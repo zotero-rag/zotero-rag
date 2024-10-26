@@ -1,0 +1,9 @@
+[package]
+name = "rag"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+downcast = "0.11.0"
+dyn-clone = "1.0.17"
+

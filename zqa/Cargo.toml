@@ -1,0 +1,11 @@
+[package]
+name = "zqa"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+rag = { path = "../rag/"}
+
+[[bin]]
+name = "zqa"
+path = "src/chain.rs"
