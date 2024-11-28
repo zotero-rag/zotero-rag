@@ -1,5 +1,3 @@
 [workspace]
-members = ["zqa", "rag"]
+members = ["zqa", "rag", "pdftools"]
 resolver = "2"
-
-[workspace.dependencies]

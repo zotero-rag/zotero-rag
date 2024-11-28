@@ -41,8 +41,6 @@ impl fmt::Debug for dyn ReturnValue {
     }
 }
 
-// If you only need read-only access to the value anyways, then the alternative of simply using Option<Rc<dyn Any>> could be better, i.e. simpler to code and also more efficient, as cloning an Rc will be cheaper.
-
 pub struct Chain<T> {
     pub name: String,
     pub tasks: Vec<Box<dyn Task>>,
