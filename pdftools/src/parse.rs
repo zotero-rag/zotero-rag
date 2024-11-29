@@ -10,6 +10,7 @@ fn parse_content(content: String) -> String {
      * - Footer text on the left column is added as part of the left column.
      * - The way we do spacing is not perfect, there are some cases where we add a space where it
      * shouldn't be there.
+     * - We do not parse tables well (or at all, really)
      */
     const THRESHOLD: i32 = 60;
     let mut rem_content = content.clone();
@@ -59,6 +60,10 @@ fn parse_content(content: String) -> String {
             let idx1 = cur_content.find('(').unwrap();
             let idx2 = cur_content.find(')').unwrap();
 
+            if idx1 >= idx2 {
+                break;
+            }
+
             parsed += &cur_content[idx1 + 1..idx2];
 
             if !cur_content[idx2..].contains('(') {
@@ -100,8 +105,6 @@ pub fn extract_text(file_path: &str) -> Result<String, Box<dyn Error>> {
         let text_content = String::from_utf8_lossy(&contents);
 
         content += text_content.as_ref();
-        // TODO: Remove this after we finish testing
-        break;
     }
 
     let parsed_text = parse_content(content);
