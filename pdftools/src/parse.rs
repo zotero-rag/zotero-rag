@@ -10,22 +10,61 @@ fn parse_content(content: String) -> String {
      * - Footer text on the left column is added as part of the left column.
      * - The way we do spacing is not perfect, there are some cases where we add a space where it
      * shouldn't be there.
-     * - We do not parse tables well (or at all, really)
-     *
-     * TODO: New heuristic: look for <number> <number> Td. If the second number (vertical) is
-     * positive and less than 9 (which is a reasonable line height), we treat it as a superscript
-     * until we find the same number, but negative. We do the same with subscripts.
-     */
-    const THRESHOLD: i32 = 60;
+     * - We do not parse tables well (or at all, really) */
+    const SAME_WORD_THRESHOLD: i32 = 60;
+    const SUBSCRIPT_THRESHOLD: f32 = 9.0;
     let mut rem_content = content.clone();
     let mut parsed = String::new();
+
+    /* Are we in a subscript/superscript?
+     * 0 = no
+     * positive: in a subscript, value determines the order of subscript (we can have e^x^2, e.g.)
+     * negative: in a superscript, same as above */
+    let mut script_status: i32 = 0;
 
     loop {
         if !rem_content.contains("TJ") {
             break;
         }
 
-        // Text array
+        /* Heuristic: look for <number> <number> Td. If the second number (vertical) is
+         * positive and less than 9 (which is a reasonable line height), we treat it as a superscript
+         * until we find the same number, but negative. We do the same with subscripts. */
+        if let Some(td_idx) = rem_content.find("Td") {
+            let space_idx = rem_content[..td_idx - 1].rfind(" ").unwrap_or_else(|| {
+                panic!("Found a Td command, but no words before it.");
+            });
+
+            let vert = rem_content[space_idx + 1..td_idx - 1]
+                .parse::<f32>()
+                .unwrap_or_else(|err| {
+                    panic!(
+                        "Failed to parse what should've been a number: '{}': {}",
+                        &rem_content[space_idx + 1..td_idx - 1],
+                        err
+                    );
+                });
+
+            // We shouldn't include 0 in these ranges
+            if (0.1..=SUBSCRIPT_THRESHOLD).contains(&vert) {
+                if script_status < 0 {
+                    parsed += "}"; // end the subscript level
+                } else {
+                    parsed += "^{"; // begin a superscript level
+                }
+                script_status += 1;
+            } else if (-SUBSCRIPT_THRESHOLD..0.0).contains(&vert) {
+                if script_status <= 0 {
+                    parsed += "_{";
+                } else {
+                    parsed += "}";
+                }
+                script_status -= 1;
+            }
+        }
+        /* TODO: The above logic also captures footnotes, so we might want to parse those while
+         * we're here. */
+
         let end_idx = rem_content.find("TJ").unwrap();
 
         // We need to match the ] immediately preceding TJ with its [, but papers have references
@@ -34,11 +73,12 @@ fn parse_content(content: String) -> String {
         // it later.
         let mut begin_idx = end_idx;
         let mut stack = Vec::new();
-        while let Some(val) = rem_content[..begin_idx].rfind(|c| c == '[' || c == ']') {
+        while let Some(val) = rem_content[..begin_idx].rfind(|c| ['[', ']'].contains(&c)) {
             match rem_content.as_bytes()[val] as char {
                 ']' => stack.push(']'),
                 '[' => {
                     if stack.is_empty() {
+                        parsed += "[";
                         break;
                     }
 
@@ -78,7 +118,7 @@ fn parse_content(content: String) -> String {
             let idx3 = cur_content[idx2..].find('(').unwrap() + idx2;
             let spacing = cur_content[idx2 + 1..idx3].parse::<i32>().unwrap().abs();
 
-            if !(0..=THRESHOLD).contains(&spacing) {
+            if !(0..=SAME_WORD_THRESHOLD).contains(&spacing) {
                 parsed += " ";
             }
 
@@ -97,7 +137,8 @@ fn parse_content(content: String) -> String {
         .replace("\\227", "--")
         .replace("\\247", "Section ")
         .replace("\\223", "\"")
-        .replace("\\224", "\"");
+        .replace("\\224", "\"")
+        .replace("\\000", "-");
 
     parsed
 }
@@ -119,9 +160,10 @@ pub fn extract_text(file_path: &str) -> Result<String, Box<dyn Error>> {
 
         content += text_content.as_ref();
     }
-    println!("{}", content);
 
+    dbg!("{}", &content[..7000]);
     let parsed_text = parse_content(content);
+    dbg!("\nParsed: {}", &parsed_text);
 
     Ok(parsed_text)
 }
