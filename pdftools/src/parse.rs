@@ -11,6 +11,10 @@ fn parse_content(content: String) -> String {
      * - The way we do spacing is not perfect, there are some cases where we add a space where it
      * shouldn't be there.
      * - We do not parse tables well (or at all, really)
+     *
+     * TODO: New heuristic: look for <number> <number> Td. If the second number (vertical) is
+     * positive and less than 9 (which is a reasonable line height), we treat it as a superscript
+     * until we find the same number, but negative. We do the same with subscripts.
      */
     const THRESHOLD: i32 = 60;
     let mut rem_content = content.clone();
@@ -91,7 +95,9 @@ fn parse_content(content: String) -> String {
         .replace("\\002", "fi")
         .replace("\\017", "*")
         .replace("\\227", "--")
-        .replace("\\247", "Section ");
+        .replace("\\247", "Section ")
+        .replace("\\223", "\"")
+        .replace("\\224", "\"");
 
     parsed
 }
@@ -100,12 +106,20 @@ pub fn extract_text(file_path: &str) -> Result<String, Box<dyn Error>> {
     let doc = Document::load(file_path)?;
     let mut content: String = String::new();
 
+    // An easy way to look at specific pages in the paper.
+    // TODO: Remove this later
+    let mut i = 0;
     for page_id in doc.page_iter() {
+        i += 1;
+        if i != 3 {
+            continue;
+        }
         let contents = doc.get_page_content(page_id)?;
         let text_content = String::from_utf8_lossy(&contents);
 
         content += text_content.as_ref();
     }
+    println!("{}", content);
 
     let parsed_text = parse_content(content);
 
