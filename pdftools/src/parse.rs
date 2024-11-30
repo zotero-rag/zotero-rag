@@ -10,7 +10,8 @@ fn parse_content(content: String) -> String {
      * - Footer text on the left column is added as part of the left column.
      * - The way we do spacing is not perfect, there are some cases where we add a space where it
      * shouldn't be there.
-     * - We do not parse tables well (or at all, really) */
+     * - We do not parse tables well (or at all, really)
+     * - We don't handle more complex equations yet. */
     const SAME_WORD_THRESHOLD: i32 = 60;
     const SUBSCRIPT_THRESHOLD: f32 = 9.0;
     let mut rem_content = content.clone();
