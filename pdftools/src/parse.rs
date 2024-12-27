@@ -1,6 +1,47 @@
+use core::str;
 use std::error::Error;
 
-use lopdf::Document;
+use lopdf::{Document, Object};
+
+fn get_font<'a>(doc: &Document, font_key: &'a str) -> &'a str {
+    /* In PDFs, fonts are triply nested dictionaries. This makes our job rather annoying, but
+     * here's our plan:
+     *
+     * - Suppose we encounter /F30 in the PDF text, so that `font_key` is "/F30".
+     * - We look inside doc.objects() to find something that has /F30 in it. You'll find an object
+     * similar to: <</Font ... R/F30 37 0 ....>>
+     * - The numbers 37 and 0 are an object ID, and we need to pass that to doc.get_object((37, 0)).
+     * - This will give us either a <</BaseFont ...>> or a <</Font...>>. If it's the former, this will
+     * have the font name, such as /JVGYNU+CMMI7. The CMMI7 is what we're interested in (this is
+     * Computer Modern Math Italic, Version 7). This function will return this string. A different
+     * function will then map values in that font to LaTeX symbols. Yes, this is tedious. Blame Adobe.
+     */
+    for (obj_id, obj) in doc.objects.clone() {
+        let dict = obj.as_dict().unwrap();
+
+        if dict.has("Font".as_bytes()) {
+            if dict
+                .get("Font".as_bytes())
+                .unwrap()
+                .as_dict()
+                .unwrap()
+                .as_hashmap()
+                .contains_key(font_key.as_bytes())
+            {
+                // Grab this value, which has the form 35 0 R. Look up (35, 0) in doc.objects,
+                // which will be a BaseFont. Then parse it as below.
+            }
+        } else if dict.has("BaseFont".as_bytes()) {
+            let font_name =
+                str::from_utf8(dict.get("BaseFont".as_bytes()).unwrap().as_name().unwrap())
+                    .unwrap();
+
+            font_name.split("+").last().unwrap();
+        }
+    }
+
+    font_key
+}
 
 fn parse_content(content: String) -> String {
     /* Parser v1. Only extracts text, with some heuristics about what should and
@@ -153,16 +194,42 @@ pub fn extract_text(file_path: &str) -> Result<String, Box<dyn Error>> {
     let mut i = 0;
     for page_id in doc.page_iter() {
         i += 1;
-        if i != 3 {
-            continue;
-        }
         let contents = doc.get_page_content(page_id)?;
+        dbg!(doc.get_page_fonts(page_id).unwrap());
+        dbg!("\n\n");
+        dbg!(doc.get_dictionary(page_id));
+        dbg!("\n\n");
+        dbg!(doc.catalog());
+        dbg!("\n\n");
+        dbg!(doc.get_page_resources(page_id));
+        dbg!("\n\n");
+        dbg!(doc.objects.clone());
+        dbg!("\n\n");
+        dbg!(doc.get_object((30, 0)));
+        dbg!("\n\n");
+        dbg!(doc.get_object((30, 0)).unwrap().type_name());
+        dbg!("\n\n");
+        dbg!(doc.get_object((37, 0)).unwrap().as_dict()?);
+        dbg!(doc.get_object((55, 0)).unwrap().as_dict()?);
+
+        dbg!(doc
+            .get_object((30, 0))
+            .unwrap()
+            .as_dict()?
+            .as_hashmap()
+            .get("Font".as_bytes())
+            .unwrap()
+            .as_dict()?
+            .as_hashmap());
+        dbg!(doc.get_object((35, 0)));
+        dbg!("\n\n");
         let text_content = String::from_utf8_lossy(&contents);
+        dbg!(text_content.clone());
 
         content += text_content.as_ref();
     }
 
-    dbg!("{}", &content[..7000]);
+    // dbg!("{}", &content[..7000]);
     let parsed_text = parse_content(content);
     dbg!("\nParsed: {}", &parsed_text);
 
@@ -176,7 +243,7 @@ mod tests {
     #[test]
     fn test_name() {
         let mut path = std::env::current_dir().expect("Failed to get cwd");
-        path.push("assets/test1.pdf");
+        path.push("assets/symbols.pdf");
         let content = extract_text(path.to_str().unwrap());
 
         assert!(content.is_ok());
