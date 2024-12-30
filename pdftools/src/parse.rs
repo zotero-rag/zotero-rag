@@ -12,11 +12,7 @@ enum PdfError {
     InvalidUtf8,     // Font name isn't valid UTF-8
 }
 
-fn get_font<'a>(
-    doc: &'a Document,
-    page_id: (u32, u16),
-    font_key: &'a str,
-) -> Result<&'a str, PdfError> {
+fn get_font(doc: &Document, page_id: (u32, u16), font_key: String) -> Result<&str, PdfError> {
     const ASCII_PLUS: u8 = b'+';
 
     // Get the fonts dictionary for the page
@@ -47,7 +43,14 @@ fn get_font<'a>(
     }
 }
 
-fn parse_content(content: String) -> String {
+fn is_math_font(font_name: &str) -> bool {
+    font_name.starts_with("CMMI")  // Computer Modern Math Italic
+        || font_name.starts_with("CMSY")  // Computer Modern Symbol
+        || font_name.starts_with("CMEX")  // Computer Modern Extension
+        || font_name.starts_with("CMR") // Computer Modern Roman
+}
+
+fn parse_content(doc: &Document, page_id: (u32, u16)) -> String {
     /* Parser v1. Only extracts text, with some heuristics about what should and
      * should not be a single word.
      *
@@ -57,10 +60,14 @@ fn parse_content(content: String) -> String {
      * shouldn't be there.
      * - We do not parse tables well (or at all, really)
      * - We don't handle more complex equations yet. */
+    let content = doc.get_page_content(page_id).unwrap();
+    let content = String::from_utf8_lossy(&content).to_string();
+
     const SAME_WORD_THRESHOLD: i32 = 60;
     const SUBSCRIPT_THRESHOLD: f32 = 9.0;
     let mut rem_content = content.clone();
     let mut parsed = String::new();
+    let mut cur_font: &str = "";
 
     /* Are we in a subscript/superscript?
      * 0 = no
@@ -113,6 +120,15 @@ fn parse_content(content: String) -> String {
 
         let end_idx = rem_content.find("TJ").unwrap();
 
+        // Check the font, if it has been set.
+        if rem_content[..end_idx].contains("/F") {
+            let font_begin_idx = rem_content[..end_idx].find("/F").unwrap();
+            let font_end_idx = rem_content[font_begin_idx..].find(" ").unwrap() + font_begin_idx;
+
+            let font_id = rem_content[font_begin_idx + 1..font_end_idx].to_string();
+            cur_font = get_font(doc, page_id, font_id).unwrap_or("");
+        }
+
         // We need to match the ] immediately preceding TJ with its [, but papers have references
         // that are written inside [], so a naive method doesn't work. Yes--right now, this doesn't
         // need a stack, but if it turns out we need to do this for other characters, we might want
@@ -143,7 +159,7 @@ fn parse_content(content: String) -> String {
         let mut cur_content = &rem_content[begin_idx..end_idx];
 
         /* Here's our strategy. We'll look for pairs of (), consuming words inside.
-         * Then, we'll consume an integer. If that integer is less than 50, the next
+         * Then, we'll consume an integer. If that integer is less than SAME_WORD_THRESHOLD, the next
          * chunk will be appended to the current word. Otherwise, we add a space. */
         // TODO: Handle paragraphs
         while cur_content.contains('(') {
@@ -154,7 +170,12 @@ fn parse_content(content: String) -> String {
                 break;
             }
 
-            parsed += &cur_content[idx1 + 1..idx2];
+            if is_math_font(cur_font) {
+                // TODO
+                parsed += &cur_content[idx1 + 1..idx2];
+            } else {
+                parsed += &cur_content[idx1 + 1..idx2];
+            }
 
             if !cur_content[idx2..].contains('(') {
                 parsed += " ";
@@ -195,21 +216,18 @@ pub fn extract_text(file_path: &str) -> Result<String, Box<dyn Error>> {
 
     // An easy way to look at specific pages in the paper.
     for page_id in doc.page_iter() {
-        let contents = doc.get_page_content(page_id)?;
-        let text_content = String::from_utf8_lossy(&contents);
-
-        content += text_content.as_ref();
+        content += &parse_content(&doc, page_id);
     }
 
-    // dbg!("{}", &content[..7000]);
-    let parsed_text = parse_content(content);
-    dbg!("\nParsed: {}", &parsed_text);
+    dbg!("\nParsed: {}", &content);
 
-    Ok(parsed_text)
+    Ok(content)
 }
 
 #[cfg(test)]
 mod tests {
+    use std::str::FromStr;
+
     use super::*;
 
     #[test]
@@ -238,12 +256,14 @@ mod tests {
         let page_content = doc.get_page_content(page_id).unwrap();
         let content = String::from_utf8_lossy(&page_content);
 
+        dbg!(&content);
+
         const TEST_QUERIES: [&str; 3] = ["F21", "F27", "F30"];
         for test in TEST_QUERIES {
             assert!(content.contains(test));
         }
 
-        let font_name = get_font(&doc, page_id, "F30");
+        let font_name = get_font(&doc, page_id, String::from_str("F30").unwrap());
         assert!(font_name.is_ok());
         assert_eq!(font_name.unwrap(), "CMMI7");
     }
