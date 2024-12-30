@@ -48,6 +48,8 @@ fn is_math_font(font_name: &str) -> bool {
         || font_name.starts_with("CMSY")  // Computer Modern Symbol
         || font_name.starts_with("CMEX")  // Computer Modern Extension
         || font_name.starts_with("CMR") // Computer Modern Roman
+        || font_name.starts_with("MSAM") // Math Symbols A
+        || font_name.starts_with("MSBM") // Math Symbols B (Blackboard Bold)
 }
 
 fn parse_content(doc: &Document, page_id: (u32, u16)) -> String {
@@ -219,8 +221,6 @@ pub fn extract_text(file_path: &str) -> Result<String, Box<dyn Error>> {
         content += &parse_content(&doc, page_id);
     }
 
-    dbg!("\nParsed: {}", &content);
-
     Ok(content)
 }
 
@@ -257,6 +257,11 @@ mod tests {
         let content = String::from_utf8_lossy(&page_content);
 
         dbg!(&content);
+        dbg!(get_font(&doc, page_id, "F21".to_string()));
+        dbg!(get_font(&doc, page_id, "F31".to_string()));
+        dbg!(get_font(&doc, page_id, "F30".to_string()));
+        dbg!(get_font(&doc, page_id, "F33".to_string()));
+        dbg!(get_font(&doc, page_id, "F63".to_string()));
 
         const TEST_QUERIES: [&str; 3] = ["F21", "F27", "F30"];
         for test in TEST_QUERIES {
