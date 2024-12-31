@@ -3,18 +3,33 @@ use std::error::Error;
 
 use lopdf::Document;
 
+const ASCII_PLUS: u8 = b'+';
+const SAME_WORD_THRESHOLD: i32 = 60;
+const SUBSCRIPT_THRESHOLD: f32 = 9.0;
+
 #[derive(Debug)]
 enum PdfError {
     PageFontError,
-    FontNotFound,    // Font key not found in dictionary (shouldn't happen)
-    MissingBaseFont, // Font object missing BaseFont field
-    InvalidFontName, // BaseFont value isn't a valid name
-    InvalidUtf8,     // Font name isn't valid UTF-8
+    FontNotFound,
+    MissingBaseFont,
+    InvalidFontName,
+    InvalidUtf8,
+}
+
+impl std::error::Error for PdfError {}
+impl std::fmt::Display for PdfError {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            PdfError::PageFontError => write!(f, "Failed to get page fonts"),
+            PdfError::FontNotFound => write!(f, "Font key not found in dictionary"),
+            PdfError::MissingBaseFont => write!(f, "Font object missing BaseFont field"),
+            PdfError::InvalidFontName => write!(f, "BaseFont value isn't a valid name"),
+            PdfError::InvalidUtf8 => write!(f, "Font name isn't valid UTF-8"),
+        }
+    }
 }
 
 fn get_font(doc: &Document, page_id: (u32, u16), font_key: String) -> Result<&str, PdfError> {
-    const ASCII_PLUS: u8 = b'+';
-
     // Get the fonts dictionary for the page
     let fonts = doc
         .get_page_fonts(page_id)
@@ -65,8 +80,6 @@ fn parse_content(doc: &Document, page_id: (u32, u16)) -> String {
     let content = doc.get_page_content(page_id).unwrap();
     let content = String::from_utf8_lossy(&content).to_string();
 
-    const SAME_WORD_THRESHOLD: i32 = 60;
-    const SUBSCRIPT_THRESHOLD: f32 = 9.0;
     let mut rem_content = content.clone();
     let mut parsed = String::new();
     let mut cur_font: &str = "";
@@ -136,22 +149,18 @@ fn parse_content(doc: &Document, page_id: (u32, u16)) -> String {
         // need a stack, but if it turns out we need to do this for other characters, we might want
         // it later.
         let mut begin_idx = end_idx;
-        let mut stack = Vec::new();
+        let mut stack = Vec::with_capacity(50);
         while let Some(val) = rem_content[..begin_idx].rfind(|c| ['[', ']'].contains(&c)) {
-            match rem_content.as_bytes()[val] as char {
-                ']' => stack.push(']'),
-                '[' => {
-                    if stack.is_empty() {
-                        parsed += "[";
-                        break;
-                    }
-
-                    if *stack.last().unwrap() == ']' {
-                        stack.pop();
-                    }
+            let char_at_val = rem_content.as_bytes()[val] as char;
+            if char_at_val == ']' {
+                stack.push(']');
+            } else if char_at_val == '[' {
+                if stack.is_empty() {
+                    parsed += "[";
+                    break;
                 }
-                _ => {
-                    unreachable!("Invalid pathway reached");
+                if let Some(']') = stack.last() {
+                    stack.pop();
                 }
             }
 
@@ -212,11 +221,14 @@ fn parse_content(doc: &Document, page_id: (u32, u16)) -> String {
     parsed
 }
 
+/// Extracts text content from a PDF file at the given path.
+///
+/// # Errors
+/// Returns an error if the file cannot be loaded or if text extraction fails.
 pub fn extract_text(file_path: &str) -> Result<String, Box<dyn Error>> {
     let doc = Document::load(file_path)?;
     let mut content: String = String::new();
 
-    // An easy way to look at specific pages in the paper.
     for page_id in doc.page_iter() {
         content += &parse_content(&doc, page_id);
     }
@@ -226,14 +238,14 @@ pub fn extract_text(file_path: &str) -> Result<String, Box<dyn Error>> {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
     use std::str::FromStr;
 
     use super::*;
 
     #[test]
     fn test_parsing_works() {
-        let mut path = std::env::current_dir().expect("Failed to get cwd");
-        path.push("assets/test1.pdf");
+        let path = PathBuf::from("assets").join("test1.pdf");
         let content = extract_text(path.to_str().unwrap());
 
         assert!(content.is_ok());
@@ -248,8 +260,7 @@ mod tests {
 
     #[test]
     fn test_fonts_identified_correctly() {
-        let mut path = std::env::current_dir().expect("Failed to get cwd");
-        path.push("assets/symbols.pdf");
+        let path = PathBuf::from("assets").join("symbols.pdf");
 
         let doc = Document::load(path).unwrap();
         let page_id = doc.page_iter().next().unwrap();
