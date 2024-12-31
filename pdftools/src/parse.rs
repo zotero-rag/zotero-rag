@@ -1,6 +1,9 @@
 use core::str;
 use std::error::Error;
 
+use once_cell::sync::Lazy;
+use std::collections::HashMap;
+
 use lopdf::Document;
 
 const ASCII_PLUS: u8 = b'+';
@@ -9,6 +12,7 @@ const DEFAULT_SUBSCRIPT_THRESHOLD: f32 = 9.0;
 
 #[derive(Debug)]
 enum PdfError {
+    ContentError,
     PageFontError,
     FontNotFound,
     MissingBaseFont,
@@ -20,6 +24,7 @@ impl std::error::Error for PdfError {}
 impl std::fmt::Display for PdfError {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
+            PdfError::ContentError => write!(f, "Failed to get page content"),
             PdfError::PageFontError => write!(f, "Failed to get page fonts"),
             PdfError::FontNotFound => write!(f, "Font key not found in dictionary"),
             PdfError::MissingBaseFont => write!(f, "Font object missing BaseFont field"),
@@ -29,10 +34,14 @@ impl std::fmt::Display for PdfError {
     }
 }
 
+/// Configuration for PDF parsing
 #[derive(Debug)]
 struct PdfParserConfig {
+    /// Threshold for determining when to join words
     same_word_threshold: i32,
+    /// Vertical movement threshold to declare sub/superscript
     subscript_threshold: f32,
+    /// List of math font prefixes
     math_fonts: Vec<String>,
 }
 
@@ -53,6 +62,21 @@ impl Default for PdfParserConfig {
     }
 }
 
+static OCTAL_REPLACEMENTS: Lazy<HashMap<&str, &str>> = Lazy::new(|| {
+    let mut m = HashMap::new();
+    m.insert("\\050", "(");
+    m.insert("\\051", ")");
+    m.insert("\\002", "fi");
+    m.insert("\\017", "*");
+    m.insert("\\227", "--");
+    m.insert("\\247", "Section ");
+    m.insert("\\223", "\"");
+    m.insert("\\224", "\"");
+    m.insert("\\000", "-");
+
+    m
+});
+
 struct PdfParser {
     config: PdfParserConfig,
     current_font: String,
@@ -60,6 +84,10 @@ struct PdfParser {
 }
 
 impl PdfParser {
+    /// Creates a new parser with the given configuration
+    ///
+    /// # Arguments
+    /// * `config` - The configuration to use for parsing
     fn new(config: PdfParserConfig) -> Self {
         Self {
             config,
@@ -72,8 +100,10 @@ impl PdfParser {
         Self::new(PdfParserConfig::default())
     }
 
-    fn parse_content(&mut self, doc: &Document, page_id: (u32, u16)) -> String {
-        let content = doc.get_page_content(page_id).unwrap();
+    fn parse_content(&mut self, doc: &Document, page_id: (u32, u16)) -> Result<String, PdfError> {
+        let content = doc
+            .get_page_content(page_id)
+            .map_err(|_| PdfError::ContentError)?;
         let content = String::from_utf8_lossy(&content).to_string();
         let mut rem_content = content;
         let mut parsed = String::new();
@@ -87,10 +117,9 @@ impl PdfParser {
              * positive and less than 9 (which is a reasonable line height), we treat it as a superscript
              * until we find the same number, but negative. We do the same with subscripts. */
             if let Some(td_idx) = rem_content.find("Td") {
-                let space_idx = rem_content[..td_idx - 1].rfind(" ").unwrap_or_else(|| {
-                    panic!("Found a Td command, but no words before it.");
-                });
-
+                let space_idx = rem_content[..td_idx - 1]
+                    .rfind(" ")
+                    .ok_or(PdfError::ContentError)?;
                 let vert = rem_content[space_idx + 1..td_idx - 1]
                     .parse::<f32>()
                     .unwrap_or_else(|err| {
@@ -121,11 +150,13 @@ impl PdfParser {
             /* TODO: The above logic also captures footnotes, so we might want to parse those while
              * we're here. */
 
-            let end_idx = rem_content.find("TJ").unwrap();
+            let end_idx = rem_content.find("TJ").ok_or(PdfError::ContentError)?;
 
             // Check the font, if it has been set.
             if rem_content[..end_idx].contains("/F") {
-                let font_begin_idx = rem_content[..end_idx].find("/F").unwrap();
+                let font_begin_idx = rem_content[..end_idx]
+                    .find("/F")
+                    .ok_or(PdfError::ContentError)?;
                 let font_end_idx =
                     rem_content[font_begin_idx..].find(" ").unwrap() + font_begin_idx;
 
@@ -163,8 +194,8 @@ impl PdfParser {
              * chunk will be appended to the current word. Otherwise, we add a space. */
             // TODO: Handle paragraphs
             while cur_content.contains('(') {
-                let idx1 = cur_content.find('(').unwrap();
-                let idx2 = cur_content.find(')').unwrap();
+                let idx1 = cur_content.find('(').ok_or(PdfError::ContentError)?;
+                let idx2 = cur_content.find(')').ok_or(PdfError::ContentError)?;
 
                 if idx1 >= idx2 {
                     break;
@@ -201,18 +232,11 @@ impl PdfParser {
         }
 
         // Parse the weird octal representations
-        parsed = parsed
-            .replace("\\050", "(")
-            .replace("\\051", ")")
-            .replace("\\002", "fi")
-            .replace("\\017", "*")
-            .replace("\\227", "--")
-            .replace("\\247", "Section ")
-            .replace("\\223", "\"")
-            .replace("\\224", "\"")
-            .replace("\\000", "-");
+        for (from, to) in OCTAL_REPLACEMENTS.iter() {
+            parsed = parsed.replace(from, to);
+        }
 
-        parsed
+        Ok(parsed)
     }
 }
 
@@ -251,12 +275,17 @@ fn get_font(doc: &Document, page_id: (u32, u16), font_key: String) -> Result<&st
 /// Returns an error if the file cannot be loaded or if text extraction fails.
 pub fn extract_text(file_path: &str) -> Result<String, Box<dyn Error>> {
     let doc = Document::load(file_path)?;
-    let mut content: String = String::new();
     let mut parser = PdfParser::with_default_config();
 
-    for page_id in doc.page_iter() {
-        content += &parser.parse_content(&doc, page_id);
-    }
+    let content = doc
+        .page_iter()
+        .map(|page_id| {
+            parser
+                .parse_content(&doc, page_id)
+                .unwrap_or("".to_string())
+        })
+        .collect::<Vec<_>>()
+        .join("");
 
     Ok(content)
 }
