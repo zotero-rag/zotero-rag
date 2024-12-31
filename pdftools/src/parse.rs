@@ -4,8 +4,8 @@ use std::error::Error;
 use lopdf::Document;
 
 const ASCII_PLUS: u8 = b'+';
-const SAME_WORD_THRESHOLD: i32 = 60;
-const SUBSCRIPT_THRESHOLD: f32 = 9.0;
+const DEFAULT_SAME_WORD_THRESHOLD: i32 = 60;
+const DEFAULT_SUBSCRIPT_THRESHOLD: f32 = 9.0;
 
 #[derive(Debug)]
 enum PdfError {
@@ -26,6 +26,193 @@ impl std::fmt::Display for PdfError {
             PdfError::InvalidFontName => write!(f, "BaseFont value isn't a valid name"),
             PdfError::InvalidUtf8 => write!(f, "Font name isn't valid UTF-8"),
         }
+    }
+}
+
+#[derive(Debug)]
+struct PdfParserConfig {
+    same_word_threshold: i32,
+    subscript_threshold: f32,
+    math_fonts: Vec<String>,
+}
+
+impl Default for PdfParserConfig {
+    fn default() -> Self {
+        Self {
+            same_word_threshold: DEFAULT_SAME_WORD_THRESHOLD,
+            subscript_threshold: DEFAULT_SUBSCRIPT_THRESHOLD,
+            math_fonts: vec![
+                "CMMI".to_string(),
+                "CMSY".to_string(),
+                "CMEX".to_string(),
+                "CMR".to_string(),
+                "MSAM".to_string(),
+                "MSBM".to_string(),
+            ],
+        }
+    }
+}
+
+struct PdfParser {
+    config: PdfParserConfig,
+    current_font: String,
+    script_status: i32,
+}
+
+impl PdfParser {
+    fn new(config: PdfParserConfig) -> Self {
+        Self {
+            config,
+            current_font: String::new(),
+            script_status: 0,
+        }
+    }
+
+    fn with_default_config() -> Self {
+        Self::new(PdfParserConfig::default())
+    }
+
+    fn parse_content(&mut self, doc: &Document, page_id: (u32, u16)) -> String {
+        let content = doc.get_page_content(page_id).unwrap();
+        let content = String::from_utf8_lossy(&content).to_string();
+        let mut rem_content = content;
+        let mut parsed = String::new();
+
+        loop {
+            if !rem_content.contains("TJ") {
+                break;
+            }
+
+            /* Heuristic: look for <number> <number> Td. If the second number (vertical) is
+             * positive and less than 9 (which is a reasonable line height), we treat it as a superscript
+             * until we find the same number, but negative. We do the same with subscripts. */
+            if let Some(td_idx) = rem_content.find("Td") {
+                let space_idx = rem_content[..td_idx - 1].rfind(" ").unwrap_or_else(|| {
+                    panic!("Found a Td command, but no words before it.");
+                });
+
+                let vert = rem_content[space_idx + 1..td_idx - 1]
+                    .parse::<f32>()
+                    .unwrap_or_else(|err| {
+                        panic!(
+                            "Failed to parse what should've been a number: '{}': {}",
+                            &rem_content[space_idx + 1..td_idx - 1],
+                            err
+                        );
+                    });
+
+                // We shouldn't include 0 in these ranges
+                if (0.1..=self.config.subscript_threshold).contains(&vert) {
+                    if self.script_status < 0 {
+                        parsed += "}"; // end the subscript level
+                    } else {
+                        parsed += "^{"; // begin a superscript level
+                    }
+                    self.script_status += 1;
+                } else if (-self.config.subscript_threshold..0.0).contains(&vert) {
+                    if self.script_status <= 0 {
+                        parsed += "_{";
+                    } else {
+                        parsed += "}";
+                    }
+                    self.script_status -= 1;
+                }
+            }
+            /* TODO: The above logic also captures footnotes, so we might want to parse those while
+             * we're here. */
+
+            let end_idx = rem_content.find("TJ").unwrap();
+
+            // Check the font, if it has been set.
+            if rem_content[..end_idx].contains("/F") {
+                let font_begin_idx = rem_content[..end_idx].find("/F").unwrap();
+                let font_end_idx =
+                    rem_content[font_begin_idx..].find(" ").unwrap() + font_begin_idx;
+
+                let font_id = rem_content[font_begin_idx + 1..font_end_idx].to_string();
+                self.current_font = get_font(doc, page_id, font_id).unwrap_or("").to_string();
+            }
+
+            // We need to match the ] immediately preceding TJ with its [, but papers have references
+            // that are written inside [], so a naive method doesn't work. Yes--right now, this doesn't
+            // need a stack, but if it turns out we need to do this for other characters, we might want
+            // it later.
+            let mut begin_idx = end_idx;
+            let mut stack = Vec::with_capacity(50);
+            while let Some(val) = rem_content[..begin_idx].rfind(|c| ['[', ']'].contains(&c)) {
+                let char_at_val = rem_content.as_bytes()[val] as char;
+                if char_at_val == ']' {
+                    stack.push(']');
+                } else if char_at_val == '[' {
+                    if stack.is_empty() {
+                        parsed += "[";
+                        break;
+                    }
+                    if let Some(']') = stack.last() {
+                        stack.pop();
+                    }
+                }
+
+                begin_idx = val;
+            }
+
+            let mut cur_content = &rem_content[begin_idx..end_idx];
+
+            /* Here's our strategy. We'll look for pairs of (), consuming words inside.
+             * Then, we'll consume an integer. If that integer is less than SAME_WORD_THRESHOLD, the next
+             * chunk will be appended to the current word. Otherwise, we add a space. */
+            // TODO: Handle paragraphs
+            while cur_content.contains('(') {
+                let idx1 = cur_content.find('(').unwrap();
+                let idx2 = cur_content.find(')').unwrap();
+
+                if idx1 >= idx2 {
+                    break;
+                }
+
+                if self
+                    .config
+                    .math_fonts
+                    .iter()
+                    .any(|f| self.current_font.starts_with(f))
+                {
+                    // TODO
+                    parsed += &cur_content[idx1 + 1..idx2];
+                } else {
+                    parsed += &cur_content[idx1 + 1..idx2];
+                }
+
+                if !cur_content[idx2..].contains('(') {
+                    parsed += " ";
+                    break;
+                }
+
+                let idx3 = cur_content[idx2..].find('(').unwrap() + idx2;
+                let spacing = cur_content[idx2 + 1..idx3].parse::<i32>().unwrap().abs();
+
+                if !(0..=self.config.same_word_threshold).contains(&spacing) {
+                    parsed += " ";
+                }
+
+                cur_content = &cur_content[idx2 + 1..];
+            }
+
+            rem_content = rem_content[end_idx + 2..].to_string();
+        }
+
+        // Parse the weird octal representations
+        parsed = parsed
+            .replace("\\050", "(")
+            .replace("\\051", ")")
+            .replace("\\002", "fi")
+            .replace("\\017", "*")
+            .replace("\\227", "--")
+            .replace("\\247", "Section ")
+            .replace("\\223", "\"")
+            .replace("\\224", "\"")
+            .replace("\\000", "-");
+
+        parsed
     }
 }
 
@@ -58,169 +245,6 @@ fn get_font(doc: &Document, page_id: (u32, u16), font_key: String) -> Result<&st
     }
 }
 
-fn is_math_font(font_name: &str) -> bool {
-    font_name.starts_with("CMMI")  // Computer Modern Math Italic
-        || font_name.starts_with("CMSY")  // Computer Modern Symbol
-        || font_name.starts_with("CMEX")  // Computer Modern Extension
-        || font_name.starts_with("CMR") // Computer Modern Roman
-        || font_name.starts_with("MSAM") // Math Symbols A
-        || font_name.starts_with("MSBM") // Math Symbols B (Blackboard Bold)
-}
-
-fn parse_content(doc: &Document, page_id: (u32, u16)) -> String {
-    /* Parser v1. Only extracts text, with some heuristics about what should and
-     * should not be a single word.
-     *
-     * Known issues:
-     * - Footer text on the left column is added as part of the left column.
-     * - The way we do spacing is not perfect, there are some cases where we add a space where it
-     * shouldn't be there.
-     * - We do not parse tables well (or at all, really)
-     * - We don't handle more complex equations yet. */
-    let content = doc.get_page_content(page_id).unwrap();
-    let content = String::from_utf8_lossy(&content).to_string();
-
-    let mut rem_content = content.clone();
-    let mut parsed = String::new();
-    let mut cur_font: &str = "";
-
-    /* Are we in a subscript/superscript?
-     * 0 = no
-     * positive: in a subscript, value determines the order of subscript (we can have e^x^2, e.g.)
-     * negative: in a superscript, same as above */
-    let mut script_status: i32 = 0;
-
-    loop {
-        if !rem_content.contains("TJ") {
-            break;
-        }
-
-        /* Heuristic: look for <number> <number> Td. If the second number (vertical) is
-         * positive and less than 9 (which is a reasonable line height), we treat it as a superscript
-         * until we find the same number, but negative. We do the same with subscripts. */
-        if let Some(td_idx) = rem_content.find("Td") {
-            let space_idx = rem_content[..td_idx - 1].rfind(" ").unwrap_or_else(|| {
-                panic!("Found a Td command, but no words before it.");
-            });
-
-            let vert = rem_content[space_idx + 1..td_idx - 1]
-                .parse::<f32>()
-                .unwrap_or_else(|err| {
-                    panic!(
-                        "Failed to parse what should've been a number: '{}': {}",
-                        &rem_content[space_idx + 1..td_idx - 1],
-                        err
-                    );
-                });
-
-            // We shouldn't include 0 in these ranges
-            if (0.1..=SUBSCRIPT_THRESHOLD).contains(&vert) {
-                if script_status < 0 {
-                    parsed += "}"; // end the subscript level
-                } else {
-                    parsed += "^{"; // begin a superscript level
-                }
-                script_status += 1;
-            } else if (-SUBSCRIPT_THRESHOLD..0.0).contains(&vert) {
-                if script_status <= 0 {
-                    parsed += "_{";
-                } else {
-                    parsed += "}";
-                }
-                script_status -= 1;
-            }
-        }
-        /* TODO: The above logic also captures footnotes, so we might want to parse those while
-         * we're here. */
-
-        let end_idx = rem_content.find("TJ").unwrap();
-
-        // Check the font, if it has been set.
-        if rem_content[..end_idx].contains("/F") {
-            let font_begin_idx = rem_content[..end_idx].find("/F").unwrap();
-            let font_end_idx = rem_content[font_begin_idx..].find(" ").unwrap() + font_begin_idx;
-
-            let font_id = rem_content[font_begin_idx + 1..font_end_idx].to_string();
-            cur_font = get_font(doc, page_id, font_id).unwrap_or("");
-        }
-
-        // We need to match the ] immediately preceding TJ with its [, but papers have references
-        // that are written inside [], so a naive method doesn't work. Yes--right now, this doesn't
-        // need a stack, but if it turns out we need to do this for other characters, we might want
-        // it later.
-        let mut begin_idx = end_idx;
-        let mut stack = Vec::with_capacity(50);
-        while let Some(val) = rem_content[..begin_idx].rfind(|c| ['[', ']'].contains(&c)) {
-            let char_at_val = rem_content.as_bytes()[val] as char;
-            if char_at_val == ']' {
-                stack.push(']');
-            } else if char_at_val == '[' {
-                if stack.is_empty() {
-                    parsed += "[";
-                    break;
-                }
-                if let Some(']') = stack.last() {
-                    stack.pop();
-                }
-            }
-
-            begin_idx = val;
-        }
-
-        let mut cur_content = &rem_content[begin_idx..end_idx];
-
-        /* Here's our strategy. We'll look for pairs of (), consuming words inside.
-         * Then, we'll consume an integer. If that integer is less than SAME_WORD_THRESHOLD, the next
-         * chunk will be appended to the current word. Otherwise, we add a space. */
-        // TODO: Handle paragraphs
-        while cur_content.contains('(') {
-            let idx1 = cur_content.find('(').unwrap();
-            let idx2 = cur_content.find(')').unwrap();
-
-            if idx1 >= idx2 {
-                break;
-            }
-
-            if is_math_font(cur_font) {
-                // TODO
-                parsed += &cur_content[idx1 + 1..idx2];
-            } else {
-                parsed += &cur_content[idx1 + 1..idx2];
-            }
-
-            if !cur_content[idx2..].contains('(') {
-                parsed += " ";
-                break;
-            }
-
-            let idx3 = cur_content[idx2..].find('(').unwrap() + idx2;
-            let spacing = cur_content[idx2 + 1..idx3].parse::<i32>().unwrap().abs();
-
-            if !(0..=SAME_WORD_THRESHOLD).contains(&spacing) {
-                parsed += " ";
-            }
-
-            cur_content = &cur_content[idx2 + 1..];
-        }
-
-        rem_content = rem_content[end_idx + 2..].to_string();
-    }
-
-    // Parse the weird octal representations
-    parsed = parsed
-        .replace("\\050", "(")
-        .replace("\\051", ")")
-        .replace("\\002", "fi")
-        .replace("\\017", "*")
-        .replace("\\227", "--")
-        .replace("\\247", "Section ")
-        .replace("\\223", "\"")
-        .replace("\\224", "\"")
-        .replace("\\000", "-");
-
-    parsed
-}
-
 /// Extracts text content from a PDF file at the given path.
 ///
 /// # Errors
@@ -228,9 +252,10 @@ fn parse_content(doc: &Document, page_id: (u32, u16)) -> String {
 pub fn extract_text(file_path: &str) -> Result<String, Box<dyn Error>> {
     let doc = Document::load(file_path)?;
     let mut content: String = String::new();
+    let mut parser = PdfParser::with_default_config();
 
     for page_id in doc.page_iter() {
-        content += &parse_content(&doc, page_id);
+        content += &parser.parse_content(&doc, page_id);
     }
 
     Ok(content)
