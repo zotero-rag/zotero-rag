@@ -6,6 +6,11 @@ use std::collections::HashMap;
 
 use lopdf::Document;
 
+use crate::math::from_cmex;
+use crate::math::from_cmmi;
+use crate::math::from_cmsy;
+use crate::math::from_msbm;
+
 const ASCII_PLUS: u8 = b'+';
 const DEFAULT_SAME_WORD_THRESHOLD: i32 = 60;
 const DEFAULT_SUBSCRIPT_THRESHOLD: f32 = 9.0;
@@ -61,6 +66,43 @@ impl Default for PdfParserConfig {
         }
     }
 }
+
+type ByteTransformFn = fn(&u8) -> String;
+type TransformFn = fn(String) -> String;
+
+fn font_transform(input: String, transform: ByteTransformFn) -> String {
+    input.as_bytes().iter().map(transform).collect::<String>()
+}
+
+static FONT_TRANSFORMS: Lazy<HashMap<&'static str, ByteTransformFn>> = Lazy::new(|| {
+    let mut m: HashMap<&'static str, ByteTransformFn> = HashMap::new();
+
+    m.insert("CMMI5", from_cmmi);
+    m.insert("CMMI6", from_cmmi);
+    m.insert("CMMI7", from_cmmi);
+    m.insert("CMMI8", from_cmmi);
+    m.insert("CMMI9", from_cmmi);
+    m.insert("CMMI10", from_cmmi);
+    m.insert("CMMI12", from_cmmi);
+
+    m.insert("CMSY5", from_cmsy);
+    m.insert("CMSY6", from_cmsy);
+    m.insert("CMSY7", from_cmsy);
+    m.insert("CMSY8", from_cmsy);
+    m.insert("CMSY9", from_cmsy);
+    m.insert("CMSY10", from_cmsy);
+
+    m.insert("CMEX10", from_cmex);
+
+    m.insert("MSBM5", from_msbm);
+    m.insert("MSBM6", from_msbm);
+    m.insert("MSBM7", from_msbm);
+    m.insert("MSBM8", from_msbm);
+    m.insert("MSBM9", from_msbm);
+    m.insert("MSBM10", from_msbm);
+
+    m
+});
 
 static OCTAL_REPLACEMENTS: Lazy<HashMap<&str, &str>> = Lazy::new(|| {
     let mut m = HashMap::new();
@@ -201,14 +243,14 @@ impl PdfParser {
                     break;
                 }
 
-                if self
-                    .config
-                    .math_fonts
-                    .iter()
-                    .any(|f| self.current_font.starts_with(f))
-                {
-                    // TODO
-                    parsed += &cur_content[idx1 + 1..idx2];
+                dbg!(&self.current_font);
+                if let Some(transform) = FONT_TRANSFORMS.get(self.current_font.as_str()) {
+                    dbg!(&cur_content[idx1 + 1..idx2]);
+                    parsed += &font_transform(cur_content[idx1 + 1..idx2].to_string(), *transform);
+                    dbg!(&font_transform(
+                        cur_content[idx1 + 1..idx2].to_string(),
+                        *transform
+                    ));
                 } else {
                     parsed += &cur_content[idx1 + 1..idx2];
                 }
@@ -336,5 +378,16 @@ mod tests {
         let font_name = get_font(&doc, page_id, String::from_str("F30").unwrap());
         assert!(font_name.is_ok());
         assert_eq!(font_name.unwrap(), "CMMI7");
+    }
+
+    #[test]
+    fn test_math_parsing_works() {
+        let path = PathBuf::from("assets").join("symbols.pdf");
+        let content = extract_text(path.to_str().unwrap());
+
+        assert!(content.is_ok());
+
+        let content = content.unwrap();
+        dbg!(content);
     }
 }
