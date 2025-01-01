@@ -243,14 +243,8 @@ impl PdfParser {
                     break;
                 }
 
-                dbg!(&self.current_font);
                 if let Some(transform) = FONT_TRANSFORMS.get(self.current_font.as_str()) {
-                    dbg!(&cur_content[idx1 + 1..idx2]);
                     parsed += &font_transform(cur_content[idx1 + 1..idx2].to_string(), *transform);
-                    dbg!(&font_transform(
-                        cur_content[idx1 + 1..idx2].to_string(),
-                        *transform
-                    ));
                 } else {
                     parsed += &cur_content[idx1 + 1..idx2];
                 }
