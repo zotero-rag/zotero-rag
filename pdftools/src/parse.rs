@@ -46,8 +46,6 @@ struct PdfParserConfig {
     same_word_threshold: i32,
     /// Vertical movement threshold to declare sub/superscript
     subscript_threshold: f32,
-    /// List of math font prefixes
-    math_fonts: Vec<String>,
 }
 
 impl Default for PdfParserConfig {
@@ -55,20 +53,11 @@ impl Default for PdfParserConfig {
         Self {
             same_word_threshold: DEFAULT_SAME_WORD_THRESHOLD,
             subscript_threshold: DEFAULT_SUBSCRIPT_THRESHOLD,
-            math_fonts: vec![
-                "CMMI".to_string(),
-                "CMSY".to_string(),
-                "CMEX".to_string(),
-                "CMR".to_string(),
-                "MSAM".to_string(),
-                "MSBM".to_string(),
-            ],
         }
     }
 }
 
 type ByteTransformFn = fn(&u8) -> String;
-type TransformFn = fn(String) -> String;
 
 fn font_transform(input: String, transform: ByteTransformFn) -> String {
     input.as_bytes().iter().map(transform).collect::<String>()
@@ -356,13 +345,6 @@ mod tests {
         let page_id = doc.page_iter().next().unwrap();
         let page_content = doc.get_page_content(page_id).unwrap();
         let content = String::from_utf8_lossy(&page_content);
-
-        dbg!(&content);
-        dbg!(get_font(&doc, page_id, "F21".to_string()));
-        dbg!(get_font(&doc, page_id, "F31".to_string()));
-        dbg!(get_font(&doc, page_id, "F30".to_string()));
-        dbg!(get_font(&doc, page_id, "F33".to_string()));
-        dbg!(get_font(&doc, page_id, "F63".to_string()));
 
         const TEST_QUERIES: [&str; 3] = ["F21", "F27", "F30"];
         for test in TEST_QUERIES {
