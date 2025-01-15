@@ -4,7 +4,9 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+directories = "6.0.0"
 rag = { path = "../rag/"}
+rusqlite = "0.32.1"
 
 [[bin]]
 name = "zqa"

@@ -1,4 +1,5 @@
 pub mod input;
+pub mod library;
 
 use crate::input::{UserInput, UserInputTask};
 use rag::task::Chain;
