@@ -22,11 +22,13 @@ fn get_lib_path() -> Option<PathBuf> {
 pub struct ZoteroItemMetadata {
     library_key: String,
     title: String,
-    paper_abstract: String,
+    paper_abstract: Option<String>,
+    notes: Option<String>,
+    file_path: PathBuf,
 }
 
 /// A general error struct for Zotero library parsing.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct LibraryParsingError {
     message: String,
 }
@@ -40,31 +42,41 @@ impl fmt::Display for LibraryParsingError {
 impl Error for LibraryParsingError {}
 
 /// Parses the Zotero library. If successful, returns a list of metadata for each item.
-/// The SQL query essentially combines the titles and abstracts for each paper into a
-/// single row. This is done using GROUP BY on the keys, and MAX to get the field itself.
 pub fn parse_library() -> Result<Vec<ZoteroItemMetadata>, Box<dyn Error>> {
     if let Some(path) = get_lib_path() {
-        let conn = Connection::open(&path)?;
+        let conn = Connection::open(path.join("zotero.sqlite"))?;
 
+        // The SQL query essentially combines the titles and abstracts for each paper into a
+        // single row. This is done using GROUP BY on the keys, and MAX to get the field itself.
         let mut stmt = conn.prepare(
             "SELECT items.key AS libraryKey,
-               MAX(CASE WHEN fieldsCombined.fieldName = 'title' THEN itemDataValues.value END) AS title,
-               MAX(CASE WHEN fieldsCombined.fieldName = 'abstract' THEN itemDataValues.value END) AS abstract
+                MAX(CASE WHEN fieldsCombined.fieldName = 'title' THEN itemDataValues.value END) AS title,
+                MAX(CASE WHEN fieldsCombined.fieldName = 'abstract' THEN itemDataValues.value END) AS abstract,
+                itemNotes.note AS notes,
+                itemAttachments.path AS filePath
             FROM items
             INNER JOIN itemData ON items.itemID = itemData.itemID
             INNER JOIN fieldsCombined ON itemData.fieldID = fieldsCombined.fieldID
             INNER JOIN itemDataValues ON itemData.valueID = itemDataValues.valueID
+            INNER JOIN itemNotes ON items.itemID = itemNotes.itemID
+            INNER JOIN itemAttachments ON items.itemID = itemAttachments.itemID
             WHERE fieldsCombined.fieldName IN ('title', 'abstract')
-            GROUP BY items.key
-            LIMIT 5;
+            GROUP BY items.key;
         ")?;
 
         let item_iter: Vec<ZoteroItemMetadata> = stmt
             .query_map([], |row| {
+                let res_path: String = row.get(4)?;
+                let split_idx = res_path.find(":").unwrap_or(0);
+                let filename = res_path.split_at(split_idx).1;
+                let lib_key: String = row.get(0)?;
+
                 Ok(ZoteroItemMetadata {
-                    library_key: row.get(0)?,
+                    library_key: lib_key.clone(),
                     title: row.get(1)?,
-                    paper_abstract: row.get(2)?,
+                    paper_abstract: row.get(2).unwrap_or(None),
+                    notes: row.get(3)?,
+                    file_path: path.join("storage").join(lib_key).join(filename),
                 })
             })?
             .filter_map(|x| x.ok())
@@ -75,5 +87,21 @@ pub fn parse_library() -> Result<Vec<ZoteroItemMetadata>, Box<dyn Error>> {
         Err(Box::new(LibraryParsingError {
             message: "Failed to get library path".to_string(),
         }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn library_fetching_works() {
+        let library_items = parse_library();
+        let library_items_2 = parse_library();
+
+        dbg!(library_items_2.unwrap().len());
+
+        assert!(library_items.is_ok());
+        assert!(!library_items.unwrap().is_empty());
     }
 }
