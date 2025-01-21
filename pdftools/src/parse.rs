@@ -4,12 +4,9 @@ use std::error::Error;
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
 
-use lopdf::Document;
+use lopdf::{Document, Object};
 
-use crate::math::from_cmex;
-use crate::math::from_cmmi;
-use crate::math::from_cmsy;
-use crate::math::from_msbm;
+use crate::math::{from_cmex, from_cmmi, from_cmsy, from_msbm};
 
 const ASCII_PLUS: u8 = b'+';
 const DEFAULT_SAME_WORD_THRESHOLD: i32 = 60;
@@ -280,6 +277,18 @@ fn get_font(doc: &Document, page_id: (u32, u16), font_key: String) -> Result<&st
         .get("BaseFont".as_bytes())
         .ok_or(PdfError::MissingBaseFont)?;
 
+    // if (font_key.contains("F21")) {
+    //     let v: Vec<u8> = [84, 121, 112, 101].to_vec();
+    //     dbg!(String::from_utf8(v));
+    //
+    //     let map = font_obj.as_hashmap();
+    //     let obj: Vec<(String, &Object)> = map
+    //         .iter()
+    //         .map(|(k, v)| (String::from_utf8(k.to_vec()).unwrap(), v))
+    //         .collect();
+    //     dbg!(obj);
+    // }
+
     match base_font.as_name() {
         Ok(name) => {
             let idx = name
@@ -359,6 +368,13 @@ mod tests {
     #[test]
     fn test_math_parsing_works() {
         let path = PathBuf::from("assets").join("symbols.pdf");
+
+        let doc = Document::load(&path).unwrap();
+        let page_id = doc.page_iter().next().unwrap();
+        let pre_content = doc.get_page_content(page_id).unwrap();
+        dbg!(String::from_utf8_lossy(&pre_content));
+        print!("\n");
+
         let content = extract_text(path.to_str().unwrap());
 
         assert!(content.is_ok());
