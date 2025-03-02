@@ -58,8 +58,8 @@ pub fn parse_library() -> Result<Vec<ZoteroItemMetadata>, Box<dyn Error>> {
             INNER JOIN itemData ON items.itemID = itemData.itemID
             INNER JOIN fieldsCombined ON itemData.fieldID = fieldsCombined.fieldID
             INNER JOIN itemDataValues ON itemData.valueID = itemDataValues.valueID
-            INNER JOIN itemNotes ON items.itemID = itemNotes.itemID
             INNER JOIN itemAttachments ON items.itemID = itemAttachments.itemID
+            LEFT JOIN itemNotes ON items.itemID = itemNotes.itemID
             WHERE fieldsCombined.fieldName IN ('title', 'abstract')
             GROUP BY items.key;
         ")?;
