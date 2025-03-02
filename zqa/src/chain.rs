@@ -1,8 +1,9 @@
-pub mod input;
 pub mod library;
+pub mod llm;
+pub mod tasks;
 
-use crate::input::{UserInput, UserInputTask};
 use rag::task::Chain;
+use tasks::input::{UserInput, UserInputTask};
 
 pub fn get_zotero_qa_chain() -> Chain<UserInput> {
     Chain {

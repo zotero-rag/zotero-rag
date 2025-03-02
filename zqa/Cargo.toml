@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 directories = "6.0.0"
+dotenv = "0.15.0"
 rag = { path = "../rag/"}
 rusqlite = "0.32.1"
 
