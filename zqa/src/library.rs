@@ -97,9 +97,6 @@ mod tests {
     #[test]
     fn library_fetching_works() {
         let library_items = parse_library();
-        let library_items_2 = parse_library();
-
-        dbg!(library_items_2.unwrap().len());
 
         assert!(library_items.is_ok());
         assert!(!library_items.unwrap().is_empty());
