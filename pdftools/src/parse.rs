@@ -12,6 +12,7 @@ const ASCII_PLUS: u8 = b'+';
 const DEFAULT_SAME_WORD_THRESHOLD: i32 = 60;
 const DEFAULT_SUBSCRIPT_THRESHOLD: f32 = 9.0;
 
+/// A wrapper for all PDF parsing errors
 #[derive(Debug)]
 enum PdfError {
     ContentError,
@@ -54,12 +55,15 @@ impl Default for PdfParserConfig {
     }
 }
 
+/// A type to convert from bytes in math fonts to LaTeX code
 type ByteTransformFn = fn(&u8) -> String;
 
 fn font_transform(input: String, transform: ByteTransformFn) -> String {
     input.as_bytes().iter().map(transform).collect::<String>()
 }
 
+/// A lazy-loaded hashmap storing conversions from math fonts to LaTeX code
+/// Handles most common math fonts, but does not yet support specialized math fonts.
 static FONT_TRANSFORMS: Lazy<HashMap<&'static str, ByteTransformFn>> = Lazy::new(|| {
     let mut m: HashMap<&'static str, ByteTransformFn> = HashMap::new();
 
@@ -90,6 +94,9 @@ static FONT_TRANSFORMS: Lazy<HashMap<&'static str, ByteTransformFn>> = Lazy::new
     m
 });
 
+/// A lazy-loaded hashmap of octal character replacements post-parsing.
+/// Some of these come across because of ligature support in fonts. This
+/// is not exhaustive, however.
 static OCTAL_REPLACEMENTS: Lazy<HashMap<&str, &str>> = Lazy::new(|| {
     let mut m = HashMap::new();
     m.insert("\\050", "(");
@@ -128,6 +135,8 @@ impl PdfParser {
         Self::new(PdfParserConfig::default())
     }
 
+    /// The actual PDF parser itself. Parses UTF-8 encoded code points in a best-effort manner,
+    /// making reasonable assumptions along the way. Such assumptions are documented.
     fn parse_content(&mut self, doc: &Document, page_id: (u32, u16)) -> Result<String, PdfError> {
         let content = doc
             .get_page_content(page_id)
@@ -277,18 +286,6 @@ fn get_font(doc: &Document, page_id: (u32, u16), font_key: String) -> Result<&st
         .get("BaseFont".as_bytes())
         .ok_or(PdfError::MissingBaseFont)?;
 
-    // if (font_key.contains("F21")) {
-    //     let v: Vec<u8> = [84, 121, 112, 101].to_vec();
-    //     dbg!(String::from_utf8(v));
-    //
-    //     let map = font_obj.as_hashmap();
-    //     let obj: Vec<(String, &Object)> = map
-    //         .iter()
-    //         .map(|(k, v)| (String::from_utf8(k.to_vec()).unwrap(), v))
-    //         .collect();
-    //     dbg!(obj);
-    // }
-
     match base_font.as_name() {
         Ok(name) => {
             let idx = name
@@ -373,7 +370,7 @@ mod tests {
         let page_id = doc.page_iter().next().unwrap();
         let pre_content = doc.get_page_content(page_id).unwrap();
         dbg!(String::from_utf8_lossy(&pre_content));
-        print!("\n");
+        println!();
 
         let content = extract_text(path.to_str().unwrap());
 
