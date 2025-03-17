@@ -7,5 +7,8 @@ edition = "2021"
 downcast = "0.11.0"
 dyn-clone = "1.0.17"
 lancedb = "0.11.0"
+reqwest = "0.12.14"
+serde = "1.0.219"
+serde_json = "1.0.140"
 tokio = "1.41.0"
 

@@ -1,8 +1,9 @@
 use super::errors::LLMError;
+use serde::{Deserialize, Serialize};
 
 /// Backend-independent struct to represent what's sent to the APIs.
 /// Implementations of ApiClient will all need at least this info.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UserMessage {
     chat_history: Vec<String>,
     message: String,
