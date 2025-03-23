@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 /// convert from this to native message types.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UserMessage {
-    chat_history: Vec<String>,
-    message: String,
+    pub chat_history: Vec<String>,
+    pub message: String,
 }
 
 /// A user-facing struct representing API responses, containing only information users

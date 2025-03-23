@@ -8,6 +8,7 @@ pub enum LLMError {
     NetworkError,
     HttpStatusError,
     EnvError,
+    DeserializationError(String),
 }
 
 impl std::error::Error for LLMError {}
@@ -22,6 +23,7 @@ impl std::fmt::Display for LLMError {
             LLMError::NetworkError => write!(f, "A network connectivity error occurred"),
             LLMError::HttpStatusError => write!(f, "Other HTTP status code error"),
             LLMError::EnvError => write!(f, "Environment variable could not be fetched"),
+            LLMError::DeserializationError(body) => write!(f, "Failed to deserialize response: {}", body),
         }
     }
 }
@@ -50,5 +52,11 @@ impl From<reqwest::Error> for LLMError {
 impl From<std::env::VarError> for LLMError {
     fn from(_error: std::env::VarError) -> LLMError {
         LLMError::EnvError
+    }
+}
+
+impl From<serde_json::Error> for LLMError {
+    fn from(error: serde_json::Error) -> LLMError {
+        LLMError::DeserializationError(error.to_string())
     }
 }

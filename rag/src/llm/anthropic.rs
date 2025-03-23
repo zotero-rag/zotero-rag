@@ -1,7 +1,7 @@
-use std::env;
 use super::base::{ApiClient, ApiResponse, UserMessage};
 use reqwest;
 use serde::{Deserialize, Serialize};
+use std::env;
 
 /// A generic client class for now. We can add stuff here later if needed, for
 /// example, features like Anthropic's native RAG thing
@@ -21,7 +21,31 @@ struct AnthropicRequest {
     messages: Vec<AnthropicMessage>,
 }
 
-/// We can freely use tons of hard-coded strings here; I think the resulting
+#[derive(Serialize, Deserialize)]
+struct AnthropicUsageStats {
+    input_tokens: u32,
+    output_tokens: u32,
+}
+
+#[derive(Serialize, Deserialize)]
+struct AnthropicResponseContent {
+    text: String,
+    r#type: String,
+}
+
+#[derive(Serialize, Deserialize)]
+struct AnthropicResponse {
+    id: String,
+    model: String,
+    role: String,
+    stop_reason: String,
+    stop_sequence: Option<String>,
+    usage: AnthropicUsageStats,
+    r#type: String,
+    content: Vec<AnthropicResponseContent>,
+}
+
+/// We can use hard-coded strings here; I think the resulting
 /// locality-of-behavior is worth the loss in pointless generality.
 impl ApiClient for AnthropicClient {
     async fn send_message(
@@ -39,5 +63,55 @@ impl ApiClient for AnthropicClient {
             .json(&message)
             .send()
             .await?;
+
+        // Get the response body as text first for debugging
+        let body = res.text().await?;
+
+        let json: serde_json::Value = match serde_json::from_str(&body) {
+            Ok(json) => json,
+            Err(_) => return Err(super::errors::LLMError::DeserializationError(body)),
+        };
+
+        let response: AnthropicResponse = match serde_json::from_value(json) {
+            Ok(response) => response,
+            Err(_) => return Err(super::errors::LLMError::DeserializationError(body)),
+        };
+
+        Ok(ApiResponse {
+            content: response.content[0].text.clone(),
+            input_tokens: response.usage.input_tokens,
+            output_tokens: response.usage.output_tokens,
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use dotenv::dotenv;
+
+    use crate::llm::base::{ApiClient, UserMessage};
+
+    use super::AnthropicClient;
+
+    #[tokio::test]
+    async fn test_request_works() {
+        dotenv().ok();
+
+        let client = AnthropicClient {};
+        let message = UserMessage {
+            chat_history: Vec::new(),
+            message: "Hello!".to_owned(),
+        };
+
+        let res = client.send_message(&message).await;
+
+        if res.is_err() {
+            dbg!(res.as_ref().unwrap_err());
+        }
+
+        assert!(res.is_ok());
+
+        let res = res.unwrap();
+        dbg!(res);
     }
 }
