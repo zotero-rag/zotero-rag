@@ -1,4 +1,4 @@
-use super::base::{ApiClient, ApiResponse, UserMessage};
+use super::base::{ApiClient, ApiResponse, ChatHistoryItem, UserMessage};
 use reqwest;
 use serde::{Deserialize, Serialize};
 use std::env;
@@ -7,18 +7,21 @@ use std::env;
 /// example, features like Anthropic's native RAG thing
 struct AnthropicClient {}
 
-/// Anthropic-specific message classes
-#[derive(Serialize, Deserialize)]
-struct AnthropicMessage {
-    role: String,
-    content: String,
-}
-
 #[derive(Serialize, Deserialize)]
 struct AnthropicRequest {
     model: String,
     max_tokens: u32,
-    messages: Vec<AnthropicMessage>,
+    messages: Vec<ChatHistoryItem>,
+}
+
+impl From<UserMessage> for AnthropicRequest {
+    fn from(msg: UserMessage) -> AnthropicRequest {
+        AnthropicRequest {
+            model: env::var("ANTHROPIC_MODEL").unwrap_or("claude-3-5-sonnet-20241022".into()),
+            max_tokens: 8192,
+            messages: msg.chat_history,
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -55,12 +58,13 @@ impl ApiClient for AnthropicClient {
         let key = env::var("ANTHROPIC_KEY")?;
 
         let client = reqwest::Client::new();
+        let req_body: AnthropicRequest = message.clone().into();
         let res = client
             .post("https://api.anthropic.com/v1/messages")
             .header("x-api-key", key)
             .header("anthropic-version", "2023-06-01")
             .header("content-type", "application/json")
-            .json(&message)
+            .json(&req_body)
             .send()
             .await?;
 

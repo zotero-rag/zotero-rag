@@ -1,5 +1,4 @@
 pub mod library;
-pub mod llm;
 pub mod tasks;
 
 use rag::task::Chain;

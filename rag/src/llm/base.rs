@@ -1,11 +1,17 @@
 use super::errors::LLMError;
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatHistoryItem {
+    role: String,
+    content: String,
+}
+
 /// A user-facing struct that does not carry API-specific information. Clients should
 /// convert from this to native message types.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UserMessage {
-    pub chat_history: Vec<String>,
+    pub chat_history: Vec<ChatHistoryItem>,
     pub message: String,
 }
 
