@@ -5,7 +5,7 @@ use std::env;
 
 /// A generic client class for now. We can add stuff here later if needed, for
 /// example, features like Anthropic's native RAG thing
-struct AnthropicClient {}
+pub struct AnthropicClient {}
 
 #[derive(Serialize, Deserialize)]
 struct AnthropicRequest {

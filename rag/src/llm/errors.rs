@@ -18,7 +18,7 @@ impl std::fmt::Display for LLMError {
             LLMError::TimeoutError => write!(f, "Request timed out"),
             LLMError::CredentialError => write!(f, "Got 4xx response, possible credentials error"),
             LLMError::GenericLLMError(msg) => {
-                write!(f, "Unknown error occurred: {}", msg.to_string())
+                write!(f, "Unknown error occurred: {}", msg)
             }
             LLMError::NetworkError => write!(f, "A network connectivity error occurred"),
             LLMError::HttpStatusError => write!(f, "Other HTTP status code error"),
