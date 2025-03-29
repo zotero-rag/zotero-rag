@@ -1,6 +1,6 @@
 /// A wrapper for all kinds of errors to one enum that tells us what happened.
 /// Has implementations of From<...> and Display
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum LLMError {
     TimeoutError,
     CredentialError,
@@ -23,7 +23,9 @@ impl std::fmt::Display for LLMError {
             LLMError::NetworkError => write!(f, "A network connectivity error occurred"),
             LLMError::HttpStatusError => write!(f, "Other HTTP status code error"),
             LLMError::EnvError => write!(f, "Environment variable could not be fetched"),
-            LLMError::DeserializationError(body) => write!(f, "Failed to deserialize response: {}", body),
+            LLMError::DeserializationError(body) => {
+                write!(f, "Failed to deserialize response: {}", body)
+            }
         }
     }
 }

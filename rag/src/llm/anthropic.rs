@@ -16,10 +16,20 @@ struct AnthropicRequest {
 
 impl From<UserMessage> for AnthropicRequest {
     fn from(msg: UserMessage) -> AnthropicRequest {
+        let n_messages = msg.chat_history.len();
+        let mut messages = msg.chat_history.clone();
+        messages.insert(
+            n_messages,
+            ChatHistoryItem {
+                role: "user".to_owned(),
+                content: msg.message.clone(),
+            },
+        );
+
         AnthropicRequest {
             model: env::var("ANTHROPIC_MODEL").unwrap_or("claude-3-5-sonnet-20241022".into()),
             max_tokens: 8192,
-            messages: msg.chat_history,
+            messages,
         }
     }
 }
@@ -93,11 +103,24 @@ impl ApiClient for AnthropicClient {
 mod tests {
     use dotenv::dotenv;
 
-    use crate::llm::base::{ApiClient, UserMessage};
+    use crate::llm::base::{ApiClient, ApiResponse, UserMessage};
+    use crate::llm::errors::LLMError;
 
     use super::AnthropicClient;
 
+    // Mock implementation of the ApiClient trait
+    struct MockAnthropicClient {
+        response: Result<ApiResponse, LLMError>,
+    }
+
+    impl ApiClient for MockAnthropicClient {
+        async fn send_message(&self, _message: &UserMessage) -> Result<ApiResponse, LLMError> {
+            self.response.clone()
+        }
+    }
+
     #[tokio::test]
+    #[ignore]
     async fn test_request_works() {
         dotenv().ok();
 
@@ -109,13 +132,36 @@ mod tests {
 
         let res = client.send_message(&message).await;
 
-        if res.is_err() {
-            dbg!(res.as_ref().unwrap_err());
-        }
-
         assert!(res.is_ok());
 
         let res = res.unwrap();
         dbg!(res);
+    }
+
+    #[tokio::test]
+    async fn test_request_with_mock() {
+        // TODO: Not fully fleshed out yet--I need a real mocking library
+        let mock_response = ApiResponse {
+            content: "Hi there! How can I help you today?".to_string(),
+            input_tokens: 9,
+            output_tokens: 13,
+        };
+
+        let mock_client = MockAnthropicClient {
+            response: Ok(mock_response),
+        };
+
+        let message = UserMessage {
+            chat_history: Vec::new(),
+            message: "Hello!".to_owned(),
+        };
+
+        let res = mock_client.send_message(&message).await;
+
+        assert!(res.is_ok());
+
+        let res = res.unwrap();
+        assert_eq!(res.input_tokens, 9);
+        assert_eq!(res.output_tokens, 13);
     }
 }
