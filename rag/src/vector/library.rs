@@ -20,29 +20,37 @@ fn get_lib_path() -> Option<PathBuf> {
 
 /// Metadata for items in the Zotero library.
 pub struct ZoteroItemMetadata {
-    library_key: String,
-    title: String,
-    paper_abstract: Option<String>,
-    notes: Option<String>,
-    file_path: PathBuf,
+    pub library_key: String,
+    pub title: String,
+    pub paper_abstract: Option<String>,
+    pub notes: Option<String>,
+    pub file_path: PathBuf,
 }
 
 /// A general error struct for Zotero library parsing.
 #[derive(Clone, Debug)]
-pub struct LibraryParsingError {
-    message: String,
+pub enum LibraryParsingError {
+    LibNotFoundError,
+}
+
+impl From<rusqlite::Error> for LibraryParsingError {
+    fn from(_: rusqlite::Error) -> Self {
+        LibraryParsingError::LibNotFoundError
+    }
 }
 
 impl fmt::Display for LibraryParsingError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "There is an error: {}", self.message)
+        match self {
+            LibraryParsingError::LibNotFoundError => write!(f, "Library not found!"),
+        }
     }
 }
 
 impl Error for LibraryParsingError {}
 
 /// Parses the Zotero library. If successful, returns a list of metadata for each item.
-pub fn parse_library() -> Result<Vec<ZoteroItemMetadata>, Box<dyn Error>> {
+pub fn parse_library() -> Result<Vec<ZoteroItemMetadata>, LibraryParsingError> {
     if let Some(path) = get_lib_path() {
         let conn = Connection::open(path.join("zotero.sqlite"))?;
 
@@ -84,9 +92,7 @@ pub fn parse_library() -> Result<Vec<ZoteroItemMetadata>, Box<dyn Error>> {
 
         Ok(item_iter)
     } else {
-        Err(Box::new(LibraryParsingError {
-            message: "Failed to get library path".to_string(),
-        }))
+        Err(LibraryParsingError::LibNotFoundError)
     }
 }
 
