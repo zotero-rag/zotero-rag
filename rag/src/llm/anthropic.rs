@@ -5,7 +5,15 @@ use std::env;
 
 /// A generic client class for now. We can add stuff here later if needed, for
 /// example, features like Anthropic's native RAG thing
+#[derive(Debug, Clone)]
 pub struct AnthropicClient {}
+
+impl AnthropicClient {
+    /// Creates a new AnthropicClient instance
+    pub fn new() -> Self {
+        Self {}
+    }
+}
 
 #[derive(Serialize, Deserialize)]
 struct AnthropicRequest {
@@ -27,7 +35,7 @@ impl From<UserMessage> for AnthropicRequest {
         );
 
         AnthropicRequest {
-            model: env::var("ANTHROPIC_MODEL").unwrap_or("claude-3-5-sonnet-20241022".into()),
+            model: env::var("ANTHROPIC_MODEL").unwrap_or_else(|_| "claude-3-5-sonnet-20241022".to_string()),
             max_tokens: 8192,
             messages,
         }

@@ -9,6 +9,7 @@ pub enum LLMError {
     HttpStatusError,
     EnvError,
     DeserializationError(String),
+    InvalidProviderError(String),
 }
 
 impl std::error::Error for LLMError {}
@@ -25,6 +26,9 @@ impl std::fmt::Display for LLMError {
             LLMError::EnvError => write!(f, "Environment variable could not be fetched"),
             LLMError::DeserializationError(body) => {
                 write!(f, "Failed to deserialize response: {}", body)
+            }
+            LLMError::InvalidProviderError(provider) => {
+                write!(f, "Invalid LLM provider: {}", provider)
             }
         }
     }

@@ -75,14 +75,14 @@ pub fn parse_library() -> Result<Vec<ZoteroItemMetadata>, LibraryParsingError> {
         let item_iter: Vec<ZoteroItemMetadata> = stmt
             .query_map([], |row| {
                 let res_path: String = row.get(4)?;
-                let split_idx = res_path.find(":").unwrap_or(0);
+                let split_idx = res_path.find(':').unwrap_or(0);
                 let filename = res_path.split_at(split_idx).1;
                 let lib_key: String = row.get(0)?;
 
                 Ok(ZoteroItemMetadata {
                     library_key: lib_key.clone(),
                     title: row.get(1)?,
-                    paper_abstract: row.get(2).unwrap_or(None),
+                    paper_abstract: row.get(2).unwrap_or_default(),
                     notes: row.get(3)?,
                     file_path: path.join("storage").join(lib_key).join(filename),
                 })
@@ -105,6 +105,7 @@ mod tests {
         let library_items = parse_library();
 
         assert!(library_items.is_ok());
-        assert!(!library_items.unwrap().is_empty());
+        let items = library_items.unwrap();
+        assert!(!items.is_empty());
     }
 }
