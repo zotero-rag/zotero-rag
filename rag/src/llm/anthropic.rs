@@ -35,7 +35,8 @@ impl From<UserMessage> for AnthropicRequest {
         );
 
         AnthropicRequest {
-            model: env::var("ANTHROPIC_MODEL").unwrap_or_else(|_| "claude-3-5-sonnet-20241022".to_string()),
+            model: env::var("ANTHROPIC_MODEL")
+                .unwrap_or_else(|_| "claude-3-5-sonnet-20241022".to_string()),
             max_tokens: 8192,
             messages,
         }

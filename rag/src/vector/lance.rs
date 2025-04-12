@@ -1,7 +1,7 @@
+use super::arrow::{library_to_arrow, ArrowError};
 use core::fmt;
 use lancedb::{connect, connection::CreateTableMode, Error as LanceDbError};
 use std::error::Error;
-use super::arrow::{library_to_arrow, ArrowError};
 
 /// Errors that can occur when working with LanceDB
 #[derive(Debug)]
@@ -45,7 +45,7 @@ impl From<LanceDbError> for LanceError {
 
 pub async fn create_initial_table() -> Result<(), LanceError> {
     let uri = "data/lancedb-table";
-    
+
     // Connect to LanceDB
     let db = connect(uri)
         .execute()
@@ -54,7 +54,7 @@ pub async fn create_initial_table() -> Result<(), LanceError> {
 
     // Get Arrow data - error will be automatically converted using From implementation
     let data = library_to_arrow()?;
-    
+
     // Create the table
     let _tbl = db
         .create_table("table", data)
@@ -62,6 +62,6 @@ pub async fn create_initial_table() -> Result<(), LanceError> {
         .execute()
         .await
         .map_err(|e| LanceError::TableCreationError(e.to_string()))?;
-    
+
     Ok(())
 }

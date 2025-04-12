@@ -62,7 +62,9 @@ impl Error for ArrowError {}
 /// - There's an error creating the Arrow schema
 /// - There's an error converting the data to Arrow format
 /// - Any file paths contain invalid UTF-8 characters
-pub fn library_to_arrow() -> Result<RecordBatchIterator<IntoIter<Result<RecordBatch, arrow_schema::ArrowError>>>, ArrowError> {
+pub fn library_to_arrow(
+) -> Result<RecordBatchIterator<IntoIter<Result<RecordBatch, arrow_schema::ArrowError>>>, ArrowError>
+{
     let lib_items = parse_library()?;
 
     // Convert ZoteroItemMetadata to something that can be converted to Arrow
@@ -129,12 +131,19 @@ mod tests {
     fn library_fetching_works() {
         let batch_iter = library_to_arrow();
 
-        assert!(batch_iter.is_ok(), "Failed to fetch library: {:?}", batch_iter.err());
+        assert!(
+            batch_iter.is_ok(),
+            "Failed to fetch library: {:?}",
+            batch_iter.err()
+        );
 
         let mut batch_iter = batch_iter.unwrap();
         // Get the first batch
-        let batch = batch_iter.next().expect("No batches in iterator").expect("Error in batch");
-        
+        let batch = batch_iter
+            .next()
+            .expect("No batches in iterator")
+            .expect("Error in batch");
+
         assert_eq!(batch.num_columns(), 5, "Expected 5 columns in record batch");
         assert!(
             batch.num_rows() > 0,
