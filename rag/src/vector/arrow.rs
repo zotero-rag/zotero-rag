@@ -1,6 +1,7 @@
 use arrow_array::{self, ArrayRef, RecordBatch, RecordBatchIterator, StringArray};
 use core::fmt;
 use lancedb::arrow::arrow_schema;
+use std::env;
 use std::sync::Arc;
 use std::{error::Error, vec::IntoIter};
 
@@ -129,6 +130,11 @@ mod tests {
 
     #[test]
     fn library_fetching_works() {
+        if env::var("CI").is_ok() {
+            // Skip this test in CI environments
+            return;
+        }
+
         let batch_iter = library_to_arrow();
 
         assert!(

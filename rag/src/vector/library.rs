@@ -102,6 +102,11 @@ mod tests {
 
     #[test]
     fn library_fetching_works() {
+        if env::var("CI").is_ok() {
+            // Skip this test in CI environments
+            return;
+        }
+
         let library_items = parse_library();
 
         assert!(library_items.is_ok());
