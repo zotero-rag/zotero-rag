@@ -1,8 +1,8 @@
-use arrow_array::{self, ArrayRef, RecordBatch, StringArray};
+use arrow_array::{self, ArrayRef, RecordBatch, RecordBatchIterator, StringArray};
 use core::fmt;
 use lancedb::arrow::arrow_schema;
-use std::error::Error;
 use std::sync::Arc;
+use std::{error::Error, vec::IntoIter};
 
 use super::library::{parse_library, LibraryParsingError};
 
@@ -62,7 +62,7 @@ impl Error for ArrowError {}
 /// - There's an error creating the Arrow schema
 /// - There's an error converting the data to Arrow format
 /// - Any file paths contain invalid UTF-8 characters
-pub fn library_to_arrow() -> Result<RecordBatch, ArrowError> {
+pub fn library_to_arrow() -> Result<RecordBatchIterator<IntoIter<Result<RecordBatch, arrow_schema::ArrowError>>>, ArrowError> {
     let lib_items = parse_library()?;
 
     // Convert ZoteroItemMetadata to something that can be converted to Arrow
@@ -100,11 +100,7 @@ pub fn library_to_arrow() -> Result<RecordBatch, ArrowError> {
     // Convert file paths to strings, returning an error if any path has invalid UTF-8
     let file_paths_vec: Result<Vec<&str>, ArrowError> = lib_items
         .iter()
-        .map(|item| {
-            item.file_path
-                .to_str()
-                .ok_or(ArrowError::PathEncodingError)
-        })
+        .map(|item| item.file_path.to_str().ok_or(ArrowError::PathEncodingError))
         .collect();
     let file_paths = StringArray::from(file_paths_vec?);
 
@@ -119,7 +115,10 @@ pub fn library_to_arrow() -> Result<RecordBatch, ArrowError> {
         ],
     )?;
 
-    Ok(record_batch)
+    let batches = vec![Ok(record_batch.clone())];
+    let reader = RecordBatchIterator::new(batches.into_iter(), record_batch.schema());
+
+    Ok(reader)
 }
 
 #[cfg(test)]
@@ -128,12 +127,18 @@ mod tests {
 
     #[test]
     fn library_fetching_works() {
-        let batch = library_to_arrow();
+        let batch_iter = library_to_arrow();
 
-        assert!(batch.is_ok(), "Failed to fetch library: {:?}", batch.err());
+        assert!(batch_iter.is_ok(), "Failed to fetch library: {:?}", batch_iter.err());
+
+        let mut batch_iter = batch_iter.unwrap();
+        // Get the first batch
+        let batch = batch_iter.next().expect("No batches in iterator").expect("Error in batch");
         
-        let batch = batch.unwrap();
         assert_eq!(batch.num_columns(), 5, "Expected 5 columns in record batch");
-        assert!(batch.num_rows() > 0, "Expected at least one row in record batch");
+        assert!(
+            batch.num_rows() > 0,
+            "Expected at least one row in record batch"
+        );
     }
 }
