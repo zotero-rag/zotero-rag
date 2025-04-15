@@ -1,7 +1,6 @@
 use arrow_array::{self, ArrayRef, RecordBatch, RecordBatchIterator, StringArray};
 use core::fmt;
 use lancedb::arrow::arrow_schema;
-use std::env;
 use std::sync::Arc;
 use std::{error::Error, vec::IntoIter};
 
@@ -127,6 +126,7 @@ pub fn library_to_arrow(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::env;
 
     #[test]
     fn library_fetching_works() {
