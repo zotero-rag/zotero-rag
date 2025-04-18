@@ -8,6 +8,12 @@ use std::env;
 #[derive(Debug, Clone)]
 pub struct AnthropicClient {}
 
+impl Default for AnthropicClient {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AnthropicClient {
     /// Creates a new AnthropicClient instance
     pub fn new() -> Self {
@@ -140,11 +146,9 @@ mod tests {
         };
 
         let res = client.send_message(&message).await;
+        dbg!(res.clone().unwrap());
 
         assert!(res.is_ok());
-
-        let res = res.unwrap();
-        dbg!(res);
     }
 
     #[tokio::test]
