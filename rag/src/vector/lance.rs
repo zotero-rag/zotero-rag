@@ -79,7 +79,7 @@ mod tests {
 
         let tbl_names = db.table_names().execute().await;
         assert!(tbl_names.is_ok());
-        assert!(tbl_names.unwrap() == vec!["data"]);
+        assert_eq!(tbl_names.unwrap(), vec!["data"]);
 
         let tbl = db.open_table("data").execute().await;
         assert!(tbl.is_ok());

@@ -4,7 +4,7 @@ use std::error::Error;
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
 
-use lopdf::{Document, Object};
+use lopdf::Document;
 
 use crate::math::{from_cmex, from_cmmi, from_cmsy, from_msbm};
 
@@ -23,7 +23,7 @@ enum PdfError {
     InvalidUtf8,
 }
 
-impl std::error::Error for PdfError {}
+impl Error for PdfError {}
 impl std::fmt::Display for PdfError {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
@@ -272,7 +272,7 @@ impl PdfParser {
 }
 
 fn get_font(doc: &Document, page_id: (u32, u16), font_key: String) -> Result<&str, PdfError> {
-    // Get the fonts dictionary for the page
+    // Get the font dictionary for the page
     let fonts = doc
         .get_page_fonts(page_id)
         .map_err(|_| PdfError::PageFontError)?;

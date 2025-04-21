@@ -36,7 +36,7 @@ impl AnthropicClient {
     ) -> Result<Arc<dyn arrow_array::Array>, LLMError> {
         // Convert to a synchronous operation because the trait expects a Result, not a Future
         let rt = tokio::runtime::Runtime::new()
-            .map_err(|_| LLMError::GenericLLMError(format!("Could not create tokio runtime")))?;
+            .map_err(|_| LLMError::GenericLLMError("Could not create tokio runtime".to_string()))?;
 
         rt.block_on(async {
             let source_array = arrow_array::cast::as_string_array(&source);
@@ -48,7 +48,7 @@ impl AnthropicClient {
                 .map(|text| common::get_openai_embedding(text.clone()));
 
             // Convert to a stream and process with buffer_unordered to limit concurrency
-            let max_concurrent = std::env::var("MAX_CONCURRENT_REQUESTS")
+            let max_concurrent = env::var("MAX_CONCURRENT_REQUESTS")
                 .unwrap_or_else(|_| "5".to_string())
                 .parse::<usize>()
                 .unwrap_or(5);
@@ -192,7 +192,7 @@ impl EmbeddingFunction for AnthropicClient {
 
     fn dest_type(&self) -> Result<Cow<DataType>, lancedb::Error> {
         Ok(Cow::Owned(DataType::FixedSizeList(
-            Arc::new(lancedb::arrow::arrow_schema::Field::new(
+            Arc::new(Field::new(
                 "item",
                 DataType::Float32,
                 false,

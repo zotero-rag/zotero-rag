@@ -14,7 +14,7 @@ pub enum ArrowError {
 }
 
 impl fmt::Display for ArrowError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::LibNotFoundError => write!(f, "Library not found"),
             Self::ArrowSchemaError(msg) => write!(f, "Arrow schema error: {}", msg),
@@ -57,7 +57,7 @@ impl Error for ArrowError {}
 ///
 /// # Errors
 ///
-/// This function will return an error if:
+/// This function returns an error if:
 /// - The Zotero library can't be found or parsed
 /// - There's an error creating the Arrow schema
 /// - There's an error converting the data to Arrow format
