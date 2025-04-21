@@ -136,7 +136,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore]
     async fn test_request_works() {
         dotenv().ok();
 
