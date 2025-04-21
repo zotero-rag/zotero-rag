@@ -37,7 +37,7 @@ pub async fn get_openai_embedding(text: String) -> Result<Vec<f32>, LLMError> {
         data: Vec<EmbeddingResponseData>,
     }
 
-    let key = env::var("OPENAI_API_KEY").expect("OpenAI API key not set");
+    let key = env::var("OPENAI_API_KEY")?;
     let model = env::var("OPENAI_EMBEDDING_MODEL").unwrap_or("text-embedding-3-small".to_string());
 
     let client = reqwest::Client::new();
@@ -56,14 +56,8 @@ pub async fn get_openai_embedding(text: String) -> Result<Vec<f32>, LLMError> {
         .await?;
 
     let body = response.text().await?;
-    let json: serde_json::Value = match serde_json::from_str(&body) {
-        Ok(json) => json,
-        Err(_) => return Err(LLMError::DeserializationError(body)),
-    };
-    let response: EmbeddingResponse = match serde_json::from_value(json) {
-        Ok(response) => response,
-        Err(_) => return Err(LLMError::DeserializationError(body)),
-    };
+    let json: serde_json::Value = serde_json::from_str(&body)?;
+    let response: EmbeddingResponse = serde_json::from_value(json)?;
 
     Ok(response.data[0].embedding.clone())
 }

@@ -165,15 +165,8 @@ impl ApiClient for AnthropicClient {
         // Get the response body as text first for debugging
         let body = res.text().await?;
 
-        let json: serde_json::Value = match serde_json::from_str(&body) {
-            Ok(json) => json,
-            Err(_) => return Err(super::errors::LLMError::DeserializationError(body)),
-        };
-
-        let response: AnthropicResponse = match serde_json::from_value(json) {
-            Ok(response) => response,
-            Err(_) => return Err(super::errors::LLMError::DeserializationError(body)),
-        };
+        let json: serde_json::Value = serde_json::from_str(&body)?;
+        let response: AnthropicResponse = serde_json::from_value(json)?;
 
         Ok(ApiResponse {
             content: response.content[0].text.clone(),
