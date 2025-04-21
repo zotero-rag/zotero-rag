@@ -10,6 +10,7 @@ pub enum LLMError {
     EnvError,
     DeserializationError(String),
     InvalidProviderError(String),
+    LanceError(String),
 }
 
 impl std::error::Error for LLMError {}
@@ -30,6 +31,7 @@ impl std::fmt::Display for LLMError {
             LLMError::InvalidProviderError(provider) => {
                 write!(f, "Invalid LLM provider: {}", provider)
             }
+            LLMError::LanceError(msg) => write!(f, "LanceDB Error: {}", msg),
         }
     }
 }
@@ -64,5 +66,11 @@ impl From<std::env::VarError> for LLMError {
 impl From<serde_json::Error> for LLMError {
     fn from(error: serde_json::Error) -> LLMError {
         LLMError::DeserializationError(error.to_string())
+    }
+}
+
+impl From<lancedb::Error> for LLMError {
+    fn from(error: lancedb::Error) -> Self {
+        LLMError::LanceError(error.to_string())
     }
 }

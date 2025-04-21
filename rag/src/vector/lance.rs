@@ -1,6 +1,6 @@
 use super::arrow::{library_to_arrow, ArrowError};
 use core::fmt;
-use lancedb::{connect, connection::CreateTableMode, Error as LanceDbError};
+use lancedb::{connect, connection::CreateTableMode, Connection, Error as LanceDbError};
 use std::error::Error;
 
 /// Errors that can occur when working with LanceDB
@@ -43,7 +43,7 @@ impl From<LanceDbError> for LanceError {
     }
 }
 
-pub async fn create_initial_table() -> Result<(), LanceError> {
+pub async fn create_initial_table() -> Result<Connection, LanceError> {
     let uri = "data/lancedb-table";
 
     // Connect to LanceDB
@@ -57,11 +57,31 @@ pub async fn create_initial_table() -> Result<(), LanceError> {
 
     // Create the table
     let _tbl = db
-        .create_table("table", data)
+        .create_table("data", data)
         .mode(CreateTableMode::Overwrite)
         .execute()
         .await
         .map_err(|e| LanceError::TableCreationError(e.to_string()))?;
 
-    Ok(())
+    Ok(db)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_create_initial_table() {
+        let db = create_initial_table().await;
+
+        assert!(db.is_ok());
+        let db = db.unwrap();
+
+        let tbl_names = db.table_names().execute().await;
+        assert!(tbl_names.is_ok());
+        assert!(tbl_names.unwrap() == vec!["data"]);
+
+        let tbl = db.open_table("data").execute().await;
+        assert!(tbl.is_ok());
+    }
 }

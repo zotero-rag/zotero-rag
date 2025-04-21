@@ -1,7 +1,16 @@
 use super::base::{ApiClient, ApiResponse, ChatHistoryItem, UserMessage};
+use super::errors::LLMError;
+use crate::common;
+use arrow_array;
+use futures::stream;
+use futures::StreamExt;
+use lancedb::arrow::arrow_schema::{DataType, Field};
+use lancedb::embeddings::EmbeddingFunction;
 use reqwest;
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 use std::env;
+use std::sync::Arc;
 
 /// A generic client class for now. We can add stuff here later if needed, for
 /// example, features like Anthropic's native RAG thing
@@ -18,6 +27,69 @@ impl AnthropicClient {
     /// Creates a new AnthropicClient instance
     pub fn new() -> Self {
         Self {}
+    }
+
+    // This is our internal implementation that works with LLMError
+    fn compute_embeddings_internal(
+        &self,
+        source: Arc<dyn arrow_array::Array>,
+    ) -> Result<Arc<dyn arrow_array::Array>, LLMError> {
+        // Convert to a synchronous operation because the trait expects a Result, not a Future
+        let rt = tokio::runtime::Runtime::new()
+            .map_err(|_| LLMError::GenericLLMError(format!("Could not create tokio runtime")))?;
+
+        rt.block_on(async {
+            let source_array = arrow_array::cast::as_string_array(&source);
+            let texts: Vec<String> = source_array.iter().map(|s| s.unwrap().to_owned()).collect();
+
+            // Create a stream of futures
+            let futures = texts
+                .iter()
+                .map(|text| common::get_openai_embedding(text.clone()));
+
+            // Convert to a stream and process with buffer_unordered to limit concurrency
+            let max_concurrent = std::env::var("MAX_CONCURRENT_REQUESTS")
+                .unwrap_or_else(|_| "5".to_string())
+                .parse::<usize>()
+                .unwrap_or(5);
+
+            // Process futures with limited concurrency
+            let results = stream::iter(futures)
+                .buffer_unordered(max_concurrent)
+                .collect::<Vec<_>>()
+                .await;
+
+            // Process results and construct Arrow array
+            let mut embeddings: Vec<Vec<f32>> = Vec::with_capacity(texts.len());
+            for result in results {
+                match result {
+                    Ok(embedding) => embeddings.push(embedding),
+                    Err(e) => return Err(e),
+                }
+            }
+
+            // Convert to Arrow FixedSizeListArray
+            let embedding_dim = if embeddings.is_empty() {
+                1536 // default for text-embedding-3-small
+            } else {
+                embeddings[0].len()
+            };
+
+            let flattened: Vec<f32> = embeddings.iter().flatten().copied().collect();
+            let values = arrow_array::Float32Array::from(flattened);
+
+            let list_array = arrow_array::FixedSizeListArray::try_new(
+                Arc::new(Field::new("item", DataType::Float32, false)),
+                embedding_dim as i32,
+                Arc::new(values),
+                None,
+            )
+            .map_err(|e| {
+                LLMError::GenericLLMError(format!("Failed to create FixedSizeListArray: {}", e))
+            })?;
+
+            Ok(Arc::new(list_array) as Arc<dyn arrow_array::Array>)
+        })
     }
 }
 
@@ -76,10 +148,7 @@ struct AnthropicResponse {
 /// We can use hard-coded strings here; I think the resulting
 /// locality-of-behavior is worth the loss in pointless generality.
 impl ApiClient for AnthropicClient {
-    async fn send_message(
-        &self,
-        message: &UserMessage,
-    ) -> Result<ApiResponse, super::errors::LLMError> {
+    async fn send_message(&self, message: &UserMessage) -> Result<ApiResponse, LLMError> {
         let key = env::var("ANTHROPIC_KEY")?;
 
         let client = reqwest::Client::new();
@@ -111,6 +180,61 @@ impl ApiClient for AnthropicClient {
             input_tokens: response.usage.input_tokens,
             output_tokens: response.usage.output_tokens,
         })
+    }
+}
+
+/// Implements the LanceDB EmbeddingFunction trait for AnthropicClient. Note that Anthropic
+/// does not have their own embeddings model, so we'll just use OpenAI's model instead. This
+/// does mean users will need an API key from both--but there's really no other option here.
+/// Anthropic's docs recommend Voyage AI--but users are more likely to have an OpenAI key than
+/// a Voyage AI key.
+impl EmbeddingFunction for AnthropicClient {
+    fn name(&self) -> &str {
+        "Anthropic"
+    }
+
+    fn source_type(&self) -> Result<Cow<DataType>, lancedb::Error> {
+        Ok(Cow::Owned(DataType::Utf8))
+    }
+
+    fn dest_type(&self) -> Result<Cow<DataType>, lancedb::Error> {
+        Ok(Cow::Owned(DataType::FixedSizeList(
+            Arc::new(lancedb::arrow::arrow_schema::Field::new(
+                "item",
+                DataType::Float32,
+                false,
+            )),
+            1536, // text-embedding-3-small size
+        )))
+    }
+
+    fn compute_source_embeddings(
+        &self,
+        source: Arc<dyn arrow_array::Array>,
+    ) -> Result<Arc<dyn arrow_array::Array>, lancedb::Error> {
+        // Call our internal implementation and map LLMError to lancedb::Error
+        match self.compute_embeddings_internal(source) {
+            Ok(result) => Ok(result),
+            Err(e) => Err(lancedb::Error::Other {
+                message: e.to_string(),
+                source: None,
+            }),
+        }
+    }
+
+    fn compute_query_embeddings(
+        &self,
+        input: Arc<dyn arrow_array::Array>,
+    ) -> Result<Arc<dyn arrow_array::Array>, lancedb::Error> {
+        // For queries, we don't need concurrency since it's typically a single query
+        // Just reuse the same implementation with the expectation it's usually for one item
+        match self.compute_embeddings_internal(input) {
+            Ok(result) => Ok(result),
+            Err(e) => Err(lancedb::Error::Other {
+                message: e.to_string(),
+                source: None,
+            }),
+        }
     }
 }
 
