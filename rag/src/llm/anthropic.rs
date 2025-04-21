@@ -30,7 +30,7 @@ impl AnthropicClient {
     }
 
     // This is our internal implementation that works with LLMError
-    fn compute_embeddings_internal(
+    pub fn compute_embeddings_internal(
         &self,
         source: Arc<dyn arrow_array::Array>,
     ) -> Result<Arc<dyn arrow_array::Array>, LLMError> {
@@ -240,6 +240,10 @@ impl EmbeddingFunction for AnthropicClient {
 
 #[cfg(test)]
 mod tests {
+    use std::env;
+    use std::sync::Arc;
+
+    use arrow_array::Array;
     use dotenv::dotenv;
 
     use crate::llm::base::{ApiClient, ApiResponse, UserMessage};
@@ -259,9 +263,13 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore]
     async fn test_request_works() {
         dotenv().ok();
+
+        if env::var("CI").is_ok() {
+            // Skip this test in CI environments
+            return;
+        }
 
         let client = AnthropicClient {};
         let message = UserMessage {
@@ -300,5 +308,35 @@ mod tests {
         let res = res.unwrap();
         assert_eq!(res.input_tokens, 9);
         assert_eq!(res.output_tokens, 13);
+    }
+
+    #[test]
+    fn test_compute_embeddings() {
+        dotenv().ok();
+
+        if env::var("CI").is_ok() {
+            // Skip this test in CI environments
+            return;
+        }
+
+        let array = arrow_array::StringArray::from(vec![
+            "Hello, World!",
+            "A second string",
+            "A third string",
+            "A fourth string",
+            "A fifth string",
+            "A sixth string",
+        ]);
+
+        let client = AnthropicClient::new();
+        let embeddings = client.compute_embeddings_internal(Arc::new(array));
+
+        assert!(embeddings.is_ok());
+
+        let embeddings = embeddings.unwrap();
+        let vector = arrow_array::cast::as_fixed_size_list_array(&embeddings);
+
+        assert_eq!(vector.len(), 6);
+        assert_eq!(vector.value_length(), 1536);
     }
 }

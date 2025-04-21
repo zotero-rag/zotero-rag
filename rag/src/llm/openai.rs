@@ -138,6 +138,12 @@ mod tests {
     #[ignore]
     async fn test_request_works() {
         dotenv().ok();
+
+        if env::var("CI").is_ok() {
+            // Skip this test in CI environments
+            return;
+        }
+
         let client = OpenAIClient::new();
         let message = UserMessage {
             chat_history: Vec::new(),
@@ -170,4 +176,3 @@ mod tests {
         assert_eq!(res.output_tokens, mock_response.output_tokens);
     }
 }
-
