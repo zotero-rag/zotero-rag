@@ -122,6 +122,7 @@ mod tests {
     use crate::llm::base::{ApiClient, ApiResponse, UserMessage};
     use crate::llm::errors::LLMError;
     use dotenv::dotenv;
+    use std::env;
 
     /// Mock implementation of the ApiClient trait
     struct MockOpenAIClient {
