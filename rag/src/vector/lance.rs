@@ -1,4 +1,8 @@
-use crate::llm::{anthropic::AnthropicClient, openai::OpenAIClient};
+use crate::llm::{
+    anthropic::AnthropicClient, 
+    http_client::ReqwestClient, 
+    openai::OpenAIClient
+};
 
 use super::arrow::{library_to_arrow, ArrowError};
 use core::fmt;
@@ -45,6 +49,16 @@ impl From<LanceDbError> for LanceError {
     }
 }
 
+/// Creates and initializes a LanceDB table for vector storage
+/// 
+/// Connects to LanceDB at the default location, creates a table named "data",
+/// and registers embedding functions for both Anthropic and OpenAI.
+///
+/// # Returns
+/// A Connection to the LanceDB database if successful
+///
+/// # Errors
+/// Returns a `LanceError` if connection, table creation, or registering embedding functions fails
 pub async fn create_initial_table() -> Result<Connection, LanceError> {
     let uri = "data/lancedb-table";
 
@@ -66,10 +80,10 @@ pub async fn create_initial_table() -> Result<Connection, LanceError> {
         .map_err(|e| LanceError::TableCreationError(e.to_string()))?;
 
     db.embedding_registry()
-        .register("anthropic", Arc::new(AnthropicClient {}))?;
+        .register("anthropic", Arc::new(AnthropicClient::<ReqwestClient>::default()))?;
 
     db.embedding_registry()
-        .register("openai", Arc::new(OpenAIClient {}))?;
+        .register("openai", Arc::new(OpenAIClient::default()))?;
 
     Ok(db)
 }

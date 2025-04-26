@@ -1,12 +1,13 @@
 use super::base::{ApiClient, ApiResponse, ChatHistoryItem, UserMessage};
 use super::errors::LLMError;
+use super::http_client::{HttpClient, ReqwestClient};
 use crate::common;
 use arrow_array;
 use futures::stream;
 use futures::StreamExt;
+use http::HeaderMap;
 use lancedb::arrow::arrow_schema::{DataType, Field};
 use lancedb::embeddings::EmbeddingFunction;
-use reqwest;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::env;
@@ -15,18 +16,25 @@ use std::sync::Arc;
 /// A generic client class for now. We can add stuff here later if needed, for
 /// example, features like Anthropic's native RAG thing
 #[derive(Debug, Clone)]
-pub struct AnthropicClient {}
+pub struct AnthropicClient<T: HttpClient = ReqwestClient> {
+    pub client: T,
+}
 
-impl Default for AnthropicClient {
+impl<T: HttpClient + Default> Default for AnthropicClient<T> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl AnthropicClient {
+impl<T> AnthropicClient<T>
+where
+    T: HttpClient + Default,
+{
     /// Creates a new AnthropicClient instance
     pub fn new() -> Self {
-        Self {}
+        Self {
+            client: T::default(),
+        }
     }
 
     // This is our internal implementation that works with LLMError
@@ -94,6 +102,11 @@ impl AnthropicClient {
     }
 }
 
+/// Represents a request to the Anthropic API
+/// 
+/// * `model` - The model to use for the request (e.g., "claude-3-5-sonnet-20241022")
+/// * `max_tokens` - The maximum number of tokens that can be generated in the response
+/// * `messages` - The conversation history and current message
 #[derive(Serialize, Deserialize)]
 struct AnthropicRequest {
     model: String,
@@ -122,19 +135,37 @@ impl From<UserMessage> for AnthropicRequest {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+/// Token usage statistics returned by the Anthropic API
+/// 
+/// * `input_tokens` - Number of tokens in the input prompt
+/// * `output_tokens` - Number of tokens in the generated response
+#[derive(Clone, Serialize, Deserialize)]
 struct AnthropicUsageStats {
     input_tokens: u32,
     output_tokens: u32,
 }
 
-#[derive(Serialize, Deserialize)]
+/// Content block in an Anthropic API response
+/// 
+/// * `text` - The text content from the model's response
+/// * `r#type` - The type of content (usually "text")
+#[derive(Clone, Serialize, Deserialize)]
 struct AnthropicResponseContent {
     text: String,
     r#type: String,
 }
 
-#[derive(Serialize, Deserialize)]
+/// Response from the Anthropic API
+/// 
+/// * `id` - Unique identifier for the response
+/// * `model` - The model that generated the response
+/// * `role` - The role of the message (usually "assistant")
+/// * `stop_reason` - Why the model stopped generating (e.g., "end_turn")
+/// * `stop_sequence` - The stop sequence that caused generation to end, if any
+/// * `usage` - Token usage statistics
+/// * `r#type` - The type of the response (usually "message")
+/// * `content` - The content blocks in the response
+#[derive(Clone, Serialize, Deserialize)]
 struct AnthropicResponse {
     id: String,
     model: String,
@@ -148,19 +179,19 @@ struct AnthropicResponse {
 
 /// We can use hard-coded strings here; I think the resulting
 /// locality-of-behavior is worth the loss in pointless generality.
-impl ApiClient for AnthropicClient {
+impl<T: HttpClient> ApiClient for AnthropicClient<T> {
     async fn send_message(&self, message: &UserMessage) -> Result<ApiResponse, LLMError> {
         let key = env::var("ANTHROPIC_KEY")?;
 
-        let client = reqwest::Client::new();
+        let mut headers = HeaderMap::new();
+        headers.insert("x-api-key", key.parse().unwrap());
+        headers.insert("anthropic-version", "2023-06-01".parse().unwrap());
+        headers.insert("content-type", "application/json".parse().unwrap());
+
         let req_body: AnthropicRequest = message.clone().into();
-        let res = client
-            .post("https://api.anthropic.com/v1/messages")
-            .header("x-api-key", key)
-            .header("anthropic-version", "2023-06-01")
-            .header("content-type", "application/json")
-            .json(&req_body)
-            .send()
+        let res = self
+            .client
+            .post_json("https://api.anthropic.com/v1/messages", headers, &req_body)
             .await?;
 
         // Get the response body as text first for debugging
@@ -184,7 +215,7 @@ impl ApiClient for AnthropicClient {
 /// a Voyage AI key.
 ///
 /// Maintainers should note that any updates here should also be reflected in AnthropicClient.
-impl EmbeddingFunction for AnthropicClient {
+impl<T: HttpClient + Default + std::fmt::Debug> EmbeddingFunction for AnthropicClient<T> {
     fn name(&self) -> &str {
         "Anthropic"
     }
@@ -195,11 +226,7 @@ impl EmbeddingFunction for AnthropicClient {
 
     fn dest_type(&self) -> Result<Cow<DataType>, lancedb::Error> {
         Ok(Cow::Owned(DataType::FixedSizeList(
-            Arc::new(Field::new(
-                "item",
-                DataType::Float32,
-                false,
-            )),
+            Arc::new(Field::new("item", DataType::Float32, false)),
             1536, // text-embedding-3-small size
         )))
     }
@@ -242,21 +269,12 @@ mod tests {
     use arrow_array::Array;
     use dotenv::dotenv;
 
-    use crate::llm::base::{ApiClient, ApiResponse, UserMessage};
-    use crate::llm::errors::LLMError;
+    use crate::llm::base::{ApiClient, UserMessage};
+    use crate::llm::http_client::{MockHttpClient, ReqwestClient};
 
-    use super::AnthropicClient;
-
-    // Mock implementation of the ApiClient trait
-    struct MockAnthropicClient {
-        response: Result<ApiResponse, LLMError>,
-    }
-
-    impl ApiClient for MockAnthropicClient {
-        async fn send_message(&self, _message: &UserMessage) -> Result<ApiResponse, LLMError> {
-            self.response.clone()
-        }
-    }
+    use super::{
+        AnthropicClient, AnthropicResponse, AnthropicResponseContent, AnthropicUsageStats,
+    };
 
     #[tokio::test]
     async fn test_request_works() {
@@ -267,7 +285,7 @@ mod tests {
             return;
         }
 
-        let client = AnthropicClient {};
+        let client = AnthropicClient::<ReqwestClient>::default();
         let message = UserMessage {
             chat_history: Vec::new(),
             message: "Hello!".to_owned(),
@@ -281,15 +299,30 @@ mod tests {
 
     #[tokio::test]
     async fn test_request_with_mock() {
-        // TODO: Not fully fleshed out yet--I need a real mocking library
-        let mock_response = ApiResponse {
-            content: "Hi there! How can I help you today?".to_string(),
-            input_tokens: 9,
-            output_tokens: 13,
+        // Load environment variables from .env file
+        dotenv().ok();
+        
+        // Create a proper AnthropicResponse that matches the structure we expect to deserialize
+        let mock_response = AnthropicResponse {
+            id: "mock-id".to_string(),
+            model: "claude-3-5-sonnet-20241022".to_string(),
+            role: "assistant".to_string(),
+            stop_reason: "end_turn".to_string(),
+            stop_sequence: None,
+            usage: AnthropicUsageStats {
+                input_tokens: 9,
+                output_tokens: 13,
+            },
+            r#type: "message".to_string(),
+            content: vec![AnthropicResponseContent {
+                text: "Hi there! How can I help you today?".to_string(),
+                r#type: "text".to_string(),
+            }],
         };
 
-        let mock_client = MockAnthropicClient {
-            response: Ok(mock_response),
+        let mock_http_client = MockHttpClient::new(mock_response);
+        let mock_client = AnthropicClient {
+            client: mock_http_client,
         };
 
         let message = UserMessage {
@@ -299,11 +332,17 @@ mod tests {
 
         let res = mock_client.send_message(&message).await;
 
+        // Debug the error if there is one
+        if res.is_err() {
+            println!("Anthropic test error: {:?}", res.as_ref().err());
+        }
+
         assert!(res.is_ok());
 
         let res = res.unwrap();
         assert_eq!(res.input_tokens, 9);
         assert_eq!(res.output_tokens, 13);
+        assert_eq!(res.content, "Hi there! How can I help you today?");
     }
 
     #[test]
@@ -324,7 +363,7 @@ mod tests {
             "A sixth string",
         ]);
 
-        let client = AnthropicClient::new();
+        let client = AnthropicClient::<ReqwestClient>::default();
         let embeddings = client.compute_embeddings_internal(Arc::new(array));
 
         assert!(embeddings.is_ok());

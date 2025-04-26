@@ -1,11 +1,12 @@
 use super::base::{ApiClient, ApiResponse, ChatHistoryItem, UserMessage};
 use super::errors::LLMError;
+use super::http_client::{HttpClient, ReqwestClient};
 use crate::common;
 use futures::stream;
 use futures::StreamExt;
+use http::HeaderMap;
 use lancedb::arrow::arrow_schema::{DataType, Field};
 use lancedb::embeddings::EmbeddingFunction;
-use reqwest;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::env;
@@ -13,18 +14,25 @@ use std::sync::Arc;
 
 /// A client for OpenAI's chat completions API
 #[derive(Debug, Clone)]
-pub struct OpenAIClient {}
+pub struct OpenAIClient<T: HttpClient = ReqwestClient> {
+    pub client: T,
+}
 
-impl Default for OpenAIClient {
+impl<T: HttpClient + Default> Default for OpenAIClient<T> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl OpenAIClient {
+impl<T> OpenAIClient<T>
+where
+    T: HttpClient + Default,
+{
     /// Creates a new OpenAIClient instance
     pub fn new() -> Self {
-        Self {}
+        Self {
+            client: T::default(),
+        }
     }
 
     // This is our internal implementation that works with LLMError
@@ -120,27 +128,27 @@ impl From<UserMessage> for OpenAIRequest {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 struct OpenAIUsage {
     prompt_tokens: u32,
     completion_tokens: u32,
     total_tokens: u32,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 struct OpenAIChoiceMessage {
     role: String,
     content: String,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 struct OpenAIChoice {
     message: OpenAIChoiceMessage,
     finish_reason: Option<String>,
     index: u32,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 struct OpenAIResponse {
     id: String,
     object: String,
@@ -150,21 +158,25 @@ struct OpenAIResponse {
     choices: Vec<OpenAIChoice>,
 }
 
-impl ApiClient for OpenAIClient {
+impl<T: HttpClient> ApiClient for OpenAIClient<T> {
     async fn send_message(
         &self,
         message: &UserMessage,
     ) -> Result<ApiResponse, super::errors::LLMError> {
         let key = env::var("OPENAI_API_KEY")?;
 
-        let client = reqwest::Client::new();
+        let mut headers = HeaderMap::new();
+        headers.insert("Authorization", format!("Bearer {}", key).parse().unwrap());
+        headers.insert("content-type", "application/json".parse().unwrap());
+
         let req_body: OpenAIRequest = message.clone().into();
-        let res = client
-            .post("https://api.openai.com/v1/chat/completions")
-            .bearer_auth(key)
-            .header("content-type", "application/json")
-            .json(&req_body)
-            .send()
+        let res = self
+            .client
+            .post_json(
+                "https://api.openai.com/v1/chat/completions",
+                headers,
+                &req_body,
+            )
             .await?;
 
         let body = res.text().await?;
@@ -245,22 +257,11 @@ impl EmbeddingFunction for OpenAIClient {
 
 #[cfg(test)]
 mod tests {
-    use super::OpenAIClient;
-    use crate::llm::base::{ApiClient, ApiResponse, UserMessage};
-    use crate::llm::errors::LLMError;
+    use super::{OpenAIClient, OpenAIResponse, OpenAIUsage, OpenAIChoice, OpenAIChoiceMessage};
+    use crate::llm::base::{ApiClient, UserMessage};
+    use crate::llm::http_client::{MockHttpClient, ReqwestClient};
     use dotenv::dotenv;
     use std::env;
-
-    /// Mock implementation of the ApiClient trait
-    struct MockOpenAIClient {
-        response: Result<ApiResponse, LLMError>,
-    }
-
-    impl ApiClient for MockOpenAIClient {
-        async fn send_message(&self, _message: &UserMessage) -> Result<ApiResponse, LLMError> {
-            self.response.clone()
-        }
-    }
 
     #[tokio::test]
     async fn test_request_works() {
@@ -271,7 +272,7 @@ mod tests {
             return;
         }
 
-        let client = OpenAIClient::new();
+        let client = OpenAIClient::<ReqwestClient>::default();
         let message = UserMessage {
             chat_history: Vec::new(),
             message: "Hello!".to_owned(),
@@ -283,23 +284,50 @@ mod tests {
 
     #[tokio::test]
     async fn test_request_with_mock() {
-        let mock_response = ApiResponse {
-            content: "Hi there!".to_string(),
-            input_tokens: 5,
-            output_tokens: 10,
+        // Load environment variables from .env file
+        dotenv().ok();
+        
+        // Create a proper OpenAIResponse that matches the structure we expect to deserialize
+        let mock_response = OpenAIResponse {
+            id: "mock-id".to_string(),
+            object: "chat.completion".to_string(),
+            created: 1234567890,
+            model: "gpt-3.5-turbo".to_string(),
+            usage: OpenAIUsage {
+                prompt_tokens: 5,
+                completion_tokens: 10,
+                total_tokens: 15,
+            },
+            choices: vec![OpenAIChoice {
+                message: OpenAIChoiceMessage {
+                    role: "assistant".to_string(),
+                    content: "Hi there!".to_string(),
+                },
+                finish_reason: Some("stop".to_string()),
+                index: 0,
+            }],
         };
-        let mock_client = MockOpenAIClient {
-            response: Ok(mock_response.clone()),
+        
+        let mock_http_client = MockHttpClient::new(mock_response);
+        let mock_client = OpenAIClient {
+            client: mock_http_client,
         };
+
         let message = UserMessage {
             chat_history: Vec::new(),
             message: "Hello!".to_owned(),
         };
         let res = mock_client.send_message(&message).await;
+        
+        // Debug the error if there is one
+        if res.is_err() {
+            println!("OpenAI test error: {:?}", res.as_ref().err());
+        }
+        
         assert!(res.is_ok());
         let res = res.unwrap();
-        assert_eq!(res.content, mock_response.content);
-        assert_eq!(res.input_tokens, mock_response.input_tokens);
-        assert_eq!(res.output_tokens, mock_response.output_tokens);
+        assert_eq!(res.content, "Hi there!");
+        assert_eq!(res.input_tokens, 5);
+        assert_eq!(res.output_tokens, 10);
     }
 }

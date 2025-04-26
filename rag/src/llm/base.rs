@@ -17,7 +17,7 @@ pub struct UserMessage {
 
 /// A user-facing struct representing API responses, containing only information users
 /// would be interested in.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ApiResponse {
     pub content: String,
     pub input_tokens: u32,
