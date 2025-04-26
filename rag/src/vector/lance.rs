@@ -1,7 +1,9 @@
+use crate::llm::{anthropic::AnthropicClient, openai::OpenAIClient};
+
 use super::arrow::{library_to_arrow, ArrowError};
 use core::fmt;
 use lancedb::{connect, connection::CreateTableMode, Connection, Error as LanceDbError};
-use std::error::Error;
+use std::{error::Error, sync::Arc};
 
 /// Errors that can occur when working with LanceDB
 #[derive(Debug)]
@@ -62,6 +64,12 @@ pub async fn create_initial_table() -> Result<Connection, LanceError> {
         .execute()
         .await
         .map_err(|e| LanceError::TableCreationError(e.to_string()))?;
+
+    db.embedding_registry()
+        .register("anthropic", Arc::new(AnthropicClient {}))?;
+
+    db.embedding_registry()
+        .register("openai", Arc::new(OpenAIClient {}))?;
 
     Ok(db)
 }

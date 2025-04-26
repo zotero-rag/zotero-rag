@@ -30,6 +30,7 @@ impl AnthropicClient {
     }
 
     // This is our internal implementation that works with LLMError
+    // Note that this is also copied in OpenAIClient.
     pub fn compute_embeddings_internal(
         &self,
         source: Arc<dyn arrow_array::Array>,
@@ -181,6 +182,8 @@ impl ApiClient for AnthropicClient {
 /// does mean users will need an API key from both--but there's really no other option here.
 /// Anthropic's docs recommend Voyage AI--but users are more likely to have an OpenAI key than
 /// a Voyage AI key.
+///
+/// Maintainers should note that any updates here should also be reflected in AnthropicClient.
 impl EmbeddingFunction for AnthropicClient {
     fn name(&self) -> &str {
         "Anthropic"
