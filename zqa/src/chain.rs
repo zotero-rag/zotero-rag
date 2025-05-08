@@ -1,4 +1,5 @@
 pub mod tasks;
+pub mod utils;
 
 use rag::task::Chain;
 use tasks::input::{UserInput, UserInputTask};

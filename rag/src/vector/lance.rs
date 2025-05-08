@@ -1,13 +1,12 @@
-use crate::llm::{
-    anthropic::AnthropicClient, 
-    http_client::ReqwestClient, 
-    openai::OpenAIClient
-};
+use crate::llm::{anthropic::AnthropicClient, http_client::ReqwestClient, openai::OpenAIClient};
 
-use super::arrow::{library_to_arrow, ArrowError};
+use arrow_array::{RecordBatch, RecordBatchIterator};
 use core::fmt;
-use lancedb::{connect, connection::CreateTableMode, Connection, Error as LanceDbError};
-use std::{error::Error, sync::Arc};
+use lancedb::{
+    arrow::arrow_schema::ArrowError, connect, connection::CreateTableMode, Connection,
+    Error as LanceDbError,
+};
+use std::{error::Error, sync::Arc, vec::IntoIter};
 
 /// Errors that can occur when working with LanceDB
 #[derive(Debug)]
@@ -16,8 +15,6 @@ pub enum LanceError {
     ConnectionError(String),
     /// Error creating a table in LanceDB
     TableCreationError(String),
-    /// Error with Arrow data
-    ArrowError(ArrowError),
     /// Other LanceDB-related errors
     Other(String),
 }
@@ -27,20 +24,12 @@ impl fmt::Display for LanceError {
         match self {
             Self::ConnectionError(msg) => write!(f, "LanceDB connection error: {}", msg),
             Self::TableCreationError(msg) => write!(f, "LanceDB table creation error: {}", msg),
-            Self::ArrowError(e) => write!(f, "Arrow error: {}", e),
             Self::Other(msg) => write!(f, "LanceDB error: {}", msg),
         }
     }
 }
 
 impl Error for LanceError {}
-
-// Convert from ArrowError to LanceError
-impl From<ArrowError> for LanceError {
-    fn from(err: ArrowError) -> Self {
-        Self::ArrowError(err)
-    }
-}
 
 // Convert from LanceDB's error to our LanceError
 impl From<LanceDbError> for LanceError {
@@ -50,7 +39,7 @@ impl From<LanceDbError> for LanceError {
 }
 
 /// Creates and initializes a LanceDB table for vector storage
-/// 
+///
 /// Connects to LanceDB at the default location, creates a table named "data",
 /// and registers embedding functions for both Anthropic and OpenAI.
 ///
@@ -59,7 +48,9 @@ impl From<LanceDbError> for LanceError {
 ///
 /// # Errors
 /// Returns a `LanceError` if connection, table creation, or registering embedding functions fails
-pub async fn create_initial_table() -> Result<Connection, LanceError> {
+pub async fn create_initial_table(
+    data: RecordBatchIterator<IntoIter<Result<RecordBatch, ArrowError>>>,
+) -> Result<Connection, LanceError> {
     let uri = "data/lancedb-table";
 
     // Connect to LanceDB
@@ -67,9 +58,6 @@ pub async fn create_initial_table() -> Result<Connection, LanceError> {
         .execute()
         .await
         .map_err(|e| LanceError::ConnectionError(e.to_string()))?;
-
-    // Get Arrow data - error will be automatically converted using From implementation
-    let data = library_to_arrow()?;
 
     // Create the table
     let _tbl = db
@@ -79,8 +67,10 @@ pub async fn create_initial_table() -> Result<Connection, LanceError> {
         .await
         .map_err(|e| LanceError::TableCreationError(e.to_string()))?;
 
-    db.embedding_registry()
-        .register("anthropic", Arc::new(AnthropicClient::<ReqwestClient>::default()))?;
+    db.embedding_registry().register(
+        "anthropic",
+        Arc::new(AnthropicClient::<ReqwestClient>::default()),
+    )?;
 
     db.embedding_registry()
         .register("openai", Arc::new(OpenAIClient::default()))?;
@@ -90,11 +80,23 @@ pub async fn create_initial_table() -> Result<Connection, LanceError> {
 
 #[cfg(test)]
 mod tests {
+    use arrow_array::StringArray;
+
     use super::*;
 
     #[tokio::test]
     async fn test_create_initial_table() {
-        let db = create_initial_table().await;
+        let schema = arrow_schema::Schema::new(vec![arrow_schema::Field::new(
+            "data",
+            arrow_schema::DataType::Utf8,
+            false,
+        )]);
+        let data = StringArray::from(vec!["Hello", "World"]);
+        let record_batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(data)]).unwrap();
+        let batches = vec![Ok(record_batch.clone())];
+        let reader = RecordBatchIterator::new(batches.into_iter(), record_batch.schema());
+
+        let db = create_initial_table(reader).await;
 
         assert!(db.is_ok());
         let db = db.unwrap();

@@ -1,6 +1,6 @@
 use arrow_array::{self, ArrayRef, RecordBatch, RecordBatchIterator, StringArray};
+use arrow_schema;
 use core::fmt;
-use lancedb::arrow::arrow_schema;
 use std::sync::Arc;
 use std::{error::Error, vec::IntoIter};
 

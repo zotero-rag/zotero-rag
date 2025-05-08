@@ -110,7 +110,7 @@ where
 }
 
 /// Represents a request to the Anthropic API
-/// 
+///
 /// * `model` - The model to use for the request (e.g., "claude-3-5-sonnet-20241022")
 /// * `max_tokens` - The maximum number of tokens that can be generated in the response
 /// * `messages` - The conversation history and current message
@@ -143,7 +143,7 @@ impl From<UserMessage> for AnthropicRequest {
 }
 
 /// Token usage statistics returned by the Anthropic API
-/// 
+///
 /// * `input_tokens` - Number of tokens in the input prompt
 /// * `output_tokens` - Number of tokens in the generated response
 #[derive(Clone, Serialize, Deserialize)]
@@ -153,7 +153,7 @@ struct AnthropicUsageStats {
 }
 
 /// Content block in an Anthropic API response
-/// 
+///
 /// * `text` - The text content from the model's response
 /// * `r#type` - The type of content (usually "text")
 #[derive(Clone, Serialize, Deserialize)]
@@ -163,7 +163,7 @@ struct AnthropicResponseContent {
 }
 
 /// Response from the Anthropic API
-/// 
+///
 /// * `id` - Unique identifier for the response
 /// * `model` - The model that generated the response
 /// * `role` - The role of the message (usually "assistant")
@@ -308,7 +308,7 @@ mod tests {
     async fn test_request_with_mock() {
         // Load environment variables from .env file
         dotenv().ok();
-        
+
         // Create a proper AnthropicResponse that matches the structure we expect to deserialize
         let mock_response = AnthropicResponse {
             id: "mock-id".to_string(),
