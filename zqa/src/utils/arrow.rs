@@ -11,6 +11,7 @@ pub enum ArrowError {
     LibNotFoundError,
     ArrowSchemaError(String),
     PathEncodingError,
+    PdfParsingError(String),
 }
 
 impl fmt::Display for ArrowError {
@@ -19,6 +20,7 @@ impl fmt::Display for ArrowError {
             Self::LibNotFoundError => write!(f, "Library not found"),
             Self::ArrowSchemaError(msg) => write!(f, "Arrow schema error: {}", msg),
             Self::PathEncodingError => write!(f, "Path contains invalid UTF-8 characters"),
+            Self::PdfParsingError(msg) => write!(f, "{}", msg),
         }
     }
 }
@@ -27,6 +29,7 @@ impl From<LibraryParsingError> for ArrowError {
     fn from(value: LibraryParsingError) -> Self {
         match value {
             LibraryParsingError::LibNotFoundError => Self::LibNotFoundError,
+            LibraryParsingError::PdfParsingError(msg) => Self::PdfParsingError(msg),
         }
     }
 }
@@ -69,56 +72,73 @@ pub fn library_to_arrow(
 
     // Convert ZoteroItemMetadata to something that can be converted to Arrow
     // Need to extract fields and create appropriate Arrow arrays
-    let schema = arrow_schema::Schema::new(vec![
+    let schema = Arc::new(arrow_schema::Schema::new(vec![
         arrow_schema::Field::new("library_key", arrow_schema::DataType::Utf8, false),
         arrow_schema::Field::new("title", arrow_schema::DataType::Utf8, false),
         arrow_schema::Field::new("abstract", arrow_schema::DataType::Utf8, true),
         arrow_schema::Field::new("notes", arrow_schema::DataType::Utf8, true),
         arrow_schema::Field::new("file_path", arrow_schema::DataType::Utf8, false),
-    ]);
+        arrow_schema::Field::new("pdf_text", arrow_schema::DataType::Utf8, false),
+    ]));
 
     // Convert ZoteroItemMetadata to Arrow arrays
     let library_keys = StringArray::from(
         lib_items
             .iter()
-            .map(|item| item.library_key.as_str())
+            .map(|item| item.metadata.library_key.as_str())
             .collect::<Vec<&str>>(),
     );
 
     let titles = StringArray::from(
         lib_items
             .iter()
-            .map(|item| item.title.as_str())
+            .map(|item| item.metadata.title.as_str())
             .collect::<Vec<&str>>(),
     );
 
     let abstracts: StringArray = lib_items
         .iter()
-        .map(|item| item.paper_abstract.as_deref())
+        .map(|item| item.metadata.paper_abstract.as_deref())
         .collect();
 
-    let notes: StringArray = lib_items.iter().map(|item| item.notes.as_deref()).collect();
+    let notes: StringArray = lib_items
+        .iter()
+        .map(|item| item.metadata.notes.as_deref())
+        .collect();
+
+    let pdf_texts = StringArray::from(
+        lib_items
+            .iter()
+            .map(|item| item.text.as_str())
+            .collect::<Vec<&str>>(),
+    );
 
     // Convert file paths to strings, returning an error if any path has invalid UTF-8
     let file_paths_vec: Result<Vec<&str>, ArrowError> = lib_items
         .iter()
-        .map(|item| item.file_path.to_str().ok_or(ArrowError::PathEncodingError))
+        .map(|item| {
+            item.metadata
+                .file_path
+                .to_str()
+                .ok_or(ArrowError::PathEncodingError)
+        })
         .collect();
     let file_paths = StringArray::from(file_paths_vec?);
 
     let record_batch = RecordBatch::try_new(
-        Arc::new(schema),
+        schema.clone(),
         vec![
             Arc::new(library_keys) as ArrayRef,
             Arc::new(titles) as ArrayRef,
             Arc::new(abstracts) as ArrayRef,
             Arc::new(notes) as ArrayRef,
             Arc::new(file_paths) as ArrayRef,
+            Arc::new(pdf_texts) as ArrayRef,
         ],
     )?;
 
-    let batches = vec![Ok(record_batch.clone())];
-    let reader = RecordBatchIterator::new(batches.into_iter(), record_batch.schema());
+    let batches = vec![Ok(record_batch)];
+    let reader = RecordBatchIterator::new(batches.into_iter(), schema);
 
     Ok(reader)
 }
@@ -126,10 +146,13 @@ pub fn library_to_arrow(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ftail::Ftail;
     use std::env;
 
     #[test]
     fn library_fetching_works() {
+        Ftail::new().console(log::LevelFilter::Info).init().unwrap();
+
         if env::var("CI").is_ok() {
             // Skip this test in CI environments
             return;
@@ -150,7 +173,7 @@ mod tests {
             .expect("No batches in iterator")
             .expect("Error in batch");
 
-        assert_eq!(batch.num_columns(), 5, "Expected 5 columns in record batch");
+        assert_eq!(batch.num_columns(), 6, "Expected 6 columns in record batch");
         assert!(
             batch.num_rows() > 0,
             "Expected at least one row in record batch"

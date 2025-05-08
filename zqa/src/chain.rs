@@ -1,3 +1,5 @@
+use ftail::Ftail;
+
 pub mod tasks;
 pub mod utils;
 
@@ -13,6 +15,7 @@ pub fn get_zotero_qa_chain() -> Chain<UserInput> {
 }
 
 pub fn main() {
+    Ftail::new().console(log::LevelFilter::Info).init().unwrap();
     let mut chain = get_zotero_qa_chain();
     chain.run();
 }
