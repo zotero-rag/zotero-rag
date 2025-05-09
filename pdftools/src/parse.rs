@@ -9,7 +9,7 @@ use lopdf::Document;
 use crate::math::{from_cmex, from_cmmi, from_cmsy, from_msbm};
 
 const ASCII_PLUS: u8 = b'+';
-const DEFAULT_SAME_WORD_THRESHOLD: i32 = 60;
+const DEFAULT_SAME_WORD_THRESHOLD: f32 = 60.0;
 const DEFAULT_SUBSCRIPT_THRESHOLD: f32 = 9.0;
 
 /// A wrapper for all PDF parsing errors
@@ -41,7 +41,7 @@ impl std::fmt::Display for PdfError {
 #[derive(Debug)]
 struct PdfParserConfig {
     /// Threshold for determining when to join words
-    same_word_threshold: i32,
+    same_word_threshold: f32,
     /// Vertical movement threshold to declare sub/superscript
     subscript_threshold: f32,
 }
@@ -234,6 +234,9 @@ impl PdfParser {
                 let idx1 = cur_content.find('(').ok_or(PdfError::ContentError)?;
                 let idx2 = cur_content.find(')').ok_or(PdfError::ContentError)?;
 
+                // TODO: If ) is preceded by a \, then it may be escaped, and we may have to have
+                // logic to account for this.
+
                 if idx1 >= idx2 {
                     break;
                 }
@@ -250,9 +253,9 @@ impl PdfParser {
                 }
 
                 let idx3 = cur_content[idx2..].find('(').unwrap() + idx2;
-                let spacing = cur_content[idx2 + 1..idx3].parse::<i32>().unwrap().abs();
+                let spacing = cur_content[idx2 + 1..idx3].parse::<f32>().unwrap().abs();
 
-                if !(0..=self.config.same_word_threshold).contains(&spacing) {
+                if !(0.0..=self.config.same_word_threshold).contains(&spacing) {
                     parsed += " ";
                 }
 

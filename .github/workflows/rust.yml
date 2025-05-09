@@ -17,6 +17,8 @@ jobs:
     steps:
     - name: Dependencies
       run: sudo apt install protobuf-compiler
+    - name: Setup
+      run: cp .env.tmpl .env
     - uses: actions/checkout@v4
     - name: Build
       run: cargo build --verbose
