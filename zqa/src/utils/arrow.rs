@@ -69,6 +69,7 @@ pub fn library_to_arrow(
 ) -> Result<RecordBatchIterator<IntoIter<Result<RecordBatch, arrow_schema::ArrowError>>>, ArrowError>
 {
     let lib_items = parse_library()?;
+    log::info!("Finished parsing library items.");
 
     // Convert ZoteroItemMetadata to something that can be converted to Arrow
     // Need to extract fields and create appropriate Arrow arrays

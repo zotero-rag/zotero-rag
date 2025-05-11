@@ -3373,6 +3373,7 @@ dependencies = [
 name = "pdftools"
 version = "0.1.0"
 dependencies = [
+ "log",
  "lopdf",
  "once_cell",
 ]

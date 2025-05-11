@@ -119,6 +119,9 @@ pub fn parse_library_metadata() -> Result<Vec<ZoteroItemMetadata>, LibraryParsin
 pub fn parse_library() -> Result<Vec<ZoteroItem>, LibraryParsingError> {
     let metadata = parse_library_metadata()?;
 
+    log::info!("Found library with {} items.", metadata.len());
+
+    let mut count = 0;
     let mut failed_count = 0;
     let items = metadata
         .iter()
@@ -134,6 +137,18 @@ pub fn parse_library() -> Result<Vec<ZoteroItem>, LibraryParsingError> {
                     return None;
                 }
             };
+
+            if !path_str.ends_with(".pdf") {
+                return None;
+            }
+
+            log::debug!(
+                "({} / {}) Parsing file {}",
+                count + 1,
+                metadata.len(),
+                path_str
+            );
+            count += 1;
 
             match extract_text(path_str) {
                 Ok(text) => Some(ZoteroItem {

@@ -1,4 +1,5 @@
 use core::str;
+use log;
 use std::error::Error;
 
 use once_cell::sync::Lazy;
@@ -135,6 +136,35 @@ impl PdfParser {
         Self::new(PdfParserConfig::default())
     }
 
+    fn contains_unescaped(&self, content: &str, ch: char) -> bool {
+        self.find_next_unescaped(content, ch)
+            .is_some_and(|pos| pos < content.len())
+    }
+
+    fn find_next_unescaped(&self, content: &str, ch: char) -> Option<usize> {
+        let mut start_idx: usize = 0;
+
+        loop {
+            let idx = content[start_idx..].find(ch)?;
+
+            // If ) is preceded by a \, then it may be escaped
+            let mut escape_count = 0;
+            for c in content[..idx].chars().rev() {
+                if c == '\\' {
+                    escape_count += 1;
+                } else {
+                    break;
+                }
+            }
+
+            if escape_count % 2 == 0 {
+                return Some(idx);
+            } else {
+                start_idx = idx;
+            }
+        }
+    }
+
     /// The actual PDF parser itself. Parses UTF-8 encoded code points in a best-effort manner,
     /// making reasonable assumptions along the way. Such assumptions are documented.
     fn parse_content(&mut self, doc: &Document, page_id: (u32, u16)) -> Result<String, PdfError> {
@@ -142,7 +172,7 @@ impl PdfParser {
             .get_page_content(page_id)
             .map_err(|_| PdfError::ContentError)?;
         let content = String::from_utf8_lossy(&content).to_string();
-        let mut rem_content = content;
+        let mut rem_content = content.clone();
         let mut parsed = String::new();
 
         loop {
@@ -230,12 +260,13 @@ impl PdfParser {
              * Then, we'll consume an integer. If that integer is less than SAME_WORD_THRESHOLD, the next
              * chunk will be appended to the current word. Otherwise, we add a space. */
             // TODO: Handle paragraphs
-            while cur_content.contains('(') {
-                let idx1 = cur_content.find('(').ok_or(PdfError::ContentError)?;
-                let idx2 = cur_content.find(')').ok_or(PdfError::ContentError)?;
-
-                // TODO: If ) is preceded by a \, then it may be escaped, and we may have to have
-                // logic to account for this.
+            while self.contains_unescaped(cur_content, '(') {
+                let idx1 = self
+                    .find_next_unescaped(cur_content, '(')
+                    .ok_or(PdfError::ContentError)?;
+                let idx2 = self
+                    .find_next_unescaped(cur_content, ')')
+                    .ok_or(PdfError::ContentError)?;
 
                 if idx1 >= idx2 {
                     break;
@@ -247,13 +278,16 @@ impl PdfParser {
                     parsed += &cur_content[idx1 + 1..idx2];
                 }
 
-                if !cur_content[idx2..].contains('(') {
+                if !self.contains_unescaped(&cur_content[idx2..], '(') {
                     parsed += " ";
                     break;
                 }
 
-                let idx3 = cur_content[idx2..].find('(').unwrap() + idx2;
-                let spacing = cur_content[idx2 + 1..idx3].parse::<f32>().unwrap().abs();
+                let idx3 = self.find_next_unescaped(&cur_content[idx2..], '(').unwrap() + idx2;
+                let spacing = cur_content[idx2 + 1..idx3]
+                    .parse::<f32>()
+                    .unwrap_or(self.config.same_word_threshold + 1.0)
+                    .abs();
 
                 if !(0.0..=self.config.same_word_threshold).contains(&spacing) {
                     parsed += " ";
@@ -311,9 +345,14 @@ pub fn extract_text(file_path: &str) -> Result<String, Box<dyn Error>> {
     let doc = Document::load(file_path)?;
     let mut parser = PdfParser::with_default_config();
 
+    let page_count = doc.get_pages().len();
+
     let content = doc
         .page_iter()
-        .map(|page_id| {
+        .enumerate()
+        .map(|(page_num, page_id)| {
+            log::debug!("\tParsing page {} of {}", page_num, page_count);
+
             parser
                 .parse_content(&doc, page_id)
                 .unwrap_or("".to_string())
