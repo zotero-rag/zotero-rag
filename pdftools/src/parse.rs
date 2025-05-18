@@ -12,6 +12,7 @@ use crate::math::{from_cmex, from_cmmi, from_cmsy, from_msbm};
 const ASCII_PLUS: u8 = b'+';
 const DEFAULT_SAME_WORD_THRESHOLD: f32 = 60.0;
 const DEFAULT_SUBSCRIPT_THRESHOLD: f32 = 9.0;
+const DEFAULT_TABLE_EUCLIDEAN_THRESHOLD: f32 = 20.0;
 
 /// A wrapper for all PDF parsing errors
 #[derive(Debug)]
@@ -22,6 +23,7 @@ enum PdfError {
     MissingBaseFont,
     InvalidFontName,
     InvalidUtf8,
+    InternalError(String),
 }
 
 impl Error for PdfError {}
@@ -34,6 +36,7 @@ impl std::fmt::Display for PdfError {
             PdfError::MissingBaseFont => write!(f, "Font object missing BaseFont field"),
             PdfError::InvalidFontName => write!(f, "BaseFont value isn't a valid name"),
             PdfError::InvalidUtf8 => write!(f, "Font name isn't valid UTF-8"),
+            PdfError::InternalError(e) => write!(f, "{}", e),
         }
     }
 }
@@ -45,6 +48,8 @@ struct PdfParserConfig {
     same_word_threshold: f32,
     /// Vertical movement threshold to declare sub/superscript
     subscript_threshold: f32,
+    /// Euclidean distance threshold between `Td` alignment to declare a table
+    table_alignment_threshold: f32,
 }
 
 impl Default for PdfParserConfig {
@@ -52,6 +57,7 @@ impl Default for PdfParserConfig {
         Self {
             same_word_threshold: DEFAULT_SAME_WORD_THRESHOLD,
             subscript_threshold: DEFAULT_SUBSCRIPT_THRESHOLD,
+            table_alignment_threshold: DEFAULT_TABLE_EUCLIDEAN_THRESHOLD,
         }
     }
 }
@@ -165,6 +171,109 @@ impl PdfParser {
         }
     }
 
+    /// Get the `N` whitespace-separated words in `content` before position `pos`. This is used to
+    /// get the operators for a PDF command.
+    ///
+    /// # Errors
+    /// * `PdfError::InternalError` if `N` > number of words in `content[..pos]`
+    fn get_params<'a, const N: usize>(
+        &self,
+        content: &'a str,
+        pos: usize,
+    ) -> Result<[&'a str; N], PdfError> {
+        let parts: Vec<&str> = content[..pos].split_whitespace().collect();
+        let n_parts = parts.len();
+
+        if n_parts < N {
+            let operator = content[pos..]
+                .split_whitespace()
+                .next()
+                .unwrap_or("unknown");
+
+            return Err(PdfError::InternalError(format!(
+                "get_params expected {} params for {}, but got {} instead",
+                N, operator, n_parts
+            )));
+        }
+
+        Ok(std::array::from_fn(|i| parts[n_parts - N + i]))
+    }
+
+    /// Given a string `content` and a position `pos`, look *around* `pos` and search for likely
+    /// boundaries for a table. This function uses the heuristic that tables are likely to be
+    /// near `ET` blocks, because tables typically have some graphics (lines for borders, etc.).
+    /// Under this assumption, this function looks for the first `Td` command after the *previous*
+    /// `BT` from `pos`, and compares the position described there to positions in the first `Td`
+    /// command after every `BT` starting from `pos`, using the Euclidean distance. If this
+    /// distance is below a threshold, it is assumed that these are alignment efforts.
+    ///
+    /// # Returns:
+    /// * `Some((start_idx, end_idx))`, where `start_idx` is the index of the `BT` command where it is suspected that
+    ///   the table begins, and `end_idx` is the index of the `ET` command where the table is suspected to end.
+    /// * If no table is detected, returns `None`.
+    fn get_table_bounds(&self, content: &str, pos: usize) -> Option<(usize, usize)> {
+        let bt_idx = content[..pos].rfind("BT")?; // First `BT` we see
+        let prev_td = content[bt_idx..].find("Td")? + bt_idx; // The immediately following `Td`
+
+        let params_result = self.get_params::<2>(content, prev_td).ok();
+        let (first_x, first_y) = params_result
+            .and_then(|[x, y]| Some((x.parse::<f32>().ok()?, y.parse::<f32>().ok()?)))?;
+
+        // Running position
+        let mut cur_pos = pos;
+
+        // How many `BT`s have we skipped?
+        let mut bt_count = 0;
+
+        loop {
+            // Try to find the next BT
+            if let Some(next_bt) = content[cur_pos..].find("BT") {
+                let next_bt_pos = cur_pos + next_bt;
+
+                // Try to find a Td command after this BT
+                if let Some(td_offset) = content[next_bt_pos..].find("Td") {
+                    // Calculate current alignment position
+                    let cur_td_idx = next_bt_pos + td_offset;
+
+                    // Parse the x,y parameters using and_then for cleaner error handling
+                    let params_result = self.get_params::<2>(content, cur_td_idx).ok();
+                    if let Some((cur_x, cur_y)) = params_result
+                        .and_then(|[x, y]| Some((x.parse::<f32>().ok()?, y.parse::<f32>().ok()?)))
+                    {
+                        let distance =
+                            ((cur_x - first_x).powi(2) + (cur_y - first_y).powi(2)).sqrt();
+
+                        if distance < self.config.table_alignment_threshold {
+                            bt_count += 1;
+                            cur_pos = cur_td_idx;
+                            continue;
+                        } else if bt_count > 0 {
+                            // We've found the end of the table
+                            return Some((bt_idx, next_bt_pos));
+                        } else {
+                            // Not a table
+                            return None;
+                        }
+                    } else {
+                        // Could not parse parameters
+                        log::warn!("Could not parse Td parameters, ignoring possible table.");
+                        return None;
+                    }
+                } else {
+                    log::warn!("Could not find a Td after a BT, ignoring possible table.");
+                    return None;
+                }
+            } else if bt_count > 0 {
+                // If we've processed at least one BT and reached the end, return what we have
+                log::warn!("Could not find a BT, is the table at the end of the document?");
+                return Some((bt_idx, cur_pos));
+            } else {
+                // Not a table
+                return None;
+            }
+        }
+    }
+
     /// The actual PDF parser itself. Parses UTF-8 encoded code points in a best-effort manner,
     /// making reasonable assumptions along the way. Such assumptions are documented.
     fn parse_content(&mut self, doc: &Document, page_id: (u32, u16)) -> Result<String, PdfError> {
@@ -184,18 +293,13 @@ impl PdfParser {
              * positive and less than 9 (which is a reasonable line height), we treat it as a superscript
              * until we find the same number, but negative. We do the same with subscripts. */
             if let Some(td_idx) = rem_content.find("Td") {
-                let space_idx = rem_content[..td_idx - 1]
-                    .rfind(" ")
-                    .ok_or(PdfError::ContentError)?;
-                let vert = rem_content[space_idx + 1..td_idx - 1]
-                    .parse::<f32>()
-                    .unwrap_or_else(|err| {
-                        panic!(
-                            "Failed to parse what should've been a number: '{}': {}",
-                            &rem_content[space_idx + 1..td_idx - 1],
-                            err
-                        );
-                    });
+                let [vert_str] = self.get_params::<1>(&rem_content, td_idx)?;
+                let vert = vert_str.parse::<f32>().unwrap_or_else(|err| {
+                    panic!(
+                        "Failed to parse what should've been a number: '{}': {}",
+                        vert_str, err
+                    );
+                });
 
                 // We shouldn't include 0 in these ranges
                 if (0.1..=self.config.subscript_threshold).contains(&vert) {
@@ -408,17 +512,39 @@ mod tests {
     fn test_math_parsing_works() {
         let path = PathBuf::from("assets").join("symbols.pdf");
 
-        let doc = Document::load(&path).unwrap();
-        let page_id = doc.page_iter().next().unwrap();
-        let pre_content = doc.get_page_content(page_id).unwrap();
-        dbg!(String::from_utf8_lossy(&pre_content));
-        println!();
-
         let content = extract_text(path.to_str().unwrap());
-
         assert!(content.is_ok());
 
         let content = content.unwrap();
-        dbg!(content);
+        for op in [r"\int", r"\sum", r"\infty"] {
+            assert!(content.contains(op));
+        }
+    }
+
+    #[test]
+    fn test_get_table_bounds_works() {
+        let path = PathBuf::from("assets").join("table.pdf");
+
+        let doc = Document::load(&path).unwrap();
+        let page_id = doc.page_iter().next().unwrap();
+        let pre_content = doc.get_page_content(page_id).unwrap();
+        let content = String::from_utf8_lossy(&pre_content);
+
+        let parser = PdfParser::with_default_config();
+
+        // NOTE: Maintainers: The indices will not exactly line up, because "\n"s seem
+        // to be two separate characters. This is okay.
+        // Test 1: The first ET in this should be ignored.
+        let first_et = content.find("ET").unwrap();
+        assert_eq!(first_et, 342);
+        assert!(parser.get_table_bounds(&content, first_et).is_none());
+
+        // Test 2: The second ET should capture the table (excluding the caption).
+        let second_et = content[first_et + 1..].find("ET").unwrap() + first_et + 1;
+        assert_eq!(second_et, 471);
+        assert_eq!(
+            parser.get_table_bounds(&content, second_et),
+            Some((412, 707))
+        );
     }
 }
