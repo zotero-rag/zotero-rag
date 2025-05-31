@@ -285,7 +285,27 @@ impl PdfParser {
         let mut parsed = String::new();
 
         loop {
-            if !rem_content.contains("TJ") {
+            /* We need to look for an ET so that we can exclude tables. However, it is possible to
+             * find an ET that is a table but is too far away to worry about for now; so we actually need to
+             * look for both an ET and a TJ. *However*, it is also possible for the immediate TJ to be part of
+             * the table that we are trying to avoid. So the following code isn't particularly efficient, but it
+             * should cover all the cases. */
+            if let Some(tj_idx) = rem_content.find("TJ") {
+                // Generally, we *should* find an ET here, since we already found a TJ (which means
+                // there's a text block to end).
+                if let Some(et_idx) = rem_content.find("ET") {
+                    if let Some((tbl_begin_idx, tbl_end_idx)) =
+                        self.get_table_bounds(&rem_content, et_idx)
+                    {
+                        if tbl_begin_idx < tj_idx {
+                            // Skip over the table
+                            rem_content = rem_content[tbl_end_idx + 1..].to_string();
+                            continue;
+                        }
+                    }
+                }
+            } else {
+                // No more TJs, so nothing left to parse.
                 break;
             }
 
