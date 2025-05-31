@@ -281,7 +281,7 @@ impl PdfParser {
             .get_page_content(page_id)
             .map_err(|_| PdfError::ContentError)?;
         let content = String::from_utf8_lossy(&content).to_string();
-        let mut rem_content = content.clone();
+        let mut cur_parse_idx = 0;
         let mut parsed = String::new();
 
         loop {
@@ -290,16 +290,16 @@ impl PdfParser {
              * look for both an ET and a TJ. *However*, it is also possible for the immediate TJ to be part of
              * the table that we are trying to avoid. So the following code isn't particularly efficient, but it
              * should cover all the cases. */
-            if let Some(tj_idx) = rem_content.find("TJ") {
+            if let Some(tj_idx) = content[cur_parse_idx..].find("TJ") {
                 // Generally, we *should* find an ET here, since we already found a TJ (which means
                 // there's a text block to end).
-                if let Some(et_idx) = rem_content.find("ET") {
+                if let Some(et_idx) = content[cur_parse_idx..].find("ET") {
                     if let Some((tbl_begin_idx, tbl_end_idx)) =
-                        self.get_table_bounds(&rem_content, et_idx)
+                        self.get_table_bounds(&content, cur_parse_idx + et_idx)
                     {
-                        if tbl_begin_idx < tj_idx {
+                        if tbl_begin_idx < cur_parse_idx + tj_idx {
                             // Skip over the table
-                            rem_content = rem_content[tbl_end_idx + 1..].to_string();
+                            cur_parse_idx = tbl_end_idx;
                             continue;
                         }
                     }
@@ -312,8 +312,8 @@ impl PdfParser {
             /* Heuristic: look for <number> <number> Td. If the second number (vertical) is
              * positive and less than 9 (which is a reasonable line height), we treat it as a superscript
              * until we find the same number, but negative. We do the same with subscripts. */
-            if let Some(td_idx) = rem_content.find("Td") {
-                let [vert_str] = self.get_params::<1>(&rem_content, td_idx)?;
+            if let Some(td_idx) = content[cur_parse_idx..].find("Td") {
+                let [vert_str] = self.get_params::<1>(&content, cur_parse_idx + td_idx)?;
                 let vert = vert_str.parse::<f32>().unwrap_or_else(|err| {
                     panic!(
                         "Failed to parse what should've been a number: '{}': {}",
@@ -341,17 +341,20 @@ impl PdfParser {
             /* TODO: The above logic also captures footnotes, so we might want to parse those while
              * we're here. */
 
-            let end_idx = rem_content.find("TJ").ok_or(PdfError::ContentError)?;
+            let end_idx = content[cur_parse_idx..]
+                .find("TJ")
+                .ok_or(PdfError::ContentError)?;
 
             // Check the font, if it has been set.
-            if rem_content[..end_idx].contains("/F") {
-                let font_begin_idx = rem_content[..end_idx]
+            if content[cur_parse_idx..cur_parse_idx + end_idx].contains("/F") {
+                let font_begin_idx = content[cur_parse_idx..cur_parse_idx + end_idx]
                     .find("/F")
                     .ok_or(PdfError::ContentError)?;
                 let font_end_idx =
-                    rem_content[font_begin_idx..].find(" ").unwrap() + font_begin_idx;
+                    content[cur_parse_idx + font_begin_idx..].find(" ").unwrap() + font_begin_idx;
 
-                let font_id = rem_content[font_begin_idx + 1..font_end_idx].to_string();
+                let font_id =
+                    content[cur_parse_idx..][font_begin_idx + 1..font_end_idx].to_string();
                 self.current_font = get_font(doc, page_id, font_id).unwrap_or("").to_string();
             }
 
@@ -361,8 +364,10 @@ impl PdfParser {
             // it later.
             let mut begin_idx = end_idx;
             let mut stack = Vec::with_capacity(50);
-            while let Some(val) = rem_content[..begin_idx].rfind(|c| ['[', ']'].contains(&c)) {
-                let char_at_val = rem_content.as_bytes()[val] as char;
+            while let Some(val) =
+                content[cur_parse_idx..][..begin_idx].rfind(|c| ['[', ']'].contains(&c))
+            {
+                let char_at_val = content[cur_parse_idx..].as_bytes()[val] as char;
                 if char_at_val == ']' {
                     stack.push(']');
                 } else if char_at_val == '[' {
@@ -378,7 +383,7 @@ impl PdfParser {
                 begin_idx = val;
             }
 
-            let mut cur_content = &rem_content[begin_idx..end_idx];
+            let mut cur_content = &content[cur_parse_idx..][begin_idx..end_idx];
 
             /* Here's our strategy. We'll look for pairs of (), consuming words inside.
              * Then, we'll consume an integer. If that integer is less than SAME_WORD_THRESHOLD, the next
@@ -420,7 +425,7 @@ impl PdfParser {
                 cur_content = &cur_content[idx2 + 1..];
             }
 
-            rem_content = rem_content[end_idx + 2..].to_string();
+            cur_parse_idx += end_idx + 2;
         }
 
         // Parse the weird octal representations
@@ -510,6 +515,20 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
+    fn test_pdf_content() {
+        // Maintainers: use this as a way to quickly get the UTF-8 content of raw PDF commands.
+        let path = PathBuf::from("assets").join("table.pdf");
+
+        let doc = Document::load(path).unwrap();
+        let page_id = doc.page_iter().next().unwrap();
+        let page_content = doc.get_page_content(page_id).unwrap();
+        let content = String::from_utf8_lossy(&page_content);
+
+        dbg!(content);
+    }
+
+    #[test]
     fn test_fonts_identified_correctly() {
         let path = PathBuf::from("assets").join("symbols.pdf");
 
@@ -566,5 +585,19 @@ mod tests {
             parser.get_table_bounds(&content, second_et),
             Some((412, 707))
         );
+    }
+
+    #[test]
+    fn test_tables_are_ignored() {
+        let path = PathBuf::from("assets").join("table.pdf");
+        let content = extract_text(path.to_str().unwrap());
+
+        assert!(content.is_ok());
+
+        let content = content.unwrap();
+        let tests = ["r1c1", "r1c2", "r2c1", "r2c2"];
+        for text in tests {
+            assert!(!content.contains(text));
+        }
     }
 }
