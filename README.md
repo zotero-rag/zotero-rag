@@ -1,18 +1,18 @@
 # Zotero RAG QA System
 
+> [!NOTE]
+> This project is still active work-in-progress!
+
 A Rust-based system for answering questions from your Zotero library using Retrieval-Augmented Generation (RAG).
 
 ## Overview
 
-This project provides a command-line interface for querying your Zotero library with natural language questions. It uses RAG techniques to search and retrieve relevant information from your academic papers, then generates answers grounded in your library content.
+This project provides a command-line interface for querying your Zotero library with natural language questions. It uses RAG to search and retrieve relevant information from your academic papers, then generates answers grounded in your library content--at least, that's the end goal, anyway. A lot of the functionality doesn't quite yet: 
 
-## Features
-
-- PDF parsing with special handling for academic papers and mathematical symbols
-- Integration with local Zotero SQLite databases
-- Vector embeddings for semantic search using LanceDB
-- LLM integration with Anthropic's Claude models (more on the way!)
-- Flexible task chain system for processing queries
+* We can currently extract text from PDFs and ignore tables/figures (they're unlikely to have useful context for LLMs)
+* We can call LLMs (currently OpenAI and Anthropic) for embedding text and generating text.
+* We can embed text using LanceDB.
+* These parts are not strung together yet--the `zqa` crate is currently a Hello World app.
 
 ## Project Structure
 
@@ -24,9 +24,9 @@ The project is organized into three Rust crates:
 
 ## Requirements
 
-- Rust (2021 edition)
+- Rust (2021 edition or higher)
 - Zotero with a local library
-- API key for Anthropic Claude (for LLM capabilities)
+- API key for OpenAI and Anthropic (for LLM capabilities)
 
 ## Installation
 
