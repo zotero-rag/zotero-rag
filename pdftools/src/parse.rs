@@ -120,9 +120,16 @@ static OCTAL_REPLACEMENTS: Lazy<HashMap<&str, &str>> = Lazy::new(|| {
 });
 
 struct PdfParser {
+    /// The config
     config: PdfParserConfig,
+    /// The current font we're using. This is not the font string in the dictionary (e.g. "F28"),
+    /// but rather the font's name itself (e.g. "CMMI10").
     current_font: String,
+    /// A variable that tracks the sub/super-script level.
     script_status: i32,
+    /// The \baselineskip set by the user.
+    /// TODO: Actually compute this; for now, this is set to the pdflatex default of 12.0
+    cur_baselineskip: f32,
 }
 
 impl PdfParser {
@@ -135,6 +142,8 @@ impl PdfParser {
             config,
             current_font: String::new(),
             script_status: 0,
+            // TODO: This is actually supposed to be 1.2! Compute font size in a future PR.
+            cur_baselineskip: 12.0, // The pdflatex default
         }
     }
 
@@ -197,6 +206,56 @@ impl PdfParser {
         }
 
         Ok(std::array::from_fn(|i| parts[n_parts - N + i]))
+    }
+
+    /// Given a string `content` and a position `pos`, look *from* `pos` and search for an image.
+    /// If an image is detected, attempt to return the position of the end of the caption. Note
+    /// that this means that the returned position will be inside a `BT`...`ET`. This function
+    /// assumes the position given to it is the position of an `ET`.
+    ///
+    /// # Returns:
+    /// * `Some(idx)` where `idx` is the index of the space after the TJ where the image caption is
+    /// shown.
+    /// * `None` if no image is detected.
+    fn get_image_bounds(&self, content: &str, pos: usize) -> Option<usize> {
+        let bt_idx = content[pos..].find("BT")? + pos;
+        content[pos..bt_idx].find("/Im")?;
+
+        let mut tj_idx = content[bt_idx..].find("TJ")? + bt_idx;
+
+        /* If a caption is long enough, it will line-break and go to the next line. In pdflatex,
+         * the line spacing between these two depends on the \baselineskip value. We currently
+         * assume that \baselineskip is always 1.2 (which is the default), and parse lines
+         * accordingly. */
+        loop {
+            /* Find the next Td that is:
+             *  1. After the current TJ
+             *  2. Before the next TJ that is also before the next ET
+             */
+            let next_et_idx = content[tj_idx + 2..].find("ET")? + tj_idx + 2; // +2 for "TJ".len()
+            let Some(next_tj_idx) = content[tj_idx + 2..next_et_idx].find("TJ") else {
+                // If there is no TJ before the next ET, the caption has ended.
+                return Some(tj_idx + 2);
+            };
+
+            let Some(next_td_idx) = content[tj_idx..tj_idx + 2 + next_tj_idx].find("Td") else {
+                // There's no vertical spacing after, so this condition does not apply.
+                return Some(tj_idx + 2);
+            };
+
+            let (_, y) = self
+                .get_params::<2>(content, tj_idx + next_td_idx)
+                .ok()
+                .and_then(|[x, y]| Some((x.parse::<f32>().ok()?, y.parse::<f32>().ok()?)))?;
+
+            if y.abs() <= self.cur_baselineskip {
+                // This is a line break, keep skipping.
+                tj_idx = next_tj_idx + tj_idx + 2;
+                continue;
+            } else {
+                return Some(tj_idx + 2);
+            }
+        }
     }
 
     /// Given a string `content` and a position `pos`, look *around* `pos` and search for likely
@@ -284,8 +343,13 @@ impl PdfParser {
         let mut cur_parse_idx = 0;
         let mut parsed = String::new();
 
+        /* A loop over TJ blocks. The broad idea is:
+         * 1. Look for tables/images--and skip them.
+         * 2. Handle super/sub-scripts and footnotes.
+         * 3. Handle math fonts to parse equations.
+         * 4. Iterate over parenthesized blocks in the TJ to parse text. */
         loop {
-            /* We need to look for an ET so that we can exclude tables. However, it is possible to
+            /* We need to look for an ET so that we can exclude tables/images. However, it is possible to
              * find an ET that is a table but is too far away to worry about for now; so we actually need to
              * look for both an ET and a TJ. *However*, it is also possible for the immediate TJ to be part of
              * the table that we are trying to avoid. So the following code isn't particularly efficient, but it
@@ -294,12 +358,28 @@ impl PdfParser {
                 // Generally, we *should* find an ET here, since we already found a TJ (which means
                 // there's a text block to end).
                 if let Some(et_idx) = content[cur_parse_idx..].find("ET") {
+                    // Handle tables
                     if let Some((tbl_begin_idx, tbl_end_idx)) =
                         self.get_table_bounds(&content, cur_parse_idx + et_idx)
                     {
                         if tbl_begin_idx < cur_parse_idx + tj_idx {
                             // Skip over the table
                             cur_parse_idx = tbl_end_idx;
+
+                            // We've invalidated some indexes in the conditions above, so we
+                            // actually can't just proceed.
+                            continue;
+                        }
+                    }
+
+                    // Handle images. The TJ has to be after the next ET--otherwise, it's
+                    // unlikely to be a caption. We assume here that figure captions occur after
+                    // the figure itself.
+                    if tj_idx > et_idx {
+                        if let Some(im_end_idx) =
+                            self.get_image_bounds(&content, cur_parse_idx + et_idx)
+                        {
+                            cur_parse_idx = im_end_idx;
                             continue;
                         }
                     }
@@ -517,8 +597,8 @@ mod tests {
     #[test]
     #[ignore]
     fn test_pdf_content() {
-        // Maintainers: use this as a way to quickly get the UTF-8 content of raw PDF commands.
-        let path = PathBuf::from("assets").join("table.pdf");
+        // NOTE: Maintainers: use this as a way to quickly get the UTF-8 content of raw PDF commands.
+        let path = PathBuf::from("assets").join("images.pdf");
 
         let doc = Document::load(path).unwrap();
         let page_id = doc.page_iter().next().unwrap();
@@ -526,6 +606,19 @@ mod tests {
         let content = String::from_utf8_lossy(&page_content);
 
         dbg!(content);
+    }
+
+    #[test]
+    #[allow(unused_must_use)]
+    #[ignore]
+    fn test_font() {
+        // NOTE: Maintainers: use this as a way to examine a font's details.
+        let path = PathBuf::from("assets").join("images.pdf");
+
+        let doc = Document::load(path).unwrap();
+        let page_id = doc.page_iter().next().unwrap();
+
+        dbg!(get_font(&doc, page_id, "F28".to_string()));
     }
 
     #[test]
@@ -598,6 +691,26 @@ mod tests {
         let tests = ["r1c1", "r1c2", "r2c1", "r2c2"];
         for text in tests {
             assert!(!content.contains(text));
+        }
+    }
+
+    #[test]
+    fn test_images_are_ignored() {
+        let path = PathBuf::from("assets").join("images.pdf");
+        let content = extract_text(path.to_str().unwrap());
+
+        assert!(content.is_ok());
+
+        let content = content.unwrap();
+
+        let tests = ["Figure", "Caption", "is", "caption", "good", "HERE"];
+        for text in tests {
+            assert!(!content.contains(text));
+        }
+
+        let tests = ["begin1", "end1", "begin2", "end2"];
+        for text in tests {
+            assert!(content.contains(text));
         }
     }
 }
