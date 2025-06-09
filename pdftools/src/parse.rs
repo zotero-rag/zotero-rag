@@ -124,9 +124,11 @@ struct PdfParser {
     config: PdfParserConfig,
     /// The current font we're using. This is not the font string in the dictionary (e.g. "F28"),
     /// but rather the font's name itself (e.g. "CMMI10").
-    current_font: String,
+    cur_font: String,
     /// A variable that tracks the sub/super-script level.
     script_status: i32,
+    /// Current font size
+    cur_font_size: f32,
     /// The \baselineskip set by the user.
     /// TODO: Actually compute this; for now, this is set to the pdflatex default of 12.0
     cur_baselineskip: f32,
@@ -140,10 +142,10 @@ impl PdfParser {
     fn new(config: PdfParserConfig) -> Self {
         Self {
             config,
-            current_font: String::new(),
+            cur_font: String::new(),
+            cur_font_size: 12.0, // Doesn't really matter
             script_status: 0,
-            // TODO: This is actually supposed to be 1.2! Compute font size in a future PR.
-            cur_baselineskip: 12.0, // The pdflatex default
+            cur_baselineskip: 1.2, // The pdflatex default
         }
     }
 
@@ -248,7 +250,7 @@ impl PdfParser {
                 .ok()
                 .and_then(|[x, y]| Some((x.parse::<f32>().ok()?, y.parse::<f32>().ok()?)))?;
 
-            if y.abs() <= self.cur_baselineskip {
+            if y.abs() <= self.cur_font_size * self.cur_baselineskip {
                 // This is a line break, keep skipping.
                 tj_idx = next_tj_idx + tj_idx + 2;
                 continue;
@@ -389,6 +391,19 @@ impl PdfParser {
                 break;
             }
 
+            // Get the current font size, if it's set.
+            if let Some(tf_idx) = content[cur_parse_idx..].find("Tf") {
+                let [font_size_str] = self.get_params::<1>(&content, cur_parse_idx + tf_idx)?;
+                let font_size = font_size_str.parse::<f32>().unwrap_or_else(|err| {
+                    panic!(
+                        "Failed to parse what should've been a number: '{}': {}",
+                        font_size_str, err
+                    );
+                });
+
+                self.cur_font_size = font_size;
+            }
+
             /* Heuristic: look for <number> <number> Td. If the second number (vertical) is
              * positive and less than 9 (which is a reasonable line height), we treat it as a superscript
              * until we find the same number, but negative. We do the same with subscripts. */
@@ -435,7 +450,7 @@ impl PdfParser {
 
                 let font_id =
                     content[cur_parse_idx..][font_begin_idx + 1..font_end_idx].to_string();
-                self.current_font = get_font(doc, page_id, font_id).unwrap_or("").to_string();
+                self.cur_font = get_font(doc, page_id, font_id).unwrap_or("").to_string();
             }
 
             // We need to match the ] immediately preceding TJ with its [, but papers have references
@@ -481,7 +496,7 @@ impl PdfParser {
                     break;
                 }
 
-                if let Some(transform) = FONT_TRANSFORMS.get(self.current_font.as_str()) {
+                if let Some(transform) = FONT_TRANSFORMS.get(self.cur_font.as_str()) {
                     parsed += &font_transform(cur_content[idx1 + 1..idx2].to_string(), *transform);
                 } else {
                     parsed += &cur_content[idx1 + 1..idx2];
@@ -611,13 +626,16 @@ mod tests {
     #[test]
     #[ignore]
     fn test_font_properties() {
+        // NOTE: Maintainers: use this as a way to quickly inspect fonts.
         use lopdf::Object;
 
         /* In PDFs, a simplified view of fonts is as triply-nested dictionaries.
          * First, you have a font dictionary for pages; that dictionary maps font keys (e.g., "F28") to font
-         * objects themselves--the second level of redirection. Then, each key has various properties of the
+         * objects themselves--the second level of redirection. Each of its keys has various properties of the
          * font. This might include, for example, CMaps (explained below), the font's name (e.g., "CMR10"),
-         * and other properties.
+         * and other properties. It's also worth noting: the 10 in CMR10 only gives the *design
+         * size* of the font in points--the size for which it was designed and optimized. You still
+         * need to look at Tf for the font sizes.
          */
         let font_key = "F48";
         let path = PathBuf::from("assets").join("sections.pdf");
