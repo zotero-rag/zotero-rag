@@ -1,6 +1,6 @@
 use core::str;
 use log;
-use std::{error::Error, path::PathBuf};
+use std::error::Error;
 
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
