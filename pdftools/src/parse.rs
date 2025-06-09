@@ -232,7 +232,7 @@ impl PdfParser {
              *  1. After the current TJ
              *  2. Before the next TJ that is also before the next ET
              */
-            let next_et_idx = content[tj_idx + 2..].find("ET")? + tj_idx + 2; // +2 for "TJ".len()
+            let next_et_idx = content[tj_idx + 2..].find("ET")? + tj_idx + 2; // +2 for len("TJ")
             let Some(next_tj_idx) = content[tj_idx + 2..next_et_idx].find("TJ") else {
                 // If there is no TJ before the next ET, the caption has ended.
                 return Some(tj_idx + 2);
@@ -609,16 +609,59 @@ mod tests {
     }
 
     #[test]
-    #[allow(unused_must_use)]
     #[ignore]
-    fn test_font() {
-        // NOTE: Maintainers: use this as a way to examine a font's details.
-        let path = PathBuf::from("assets").join("images.pdf");
+    fn test_font_properties() {
+        use lopdf::Object;
+
+        /* In PDFs, a simplified view of fonts is as triply-nested dictionaries.
+         * First, you have a font dictionary for pages; that dictionary maps font keys (e.g., "F28") to font
+         * objects themselves--the second level of redirection. Then, each key has various properties of the
+         * font. This might include, for example, CMaps (explained below), the font's name (e.g., "CMR10"),
+         * and other properties.
+         */
+        let font_key = "F48";
+        let path = PathBuf::from("assets").join("sections.pdf");
 
         let doc = Document::load(path).unwrap();
         let page_id = doc.page_iter().next().unwrap();
+        let page_content = doc.get_page_content(page_id).unwrap();
+        let content = String::from_utf8_lossy(&page_content);
 
-        dbg!(get_font(&doc, page_id, "F28".to_string()));
+        dbg!(&content);
+
+        // Get the font dictionary for the page
+        let fonts = doc.get_page_fonts(page_id).unwrap();
+
+        let font_obj = fonts.get(font_key.as_bytes()).unwrap();
+        let font_hash = font_obj.as_hashmap();
+
+        let readable_font_obj: HashMap<String, &Object> = font_hash
+            .iter()
+            .map(|(k, v)| (String::from_utf8(k.clone()).unwrap(), v))
+            .collect();
+        dbg!(&readable_font_obj);
+
+        /* Quick primer: in PDFs, a CMap (character map) is an object that maps character codes to
+         * Unicode values. There are two kinds of CMaps:
+         * - a ToUnicode CMap: maps font character codes to actual Unicode values.
+         * - CID-to-GID or CID-to-Unicode maps: internal font glyph maps, especially for CJK fonts.
+         *
+         * Here, we read the former of these. Note: this will be long!
+         */
+        let cmap_ref = readable_font_obj
+            .get("ToUnicode")
+            .unwrap()
+            .as_reference()
+            .unwrap();
+
+        let f = doc.get_object(cmap_ref);
+        let decompressed = f
+            .unwrap()
+            .as_stream()
+            .unwrap()
+            .decompressed_content()
+            .unwrap();
+        print!("{}", String::from_utf8(decompressed).unwrap());
     }
 
     #[test]
