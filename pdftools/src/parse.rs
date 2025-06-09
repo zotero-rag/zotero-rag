@@ -641,12 +641,12 @@ mod tests {
         use lopdf::Object;
 
         /* In PDFs, a simplified view of fonts is as triply-nested dictionaries.
-         * First, you have a font dictionary for pages; that dictionary maps font keys (e.g., "F28") to font
-         * objects themselves--the second level of redirection. Each of its keys has various properties of the
-         * font. This might include, for example, CMaps (explained below), the font's name (e.g., "CMR10"),
-         * and other properties. It's also worth noting: the 10 in CMR10 only gives the *design
-         * size* of the font in points--the size for which it was designed and optimized. You still
-         * need to look at Tf for the font sizes.
+         * First, pages have a resources dictionary, which includes a font dictionary; that dictionary maps
+         * font resource names (e.g., "F28") to font objects themselves--the second level of redirection.
+         * Each font object has various properties of the font. This might include, for example, CMaps
+         * (explained below), the font's name (e.g., "CMR10"), and other properties. It's also worth noting:
+         * the 10 in CMR10 only gives the *design size* of the font in points--the size for which it was
+         * designed and optimized. You still need to look at Tf for the font sizes.
          */
         let font_key = "F48";
         let path = PathBuf::from("assets").join("sections.pdf");
@@ -671,11 +671,14 @@ mod tests {
         dbg!(&readable_font_obj);
 
         /* Quick primer: in PDFs, a CMap (character map) is an object that maps character codes to
-         * Unicode values. There are two kinds of CMaps:
-         * - a ToUnicode CMap: maps font character codes to actual Unicode values.
-         * - CID-to-GID or CID-to-Unicode maps: internal font glyph maps, especially for CJK fonts.
+         * Unicode values or to intermediate glyph identifiers. There are two main kinds of CMaps:
          *
-         * Here, we read the former of these. Note: this will be long!
+         * - ToUnicode CMaps: map font character codes to actual Unicode values.
+         * - CID-based CMaps: map character codes to CIDs (character IDs), which then map to GIDs
+         *   or glyphs inside the font file--used especially in CJK and composite fonts.
+         *
+         * Here, we read the first kind (ToUnicdoe). Note: this will be a long object, so comment
+         * it out if you don't need it!
          */
         let cmap_ref = readable_font_obj
             .get("ToUnicode")
