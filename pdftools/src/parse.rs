@@ -130,7 +130,7 @@ struct PdfParser {
     /// Current font size
     cur_font_size: f32,
     /// The \baselineskip set by the user.
-    /// TODO: Actually compute this; for now, this is set to the pdflatex default of 12.0
+    /// TODO: Actually compute this; for now, this is set to the pdflatex default of 1.2
     cur_baselineskip: f32,
 }
 
@@ -589,6 +589,7 @@ pub fn extract_text(file_path: &str) -> Result<String, Box<dyn Error>> {
 
 #[cfg(test)]
 mod tests {
+    use std::env;
     use std::path::PathBuf;
     use std::str::FromStr;
 
@@ -612,8 +613,13 @@ mod tests {
     #[test]
     #[ignore]
     fn test_pdf_content() {
+        if env::var("CI").is_ok() {
+            // Skip this test in CI environments
+            return;
+        }
+
         // NOTE: Maintainers: use this as a way to quickly get the UTF-8 content of raw PDF commands.
-        let path = PathBuf::from("assets").join("images.pdf");
+        let path = PathBuf::from("assets").join("hyperlinks.pdf");
 
         let doc = Document::load(path).unwrap();
         let page_id = doc.page_iter().next().unwrap();
@@ -626,6 +632,11 @@ mod tests {
     #[test]
     #[ignore]
     fn test_font_properties() {
+        if env::var("CI").is_ok() {
+            // Skip this test in CI environments
+            return;
+        }
+
         // NOTE: Maintainers: use this as a way to quickly inspect fonts.
         use lopdf::Object;
 
@@ -772,6 +783,21 @@ mod tests {
         let tests = ["begin1", "end1", "begin2", "end2"];
         for text in tests {
             assert!(content.contains(text));
+        }
+    }
+
+    #[test]
+    fn test_hyperlinks_are_ignored() {
+        let path = PathBuf::from("assets").join("hyperlinks.pdf");
+        let content = extract_text(path.to_str().unwrap());
+
+        assert!(content.is_ok());
+
+        let content = content.unwrap();
+
+        let tests = ["google.com", "sec:2", "cite.yedida"];
+        for text in tests {
+            assert!(!content.contains(text));
         }
     }
 }
