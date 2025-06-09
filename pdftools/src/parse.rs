@@ -1,6 +1,6 @@
 use core::str;
 use log;
-use std::error::Error;
+use std::{error::Error, path::PathBuf};
 
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
@@ -217,7 +217,7 @@ impl PdfParser {
     ///
     /// # Returns:
     /// * `Some(idx)` where `idx` is the index of the space after the TJ where the image caption is
-    /// shown.
+    ///   shown.
     /// * `None` if no image is detected.
     fn get_image_bounds(&self, content: &str, pos: usize) -> Option<usize> {
         let bt_idx = content[pos..].find("BT")? + pos;
@@ -227,13 +227,11 @@ impl PdfParser {
 
         /* If a caption is long enough, it will line-break and go to the next line. In pdflatex,
          * the line spacing between these two depends on the \baselineskip value. We currently
-         * assume that \baselineskip is always 1.2 (which is the default), and parse lines
-         * accordingly. */
+         * assume that \baselineskip is always 1.2 (which is the default), and parse lines accordingly. */
         loop {
             /* Find the next Td that is:
              *  1. After the current TJ
-             *  2. Before the next TJ that is also before the next ET
-             */
+             *  2. Before the next TJ that is also before the next ET. */
             let next_et_idx = content[tj_idx + 2..].find("ET")? + tj_idx + 2; // +2 for len("TJ")
             let Some(next_tj_idx) = content[tj_idx + 2..next_et_idx].find("TJ") else {
                 // If there is no TJ before the next ET, the caption has ended.
@@ -356,39 +354,39 @@ impl PdfParser {
              * look for both an ET and a TJ. *However*, it is also possible for the immediate TJ to be part of
              * the table that we are trying to avoid. So the following code isn't particularly efficient, but it
              * should cover all the cases. */
-            if let Some(tj_idx) = content[cur_parse_idx..].find("TJ") {
-                // Generally, we *should* find an ET here, since we already found a TJ (which means
-                // there's a text block to end).
-                if let Some(et_idx) = content[cur_parse_idx..].find("ET") {
-                    // Handle tables
-                    if let Some((tbl_begin_idx, tbl_end_idx)) =
-                        self.get_table_bounds(&content, cur_parse_idx + et_idx)
-                    {
-                        if tbl_begin_idx < cur_parse_idx + tj_idx {
-                            // Skip over the table
-                            cur_parse_idx = tbl_end_idx;
-
-                            // We've invalidated some indexes in the conditions above, so we
-                            // actually can't just proceed.
-                            continue;
-                        }
-                    }
-
-                    // Handle images. The TJ has to be after the next ET--otherwise, it's
-                    // unlikely to be a caption. We assume here that figure captions occur after
-                    // the figure itself.
-                    if tj_idx > et_idx {
-                        if let Some(im_end_idx) =
-                            self.get_image_bounds(&content, cur_parse_idx + et_idx)
-                        {
-                            cur_parse_idx = im_end_idx;
-                            continue;
-                        }
-                    }
-                }
-            } else {
+            let Some(tj_idx) = content[cur_parse_idx..].find("TJ") else {
                 // No more TJs, so nothing left to parse.
                 break;
+            };
+
+            // Generally, we *should* find an ET here, since we already found a TJ (which means
+            // there's a text block to end).
+            if let Some(et_idx) = content[cur_parse_idx..].find("ET") {
+                // Handle tables
+                if let Some((tbl_begin_idx, tbl_end_idx)) =
+                    self.get_table_bounds(&content, cur_parse_idx + et_idx)
+                {
+                    if tbl_begin_idx < cur_parse_idx + tj_idx {
+                        // Skip over the table
+                        cur_parse_idx = tbl_end_idx;
+
+                        // We've invalidated some indexes in the conditions above, so we
+                        // actually can't just proceed.
+                        continue;
+                    }
+                }
+
+                // Handle images. The TJ has to be after the next ET--otherwise, it's
+                // unlikely to be a caption. We assume here that figure captions occur after
+                // the figure itself.
+                if tj_idx > et_idx {
+                    if let Some(im_end_idx) =
+                        self.get_image_bounds(&content, cur_parse_idx + et_idx)
+                    {
+                        cur_parse_idx = im_end_idx;
+                        continue;
+                    }
+                }
             }
 
             // Get the current font size, if it's set.
@@ -523,7 +521,7 @@ impl PdfParser {
             cur_parse_idx += end_idx + 2;
         }
 
-        // Parse the weird octal representations
+        // Replace ligatures with constitutent characters
         for (from, to) in OCTAL_REPLACEMENTS.iter() {
             parsed = parsed.replace(from, to);
         }
@@ -595,6 +593,21 @@ mod tests {
 
     use super::*;
 
+    /// Get the raw content stream for page `page_num` for the PDF.
+    fn get_raw_content_stream(doc: &Document, page_num: usize) -> Result<String, PdfError> {
+        let page_id: (u32, u16) = doc
+            .page_iter()
+            .nth(page_num)
+            .ok_or(PdfError::ContentError)?;
+
+        let page_content = doc
+            .get_page_content(page_id)
+            .map_err(|_| PdfError::ContentError)?;
+        let content = String::from_utf8_lossy(&page_content);
+
+        Ok(content.to_string())
+    }
+
     #[test]
     fn test_parsing_works() {
         let path = PathBuf::from("assets").join("test1.pdf");
@@ -622,9 +635,7 @@ mod tests {
         let path = PathBuf::from("assets").join("hyperlinks.pdf");
 
         let doc = Document::load(path).unwrap();
-        let page_id = doc.page_iter().next().unwrap();
-        let page_content = doc.get_page_content(page_id).unwrap();
-        let content = String::from_utf8_lossy(&page_content);
+        let content = get_raw_content_stream(&doc, 0).unwrap();
 
         dbg!(content);
     }
@@ -701,15 +712,14 @@ mod tests {
         let path = PathBuf::from("assets").join("symbols.pdf");
 
         let doc = Document::load(path).unwrap();
-        let page_id = doc.page_iter().next().unwrap();
-        let page_content = doc.get_page_content(page_id).unwrap();
-        let content = String::from_utf8_lossy(&page_content);
+        let content = get_raw_content_stream(&doc, 0).unwrap();
 
         const TEST_QUERIES: [&str; 3] = ["F21", "F27", "F30"];
         for test in TEST_QUERIES {
             assert!(content.contains(test));
         }
 
+        let page_id = doc.page_iter().next().unwrap();
         let font_name = get_font(&doc, page_id, String::from_str("F30").unwrap());
         assert!(font_name.is_ok());
         assert_eq!(font_name.unwrap(), "CMMI7");
@@ -733,14 +743,11 @@ mod tests {
         let path = PathBuf::from("assets").join("table.pdf");
 
         let doc = Document::load(&path).unwrap();
-        let page_id = doc.page_iter().next().unwrap();
-        let pre_content = doc.get_page_content(page_id).unwrap();
-        let content = String::from_utf8_lossy(&pre_content);
+        let content = get_raw_content_stream(&doc, 0).unwrap();
 
         let parser = PdfParser::with_default_config();
 
-        // NOTE: Maintainers: The indices will not exactly line up, because "\n"s seem
-        // to be two separate characters. This is okay.
+        // The indices will not exactly line up, because "\n"s seem to be two separate characters. This is okay.
         // Test 1: The first ET in this should be ignored.
         let first_et = content.find("ET").unwrap();
         assert_eq!(first_et, 342);
