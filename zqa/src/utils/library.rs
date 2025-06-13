@@ -75,20 +75,28 @@ pub fn parse_library_metadata() -> Result<Vec<ZoteroItemMetadata>, LibraryParsin
         // The SQL query essentially combines the titles and abstracts for each paper into a
         // single row. This is done using GROUP BY on the keys, and MAX to get the field itself.
         let mut stmt = conn.prepare(
-            "SELECT items.key AS libraryKey,
-                MAX(CASE WHEN fieldsCombined.fieldName = 'title' THEN itemDataValues.value END) AS title,
-                MAX(CASE WHEN fieldsCombined.fieldName = 'abstract' THEN itemDataValues.value END) AS abstract,
-                itemNotes.note AS notes,
-                itemAttachments.path AS filePath
-            FROM items
-            INNER JOIN itemData ON items.itemID = itemData.itemID
-            INNER JOIN fieldsCombined ON itemData.fieldID = fieldsCombined.fieldID
-            INNER JOIN itemDataValues ON itemData.valueID = itemDataValues.valueID
-            INNER JOIN itemAttachments ON items.itemID = itemAttachments.itemID
-            LEFT JOIN itemNotes ON items.itemID = itemNotes.itemID
-            WHERE fieldsCombined.fieldName IN ('title', 'abstract')
-            GROUP BY items.key;
-        ")?;
+            "WITH itemTitles AS (
+                SELECT DISTINCT itemDataValues.value AS title,
+                    items.key AS libraryKey
+                FROM items
+                INNER JOIN itemData ON items.itemID = itemData.itemID
+                INNER JOIN itemTypes ON items.itemTypeID = itemTypes.itemTypeID
+                INNER JOIN fields ON itemData.fieldID = fields.fieldID
+                INNER JOIN itemDataValues ON itemData.valueID = itemDataValues.valueID
+                WHERE fields.fieldName = 'title'
+                AND itemTypes.typeName IN ('conferencePaper', 'journalArticle', 'preprint')
+            ),
+            itemPaths AS (
+                SELECT itemAttachments.path AS filePath,
+                       items.key AS libraryKey
+                FROM items
+                LEFT JOIN itemAttachments ON items.itemID = itemAttachments.parentItemID
+            )
+            SELECT itemTitles.title AS title,
+                   itemTitles.libraryKey AS libraryKey,
+                   itemPaths.filePath AS filePath
+            FROM itemTitles, itemPaths
+            WHERE itemTitles.libraryKey = itemPaths.libraryKey;")?;
 
         let item_iter: Vec<ZoteroItemMetadata> = stmt
             .query_map([], |row| {
