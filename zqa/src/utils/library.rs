@@ -70,8 +70,6 @@ pub fn parse_library_metadata() -> Result<Vec<ZoteroItemMetadata>, LibraryParsin
     if let Some(path) = get_lib_path() {
         let conn = Connection::open(path.join("zotero.sqlite"))?;
 
-        // The SQL query essentially combines the titles and abstracts for each paper into a
-        // single row. This is done using GROUP BY on the keys, and MAX to get the field itself.
         let mut stmt = conn.prepare(
             "WITH itemTitles AS (
                 SELECT DISTINCT itemDataValues.value AS title,
@@ -94,7 +92,8 @@ pub fn parse_library_metadata() -> Result<Vec<ZoteroItemMetadata>, LibraryParsin
                    itemTitles.libraryKey AS libraryKey,
                    itemPaths.filePath AS filePath
             FROM itemTitles, itemPaths
-            WHERE itemTitles.libraryKey = itemPaths.libraryKey;")?;
+            WHERE itemTitles.libraryKey = itemPaths.libraryKey;",
+        )?;
 
         let item_iter: Vec<ZoteroItemMetadata> = stmt
             .query_map([], |row| {
