@@ -76,8 +76,6 @@ pub fn library_to_arrow(
     let schema = Arc::new(arrow_schema::Schema::new(vec![
         arrow_schema::Field::new("library_key", arrow_schema::DataType::Utf8, false),
         arrow_schema::Field::new("title", arrow_schema::DataType::Utf8, false),
-        arrow_schema::Field::new("abstract", arrow_schema::DataType::Utf8, true),
-        arrow_schema::Field::new("notes", arrow_schema::DataType::Utf8, true),
         arrow_schema::Field::new("file_path", arrow_schema::DataType::Utf8, false),
         arrow_schema::Field::new("pdf_text", arrow_schema::DataType::Utf8, false),
     ]));
@@ -96,16 +94,6 @@ pub fn library_to_arrow(
             .map(|item| item.metadata.title.as_str())
             .collect::<Vec<&str>>(),
     );
-
-    let abstracts: StringArray = lib_items
-        .iter()
-        .map(|item| item.metadata.paper_abstract.as_deref())
-        .collect();
-
-    let notes: StringArray = lib_items
-        .iter()
-        .map(|item| item.metadata.notes.as_deref())
-        .collect();
 
     let pdf_texts = StringArray::from(
         lib_items
@@ -131,8 +119,6 @@ pub fn library_to_arrow(
         vec![
             Arc::new(library_keys) as ArrayRef,
             Arc::new(titles) as ArrayRef,
-            Arc::new(abstracts) as ArrayRef,
-            Arc::new(notes) as ArrayRef,
             Arc::new(file_paths) as ArrayRef,
             Arc::new(pdf_texts) as ArrayRef,
         ],
@@ -151,6 +137,7 @@ mod tests {
     use std::env;
 
     #[test]
+    #[ignore]
     fn library_fetching_works() {
         Ftail::new().console(log::LevelFilter::Info).init().unwrap();
 

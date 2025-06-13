@@ -25,8 +25,6 @@ fn get_lib_path() -> Option<PathBuf> {
 pub struct ZoteroItemMetadata {
     pub library_key: String,
     pub title: String,
-    pub paper_abstract: Option<String>,
-    pub notes: Option<String>,
     pub file_path: PathBuf,
 }
 
@@ -100,16 +98,14 @@ pub fn parse_library_metadata() -> Result<Vec<ZoteroItemMetadata>, LibraryParsin
 
         let item_iter: Vec<ZoteroItemMetadata> = stmt
             .query_map([], |row| {
-                let res_path: String = row.get(4)?;
+                let res_path: String = row.get(2)?;
                 let split_idx = res_path.find(':').unwrap_or(0);
                 let filename = res_path.split_at(split_idx + 1).1;
-                let lib_key: String = row.get(0)?;
+                let lib_key: String = row.get(1)?;
 
                 Ok(ZoteroItemMetadata {
                     library_key: lib_key.clone(),
-                    title: row.get(1)?,
-                    paper_abstract: row.get(2).unwrap_or_default(),
-                    notes: row.get(3)?,
+                    title: row.get(0)?,
                     file_path: path.join("storage").join(lib_key).join(filename),
                 })
             })?
