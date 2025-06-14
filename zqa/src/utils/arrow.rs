@@ -65,10 +65,18 @@ impl Error for ArrowError {}
 /// - There's an error creating the Arrow schema
 /// - There's an error converting the data to Arrow format
 /// - Any file paths contain invalid UTF-8 characters
+///
+/// # Arguments
+///
+/// * `start_from` - An optional offset for the SQL query. Useful for debugging, pagination,
+///   multi-threading, etc.
+/// * `limit` - Optional limit, meant to be used in conjunction with `start_from`.
 pub fn library_to_arrow(
+    start_from: Option<usize>,
+    limit: Option<usize>,
 ) -> Result<RecordBatchIterator<IntoIter<Result<RecordBatch, arrow_schema::ArrowError>>>, ArrowError>
 {
-    let lib_items = parse_library()?;
+    let lib_items = parse_library(start_from, limit)?;
     log::info!("Finished parsing library items.");
 
     // Convert ZoteroItemMetadata to something that can be converted to Arrow
@@ -137,8 +145,8 @@ mod tests {
     use std::env;
 
     #[test]
-    #[ignore]
-    fn library_fetching_works() {
+    // #[ignore]
+    fn test_library_to_arrow_works() {
         Ftail::new().console(log::LevelFilter::Info).init().unwrap();
 
         if env::var("CI").is_ok() {
@@ -146,7 +154,7 @@ mod tests {
             return;
         }
 
-        let batch_iter = library_to_arrow();
+        let batch_iter = library_to_arrow(Some(0), Some(5));
 
         assert!(
             batch_iter.is_ok(),
@@ -161,10 +169,7 @@ mod tests {
             .expect("No batches in iterator")
             .expect("Error in batch");
 
-        assert_eq!(batch.num_columns(), 6, "Expected 6 columns in record batch");
-        assert!(
-            batch.num_rows() > 0,
-            "Expected at least one row in record batch"
-        );
+        assert_eq!(batch.num_columns(), 4, "Expected 4 columns in record batch");
+        assert!(batch.num_rows() == 5, "Expected 5 rows in record batch");
     }
 }

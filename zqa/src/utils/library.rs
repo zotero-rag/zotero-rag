@@ -1,5 +1,6 @@
 use core::fmt;
 use directories::UserDirs;
+use indicatif::ProgressBar;
 use rusqlite::Connection;
 use std::env;
 use std::error::Error;
@@ -66,14 +67,21 @@ impl fmt::Display for LibraryParsingError {
 impl Error for LibraryParsingError {}
 
 /// Parses the Zotero library metadata. If successful, returns a list of metadata for each item.
-pub fn parse_library_metadata() -> Result<Vec<ZoteroItemMetadata>, LibraryParsingError> {
+///
+/// Arguments:
+/// * `start_from` - An optional offset for the SQL query. Useful for debugging, pagination,
+///   multi-threading, etc.
+/// * `limit` - Optional limit, meant to be used in conjunction with `start_from`.
+pub fn parse_library_metadata(
+    start_from: Option<usize>,
+    limit: Option<usize>,
+) -> Result<Vec<ZoteroItemMetadata>, LibraryParsingError> {
     if let Some(path) = get_lib_path() {
         let conn = Connection::open(path.join("zotero.sqlite"))?;
 
-        let mut stmt = conn.prepare(
-            "WITH itemTitles AS (
+        let mut query = "WITH itemTitles AS (
                 SELECT DISTINCT itemDataValues.value AS title,
-                    items.key AS libraryKey
+                    items.itemID AS itemID
                 FROM items
                 INNER JOIN itemData ON items.itemID = itemData.itemID
                 INNER JOIN itemTypes ON items.itemTypeID = itemTypes.itemTypeID
@@ -84,23 +92,36 @@ pub fn parse_library_metadata() -> Result<Vec<ZoteroItemMetadata>, LibraryParsin
             ),
             itemPaths AS (
                 SELECT itemAttachments.path AS filePath,
-                       items.key AS libraryKey
+                       itemAttachments.parentItemID as itemID,
+                       itemAttachments.itemID AS childItemID
                 FROM items
                 LEFT JOIN itemAttachments ON items.itemID = itemAttachments.parentItemID
             )
             SELECT itemTitles.title AS title,
-                   itemTitles.libraryKey AS libraryKey,
-                   itemPaths.filePath AS filePath
-            FROM itemTitles, itemPaths
-            WHERE itemTitles.libraryKey = itemPaths.libraryKey;",
-        )?;
+                   itemPaths.filePath AS filePath,
+                   items.key AS libraryKey
+            FROM itemTitles
+            NATURAL JOIN itemPaths
+            JOIN items ON itemPaths.childItemID = items.itemID"
+            .to_string();
+
+        // Useful for debugging
+        if limit.is_some() {
+            query.push_str(&format!(" LIMIT {}", limit.unwrap()));
+        }
+
+        if start_from.is_some() {
+            query.push_str(&format!(" OFFSET {}", start_from.unwrap()));
+        }
+
+        let mut stmt = conn.prepare(&query)?;
 
         let item_iter: Vec<ZoteroItemMetadata> = stmt
             .query_map([], |row| {
-                let res_path: String = row.get(2)?;
+                let res_path: String = row.get(1)?;
                 let split_idx = res_path.find(':').unwrap_or(0);
                 let filename = res_path.split_at(split_idx + 1).1;
-                let lib_key: String = row.get(1)?;
+                let lib_key: String = row.get(2)?;
 
                 Ok(ZoteroItemMetadata {
                     library_key: lib_key.clone(),
@@ -119,10 +140,20 @@ pub fn parse_library_metadata() -> Result<Vec<ZoteroItemMetadata>, LibraryParsin
 
 /// Parses the Zotero library, also parsing PDF files if they exist on disk. If not, we currently
 /// discard those items. TODO: Update this logic later on.
-pub fn parse_library() -> Result<Vec<ZoteroItem>, LibraryParsingError> {
-    let metadata = parse_library_metadata()?;
+///
+/// # Arguments:
+///
+/// * `start_from` - An optional offset for the SQL query. Useful for debugging, pagination,
+///   multi-threading, etc.
+/// * `limit` - Optional limit, meant to be used in conjunction with `start_from`.
+pub fn parse_library(
+    start_from: Option<usize>,
+    limit: Option<usize>,
+) -> Result<Vec<ZoteroItem>, LibraryParsingError> {
+    let metadata = parse_library_metadata(start_from, limit)?;
 
     log::info!("Found library with {} items.", metadata.len());
+    let bar = ProgressBar::new(metadata.len().try_into().unwrap());
 
     let mut count = 0;
     let mut failed_count = 0;
@@ -153,7 +184,7 @@ pub fn parse_library() -> Result<Vec<ZoteroItem>, LibraryParsingError> {
             );
             count += 1;
 
-            match extract_text(path_str) {
+            let returned = match extract_text(path_str) {
                 Ok(text) => Some(ZoteroItem {
                     metadata: m.clone(),
                     text,
@@ -168,9 +199,15 @@ pub fn parse_library() -> Result<Vec<ZoteroItem>, LibraryParsingError> {
                     );
                     None
                 }
-            }
+            };
+
+            bar.inc(1);
+
+            returned
         })
         .collect::<Vec<_>>();
+
+    bar.finish();
 
     if failed_count > 0 {
         log::warn!("Failed to parse {} PDF files", failed_count);
@@ -186,16 +223,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn library_fetching_works() {
+    fn test_library_fetching_works() {
         if env::var("CI").is_ok() {
             // Skip this test in CI environments
             return;
         }
 
-        let library_items = parse_library_metadata();
+        let library_items = parse_library_metadata(None, None);
 
         assert!(library_items.is_ok());
         let items = library_items.unwrap();
         assert!(!items.is_empty());
+
+        dbg!(items.len());
     }
 }
