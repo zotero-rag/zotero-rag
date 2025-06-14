@@ -145,7 +145,6 @@ mod tests {
     use std::env;
 
     #[test]
-    // #[ignore]
     fn test_library_to_arrow_works() {
         Ftail::new().console(log::LevelFilter::Info).init().unwrap();
 
