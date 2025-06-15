@@ -1,0 +1,28 @@
+name: Check Unwanted Dependencies
+
+on:
+  push:
+    branches: [ "master" ]
+  pull_request:
+    branches: [ "master" ]
+
+jobs:
+  check-inter-crate-dependencies:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Install Rust toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+      - name: Check for circular dependencies
+        run: |
+          if cargo tree -p rag --invert | grep -q "pdftools"; then
+            echo "Error: 'rag' crate has a dependency on 'pdftools'"
+            exit 1
+          fi
+          if cargo tree -p pdftools --invert | grep -q "rag"; then
+            echo "Error: 'pdftools' crate has a dependency on 'rag'"
+            exit 1
+          fi
