@@ -289,7 +289,7 @@ impl PdfParser {
             let Some(next_bt) = content[cur_pos..].find("BT") else {
                 if bt_count > 0 {
                     // If we've processed at least one BT and reached the end, return what we have
-                    log::warn!("Could not find a BT, is the table at the end of the document?");
+                    log::debug!("Could not find a BT, is the table at the end of the document?");
                     return Some((bt_idx, cur_pos));
                 } else {
                     // Not a table
@@ -300,24 +300,24 @@ impl PdfParser {
 
             // Try to find a Td command after this BT
             let Some(td_offset) = content[next_bt_pos..].find("Td") else {
-                log::warn!("Could not find a Td after a BT, ignoring possible table.");
+                log::debug!("Could not find a Td after a BT, ignoring possible table.");
                 return None;
             };
-            
+
             // Calculate current alignment position
             let cur_td_idx = next_bt_pos + td_offset;
 
             // Parse the x,y parameters using and_then for cleaner error handling
             let params_result = self.get_params::<2>(content, cur_td_idx).ok();
             let Some((cur_x, cur_y)) = params_result
-                .and_then(|[x, y]| Some((x.parse::<f32>().ok()?, y.parse::<f32>().ok()?))) else {
+                .and_then(|[x, y]| Some((x.parse::<f32>().ok()?, y.parse::<f32>().ok()?)))
+            else {
                 // Could not parse parameters
-                log::warn!("Could not parse Td parameters, ignoring possible table.");
+                log::info!("Could not parse Td parameters, ignoring possible table.");
                 return None;
             };
-            
-            let distance =
-                ((cur_x - first_x).powi(2) + (cur_y - first_y).powi(2)).sqrt();
+
+            let distance = ((cur_x - first_x).powi(2) + (cur_y - first_y).powi(2)).sqrt();
 
             if distance < self.config.table_alignment_threshold {
                 bt_count += 1;

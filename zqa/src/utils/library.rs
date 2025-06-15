@@ -5,6 +5,8 @@ use rusqlite::Connection;
 use std::env;
 use std::error::Error;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
+use std::thread;
 
 use pdftools::parse::extract_text;
 
@@ -152,70 +154,108 @@ pub fn parse_library(
 ) -> Result<Vec<ZoteroItem>, LibraryParsingError> {
     let metadata = parse_library_metadata(start_from, limit)?;
 
+    if metadata.is_empty() {
+        log::warn!("The library seems to be empty.");
+
+        return Ok(Vec::new());
+    }
+
     log::info!("Found library with {} items.", metadata.len());
-    let bar = ProgressBar::new(metadata.len().try_into().unwrap());
 
-    let mut count = 0;
-    let mut failed_count = 0;
-    let items = metadata
-        .iter()
-        .filter_map(|m| {
-            let path_str = match m.file_path.to_str() {
-                Some(p) => p,
-                None => {
-                    failed_count += 1;
-                    log::warn!(
-                        "Skipping item with invalid UTF-8 in path: {:?}",
-                        m.library_key
-                    );
-                    return None;
-                }
-            };
+    let n_threads = thread::available_parallelism()
+        .unwrap_or(std::num::NonZero::<usize>::MIN)
+        .get();
 
-            if !path_str.ends_with(".pdf") {
-                return None;
-            }
+    // The addition in the numerator helps avoid chunk_size going to 0.
+    let chunk_size = (metadata.len() + n_threads - 1) / n_threads;
 
-            log::debug!(
-                "({} / {}) Parsing file {}",
-                count + 1,
-                metadata.len(),
-                path_str
-            );
-            count += 1;
+    let bar = Arc::new(Mutex::new(ProgressBar::new(
+        metadata.len().try_into().unwrap(),
+    )));
 
-            let returned = match extract_text(path_str) {
-                Ok(text) => Some(ZoteroItem {
-                    metadata: m.clone(),
-                    text,
-                }),
-                Err(e) => {
-                    failed_count += 1;
-                    log::warn!(
-                        "Failed to parse PDF for item {} with path {}: {}",
-                        m.library_key,
-                        path_str,
-                        e
-                    );
-                    None
-                }
-            };
+    let handles = metadata
+        .chunks(chunk_size)
+        .into_iter()
+        .map(|chunk| {
+            // Parse each chunked subset of items
+            let bar = Arc::clone(&bar);
+            let chunk = chunk.to_vec();
+            let cur_chunk_size = chunk.len();
 
-            bar.inc(1);
+            let handle = thread::spawn(move || {
+                let result = chunk
+                    .iter()
+                    .filter_map(|m| {
+                        /* Handle each ZoteroItemMetadata item. This has all the info needed to
+                         * actually figure out where the file is on disk and parse it--it's here
+                         * that we integrate with `pdftools` to get text out of each PDF. */
+                        let path_str = match m.file_path.to_str() {
+                            Some(p) => p,
+                            None => {
+                                // Best not to try printing the file path here, give the user the
+                                // library key instead.
+                                log::warn!(
+                                    "Skipping item with invalid UTF-8 in path: {:?}",
+                                    m.library_key
+                                );
+                                return None;
+                            }
+                        };
 
-            returned
+                        // TODO: Handle other formats
+                        if !path_str.ends_with(".pdf") {
+                            return None;
+                        }
+
+                        let returned = match extract_text(path_str) {
+                            Ok(text) => Some(ZoteroItem {
+                                metadata: m.clone(),
+                                text,
+                            }),
+                            Err(e) => {
+                                log::warn!(
+                                    "Failed to parse PDF for item {} with path {}: {}",
+                                    m.library_key,
+                                    path_str,
+                                    e
+                                );
+                                None
+                            }
+                        };
+
+                        returned
+                    })
+                    .collect::<Vec<_>>();
+
+                result
+            });
+
+            // Batch-update the progress bar
+            let pbar = bar.lock().unwrap();
+            pbar.inc(cur_chunk_size as u64);
+
+            handle
         })
         .collect::<Vec<_>>();
 
-    bar.finish();
+    let results = handles
+        .into_iter()
+        .map(|handle| handle.join().unwrap_or_else(|_| Vec::new()))
+        .flatten()
+        .collect::<Vec<_>>();
+    log::info!("Parsed {} items from library.", results.len());
 
-    if failed_count > 0 {
-        log::warn!("Failed to parse {} PDF files", failed_count);
+    let pbar = bar.lock().unwrap();
+    pbar.finish();
+
+    let fail_count = metadata.len() - results.len();
+    if fail_count == 0 {
+        log::info!("There were no errors during parsing.");
+    } else {
+        log::warn!("{} items could not be parsed.", fail_count);
     }
 
-    log::info!("Parsed {} items from library.", items.len());
-
-    Ok(items)
+    Ok(results)
 }
 
 #[cfg(test)]
@@ -234,7 +274,20 @@ mod tests {
         assert!(library_items.is_ok());
         let items = library_items.unwrap();
         assert!(!items.is_empty());
+    }
 
-        dbg!(items.len());
+    #[test]
+    fn test_parse_library() {
+        if env::var("CI").is_ok() {
+            // Skip this test in CI environments
+            return;
+        }
+
+        let items = parse_library(Some(0), Some(5));
+
+        assert!(items.is_ok());
+
+        let items = items.unwrap();
+        assert_eq!(items.len(), 5);
     }
 }
