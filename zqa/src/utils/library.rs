@@ -5,6 +5,8 @@ use rusqlite::Connection;
 use std::env;
 use std::error::Error;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
+use std::thread;
 
 use pdftools::parse::extract_text;
 
@@ -153,69 +155,109 @@ pub fn parse_library(
     let metadata = parse_library_metadata(start_from, limit)?;
 
     log::info!("Found library with {} items.", metadata.len());
-    let bar = ProgressBar::new(metadata.len().try_into().unwrap());
 
-    let mut count = 0;
-    let mut failed_count = 0;
-    let items = metadata
-        .iter()
-        .filter_map(|m| {
-            let path_str = match m.file_path.to_str() {
-                Some(p) => p,
-                None => {
-                    failed_count += 1;
-                    log::warn!(
-                        "Skipping item with invalid UTF-8 in path: {:?}",
-                        m.library_key
-                    );
-                    return None;
-                }
-            };
+    let n_threads = thread::available_parallelism()
+        .unwrap_or(std::num::NonZero::<usize>::MIN)
+        .get();
 
-            if !path_str.ends_with(".pdf") {
-                return None;
-            }
+    // Chunk our single vec based on the available parallelism
+    let parts = metadata.iter().enumerate().fold(
+        (0..n_threads).map(|_| Vec::new()).collect(),
+        |mut acc: Vec<Vec<ZoteroItemMetadata>>, (i, el)| {
+            // We can safely `unwrap()` here because we reserved capacity.
+            dbg!(i, n_threads, i % n_threads);
+            let alloted_vec = acc.get_mut(i % n_threads).unwrap();
+            alloted_vec.push(el.clone());
 
-            log::debug!(
-                "({} / {}) Parsing file {}",
-                count + 1,
-                metadata.len(),
-                path_str
-            );
-            count += 1;
+            acc
+        },
+    );
 
-            let returned = match extract_text(path_str) {
-                Ok(text) => Some(ZoteroItem {
-                    metadata: m.clone(),
-                    text,
-                }),
-                Err(e) => {
-                    failed_count += 1;
-                    log::warn!(
-                        "Failed to parse PDF for item {} with path {}: {}",
-                        m.library_key,
-                        path_str,
-                        e
-                    );
-                    None
-                }
-            };
+    let bar = Arc::new(Mutex::new(ProgressBar::new(
+        metadata.len().try_into().unwrap(),
+    )));
 
-            bar.inc(1);
+    let handles = parts
+        .into_iter()
+        .map(|chunk| {
+            // Parse each chunked subset of items
+            let bar = Arc::clone(&bar);
+            let handle = thread::spawn(move || {
+                let result = chunk
+                    .iter()
+                    .filter_map(|m| {
+                        /* Handle each ZoteroItemMetadata item. This has all the info needed to
+                         * actually figure out where the file is on disk and parse it--it's here
+                         * that we integrate with `pdftools` to get text out of each PDF. */
+                        let path_str = match m.file_path.to_str() {
+                            Some(p) => p,
+                            None => {
+                                // Best not to try printing the file path here, give the user the
+                                // library key instead.
+                                log::warn!(
+                                    "Skipping item with invalid UTF-8 in path: {:?}",
+                                    m.library_key
+                                );
+                                return None;
+                            }
+                        };
 
-            returned
+                        // TODO: Handle other formats
+                        if !path_str.ends_with(".pdf") {
+                            return None;
+                        }
+
+                        let returned = match extract_text(path_str) {
+                            Ok(text) => Some(ZoteroItem {
+                                metadata: m.clone(),
+                                text,
+                            }),
+                            Err(e) => {
+                                log::warn!(
+                                    "Failed to parse PDF for item {} with path {}: {}",
+                                    m.library_key,
+                                    path_str,
+                                    e
+                                );
+                                None
+                            }
+                        };
+
+                        let pbar = bar.lock().unwrap();
+                        pbar.inc(1);
+
+                        returned
+                    })
+                    .collect::<Vec<_>>();
+
+                result
+            });
+
+            handle
         })
         .collect::<Vec<_>>();
 
-    bar.finish();
+    /* Gather all the results.
+     * TODO: In the future, we might want to make this more robust by not calling `.unwrap()` on the results from
+     * the `handle.join()`--possibly by re-batching them until we get no errors or something. */
+    let results = handles
+        .into_iter()
+        .map(|handle| handle.join().unwrap())
+        .flatten()
+        .collect::<Vec<_>>();
+    log::info!("Parsed {} items from library.", results.len());
 
-    if failed_count > 0 {
-        log::warn!("Failed to parse {} PDF files", failed_count);
+    let pbar = bar.lock().unwrap();
+    pbar.finish();
+
+    let fail_count = metadata.len() - results.len();
+    if fail_count == 0 {
+        log::info!("There were no errors during parsing.");
+    } else {
+        log::warn!("{} items could not be parsed.", fail_count);
     }
 
-    log::info!("Parsed {} items from library.", items.len());
-
-    Ok(items)
+    Ok(results)
 }
 
 #[cfg(test)]
