@@ -106,12 +106,12 @@ pub fn parse_library_metadata(
             .to_string();
 
         // Useful for debugging
-        if limit.is_some() {
-            query.push_str(&format!(" LIMIT {}", limit.unwrap()));
+        if let Some(limit_val) = limit {
+            query.push_str(&format!(" LIMIT {}", limit_val));
         }
 
-        if start_from.is_some() {
-            query.push_str(&format!(" OFFSET {}", start_from.unwrap()));
+        if let Some(offset) = start_from {
+            query.push_str(&format!(" OFFSET {}", offset));
         }
 
         let mut stmt = conn.prepare(&query)?;
