@@ -238,12 +238,9 @@ pub fn parse_library(
         })
         .collect::<Vec<_>>();
 
-    /* Gather all the results.
-     * TODO: In the future, we might want to make this more robust by not calling `.unwrap()` on the results from
-     * the `handle.join()`--possibly by re-batching them until we get no errors or something. */
     let results = handles
         .into_iter()
-        .map(|handle| handle.join().unwrap())
+        .map(|handle| handle.join().unwrap_or_else(|_| Vec::new()))
         .flatten()
         .collect::<Vec<_>>();
     log::info!("Parsed {} items from library.", results.len());
