@@ -180,6 +180,7 @@ pub fn parse_library(
             // Parse each chunked subset of items
             let bar = Arc::clone(&bar);
             let chunk = chunk.to_vec();
+            let cur_chunk_size = chunk.len();
 
             let handle = thread::spawn(move || {
                 let result = chunk
@@ -222,15 +223,16 @@ pub fn parse_library(
                             }
                         };
 
-                        let pbar = bar.lock().unwrap();
-                        pbar.inc(1);
-
                         returned
                     })
                     .collect::<Vec<_>>();
 
                 result
             });
+
+            // Batch-update the progress bar
+            let pbar = bar.lock().unwrap();
+            pbar.inc(cur_chunk_size as u64);
 
             handle
         })
@@ -275,7 +277,20 @@ mod tests {
         assert!(library_items.is_ok());
         let items = library_items.unwrap();
         assert!(!items.is_empty());
+    }
 
-        dbg!(items.len());
+    #[test]
+    fn test_parse_library() {
+        if env::var("CI").is_ok() {
+            // Skip this test in CI environments
+            return;
+        }
+
+        let items = parse_library(Some(0), Some(5));
+
+        assert!(items.is_ok());
+
+        let items = items.unwrap();
+        assert_eq!(items.len(), 5);
     }
 }
