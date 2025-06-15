@@ -167,7 +167,7 @@ pub fn parse_library(
         .get();
 
     // The addition in the numerator helps avoid chunk_size going to 0.
-    let chunk_size = (metadata.len() + n_threads - 1) / n_threads;
+    let chunk_size = metadata.len().div_ceil(n_threads);
 
     let bar = Arc::new(Mutex::new(ProgressBar::new(
         metadata.len().try_into().unwrap(),
@@ -175,7 +175,6 @@ pub fn parse_library(
 
     let handles = metadata
         .chunks(chunk_size)
-        .into_iter()
         .map(|chunk| {
             // Parse each chunked subset of items
             let bar = Arc::clone(&bar);
@@ -207,7 +206,7 @@ pub fn parse_library(
                             return None;
                         }
 
-                        let returned = match extract_text(path_str) {
+                        match extract_text(path_str) {
                             Ok(text) => Some(ZoteroItem {
                                 metadata: m.clone(),
                                 text,
@@ -221,9 +220,7 @@ pub fn parse_library(
                                 );
                                 None
                             }
-                        };
-
-                        returned
+                        }
                     })
                     .collect::<Vec<_>>();
 
@@ -240,8 +237,7 @@ pub fn parse_library(
 
     let results = handles
         .into_iter()
-        .map(|handle| handle.join().unwrap_or_else(|_| Vec::new()))
-        .flatten()
+        .flat_map(|handle| handle.join().unwrap_or_else(|_| Vec::new()))
         .collect::<Vec<_>>();
     log::info!("Parsed {} items from library.", results.len());
 

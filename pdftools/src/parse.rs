@@ -458,9 +458,9 @@ impl PdfParser {
             let mut begin_idx = end_idx;
             let mut stack = Vec::with_capacity(50);
             while let Some(val) =
-                content[cur_parse_idx..][..begin_idx].rfind(|c| ['[', ']'].contains(&c))
+                content[cur_parse_idx..cur_parse_idx + begin_idx].rfind(|c| ['[', ']'].contains(&c))
             {
-                let char_at_val = content[cur_parse_idx..].as_bytes()[val] as char;
+                let char_at_val = content.as_bytes()[cur_parse_idx + val] as char;
                 if char_at_val == ']' {
                     stack.push(']');
                 } else if char_at_val == '[' {
