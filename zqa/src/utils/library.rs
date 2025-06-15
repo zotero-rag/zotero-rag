@@ -32,7 +32,6 @@ pub struct ZoteroItemMetadata {
 }
 
 /// A Zotero library item. Includes full-text from parsing PDFs when they exist.
-/// TODO: For now, we assume the PDF text always exists. This should be generalized later.
 pub struct ZoteroItem {
     pub metadata: ZoteroItemMetadata,
     pub text: String,
@@ -141,7 +140,7 @@ pub fn parse_library_metadata(
 }
 
 /// Parses the Zotero library, also parsing PDF files if they exist on disk. If not, we currently
-/// discard those items. TODO: Update this logic later on.
+/// discard those items.
 ///
 /// # Arguments:
 ///
