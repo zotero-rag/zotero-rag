@@ -154,34 +154,33 @@ pub fn parse_library(
 ) -> Result<Vec<ZoteroItem>, LibraryParsingError> {
     let metadata = parse_library_metadata(start_from, limit)?;
 
+    if metadata.is_empty() {
+        log::warn!("The library seems to be empty.");
+
+        return Ok(Vec::new());
+    }
+
     log::info!("Found library with {} items.", metadata.len());
 
     let n_threads = thread::available_parallelism()
         .unwrap_or(std::num::NonZero::<usize>::MIN)
         .get();
 
-    // Chunk our single vec based on the available parallelism
-    let parts = metadata.iter().enumerate().fold(
-        (0..n_threads).map(|_| Vec::new()).collect(),
-        |mut acc: Vec<Vec<ZoteroItemMetadata>>, (i, el)| {
-            // We can safely `unwrap()` here because we reserved capacity.
-            dbg!(i, n_threads, i % n_threads);
-            let alloted_vec = acc.get_mut(i % n_threads).unwrap();
-            alloted_vec.push(el.clone());
-
-            acc
-        },
-    );
+    // The addition in the numerator helps avoid chunk_size going to 0.
+    let chunk_size = (metadata.len() + n_threads - 1) / n_threads;
 
     let bar = Arc::new(Mutex::new(ProgressBar::new(
         metadata.len().try_into().unwrap(),
     )));
 
-    let handles = parts
+    let handles = metadata
+        .chunks(chunk_size)
         .into_iter()
         .map(|chunk| {
             // Parse each chunked subset of items
             let bar = Arc::clone(&bar);
+            let chunk = chunk.to_vec();
+
             let handle = thread::spawn(move || {
                 let result = chunk
                     .iter()
