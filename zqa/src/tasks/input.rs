@@ -3,11 +3,13 @@ use std::io::{stdin, stdout, Write};
 use rag::task::{ReturnValue, Task};
 
 #[derive(Clone)]
+#[allow(dead_code)]
 pub struct UserInput {
     query: String,
 }
 
 #[derive(Clone)]
+#[allow(dead_code)]
 pub struct UserInputTask {
     name: String,
     _chain_index: Option<usize>,
