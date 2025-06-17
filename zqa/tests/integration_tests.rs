@@ -1,6 +1,10 @@
+use dotenv::dotenv;
 use ftail::Ftail;
-use rag::vector::lance::create_initial_table;
+use lancedb::embeddings::EmbeddingDefinition;
+
 use std::env;
+
+use rag::vector::lance::create_initial_table;
 use zqa::library_to_arrow;
 
 /* This is the main integration test ensuring the whole thing works together. Right now, this is
@@ -10,6 +14,8 @@ use zqa::library_to_arrow;
 #[ignore]
 #[tokio::test]
 async fn test_integration_works() {
+    dotenv().ok();
+
     Ftail::new().console(log::LevelFilter::Info).init().unwrap();
 
     if env::var("CI").is_ok() {
@@ -21,7 +27,15 @@ async fn test_integration_works() {
 
     assert!(batch_iter.is_ok());
     let batch_iter = batch_iter.unwrap();
-    let db = create_initial_table(batch_iter).await;
+    let db = create_initial_table(
+        batch_iter,
+        EmbeddingDefinition::new(
+            "data",             // source column
+            "openai",           // embedding name, either "openai" or "anthropic"
+            Some("embeddings"), // dest column
+        ),
+    )
+    .await;
 
     assert!(db.is_ok());
 }
