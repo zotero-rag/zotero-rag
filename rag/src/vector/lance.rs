@@ -3,8 +3,8 @@ use crate::llm::{anthropic::AnthropicClient, http_client::ReqwestClient, openai:
 use arrow_array::{RecordBatch, RecordBatchIterator};
 use core::fmt;
 use lancedb::{
-    arrow::arrow_schema::ArrowError, connect, connection::CreateTableMode, Connection,
-    Error as LanceDbError,
+    arrow::arrow_schema::ArrowError, connect, connection::CreateTableMode,
+    embeddings::EmbeddingDefinition, Connection, Error as LanceDbError,
 };
 use std::{error::Error, sync::Arc, vec::IntoIter};
 
@@ -15,6 +15,8 @@ pub enum LanceError {
     ConnectionError(String),
     /// Error creating a table in LanceDB
     TableCreationError(String),
+    /// Invalid params
+    ParameterError(String),
     /// Other LanceDB-related errors
     Other(String),
 }
@@ -24,6 +26,7 @@ impl fmt::Display for LanceError {
         match self {
             Self::ConnectionError(msg) => write!(f, "LanceDB connection error: {}", msg),
             Self::TableCreationError(msg) => write!(f, "LanceDB table creation error: {}", msg),
+            Self::ParameterError(msg) => write!(f, "Invalid parameter: {}", msg),
             Self::Other(msg) => write!(f, "LanceDB error: {}", msg),
         }
     }
@@ -50,22 +53,23 @@ impl From<LanceDbError> for LanceError {
 /// Returns a `LanceError` if connection, table creation, or registering embedding functions fails
 pub async fn create_initial_table(
     data: RecordBatchIterator<IntoIter<Result<RecordBatch, ArrowError>>>,
+    embedding_params: EmbeddingDefinition,
 ) -> Result<Connection, LanceError> {
     let uri = "data/lancedb-table";
+    const VALID_EMBEDDINGS: [&str; 2] = ["openai", "anthropic"];
+
+    if !(VALID_EMBEDDINGS.contains(&embedding_params.embedding_name.as_str())) {
+        return Err(LanceError::ParameterError(format!(
+            "{} is not a valid embedding.",
+            embedding_params.embedding_name
+        )));
+    }
 
     // Connect to LanceDB
     let db = connect(uri)
         .execute()
         .await
         .map_err(|e| LanceError::ConnectionError(e.to_string()))?;
-
-    // Create the table
-    let _tbl = db
-        .create_table("data", data)
-        .mode(CreateTableMode::Overwrite)
-        .execute()
-        .await
-        .map_err(|e| LanceError::TableCreationError(e.to_string()))?;
 
     db.embedding_registry().register(
         "anthropic",
@@ -75,17 +79,31 @@ pub async fn create_initial_table(
     db.embedding_registry()
         .register("openai", Arc::new(OpenAIClient::default()))?;
 
+    // Create the table
+    let _tbl = db
+        .create_table("data", data)
+        .mode(CreateTableMode::Overwrite)
+        .add_embedding(embedding_params)?
+        .execute()
+        .await
+        .map_err(|e| LanceError::TableCreationError(e.to_string()))?;
+
     Ok(db)
 }
 
 #[cfg(test)]
 mod tests {
     use arrow_array::StringArray;
+    use dotenv::dotenv;
+    use futures::StreamExt;
+    use lancedb::query::ExecutableQuery;
 
     use super::*;
 
     #[tokio::test]
     async fn test_create_initial_table() {
+        dotenv().ok();
+
         let schema = arrow_schema::Schema::new(vec![arrow_schema::Field::new(
             "data",
             arrow_schema::DataType::Utf8,
@@ -96,7 +114,15 @@ mod tests {
         let batches = vec![Ok(record_batch.clone())];
         let reader = RecordBatchIterator::new(batches.into_iter(), record_batch.schema());
 
-        let db = create_initial_table(reader).await;
+        let db = create_initial_table(
+            reader,
+            EmbeddingDefinition::new(
+                "data",             // source column
+                "openai",           // embedding name, either "openai" or "anthropic"
+                Some("embeddings"), // dest column
+            ),
+        )
+        .await;
 
         assert!(db.is_ok());
         let db = db.unwrap();
@@ -107,5 +133,24 @@ mod tests {
 
         let tbl = db.open_table("data").execute().await;
         assert!(tbl.is_ok());
+
+        let tbl = tbl.unwrap();
+        let tbl_values = tbl.query().execute().await;
+
+        assert!(tbl_values.is_ok());
+
+        let mut tbl_values = tbl_values.unwrap();
+        let row = tbl_values.next().await;
+
+        assert!(row.is_some());
+        let row = row.unwrap();
+
+        assert!(row.is_ok());
+        let row = row.unwrap();
+
+        for column in ["data", "embeddings"] {
+            assert!(row.column_by_name(column).is_some());
+            dbg!(row.column_by_name(column));
+        }
     }
 }
