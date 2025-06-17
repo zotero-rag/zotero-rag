@@ -280,8 +280,13 @@ mod tests {
             message: "Hello!".to_owned(),
         };
         let res = client.send_message(&message).await;
+
+        // Debug the error if there is one
+        if res.is_err() {
+            println!("OpenAI test error: {:?}", res.as_ref().err());
+        }
+
         assert!(res.is_ok());
-        dbg!(res.unwrap());
     }
 
     #[tokio::test]
