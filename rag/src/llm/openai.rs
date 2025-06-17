@@ -1,16 +1,18 @@
-use super::base::{ApiClient, ApiResponse, ChatHistoryItem, UserMessage};
-use super::errors::LLMError;
-use super::http_client::{HttpClient, ReqwestClient};
-use crate::common;
+use std::borrow::Cow;
+use std::env;
+use std::sync::Arc;
+
 use futures::stream;
 use futures::StreamExt;
 use http::HeaderMap;
 use lancedb::arrow::arrow_schema::{DataType, Field};
 use lancedb::embeddings::EmbeddingFunction;
 use serde::{Deserialize, Serialize};
-use std::borrow::Cow;
-use std::env;
-use std::sync::Arc;
+
+use super::base::{ApiClient, ApiResponse, ChatHistoryItem, UserMessage};
+use super::errors::LLMError;
+use super::http_client::{HttpClient, ReqwestClient};
+use crate::common;
 
 /// A client for OpenAI's chat completions API
 #[derive(Debug, Clone)]
@@ -116,7 +118,7 @@ struct OpenAIRequest {
 
 impl From<UserMessage> for OpenAIRequest {
     fn from(msg: UserMessage) -> OpenAIRequest {
-        let model = env::var("OPENAI_MODEL").unwrap_or_else(|_| "gpt-3.5-turbo".to_string());
+        let model = env::var("OPENAI_MODEL").unwrap_or_else(|_| "gpt-4.1-2025-04-14".to_string());
         let max_tokens = env::var("OPENAI_MAX_TOKENS")
             .ok()
             .and_then(|s| s.parse().ok());
@@ -263,20 +265,14 @@ impl EmbeddingFunction for OpenAIClient {
 
 #[cfg(test)]
 mod tests {
-    use super::{OpenAIClient, OpenAIResponse, OpenAIUsage, OpenAIChoice, OpenAIChoiceMessage};
+    use super::{OpenAIChoice, OpenAIChoiceMessage, OpenAIClient, OpenAIResponse, OpenAIUsage};
     use crate::llm::base::{ApiClient, UserMessage};
     use crate::llm::http_client::{MockHttpClient, ReqwestClient};
     use dotenv::dotenv;
-    use std::env;
 
     #[tokio::test]
     async fn test_request_works() {
         dotenv().ok();
-
-        if env::var("CI").is_ok() {
-            // Skip this test in CI environments
-            return;
-        }
 
         let client = OpenAIClient::<ReqwestClient>::default();
         let message = UserMessage {
@@ -292,13 +288,13 @@ mod tests {
     async fn test_request_with_mock() {
         // Load environment variables from .env file
         dotenv().ok();
-        
+
         // Create a proper OpenAIResponse that matches the structure we expect to deserialize
         let mock_response = OpenAIResponse {
             id: "mock-id".to_string(),
             object: "chat.completion".to_string(),
             created: 1234567890,
-            model: "gpt-3.5-turbo".to_string(),
+            model: "gpt-4.1-2025-04-14".to_string(),
             usage: OpenAIUsage {
                 prompt_tokens: 5,
                 completion_tokens: 10,
@@ -313,7 +309,7 @@ mod tests {
                 index: 0,
             }],
         };
-        
+
         let mock_http_client = MockHttpClient::new(mock_response);
         let mock_client = OpenAIClient {
             client: mock_http_client,
@@ -324,12 +320,12 @@ mod tests {
             message: "Hello!".to_owned(),
         };
         let res = mock_client.send_message(&message).await;
-        
+
         // Debug the error if there is one
         if res.is_err() {
             println!("OpenAI test error: {:?}", res.as_ref().err());
         }
-        
+
         assert!(res.is_ok());
         let res = res.unwrap();
         assert_eq!(res.content, "Hi there!");

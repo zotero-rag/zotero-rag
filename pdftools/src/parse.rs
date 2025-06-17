@@ -18,12 +18,12 @@ const DEFAULT_TABLE_EUCLIDEAN_THRESHOLD: f32 = 20.0;
 #[derive(Debug)]
 enum PdfError {
     ContentError,
-    PageFontError,
     FontNotFound,
-    MissingBaseFont,
+    InternalError(String),
     InvalidFontName,
     InvalidUtf8,
-    InternalError(String),
+    MissingBaseFont,
+    PageFontError,
 }
 
 impl Error for PdfError {}
@@ -31,12 +31,12 @@ impl std::fmt::Display for PdfError {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
             PdfError::ContentError => write!(f, "Failed to get page content"),
-            PdfError::PageFontError => write!(f, "Failed to get page fonts"),
             PdfError::FontNotFound => write!(f, "Font key not found in dictionary"),
-            PdfError::MissingBaseFont => write!(f, "Font object missing BaseFont field"),
+            PdfError::InternalError(e) => write!(f, "{}", e),
             PdfError::InvalidFontName => write!(f, "BaseFont value isn't a valid name"),
             PdfError::InvalidUtf8 => write!(f, "Font name isn't valid UTF-8"),
-            PdfError::InternalError(e) => write!(f, "{}", e),
+            PdfError::MissingBaseFont => write!(f, "Font object missing BaseFont field"),
+            PdfError::PageFontError => write!(f, "Failed to get page fonts"),
         }
     }
 }
@@ -232,10 +232,10 @@ impl PdfParser {
             /* Find the next Td that is:
              *  1. After the current TJ
              *  2. Before the next TJ that is also before the next ET. */
-            let next_et_idx = content[tj_idx + 2..].find("ET")? + tj_idx + 2; // +2 for len("TJ")
+            let next_et_idx = content[tj_idx..].find("ET")? + tj_idx;
             let Some(next_tj_idx) = content[tj_idx + 2..next_et_idx].find("TJ") else {
                 // If there is no TJ before the next ET, the caption has ended.
-                return Some(tj_idx + 2);
+                return Some(tj_idx + 2); // +2 for len("TJ")
             };
 
             let Some(next_td_idx) = content[tj_idx..tj_idx + 2 + next_tj_idx].find("Td") else {

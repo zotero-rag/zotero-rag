@@ -1,7 +1,7 @@
-use super::base::{ApiClient, ApiResponse, ChatHistoryItem, UserMessage};
-use super::errors::LLMError;
-use super::http_client::{HttpClient, ReqwestClient};
 use crate::common;
+use std::borrow::Cow;
+use std::env;
+
 use arrow_array;
 use futures::stream;
 use futures::StreamExt;
@@ -9,9 +9,11 @@ use http::HeaderMap;
 use lancedb::arrow::arrow_schema::{DataType, Field};
 use lancedb::embeddings::EmbeddingFunction;
 use serde::{Deserialize, Serialize};
-use std::borrow::Cow;
-use std::env;
 use std::sync::Arc;
+
+use super::base::{ApiClient, ApiResponse, ChatHistoryItem, UserMessage};
+use super::errors::LLMError;
+use super::http_client::{HttpClient, ReqwestClient};
 
 /// A generic client class for now. We can add stuff here later if needed, for
 /// example, features like Anthropic's native RAG thing
@@ -270,7 +272,6 @@ impl<T: HttpClient + Default + std::fmt::Debug> EmbeddingFunction for AnthropicC
 
 #[cfg(test)]
 mod tests {
-    use std::env;
     use std::sync::Arc;
 
     use arrow_array::Array;
@@ -286,11 +287,6 @@ mod tests {
     #[tokio::test]
     async fn test_request_works() {
         dotenv().ok();
-
-        if env::var("CI").is_ok() {
-            // Skip this test in CI environments
-            return;
-        }
 
         let client = AnthropicClient::<ReqwestClient>::default();
         let message = UserMessage {
@@ -312,7 +308,7 @@ mod tests {
         // Create a proper AnthropicResponse that matches the structure we expect to deserialize
         let mock_response = AnthropicResponse {
             id: "mock-id".to_string(),
-            model: "claude-3-5-sonnet-20241022".to_string(),
+            model: "claude-sonnet-4-20250514".to_string(),
             role: "assistant".to_string(),
             stop_reason: "end_turn".to_string(),
             stop_sequence: None,
@@ -355,11 +351,6 @@ mod tests {
     #[test]
     fn test_compute_embeddings() {
         dotenv().ok();
-
-        if env::var("CI").is_ok() {
-            // Skip this test in CI environments
-            return;
-        }
 
         let array = arrow_array::StringArray::from(vec![
             "Hello, World!",
