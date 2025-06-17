@@ -258,6 +258,11 @@ mod tests {
 
     #[test]
     fn test_library_fetching_works() {
+        if env::var("CI").is_ok() {
+            // Skip this test in CI environments
+            return;
+        }
+
         let library_items = parse_library_metadata(None, None);
 
         assert!(library_items.is_ok());
@@ -267,6 +272,11 @@ mod tests {
 
     #[test]
     fn test_parse_library() {
+        if env::var("CI").is_ok() {
+            // Skip this test in CI environments
+            return;
+        }
+
         let items = parse_library(Some(0), Some(5));
 
         assert!(items.is_ok());

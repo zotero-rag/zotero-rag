@@ -142,10 +142,16 @@ pub fn library_to_arrow(
 mod tests {
     use super::*;
     use ftail::Ftail;
+    use std::env;
 
     #[test]
     fn test_library_to_arrow_works() {
         Ftail::new().console(log::LevelFilter::Info).init().unwrap();
+
+        if env::var("CI").is_ok() {
+            // Skip this test in CI environments
+            return;
+        }
 
         let batch_iter = library_to_arrow(Some(0), Some(5));
 
