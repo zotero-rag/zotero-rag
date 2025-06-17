@@ -268,7 +268,9 @@ mod tests {
     use super::{OpenAIChoice, OpenAIChoiceMessage, OpenAIClient, OpenAIResponse, OpenAIUsage};
     use crate::llm::base::{ApiClient, UserMessage};
     use crate::llm::http_client::{MockHttpClient, ReqwestClient};
+    use arrow_array::Array;
     use dotenv::dotenv;
+    use std::sync::Arc;
 
     #[tokio::test]
     async fn test_request_works() {
@@ -336,5 +338,35 @@ mod tests {
         assert_eq!(res.content, "Hi there!");
         assert_eq!(res.input_tokens, 5);
         assert_eq!(res.output_tokens, 10);
+    }
+
+    #[test]
+    fn test_compute_embeddings() {
+        dotenv().ok();
+
+        let array = arrow_array::StringArray::from(vec![
+            "Hello, World!",
+            "A second string",
+            "A third string",
+            "A fourth string",
+            "A fifth string",
+            "A sixth string",
+        ]);
+
+        let client = OpenAIClient::<ReqwestClient>::default();
+        let embeddings = client.compute_embeddings_internal(Arc::new(array));
+
+        // Debug the error if there is one
+        if embeddings.is_err() {
+            println!("OpenAI embedding error: {:?}", embeddings.as_ref().err());
+        }
+
+        assert!(embeddings.is_ok());
+
+        let embeddings = embeddings.unwrap();
+        let vector = arrow_array::cast::as_fixed_size_list_array(&embeddings);
+
+        assert_eq!(vector.len(), 6);
+        assert_eq!(vector.value_length(), 1536);
     }
 }
