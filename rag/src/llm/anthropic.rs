@@ -295,7 +295,11 @@ mod tests {
         };
 
         let res = client.send_message(&message).await;
-        dbg!(res.clone().unwrap());
+
+        // Debug the error if there is one
+        if res.is_err() {
+            println!("Anthropic test error: {:?}", res.as_ref().err());
+        }
 
         assert!(res.is_ok());
     }
@@ -363,6 +367,11 @@ mod tests {
 
         let client = AnthropicClient::<ReqwestClient>::default();
         let embeddings = client.compute_embeddings_internal(Arc::new(array));
+
+        // Debug the error if there is one
+        if embeddings.is_err() {
+            println!("Anthropic embedding error: {:?}", embeddings.as_ref().err());
+        }
 
         assert!(embeddings.is_ok());
 
