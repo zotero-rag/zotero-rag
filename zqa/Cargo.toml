@@ -5,8 +5,8 @@ edition = "2021"
 
 [dependencies]
 directories = "6.0.0"
-arrow-array = "52.2.0"
-arrow-schema = "52.2.0"
+arrow-array = "53.4.1"
+arrow-schema = "53.4.1"
 libsqlite3-sys = "^0.32"
 rusqlite = "0.34.0"
 dotenv = "0.15.0"
@@ -19,7 +19,7 @@ tokio = "1.44.1"
 ftail = "0.2.1"
 log = "0.4.27"
 indicatif = "0.17.11"
-lancedb = "0.11.0"
+lancedb = "0.15.0"
 
 [[bin]]
 name = "zqa"
