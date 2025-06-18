@@ -1,4 +1,7 @@
-use crate::llm::{anthropic::AnthropicClient, http_client::ReqwestClient, openai::OpenAIClient};
+use crate::llm::{
+    anthropic::AnthropicClient, base::ModelProviders, http_client::ReqwestClient,
+    openai::OpenAIClient,
+};
 
 use arrow_array::{RecordBatch, RecordBatchIterator};
 use core::fmt;
@@ -46,6 +49,13 @@ impl From<LanceDbError> for LanceError {
 /// Connects to LanceDB at the default location, creates a table named "data",
 /// and registers embedding functions for both Anthropic and OpenAI.
 ///
+/// # Arguments
+///
+/// * `data`: An Arrow `RecordBatchIterator` containing data. See
+///   https://docs.rs/lancedb/latest/lancedb/index.html for an example of creating this.
+/// * `embedding_params`: An `EmbeddingDefinition` object that contains the source column that has
+///   the text data, the destination column name, and the embedding function to use.
+///
 /// # Returns
 /// A Connection to the LanceDB database if successful
 ///
@@ -56,9 +66,8 @@ pub async fn create_initial_table(
     embedding_params: EmbeddingDefinition,
 ) -> Result<Connection, LanceError> {
     let uri = "data/lancedb-table";
-    const VALID_EMBEDDINGS: [&str; 2] = ["openai", "anthropic"];
 
-    if !(VALID_EMBEDDINGS.contains(&embedding_params.embedding_name.as_str())) {
+    if !(ModelProviders::contains(&embedding_params.embedding_name)) {
         return Err(LanceError::ParameterError(format!(
             "{} is not a valid embedding.",
             embedding_params.embedding_name
@@ -71,13 +80,24 @@ pub async fn create_initial_table(
         .await
         .map_err(|e| LanceError::ConnectionError(e.to_string()))?;
 
-    db.embedding_registry().register(
-        "anthropic",
-        Arc::new(AnthropicClient::<ReqwestClient>::default()),
-    )?;
-
-    db.embedding_registry()
-        .register("openai", Arc::new(OpenAIClient::default()))?;
+    match embedding_params.embedding_name.as_str() {
+        "openai" => {
+            db.embedding_registry().register(
+                ModelProviders::Anthropic.as_str(),
+                Arc::new(AnthropicClient::<ReqwestClient>::default()),
+            )?;
+        }
+        "anthropic" => {
+            db.embedding_registry().register(
+                ModelProviders::OpenAI.as_str(),
+                Arc::new(OpenAIClient::default()),
+            )?;
+        }
+        _ => unreachable!(
+            "Unknown embedding provider {}",
+            embedding_params.embedding_name
+        ),
+    }
 
     // Create the table
     let _tbl = db
@@ -152,5 +172,28 @@ mod tests {
             assert!(row.column_by_name(column).is_some());
             dbg!(row.column_by_name(column));
         }
+    }
+
+    #[tokio::test]
+    async fn test_invalid_embedding_provider_rejected() {
+        dotenv().ok();
+
+        let schema = arrow_schema::Schema::new(vec![arrow_schema::Field::new(
+            "data",
+            arrow_schema::DataType::Utf8,
+            false,
+        )]);
+        let data = StringArray::from(vec!["Hello", "World"]);
+        let record_batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(data)]).unwrap();
+        let batches = vec![Ok(record_batch.clone())];
+        let reader = RecordBatchIterator::new(batches.into_iter(), record_batch.schema());
+
+        let db = create_initial_table(
+            reader,
+            EmbeddingDefinition::new("data", "invalid", Some("embeddings")),
+        )
+        .await;
+
+        assert!(db.is_err());
     }
 }
