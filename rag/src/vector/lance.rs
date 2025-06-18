@@ -81,13 +81,13 @@ pub async fn create_initial_table(
         .map_err(|e| LanceError::ConnectionError(e.to_string()))?;
 
     match embedding_params.embedding_name.as_str() {
-        "openai" => {
+        "anthropic" => {
             db.embedding_registry().register(
                 ModelProviders::Anthropic.as_str(),
                 Arc::new(AnthropicClient::<ReqwestClient>::default()),
             )?;
         }
-        "anthropic" => {
+        "openai" => {
             db.embedding_registry().register(
                 ModelProviders::OpenAI.as_str(),
                 Arc::new(OpenAIClient::default()),
@@ -121,11 +121,11 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn test_create_initial_table() {
+    async fn test_create_initial_table_with_openai() {
         dotenv().ok();
 
         let schema = arrow_schema::Schema::new(vec![arrow_schema::Field::new(
-            "data",
+            "data_openai",
             arrow_schema::DataType::Utf8,
             false,
         )]);
@@ -137,7 +137,7 @@ mod tests {
         let db = create_initial_table(
             reader,
             EmbeddingDefinition::new(
-                "data",             // source column
+                "data_openai",      // source column
                 "openai",           // embedding name, either "openai" or "anthropic"
                 Some("embeddings"), // dest column
             ),
@@ -168,9 +168,57 @@ mod tests {
         assert!(row.is_ok());
         let row = row.unwrap();
 
-        for column in ["data", "embeddings"] {
+        for column in ["data_openai", "embeddings"] {
             assert!(row.column_by_name(column).is_some());
-            dbg!(row.column_by_name(column));
+        }
+    }
+
+    #[tokio::test]
+    async fn test_create_initial_table_with_anthropic() {
+        dotenv().ok();
+
+        let schema = arrow_schema::Schema::new(vec![arrow_schema::Field::new(
+            "data_anthropic",
+            arrow_schema::DataType::Utf8,
+            false,
+        )]);
+        let data = StringArray::from(vec!["Hello", "World"]);
+        let record_batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(data)]).unwrap();
+        let batches = vec![Ok(record_batch.clone())];
+        let reader = RecordBatchIterator::new(batches.into_iter(), record_batch.schema());
+
+        let db = create_initial_table(
+            reader,
+            EmbeddingDefinition::new("data_anthropic", "anthropic", Some("embeddings")),
+        )
+        .await;
+
+        assert!(db.is_ok());
+        let db = db.unwrap();
+
+        let tbl_names = db.table_names().execute().await;
+        assert!(tbl_names.is_ok());
+        assert_eq!(tbl_names.unwrap(), vec!["data"]);
+
+        let tbl = db.open_table("data").execute().await;
+        assert!(tbl.is_ok());
+
+        let tbl = tbl.unwrap();
+        let tbl_values = tbl.query().execute().await;
+
+        assert!(tbl_values.is_ok());
+
+        let mut tbl_values = tbl_values.unwrap();
+        let row = tbl_values.next().await;
+
+        assert!(row.is_some());
+        let row = row.unwrap();
+
+        assert!(row.is_ok());
+        let row = row.unwrap();
+
+        for column in ["data_anthropic", "embeddings"] {
+            assert!(row.column_by_name(column).is_some());
         }
     }
 
