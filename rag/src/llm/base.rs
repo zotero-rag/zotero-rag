@@ -44,10 +44,10 @@ impl ModelProviders {
     }
 
     pub fn contains(provider: &str) -> bool {
-        return [
+        [
             ModelProviders::OpenAI.as_str(),
             ModelProviders::Anthropic.as_str(),
         ]
-        .contains(&provider);
+        .contains(&provider)
     }
 }

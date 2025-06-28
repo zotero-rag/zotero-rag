@@ -27,10 +27,10 @@ pub enum LanceError {
 impl fmt::Display for LanceError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::ConnectionError(msg) => write!(f, "LanceDB connection error: {}", msg),
-            Self::TableCreationError(msg) => write!(f, "LanceDB table creation error: {}", msg),
-            Self::ParameterError(msg) => write!(f, "Invalid parameter: {}", msg),
-            Self::Other(msg) => write!(f, "LanceDB error: {}", msg),
+            Self::ConnectionError(msg) => write!(f, "LanceDB connection error: {msg}"),
+            Self::TableCreationError(msg) => write!(f, "LanceDB table creation error: {msg}"),
+            Self::ParameterError(msg) => write!(f, "Invalid parameter: {msg}"),
+            Self::Other(msg) => write!(f, "LanceDB error: {msg}"),
         }
     }
 }

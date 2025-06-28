@@ -92,7 +92,7 @@ where
             None,
         )
         .map_err(|e| {
-            LLMError::GenericLLMError(format!("Failed to create FixedSizeListArray: {}", e))
+            LLMError::GenericLLMError(format!("Failed to create FixedSizeListArray: {e}"))
         })?;
 
         Ok(Arc::new(list_array) as Arc<dyn arrow_array::Array>)
