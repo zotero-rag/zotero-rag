@@ -60,7 +60,7 @@ impl fmt::Display for LibraryParsingError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             LibraryParsingError::LibNotFoundError => write!(f, "Library not found!"),
-            LibraryParsingError::PdfParsingError(m) => write!(f, "PDF parsing error: {}", m),
+            LibraryParsingError::PdfParsingError(m) => write!(f, "PDF parsing error: {m}"),
         }
     }
 }
@@ -108,11 +108,11 @@ pub fn parse_library_metadata(
 
         // Useful for debugging
         if let Some(limit_val) = limit {
-            query.push_str(&format!(" LIMIT {}", limit_val));
+            query.push_str(&format!(" LIMIT {limit_val}"));
         }
 
         if let Some(offset) = start_from {
-            query.push_str(&format!(" OFFSET {}", offset));
+            query.push_str(&format!(" OFFSET {offset}"));
         }
 
         let mut stmt = conn.prepare(&query)?;
@@ -246,7 +246,7 @@ pub fn parse_library(
     if fail_count == 0 {
         log::info!("There were no errors during parsing.");
     } else {
-        log::warn!("{} items could not be parsed.", fail_count);
+        log::warn!("{fail_count} items could not be parsed.");
     }
 
     Ok(results)

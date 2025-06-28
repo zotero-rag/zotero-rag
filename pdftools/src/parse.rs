@@ -32,7 +32,7 @@ impl std::fmt::Display for PdfError {
         match self {
             PdfError::ContentError => write!(f, "Failed to get page content"),
             PdfError::FontNotFound => write!(f, "Font key not found in dictionary"),
-            PdfError::InternalError(e) => write!(f, "{}", e),
+            PdfError::InternalError(e) => write!(f, "{e}"),
             PdfError::InvalidFontName => write!(f, "BaseFont value isn't a valid name"),
             PdfError::InvalidUtf8 => write!(f, "Font name isn't valid UTF-8"),
             PdfError::MissingBaseFont => write!(f, "Font object missing BaseFont field"),
@@ -202,8 +202,7 @@ impl PdfParser {
                 .unwrap_or("unknown");
 
             return Err(PdfError::InternalError(format!(
-                "get_params expected {} params for {}, but got {} instead",
-                N, operator, n_parts
+                "get_params expected {N} params for {operator}, but got {n_parts} instead"
             )));
         }
 
@@ -394,8 +393,7 @@ impl PdfParser {
                 let [font_size_str] = self.get_params::<1>(&content, cur_parse_idx + tf_idx)?;
                 let font_size = font_size_str.parse::<f32>().unwrap_or_else(|err| {
                     panic!(
-                        "Failed to parse what should've been a number: '{}': {}",
-                        font_size_str, err
+                        "Failed to parse what should've been a number: '{font_size_str}': {err}"
                     );
                 });
 
@@ -409,8 +407,7 @@ impl PdfParser {
                 let [vert_str] = self.get_params::<1>(&content, cur_parse_idx + td_idx)?;
                 let vert = vert_str.parse::<f32>().unwrap_or_else(|err| {
                     panic!(
-                        "Failed to parse what should've been a number: '{}': {}",
-                        vert_str, err
+                        "Failed to parse what should've been a number: '{vert_str}': {err}"
                     );
                 });
 
@@ -573,7 +570,7 @@ pub fn extract_text(file_path: &str) -> Result<String, Box<dyn Error>> {
         .page_iter()
         .enumerate()
         .map(|(page_num, page_id)| {
-            log::debug!("\tParsing page {} of {}", page_num, page_count);
+            log::debug!("\tParsing page {page_num} of {page_count}");
 
             parser
                 .parse_content(&doc, page_id)

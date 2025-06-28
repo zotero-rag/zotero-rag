@@ -88,7 +88,7 @@ where
             None,
         )
         .map_err(|e| {
-            LLMError::GenericLLMError(format!("Failed to create FixedSizeListArray: {}", e))
+            LLMError::GenericLLMError(format!("Failed to create FixedSizeListArray: {e}"))
         })?;
 
         Ok(Arc::new(list_array) as Arc<dyn arrow_array::Array>)
@@ -174,7 +174,7 @@ impl<T: HttpClient> ApiClient for OpenAIClient<T> {
         let key = env::var("OPENAI_API_KEY")?;
 
         let mut headers = HeaderMap::new();
-        headers.insert("Authorization", format!("Bearer {}", key).parse().unwrap());
+        headers.insert("Authorization", format!("Bearer {key}").parse().unwrap());
         headers.insert("content-type", "application/json".parse().unwrap());
 
         let req_body: OpenAIRequest = message.clone().into();

@@ -19,19 +19,19 @@ impl std::fmt::Display for LLMError {
         match self {
             LLMError::CredentialError => write!(f, "Got 4xx response, possible credentials error"),
             LLMError::DeserializationError(body) => {
-                write!(f, "Failed to deserialize response: {}", body)
+                write!(f, "Failed to deserialize response: {body}")
             }
             LLMError::EnvError(msg) => {
-                write!(f, "Environment variable could not be fetched: {}", msg)
+                write!(f, "Environment variable could not be fetched: {msg}")
             }
             LLMError::GenericLLMError(msg) => {
-                write!(f, "Unknown error occurred: {}", msg)
+                write!(f, "Unknown error occurred: {msg}")
             }
             LLMError::HttpStatusError => write!(f, "Other HTTP status code error"),
             LLMError::InvalidProviderError(provider) => {
-                write!(f, "Invalid LLM provider: {}", provider)
+                write!(f, "Invalid LLM provider: {provider}")
             }
-            LLMError::LanceError(msg) => write!(f, "LanceDB Error: {}", msg),
+            LLMError::LanceError(msg) => write!(f, "LanceDB Error: {msg}"),
             LLMError::NetworkError => write!(f, "A network connectivity error occurred"),
             LLMError::TimeoutError => write!(f, "Request timed out"),
         }

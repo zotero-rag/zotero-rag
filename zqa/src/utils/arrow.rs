@@ -18,9 +18,9 @@ impl fmt::Display for ArrowError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::LibNotFoundError => write!(f, "Library not found"),
-            Self::ArrowSchemaError(msg) => write!(f, "Arrow schema error: {}", msg),
+            Self::ArrowSchemaError(msg) => write!(f, "Arrow schema error: {msg}"),
             Self::PathEncodingError => write!(f, "Path contains invalid UTF-8 characters"),
-            Self::PdfParsingError(msg) => write!(f, "{}", msg),
+            Self::PdfParsingError(msg) => write!(f, "{msg}"),
         }
     }
 }
