@@ -75,14 +75,14 @@ impl<T: serde::Serialize + Send + Sync + Clone> HttpClient for MockHttpClient<T>
         // Serialize the response to JSON and create a reqwest::Response
         let json = serde_json::to_string(&self.response).unwrap();
         let bytes = bytes::Bytes::from(json);
-        
+
         // Create a builder and set the body
         let builder = http::Response::builder()
             .status(200)
             .header("content-type", "application/json");
-            
+
         let http_response = builder.body(bytes).unwrap();
-        
+
         Ok(reqwest::Response::from(http_response))
     }
 }

@@ -406,9 +406,7 @@ impl PdfParser {
             if let Some(td_idx) = content[cur_parse_idx..].find("Td") {
                 let [vert_str] = self.get_params::<1>(&content, cur_parse_idx + td_idx)?;
                 let vert = vert_str.parse::<f32>().unwrap_or_else(|err| {
-                    panic!(
-                        "Failed to parse what should've been a number: '{vert_str}': {err}"
-                    );
+                    panic!("Failed to parse what should've been a number: '{vert_str}': {err}");
                 });
 
                 // We shouldn't include 0 in these ranges
