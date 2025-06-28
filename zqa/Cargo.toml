@@ -20,7 +20,9 @@ ftail = "0.2.1"
 log = "0.4.27"
 indicatif = "0.17.11"
 lancedb = "0.15.0"
+ratatui = "0.29.0"
+crossterm = "0.29.0"
 
 [[bin]]
 name = "zqa"
-path = "src/chain.rs"
+path = "src/main.rs"
