@@ -33,7 +33,7 @@ pub async fn process() {
     let db = create_initial_table(
         batch_iter,
         EmbeddingDefinition::new(
-            "data",             // source column
+            "pdf_text",         // source column
             "anthropic",        // embedding name, either "openai" or "anthropic"
             Some("embeddings"), // dest column
         ),
