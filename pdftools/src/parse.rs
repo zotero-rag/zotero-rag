@@ -391,11 +391,9 @@ impl PdfParser {
             // Get the current font size, if it's set.
             if let Some(tf_idx) = content[cur_parse_idx..].find("Tf") {
                 let [font_size_str] = self.get_params::<1>(&content, cur_parse_idx + tf_idx)?;
-                let font_size = font_size_str.parse::<f32>().unwrap_or_else(|err| {
-                    panic!(
-                        "Failed to parse what should've been a number: '{font_size_str}': {err}"
-                    );
-                });
+
+                // If it didn't work, it might not be a PDF command.
+                let font_size = font_size_str.parse::<f32>().unwrap_or(self.cur_font_size);
 
                 self.cur_font_size = font_size;
             }
@@ -405,25 +403,24 @@ impl PdfParser {
              * until we find the same number, but negative. We do the same with subscripts. */
             if let Some(td_idx) = content[cur_parse_idx..].find("Td") {
                 let [vert_str] = self.get_params::<1>(&content, cur_parse_idx + td_idx)?;
-                let vert = vert_str.parse::<f32>().unwrap_or_else(|err| {
-                    panic!("Failed to parse what should've been a number: '{vert_str}': {err}");
-                });
 
-                // We shouldn't include 0 in these ranges
-                if (0.1..=self.config.subscript_threshold).contains(&vert) {
-                    if self.script_status < 0 {
-                        parsed += "}"; // end the subscript level
-                    } else {
-                        parsed += "^{"; // begin a superscript level
+                if let Ok(vert) = vert_str.parse::<f32>() {
+                    // We shouldn't include 0 in these ranges
+                    if (0.1..=self.config.subscript_threshold).contains(&vert) {
+                        if self.script_status < 0 {
+                            parsed += "}"; // end the subscript level
+                        } else {
+                            parsed += "^{"; // begin a superscript level
+                        }
+                        self.script_status += 1;
+                    } else if (-self.config.subscript_threshold..0.0).contains(&vert) {
+                        if self.script_status <= 0 {
+                            parsed += "_{";
+                        } else {
+                            parsed += "}";
+                        }
+                        self.script_status -= 1;
                     }
-                    self.script_status += 1;
-                } else if (-self.config.subscript_threshold..0.0).contains(&vert) {
-                    if self.script_status <= 0 {
-                        parsed += "_{";
-                    } else {
-                        parsed += "}";
-                    }
-                    self.script_status -= 1;
                 }
             }
             /* TODO: The above logic also captures footnotes, so we might want to parse those while
