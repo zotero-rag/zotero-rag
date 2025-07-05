@@ -43,7 +43,7 @@ pub async fn process() {
     if db.is_ok() {
         println!("Successfully parsed library!");
     } else {
-        println!("Parsing library failed: {}", db.err().unwrap().to_string())
+        println!("Parsing library failed: {}", db.err().unwrap());
     }
 }
 
