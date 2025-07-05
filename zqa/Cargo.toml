@@ -22,6 +22,7 @@ indicatif = "0.17.11"
 lancedb = "0.15.0"
 ratatui = "0.29.0"
 crossterm = "0.29.0"
+clap = { version = "4.5.40", features = ["derive"] }
 
 [[bin]]
 name = "zqa"
