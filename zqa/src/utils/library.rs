@@ -222,12 +222,12 @@ pub fn parse_library(
                     })
                     .collect::<Vec<_>>();
 
+                // Batch-update the progress bar
+                let pbar = bar.lock().unwrap();
+                pbar.inc(cur_chunk_size as u64);
+
                 result
             });
-
-            // Batch-update the progress bar
-            let pbar = bar.lock().unwrap();
-            pbar.inc(cur_chunk_size as u64);
 
             handle
         })
