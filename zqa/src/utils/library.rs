@@ -7,6 +7,9 @@ use std::error::Error;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time;
+use std::time::Instant;
+use std::time::SystemTime;
 
 use pdftools::parse::extract_text;
 
@@ -151,6 +154,7 @@ pub fn parse_library(
     start_from: Option<usize>,
     limit: Option<usize>,
 ) -> Result<Vec<ZoteroItem>, LibraryParsingError> {
+    let start_time = Instant::now();
     let metadata = parse_library_metadata(start_from, limit)?;
 
     if metadata.is_empty() {
@@ -170,6 +174,8 @@ pub fn parse_library(
     let bar = Arc::new(Mutex::new(ProgressBar::new(
         metadata.len().try_into().unwrap(),
     )));
+    let pbar = bar.lock().unwrap();
+    pbar.inc(1);
 
     let handles = metadata
         .chunks(chunk_size)
@@ -233,11 +239,21 @@ pub fn parse_library(
         })
         .collect::<Vec<_>>();
 
+    let end_time = Instant::now();
+    let elapsed_time = (end_time - start_time).as_secs();
+    let minutes = elapsed_time / 60;
+    let seconds = elapsed_time % 60;
+
     let results = handles
         .into_iter()
         .flat_map(|handle| handle.join().unwrap_or_else(|_| Vec::new()))
         .collect::<Vec<_>>();
-    log::info!("Parsed {} items from library.", results.len());
+    log::info!(
+        "Parsed {} items from library in {}min {}s.",
+        results.len(),
+        minutes,
+        seconds
+    );
 
     let pbar = bar.lock().unwrap();
     pbar.finish();
