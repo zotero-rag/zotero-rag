@@ -84,7 +84,7 @@ where
 
         // Convert to Arrow FixedSizeListArray
         let embedding_dim = if embeddings.is_empty() {
-            OPENAI_EMBEDDING_DIM, // default for text-embedding-3-small
+            OPENAI_EMBEDDING_DIM as usize // default for text-embedding-3-small
         } else {
             embeddings[0].len()
         };
@@ -143,8 +143,7 @@ impl From<UserMessage> for AnthropicRequest {
         );
 
         AnthropicRequest {
-            model: env::var("ANTHROPIC_MODEL")
-                .unwrap_or_else(|_| DEFAULT_CLAUDE_MODEL.to_string()),
+            model: env::var("ANTHROPIC_MODEL").unwrap_or_else(|_| DEFAULT_CLAUDE_MODEL.to_string()),
             max_tokens: 8192,
             messages,
         }
@@ -200,9 +199,9 @@ impl<T: HttpClient> ApiClient for AnthropicClient<T> {
         let key = env::var("ANTHROPIC_KEY")?;
 
         let mut headers = HeaderMap::new();
-        headers.insert("x-api-key", key.parse().unwrap());
-        headers.insert("anthropic-version", "2023-06-01".parse().unwrap());
-        headers.insert("content-type", "application/json".parse().unwrap());
+        headers.insert("x-api-key", key.parse()?);
+        headers.insert("anthropic-version", "2023-06-01".parse()?);
+        headers.insert("content-type", "application/json".parse()?);
 
         let req_body: AnthropicRequest = message.clone().into();
         let res = self

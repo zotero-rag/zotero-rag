@@ -178,7 +178,7 @@ impl<T: HttpClient + Default + std::fmt::Debug> EmbeddingFunction for VoyageAICl
     fn dest_type(&self) -> Result<Cow<DataType>, lancedb::Error> {
         Ok(Cow::Owned(DataType::FixedSizeList(
             Arc::new(Field::new("item", DataType::Float32, false)),
-            VOYAGE_EMBEDDING_DIM,
+            VOYAGE_EMBEDDING_DIM as i32,
         )))
     }
 
