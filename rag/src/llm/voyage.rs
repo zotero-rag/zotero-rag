@@ -8,6 +8,9 @@ use serde::{Deserialize, Serialize};
 use super::errors::LLMError;
 use crate::llm::http_client::{HttpClient, ReqwestClient};
 
+const VOYAGE_EMBEDDING_DIM: u32 = 2048;
+const VOYAGE_EMBEDDING_MODEL: &str = "voyage-3-large";
+
 /// A client for Voyage AI's embedding API.
 #[derive(Debug, Clone)]
 pub struct VoyageAIClient<T: HttpClient = ReqwestClient> {
@@ -24,7 +27,7 @@ impl<T> VoyageAIClient<T>
 where
     T: HttpClient + Default,
 {
-    /// Creates a new AnthropicClient instance
+    /// Creates a new VoyageAIClient instance
     pub fn new() -> Self {
         Self {
             client: T::default(),
@@ -37,7 +40,10 @@ where
         source: Arc<dyn arrow_array::Array>,
     ) -> Result<Arc<dyn arrow_array::Array>, LLMError> {
         let source_array = arrow_array::cast::as_string_array(&source);
-        let texts: Vec<String> = source_array.iter().map(|s| s.unwrap().to_owned()).collect();
+        let texts: Vec<String> = source_array
+            .iter()
+            .filter_map(|s| Some(s?.to_owned()))
+            .collect();
 
         let api_key = env::var("VOYAGE_AI_API_KEY")?;
 
@@ -48,11 +54,8 @@ where
             let request = VoyageAIRequest::from_texts(batch.to_vec());
 
             let mut headers = HeaderMap::new();
-            headers.insert(
-                "Authorization",
-                format!("Bearer {}", api_key).parse().unwrap(),
-            );
-            headers.insert("Content-Type", "application/json".parse().unwrap());
+            headers.insert("Authorization", format!("Bearer {api_key}").parse()?);
+            headers.insert("Content-Type", "application/json".parse()?);
 
             let response = self
                 .client
@@ -74,18 +77,18 @@ where
         }
 
         // Convert to Arrow FixedSizeListArray
-        let embedding_dim = 2048; // VoyageAI 3-large dimension
+        let embedding_dim = VOYAGE_EMBEDDING_DIM;
         let flattened: Vec<f32> = all_embeddings.iter().flatten().copied().collect();
         let values = arrow_array::Float32Array::from(flattened);
 
         let list_array = arrow_array::FixedSizeListArray::try_new(
             Arc::new(Field::new("item", DataType::Float32, false)),
-            embedding_dim,
+            embedding_dim as i32,
             Arc::new(values),
             None,
         )
         .map_err(|e| {
-            LLMError::GenericLLMError(format!("Failed to create FixedSizeListArray: {}", e))
+            LLMError::GenericLLMError(format!("Failed to create FixedSizeListArray: {e}"))
         })?;
 
         Ok(Arc::new(list_array) as Arc<dyn arrow_array::Array>)
@@ -97,7 +100,7 @@ where
         source: Arc<dyn arrow_array::Array>,
     ) -> Result<Arc<dyn arrow_array::Array>, LLMError> {
         let rt = tokio::runtime::Runtime::new().map_err(|e| {
-            LLMError::GenericLLMError(format!("Could not create tokio runtime: {}", e))
+            LLMError::GenericLLMError(format!("Could not create tokio runtime: {e}"))
         })?;
 
         rt.block_on(self.compute_embeddings_async(source))
@@ -120,10 +123,10 @@ impl VoyageAIRequest {
     pub fn from_texts(texts: Vec<String>) -> Self {
         Self {
             input: texts,
-            model: "voyage-3-large".to_string(),
+            model: VOYAGE_EMBEDDING_MODEL.to_string(),
             input_type: None, // Directly convert to vector
             truncation: true,
-            output_dimension: 2048, // Matryoshka embeddings
+            output_dimension: VOYAGE_EMBEDDING_DIM, // Matryoshka embeddings
             output_dtype: "float".to_string(),
         }
     }
@@ -175,7 +178,7 @@ impl<T: HttpClient + Default + std::fmt::Debug> EmbeddingFunction for VoyageAICl
     fn dest_type(&self) -> Result<Cow<DataType>, lancedb::Error> {
         Ok(Cow::Owned(DataType::FixedSizeList(
             Arc::new(Field::new("item", DataType::Float32, false)),
-            2048,
+            VOYAGE_EMBEDDING_DIM,
         )))
     }
 
@@ -212,7 +215,7 @@ impl<T: HttpClient + Default + std::fmt::Debug> EmbeddingFunction for VoyageAICl
 #[cfg(test)]
 mod tests {
     use crate::llm::http_client::ReqwestClient;
-    use crate::llm::voyage::VoyageAIClient;
+    use crate::llm::voyage::{VoyageAIClient, VOYAGE_EMBEDDING_DIM};
     use arrow_array::Array;
     use dotenv::dotenv;
     use std::sync::Arc;
@@ -244,6 +247,6 @@ mod tests {
         let vector = arrow_array::cast::as_fixed_size_list_array(&embeddings);
 
         assert_eq!(vector.len(), 6);
-        assert_eq!(vector.value_length(), 2048);
+        assert_eq!(vector.value_length(), VOYAGE_EMBEDDING_DIM as i32);
     }
 }

@@ -15,6 +15,10 @@ use super::base::{ApiClient, ApiResponse, ChatHistoryItem, UserMessage};
 use super::errors::LLMError;
 use super::http_client::{HttpClient, ReqwestClient};
 
+/// Anthropic does not have an embedding model, so we use OpenAI instead.
+const OPENAI_EMBEDDING_DIM: u32 = 1536;
+const DEFAULT_CLAUDE_MODEL: &str = "claude-sonnet-4-20250514";
+
 /// A generic client class for now. We can add stuff here later if needed, for
 /// example, features like Anthropic's native RAG thing
 #[derive(Debug, Clone)]
@@ -47,7 +51,10 @@ where
         source: Arc<dyn arrow_array::Array>,
     ) -> Result<Arc<dyn arrow_array::Array>, LLMError> {
         let source_array = arrow_array::cast::as_string_array(&source);
-        let texts: Vec<String> = source_array.iter().map(|s| s.unwrap().to_owned()).collect();
+        let texts: Vec<String> = source_array
+            .iter()
+            .filter_map(|s| Some(s?.to_owned()))
+            .collect();
 
         // Create a stream of futures
         let futures = texts
@@ -77,7 +84,7 @@ where
 
         // Convert to Arrow FixedSizeListArray
         let embedding_dim = if embeddings.is_empty() {
-            1536 // default for text-embedding-3-small
+            OPENAI_EMBEDDING_DIM, // default for text-embedding-3-small
         } else {
             embeddings[0].len()
         };
@@ -137,7 +144,7 @@ impl From<UserMessage> for AnthropicRequest {
 
         AnthropicRequest {
             model: env::var("ANTHROPIC_MODEL")
-                .unwrap_or_else(|_| "claude-3-5-sonnet-20241022".to_string()),
+                .unwrap_or_else(|_| DEFAULT_CLAUDE_MODEL.to_string()),
             max_tokens: 8192,
             messages,
         }
@@ -236,7 +243,7 @@ impl<T: HttpClient + Default + std::fmt::Debug> EmbeddingFunction for AnthropicC
     fn dest_type(&self) -> Result<Cow<DataType>, lancedb::Error> {
         Ok(Cow::Owned(DataType::FixedSizeList(
             Arc::new(Field::new("item", DataType::Float32, false)),
-            1536, // text-embedding-3-small size
+            OPENAI_EMBEDDING_DIM as i32, // text-embedding-3-small size
         )))
     }
 
@@ -277,6 +284,7 @@ mod tests {
     use arrow_array::Array;
     use dotenv::dotenv;
 
+    use crate::llm::anthropic::{DEFAULT_CLAUDE_MODEL, OPENAI_EMBEDDING_DIM};
     use crate::llm::base::{ApiClient, UserMessage};
     use crate::llm::http_client::{MockHttpClient, ReqwestClient};
 
@@ -312,7 +320,7 @@ mod tests {
         // Create a proper AnthropicResponse that matches the structure we expect to deserialize
         let mock_response = AnthropicResponse {
             id: "mock-id".to_string(),
-            model: "claude-sonnet-4-20250514".to_string(),
+            model: DEFAULT_CLAUDE_MODEL.to_string(),
             role: "assistant".to_string(),
             stop_reason: "end_turn".to_string(),
             stop_sequence: None,
@@ -379,6 +387,6 @@ mod tests {
         let vector = arrow_array::cast::as_fixed_size_list_array(&embeddings);
 
         assert_eq!(vector.len(), 6);
-        assert_eq!(vector.value_length(), 1536);
+        assert_eq!(vector.value_length(), OPENAI_EMBEDDING_DIM as i32);
     }
 }
