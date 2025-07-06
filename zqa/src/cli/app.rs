@@ -11,23 +11,33 @@ use std::{
     io::{self, Write},
 };
 
+/// A file that contains parsed PDF texts from the user's Zotero library. In case the
+/// embedding generation fails, the user does not need to rerun the full PDF parsing,
+/// and can simply retry the embedding. Note that this is *not* supposed to be user-facing
+/// and all interaction with it is meant for use by the CLI.
+const BATCH_ITER_FILE: &str = "batch_iter.bin";
+
+/// Embed text from PDFs parsed, in case this step previously failed. This function reads
+/// the `BATCH_ITER_FILE` and uses the data in there to compute embeddings and write out
+/// the LanceDB table.
 async fn embed() -> Result<(), CLIError> {
-    let file = File::open("batch_iter.bin")?;
+    let file = File::open(BATCH_ITER_FILE)?;
     let reader = FileReader::try_new(file, None)?;
 
     let mut batches = Vec::<Result<RecordBatch, arrow_schema::ArrowError>>::new();
     for batch in reader {
-        let batch = batch.unwrap();
-
-        batches.push(Ok(batch));
+        batches.push(batch);
     }
 
-    if batches.len() == 0 {
+    if batches.is_empty() {
         return Ok(());
     }
 
     // All batches should have the same schema, so we use the first batch
-    let first_batch = batches.get(0).unwrap().as_ref()?;
+    let first_batch = batches
+        .get(0)
+        .ok_or(CLIError::MalformedBatchError)?
+        .as_ref()?;
     let schema = first_batch.schema();
     let batch_iter = RecordBatchIterator::new(batches.into_iter(), schema);
 
@@ -43,13 +53,19 @@ async fn embed() -> Result<(), CLIError> {
 
     if db.is_ok() {
         println!("Successfully parsed library!");
-    } else {
-        println!("Parsing library failed: {}", db.err().unwrap());
+        std::fs::remove_file(BATCH_ITER_FILE)?;
+    } else if let Err(e) = db {
+        println!("Parsing library failed: {}", e);
+        println!("Your {BATCH_ITER_FILE} file has been left untouched.");
     }
 
     Ok(())
 }
 
+/// Process a user's Zotero library. This acts as the main function provided by the CLI.
+/// This parses the library, extracts the text from each file, stores them in a LanceDB
+/// table, and adds their embeddings. If the last step fails, the parsed texts are stored
+/// in `BATCH_ITER_FILE`.
 async fn process() -> Result<(), CLIError> {
     const WARNING_THRESHOLD: usize = 100;
     let item_metadata = parse_library_metadata(None, None);
@@ -70,7 +86,7 @@ async fn process() -> Result<(), CLIError> {
         io::stdin().read_line(&mut option)?;
 
         let option = option.trim().to_lowercase();
-        if ["n", "no"].contains(&option.as_str()) {
+        if ["n", "no", "false", "0"].contains(&option.as_str()) {
             return Ok(());
         }
     }
@@ -87,7 +103,7 @@ async fn process() -> Result<(), CLIError> {
     writer.write(&record_batch)?;
     writer.finish()?;
 
-    let db = create_initial_table(
+    let result = create_initial_table(
         batch_iter,
         EmbeddingDefinition::new(
             "pdf_text",         // source column
@@ -97,11 +113,12 @@ async fn process() -> Result<(), CLIError> {
     )
     .await;
 
-    if db.is_ok() {
-        println!("Successfully parsed library!");
-        std::fs::remove_file("batch_iter.bin")?;
-    } else {
-        if let Err(e) = db {
+    match result {
+        Ok(_) => {
+            println!("Successfully parsed library!");
+            std::fs::remove_file("batch_iter.bin")?;
+        }
+        Err(e) => {
             println!("Parsing library failed: {}", e);
             println!(
                 "The parsed PDFs have been saved in 'batch_iter.bin'. Run '/embed' to retry embedding."

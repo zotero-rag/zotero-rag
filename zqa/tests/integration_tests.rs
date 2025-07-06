@@ -1,3 +1,4 @@
+use arrow_array::RecordBatchIterator;
 use dotenv::dotenv;
 use ftail::Ftail;
 use lancedb::embeddings::EmbeddingDefinition;
@@ -23,10 +24,14 @@ async fn test_integration_works() {
         return;
     }
 
-    let batch_iter = library_to_arrow(Some(0), Some(5));
+    let record_batch = library_to_arrow(None, None);
+    assert!(record_batch.is_ok());
 
-    assert!(batch_iter.is_ok());
-    let batch_iter = batch_iter.unwrap();
+    let record_batch = record_batch.unwrap();
+    let schema = record_batch.schema();
+    let batches = vec![Ok(record_batch.clone())];
+    let batch_iter = RecordBatchIterator::new(batches.into_iter(), schema.clone());
+
     let db = create_initial_table(
         batch_iter,
         EmbeddingDefinition::new(
