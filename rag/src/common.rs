@@ -57,7 +57,11 @@ pub async fn get_openai_embedding(text: String) -> Result<Vec<f32>, LLMError> {
 
     let body = response.text().await?;
     let json: serde_json::Value = serde_json::from_str(&body)?;
-    let response: EmbeddingResponse = serde_json::from_value(json)?;
+    let response: EmbeddingResponse = serde_json::from_value(json.clone()).map_err(|e| {
+        eprintln!("Failed to deserialize OpenAI embedding response: {}", e);
+        eprintln!("Response body: {}", serde_json::to_string_pretty(&json).unwrap_or_else(|_| body.clone()));
+        e
+    })?;
 
     Ok(response.data[0].embedding.clone())
 }

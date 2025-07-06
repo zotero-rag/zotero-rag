@@ -7,9 +7,7 @@ use std::error::Error;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time;
 use std::time::Instant;
-use std::time::SystemTime;
 
 use pdftools::parse::extract_text;
 
