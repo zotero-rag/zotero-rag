@@ -34,8 +34,7 @@ async fn embed() -> Result<(), CLIError> {
     }
 
     // All batches should have the same schema, so we use the first batch
-    let first_batch = batches
-        .get(0)
+    let first_batch = batches.first()
         .ok_or(CLIError::MalformedBatchError)?
         .as_ref()?;
     let schema = first_batch.schema();
@@ -55,7 +54,7 @@ async fn embed() -> Result<(), CLIError> {
         println!("Successfully parsed library!");
         std::fs::remove_file(BATCH_ITER_FILE)?;
     } else if let Err(e) = db {
-        println!("Parsing library failed: {}", e);
+        println!("Parsing library failed: {e}");
         println!("Your {BATCH_ITER_FILE} file has been left untouched.");
     }
 
@@ -119,7 +118,7 @@ async fn process() -> Result<(), CLIError> {
             std::fs::remove_file("batch_iter.bin")?;
         }
         Err(e) => {
-            println!("Parsing library failed: {}", e);
+            println!("Parsing library failed: {e}");
             println!(
                 "The parsed PDFs have been saved in 'batch_iter.bin'. Run '/embed' to retry embedding."
             );
