@@ -6277,6 +6277,7 @@ name = "zqa"
 version = "0.1.0"
 dependencies = [
  "arrow-array",
+ "arrow-ipc",
  "arrow-schema",
  "clap",
  "crossterm 0.29.0",

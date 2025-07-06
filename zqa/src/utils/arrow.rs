@@ -1,8 +1,8 @@
-use arrow_array::{self, ArrayRef, RecordBatch, RecordBatchIterator, StringArray};
+use arrow_array::{self, ArrayRef, RecordBatch, StringArray};
 use arrow_schema;
 use core::fmt;
+use std::error::Error;
 use std::sync::Arc;
-use std::{error::Error, vec::IntoIter};
 
 use super::library::{parse_library, LibraryParsingError};
 
@@ -74,8 +74,7 @@ impl Error for ArrowError {}
 pub fn library_to_arrow(
     start_from: Option<usize>,
     limit: Option<usize>,
-) -> Result<RecordBatchIterator<IntoIter<Result<RecordBatch, arrow_schema::ArrowError>>>, ArrowError>
-{
+) -> Result<RecordBatch, ArrowError> {
     let lib_items = parse_library(start_from, limit)?;
     log::info!("Finished parsing library items.");
 
@@ -132,10 +131,7 @@ pub fn library_to_arrow(
         ],
     )?;
 
-    let batches = vec![Ok(record_batch)];
-    let reader = RecordBatchIterator::new(batches.into_iter(), schema);
-
-    Ok(reader)
+    Ok(record_batch)
 }
 
 #[cfg(test)]
@@ -153,15 +149,18 @@ mod tests {
             return;
         }
 
-        let batch_iter = library_to_arrow(Some(0), Some(5));
-
+        let record_batch = library_to_arrow(Some(0), Some(5));
         assert!(
-            batch_iter.is_ok(),
+            record_batch.is_ok(),
             "Failed to fetch library: {:?}",
-            batch_iter.err()
+            record_batch.err()
         );
 
-        let mut batch_iter = batch_iter.unwrap();
+        let record_batch = record_batch.unwrap();
+        let schema = record_batch.schema();
+        let batches = vec![Ok(record_batch)];
+        let mut batch_iter = RecordBatchIterator::new(batches.into_iter(), schema);
+
         // Get the first batch
         let batch = batch_iter
             .next()
