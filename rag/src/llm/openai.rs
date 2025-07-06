@@ -78,7 +78,7 @@ where
 
         // Convert to Arrow FixedSizeListArray
         let embedding_dim = if embeddings.is_empty() {
-            OPENAI_EMBEDDING_DIM, // default for text-embedding-3-small
+            OPENAI_EMBEDDING_DIM as usize // default for text-embedding-3-small
         } else {
             embeddings[0].len()
         };
