@@ -51,3 +51,29 @@ impl ModelProviders {
         .contains(&provider)
     }
 }
+
+#[derive(Clone, Debug)]
+pub enum EmbeddingProviders {
+    OpenAI,
+    Anthropic,
+    VoyageAI,
+}
+
+impl EmbeddingProviders {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            EmbeddingProviders::OpenAI => "openai",
+            EmbeddingProviders::Anthropic => "anthropic",
+            EmbeddingProviders::VoyageAI => "voyageai",
+        }
+    }
+
+    pub fn contains(provider: &str) -> bool {
+        [
+            EmbeddingProviders::OpenAI.as_str(),
+            EmbeddingProviders::Anthropic.as_str(),
+            EmbeddingProviders::VoyageAI.as_str(),
+        ]
+        .contains(&provider)
+    }
+}

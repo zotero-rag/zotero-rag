@@ -1,6 +1,6 @@
 use crate::llm::{
-    anthropic::AnthropicClient, base::ModelProviders, http_client::ReqwestClient,
-    openai::OpenAIClient,
+    anthropic::AnthropicClient, base::EmbeddingProviders, http_client::ReqwestClient,
+    openai::OpenAIClient, voyage::VoyageAIClient,
 };
 
 use arrow_array::{RecordBatch, RecordBatchIterator};
@@ -67,7 +67,7 @@ pub async fn create_initial_table(
 ) -> Result<Connection, LanceError> {
     let uri = "data/lancedb-table";
 
-    if !(ModelProviders::contains(&embedding_params.embedding_name)) {
+    if !(EmbeddingProviders::contains(&embedding_params.embedding_name)) {
         return Err(LanceError::ParameterError(format!(
             "{} is not a valid embedding.",
             embedding_params.embedding_name
@@ -83,14 +83,20 @@ pub async fn create_initial_table(
     match embedding_params.embedding_name.as_str() {
         "anthropic" => {
             db.embedding_registry().register(
-                ModelProviders::Anthropic.as_str(),
+                EmbeddingProviders::Anthropic.as_str(),
                 Arc::new(AnthropicClient::<ReqwestClient>::default()),
             )?;
         }
         "openai" => {
             db.embedding_registry().register(
-                ModelProviders::OpenAI.as_str(),
+                EmbeddingProviders::OpenAI.as_str(),
                 Arc::new(OpenAIClient::default()),
+            )?;
+        }
+        "voyageai" => {
+            db.embedding_registry().register(
+                EmbeddingProviders::VoyageAI.as_str(),
+                Arc::new(VoyageAIClient::<ReqwestClient>::default()),
             )?;
         }
         _ => unreachable!(
@@ -218,6 +224,55 @@ mod tests {
         let row = row.unwrap();
 
         for column in ["data_anthropic", "embeddings"] {
+            assert!(row.column_by_name(column).is_some());
+        }
+    }
+
+    #[tokio::test]
+    async fn test_create_initial_table_with_voyage() {
+        dotenv().ok();
+
+        let schema = arrow_schema::Schema::new(vec![arrow_schema::Field::new(
+            "data_voyage",
+            arrow_schema::DataType::Utf8,
+            false,
+        )]);
+        let data = StringArray::from(vec!["Hello", "World"]);
+        let record_batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(data)]).unwrap();
+        let batches = vec![Ok(record_batch.clone())];
+        let reader = RecordBatchIterator::new(batches.into_iter(), record_batch.schema());
+
+        let db = create_initial_table(
+            reader,
+            EmbeddingDefinition::new("data_voyage", "voyageai", Some("embeddings")),
+        )
+        .await;
+
+        assert!(db.is_ok());
+        let db = db.unwrap();
+
+        let tbl_names = db.table_names().execute().await;
+        assert!(tbl_names.is_ok());
+        assert_eq!(tbl_names.unwrap(), vec!["data"]);
+
+        let tbl = db.open_table("data").execute().await;
+        assert!(tbl.is_ok());
+
+        let tbl = tbl.unwrap();
+        let tbl_values = tbl.query().execute().await;
+
+        assert!(tbl_values.is_ok());
+
+        let mut tbl_values = tbl_values.unwrap();
+        let row = tbl_values.next().await;
+
+        assert!(row.is_some());
+        let row = row.unwrap();
+
+        assert!(row.is_ok());
+        let row = row.unwrap();
+
+        for column in ["data_voyage", "embeddings"] {
             assert!(row.column_by_name(column).is_some());
         }
     }
