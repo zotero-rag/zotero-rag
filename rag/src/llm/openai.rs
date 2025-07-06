@@ -14,6 +14,8 @@ use super::errors::LLMError;
 use super::http_client::{HttpClient, ReqwestClient};
 use crate::common;
 
+const OPENAI_EMBEDDING_DIM: u32 = 1536;
+
 /// A client for OpenAI's chat completions API
 #[derive(Debug, Clone)]
 pub struct OpenAIClient<T: HttpClient = ReqwestClient> {
@@ -43,7 +45,10 @@ where
         source: Arc<dyn arrow_array::Array>,
     ) -> Result<Arc<dyn arrow_array::Array>, LLMError> {
         let source_array = arrow_array::cast::as_string_array(&source);
-        let texts: Vec<String> = source_array.iter().map(|s| s.unwrap().to_owned()).collect();
+        let texts: Vec<String> = source_array
+            .iter()
+            .filter_map(|s| Some(s?.to_owned()))
+            .collect();
 
         // Create a stream of futures
         let futures = texts
@@ -73,7 +78,7 @@ where
 
         // Convert to Arrow FixedSizeListArray
         let embedding_dim = if embeddings.is_empty() {
-            1536 // default for text-embedding-3-small
+            OPENAI_EMBEDDING_DIM, // default for text-embedding-3-small
         } else {
             embeddings[0].len()
         };
@@ -174,8 +179,8 @@ impl<T: HttpClient> ApiClient for OpenAIClient<T> {
         let key = env::var("OPENAI_API_KEY")?;
 
         let mut headers = HeaderMap::new();
-        headers.insert("Authorization", format!("Bearer {key}").parse().unwrap());
-        headers.insert("content-type", "application/json".parse().unwrap());
+        headers.insert("Authorization", format!("Bearer {key}").parse()?);
+        headers.insert("content-type", "application/json".parse()?);
 
         let req_body: OpenAIRequest = message.clone().into();
         let res = self
@@ -229,7 +234,7 @@ impl EmbeddingFunction for OpenAIClient {
                 DataType::Float32,
                 false,
             )),
-            1536, // text-embedding-3-small size
+            OPENAI_EMBEDDING_DIM as i32, // text-embedding-3-small size
         )))
     }
 
@@ -268,6 +273,7 @@ mod tests {
     use super::{OpenAIChoice, OpenAIChoiceMessage, OpenAIClient, OpenAIResponse, OpenAIUsage};
     use crate::llm::base::{ApiClient, UserMessage};
     use crate::llm::http_client::{MockHttpClient, ReqwestClient};
+    use crate::llm::openai::OPENAI_EMBEDDING_DIM;
     use arrow_array::Array;
     use dotenv::dotenv;
     use std::sync::Arc;
@@ -367,6 +373,6 @@ mod tests {
         let vector = arrow_array::cast::as_fixed_size_list_array(&embeddings);
 
         assert_eq!(vector.len(), 6);
-        assert_eq!(vector.value_length(), 1536);
+        assert_eq!(vector.value_length(), OPENAI_EMBEDDING_DIM as i32);
     }
 }

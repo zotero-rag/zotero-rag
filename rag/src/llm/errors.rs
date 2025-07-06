@@ -1,3 +1,5 @@
+use http::header::InvalidHeaderValue;
+
 /// A wrapper for all kinds of errors to one enum that tells us what happened.
 /// Has implementations of From<...> and Display
 #[derive(Clone, Debug)]
@@ -8,6 +10,7 @@ pub enum LLMError {
     GenericLLMError(String),
     HttpStatusError,
     InvalidProviderError(String),
+    InvalidHeaderError(String),
     LanceError(String),
     NetworkError,
     TimeoutError,
@@ -28,6 +31,9 @@ impl std::fmt::Display for LLMError {
                 write!(f, "Unknown error occurred: {msg}")
             }
             LLMError::HttpStatusError => write!(f, "Other HTTP status code error"),
+            LLMError::InvalidHeaderError(msg) => {
+                write!(f, "Invalid request header value: {msg}")
+            }
             LLMError::InvalidProviderError(provider) => {
                 write!(f, "Invalid LLM provider: {provider}")
             }
@@ -74,5 +80,11 @@ impl From<serde_json::Error> for LLMError {
 impl From<lancedb::Error> for LLMError {
     fn from(error: lancedb::Error) -> Self {
         LLMError::LanceError(error.to_string())
+    }
+}
+
+impl From<InvalidHeaderValue> for LLMError {
+    fn from(value: InvalidHeaderValue) -> Self {
+        LLMError::InvalidHeaderError(value.to_string())
     }
 }
