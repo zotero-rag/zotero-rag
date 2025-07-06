@@ -137,6 +137,7 @@ pub fn library_to_arrow(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arrow_array::RecordBatchIterator;
     use ftail::Ftail;
     use std::env;
 
