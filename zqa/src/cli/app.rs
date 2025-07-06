@@ -2,6 +2,7 @@ use arrow_array::{self, RecordBatch, RecordBatchIterator};
 use lancedb::embeddings::EmbeddingDefinition;
 use rag::vector::lance::create_initial_table;
 
+use crate::cli::errors::CLIError;
 use crate::{library_to_arrow, utils::library::parse_library_metadata};
 use arrow_ipc::reader::FileReader;
 use arrow_ipc::writer::FileWriter;
@@ -10,9 +11,9 @@ use std::{
     io::{self, Write},
 };
 
-async fn repair() {
-    let file = File::open("batch_iter.bin").expect("Failed to create output file");
-    let reader = FileReader::try_new(file, None).expect("Failed to create file reader");
+async fn embed() -> Result<(), CLIError> {
+    let file = File::open("batch_iter.bin")?;
+    let reader = FileReader::try_new(file, None)?;
 
     let mut batches = Vec::<Result<RecordBatch, arrow_schema::ArrowError>>::new();
     for batch in reader {
@@ -21,7 +22,13 @@ async fn repair() {
         batches.push(Ok(batch));
     }
 
-    let schema = batches.get(0).unwrap().as_ref().unwrap().schema();
+    if batches.len() == 0 {
+        return Ok(());
+    }
+
+    // All batches should have the same schema, so we use the first batch
+    let first_batch = batches.get(0).unwrap().as_ref()?;
+    let schema = first_batch.schema();
     let batch_iter = RecordBatchIterator::new(batches.into_iter(), schema);
 
     let db = create_initial_table(
@@ -39,15 +46,17 @@ async fn repair() {
     } else {
         println!("Parsing library failed: {}", db.err().unwrap());
     }
+
+    Ok(())
 }
 
-async fn process() {
+async fn process() -> Result<(), CLIError> {
     const WARNING_THRESHOLD: usize = 100;
     let item_metadata = parse_library_metadata(None, None);
 
     if let Err(parse_err) = item_metadata {
         println!("Could not parse library metadata: {parse_err}");
-        return;
+        return Ok(());
     }
 
     let item_metadata = item_metadata.unwrap();
@@ -58,26 +67,25 @@ async fn process() {
         let _ = io::stdout().flush();
 
         let mut option = String::new();
-        io::stdin()
-            .read_line(&mut option)
-            .expect("Failed to read input.");
+        io::stdin().read_line(&mut option)?;
 
+        let option = option.trim().to_lowercase();
         if ["n", "no"].contains(&option.as_str()) {
-            return;
+            return Ok(());
         }
     }
 
-    let record_batch = library_to_arrow(None, None).expect("Failed to parse library");
+    let record_batch = library_to_arrow(None, None)?;
     let schema = record_batch.schema();
     let batches = vec![Ok(record_batch.clone())];
     let batch_iter = RecordBatchIterator::new(batches.into_iter(), schema.clone());
 
     // Write to binary file using Arrow IPC format
-    let file = File::create("batch_iter.bin").expect("Failed to create output file");
-    let mut writer = FileWriter::try_new(file, &schema).expect("Failed to create writer");
+    let file = File::create("batch_iter.bin")?;
+    let mut writer = FileWriter::try_new(file, &schema)?;
 
-    writer.write(&record_batch).expect("Failed to write batch");
-    writer.finish().expect("Failed to finish writing");
+    writer.write(&record_batch)?;
+    writer.finish()?;
 
     let db = create_initial_table(
         batch_iter,
@@ -91,9 +99,17 @@ async fn process() {
 
     if db.is_ok() {
         println!("Successfully parsed library!");
+        std::fs::remove_file("batch_iter.bin")?;
     } else {
-        println!("Parsing library failed: {}", db.err().unwrap());
+        if let Err(e) = db {
+            println!("Parsing library failed: {}", e);
+            println!(
+                "The parsed PDFs have been saved in 'batch_iter.bin'. Run '/embed' to retry embedding."
+            );
+        }
     }
+
+    Ok(())
 }
 
 pub async fn cli() {
@@ -119,10 +135,18 @@ pub async fn cli() {
                 println!();
             }
             "/embed" => {
-                repair().await;
+                if embed().await.is_err() {
+                    eprintln!(
+                        "Failed to create embeddings. You may find relevant error messages above."
+                    );
+                }
             }
             "/process" => {
-                process().await;
+                if process().await.is_err() {
+                    eprintln!(
+                        "Failed to create embeddings. You may find relevant error messages above."
+                    );
+                }
             }
             "/quit" => {
                 break;
