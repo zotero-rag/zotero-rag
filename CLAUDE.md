@@ -48,6 +48,8 @@ cargo run --bin zqa
     - In general, prefer to handle errors explicitly as in idiomatic Rust. Errors from external sources should be wrapped appropriately and propagated until they are handled.
 - Factory pattern for LLM clients (`rag/src/llm/factory.rs`)
 - Trait-based design for extensibility (base traits in `rag/src/llm/base.rs`)
+- In general, functions should have documentation above them. This does not need to be done for trait implementations, if the trait is standard in Rust (e.g., `From<...>`, `Copy`, etc.).
+- Although `cargo clippy` is automatically run and will block PR merging, you should also perform checks for idiomatic Rust, especially for code that reimplements functions that are built-in. However, if the user notes, or you believe, that Clippy marked that instance as okay, this is fine, and Clippy's ruling should be followed.
 
 ## PR Review
 

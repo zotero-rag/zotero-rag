@@ -6,6 +6,7 @@ use crate::utils;
 pub enum CLIError {
     IOError(String),
     ArrowError(String),
+    MalformedBatchError,
 }
 
 impl std::error::Error for CLIError {}
@@ -14,6 +15,7 @@ impl std::fmt::Display for CLIError {
         match self {
             Self::IOError(msg) => write!(f, "IO Error: {msg}"),
             Self::ArrowError(msg) => write!(f, "Error parsing library: {msg}"),
+            Self::MalformedBatchError => write!(f, "Malformed batch in batch_iter.bin"),
         }
     }
 }
