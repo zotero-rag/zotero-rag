@@ -6,6 +6,7 @@ use crate::cli::errors::CLIError;
 use crate::{library_to_arrow, utils::library::parse_library_metadata};
 use arrow_ipc::reader::FileReader;
 use arrow_ipc::writer::FileWriter;
+use std::env;
 use std::{
     fs::File,
     io::{self, Write},
@@ -34,17 +35,20 @@ async fn embed() -> Result<(), CLIError> {
     }
 
     // All batches should have the same schema, so we use the first batch
-    let first_batch = batches.first()
+    let first_batch = batches
+        .first()
         .ok_or(CLIError::MalformedBatchError)?
         .as_ref()?;
     let schema = first_batch.schema();
     let batch_iter = RecordBatchIterator::new(batches.into_iter(), schema);
 
+    let embedding_provider =
+        env::var("EMBEDDING_PROVIDER").unwrap_or_else(|_| "anthropic".to_string());
     let db = create_initial_table(
         batch_iter,
         EmbeddingDefinition::new(
-            "pdf_text",         // source column
-            "anthropic",        // embedding name, either "openai" or "anthropic"
+            "pdf_text", // source column
+            &embedding_provider,
             Some("embeddings"), // dest column
         ),
     )
@@ -102,11 +106,13 @@ async fn process() -> Result<(), CLIError> {
     writer.write(&record_batch)?;
     writer.finish()?;
 
+    let embedding_provider =
+        env::var("EMBEDDING_PROVIDER").unwrap_or_else(|_| "anthropic".to_string());
     let result = create_initial_table(
         batch_iter,
         EmbeddingDefinition::new(
-            "pdf_text",         // source column
-            "anthropic",        // embedding name, either "openai" or "anthropic"
+            "pdf_text", // source column
+            &embedding_provider,
             Some("embeddings"), // dest column
         ),
     )
