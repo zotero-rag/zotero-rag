@@ -3,10 +3,10 @@ use lancedb::embeddings::EmbeddingDefinition;
 use rag::vector::lance::create_initial_table;
 
 use crate::cli::errors::CLIError;
+use crate::common::Args;
 use crate::{library_to_arrow, utils::library::parse_library_metadata};
 use arrow_ipc::reader::FileReader;
 use arrow_ipc::writer::FileWriter;
-use std::env;
 use std::{
     fs::File,
     io::{self, Write},
@@ -21,7 +21,7 @@ const BATCH_ITER_FILE: &str = "batch_iter.bin";
 /// Embed text from PDFs parsed, in case this step previously failed. This function reads
 /// the `BATCH_ITER_FILE` and uses the data in there to compute embeddings and write out
 /// the LanceDB table.
-async fn embed() -> Result<(), CLIError> {
+async fn embed(args: &Args) -> Result<(), CLIError> {
     let file = File::open(BATCH_ITER_FILE)?;
     let reader = FileReader::try_new(file, None)?;
 
@@ -31,8 +31,11 @@ async fn embed() -> Result<(), CLIError> {
     }
 
     if batches.is_empty() {
+        eprintln!("(/embed) It seems {BATCH_ITER_FILE} contains no batches. Exiting early.");
         return Ok(());
     }
+
+    let n_batches = batches.len();
 
     // All batches should have the same schema, so we use the first batch
     let first_batch = batches
@@ -42,13 +45,19 @@ async fn embed() -> Result<(), CLIError> {
     let schema = first_batch.schema();
     let batch_iter = RecordBatchIterator::new(batches.into_iter(), schema);
 
-    let embedding_provider =
-        env::var("EMBEDDING_PROVIDER").unwrap_or_else(|_| "anthropic".to_string());
+    print!("Successfully loaded {n_batches} batch");
+
+    if n_batches > 1 {
+        print!("es");
+    }
+    println!(".");
+
+    let embedding_provider = args.embedding.as_str();
     let db = create_initial_table(
         batch_iter,
         EmbeddingDefinition::new(
             "pdf_text", // source column
-            &embedding_provider,
+            embedding_provider,
             Some("embeddings"), // dest column
         ),
     )
@@ -69,7 +78,7 @@ async fn embed() -> Result<(), CLIError> {
 /// This parses the library, extracts the text from each file, stores them in a LanceDB
 /// table, and adds their embeddings. If the last step fails, the parsed texts are stored
 /// in `BATCH_ITER_FILE`.
-async fn process() -> Result<(), CLIError> {
+async fn process(args: &Args) -> Result<(), CLIError> {
     const WARNING_THRESHOLD: usize = 100;
     let item_metadata = parse_library_metadata(None, None);
 
@@ -106,13 +115,12 @@ async fn process() -> Result<(), CLIError> {
     writer.write(&record_batch)?;
     writer.finish()?;
 
-    let embedding_provider =
-        env::var("EMBEDDING_PROVIDER").unwrap_or_else(|_| "anthropic".to_string());
+    let embedding_provider = args.embedding.as_str();
     let result = create_initial_table(
         batch_iter,
         EmbeddingDefinition::new(
             "pdf_text", // source column
-            &embedding_provider,
+            embedding_provider,
             Some("embeddings"), // dest column
         ),
     )
@@ -134,7 +142,7 @@ async fn process() -> Result<(), CLIError> {
     Ok(())
 }
 
-pub async fn cli() {
+pub async fn cli(args: Args) {
     loop {
         print!(">>> ");
         let _ = io::stdout().flush();
@@ -157,20 +165,20 @@ pub async fn cli() {
                 println!();
             }
             "/embed" => {
-                if embed().await.is_err() {
+                if embed(&args).await.is_err() {
                     eprintln!(
                         "Failed to create embeddings. You may find relevant error messages above."
                     );
                 }
             }
             "/process" => {
-                if process().await.is_err() {
+                if process(&args).await.is_err() {
                     eprintln!(
                         "Failed to create embeddings. You may find relevant error messages above."
                     );
                 }
             }
-            "/quit" => {
+            "/quit" | "/exit" | "quit" | "exit" => {
                 break;
             }
             invalid => {

@@ -1,4 +1,5 @@
-use std::{borrow::Cow, env, sync::Arc, time::Duration};
+use indicatif::ProgressBar;
+use std::{borrow::Cow, env, fs, sync::Arc, time::Duration};
 
 use arrow_schema::{DataType, Field};
 use lancedb::embeddings::EmbeddingFunction;
@@ -45,13 +46,30 @@ where
             .filter_map(|s| Some(s?.to_owned()))
             .collect();
 
+        println!("Processing {} input texts.", texts.len());
+        let bar = ProgressBar::new(texts.len().try_into().unwrap());
+
         let api_key = env::var("VOYAGE_AI_API_KEY")?;
 
         let mut all_embeddings = Vec::new();
-        let batch_size = 90;
+        let batch_size = 3;
+
+        // Gather failed texts.
+        let mut fail_count = 0;
+        let mut failed_texts: Vec<String> = Vec::new();
 
         for batch in texts.chunks(batch_size) {
-            let request = VoyageAIRequest::from_texts(batch.to_vec());
+            let cur_texts: Vec<String> = batch
+                .iter()
+                .filter(|s| !s.trim().is_empty())
+                .map(|s| s.clone())
+                .collect();
+
+            if cur_texts.is_empty() {
+                continue;
+            }
+
+            let request = VoyageAIRequest::from_texts(cur_texts);
 
             let mut headers = HeaderMap::new();
             headers.insert("Authorization", format!("Bearer {api_key}").parse()?);
@@ -64,16 +82,42 @@ where
 
             let body = response.text().await?;
 
-            let voyage_response: VoyageAISuccess = serde_json::from_str(&body)?;
+            let voyage_response: VoyageAIResponse = serde_json::from_str(&body)?;
 
-            for embedding_data in voyage_response.data {
-                all_embeddings.push(embedding_data.embedding);
-            }
+            match voyage_response {
+                VoyageAIResponse::Success(success) => {
+                    for embedding_data in success.data {
+                        all_embeddings.push(embedding_data.embedding);
+                    }
 
-            // Wait for one minute after each batch (except the last one)
-            if batch.len() == batch_size {
-                tokio::time::sleep(Duration::from_secs(60)).await;
+                    bar.inc(batch_size as u64);
+
+                    // Wait for two seconds after each batch to avoid RPM and TPM throttling
+                    if batch.len() == batch_size {
+                        tokio::time::sleep(Duration::from_secs(2)).await;
+                    }
+                }
+                VoyageAIResponse::Error(err) => {
+                    eprintln!("Got a 400 response from Voyage AI: {}\n", err.detail);
+                    eprintln!("We tried sending the request: {:#?}\n", request);
+
+                    fail_count += batch_size;
+                    failed_texts.extend(batch.iter().map(|s| s.clone()));
+                }
             }
+        }
+
+        println!("Processing finished. {fail_count} items failed.");
+        let failed = FailedTexts {
+            embedding_provider: String::from("voyageai"),
+            texts,
+        };
+        let encoded = serde_json::to_string_pretty(&failed)?;
+
+        if let Err(e) = fs::write("failed.json", encoded) {
+            eprintln!("We could not write out the failed texts to 'failed.json': {e}");
+        } else {
+            println!("We have written the failed texts to 'failed.json'. Consider using /repair to fix this.");
         }
 
         // Convert to Arrow FixedSizeListArray
@@ -109,7 +153,7 @@ where
 
 /// A request to Voyage AI's embedding endpoint. This struct should not be created directly.
 /// Instead, use `from_texts` instead for good defaults.
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Debug, Deserialize)]
 struct VoyageAIRequest {
     pub input: Vec<String>,
     pub model: String,
@@ -154,13 +198,20 @@ pub struct VoyageAISuccess {
 
 #[derive(Serialize, Deserialize)]
 pub struct VoyageAIError {
-    detail: String,
+    pub detail: String,
 }
 
 #[derive(Serialize, Deserialize)]
+#[serde(untagged)]
 pub enum VoyageAIResponse {
-    VoyageAISuccess(VoyageAISuccess),
-    VoyageAIError(VoyageAIError),
+    Success(VoyageAISuccess),
+    Error(VoyageAIError),
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct FailedTexts {
+    pub embedding_provider: String,
+    pub texts: Vec<String>,
 }
 
 /// Implements the LanceDB EmbeddingFunction trait for VoyageAIClient. Since VoyageAI has the

@@ -1,15 +1,8 @@
 use clap::Parser;
 use dotenv::dotenv;
 use zqa::cli::app::cli;
+use zqa::common::Args;
 use zqa::ui::app::App;
-
-#[derive(Parser, Debug)]
-#[command(version, about, long_about = None)]
-struct Args {
-    /// Whether to use the tui interface
-    #[arg(long, default_value_t = false)]
-    tui: bool,
-}
 
 #[tokio::main]
 pub async fn main() {
@@ -24,5 +17,5 @@ pub async fn main() {
         return;
     }
 
-    cli().await;
+    cli(args).await;
 }
