@@ -651,15 +651,11 @@ mod tests {
          * the 10 in CMR10 only gives the *design size* of the font in points--the size for which it was
          * designed and optimized. You still need to look at Tf for the font sizes.
          */
-        let font_key = "F48";
-        let path = PathBuf::from("assets").join("sections.pdf");
+        let font_key = "F21";
+        let path = PathBuf::from("assets").join("symbols.pdf");
 
         let doc = Document::load(path).unwrap();
         let page_id = doc.page_iter().next().unwrap();
-        let page_content = doc.get_page_content(page_id).unwrap();
-        let content = String::from_utf8_lossy(&page_content);
-
-        dbg!(&content);
 
         // Get the font dictionary for the page
         let fonts = doc.get_page_fonts(page_id).unwrap();
