@@ -70,14 +70,17 @@ where
         for batch in texts.chunks(BATCH_SIZE) {
             let cur_texts: Vec<String> = batch
                 .iter()
-                .filter(|s| !s.trim().is_empty()).cloned()
+                .filter(|s| !s.trim().is_empty())
+                .cloned()
                 .collect();
 
             if cur_texts.is_empty() {
                 // Push zero-vectors out so the sizes are consistent.
-                let zeros: Vec<Vec<f32>> =
-                    std::iter::repeat_n(Vec::from([0.0_f32; VOYAGE_EMBEDDING_DIM as usize]), batch.len())
-                        .collect();
+                let zeros: Vec<Vec<f32>> = std::iter::repeat_n(
+                    Vec::from([0.0_f32; VOYAGE_EMBEDDING_DIM as usize]),
+                    batch.len(),
+                )
+                .collect();
                 all_embeddings.extend(zeros);
 
                 continue;
