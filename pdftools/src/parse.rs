@@ -565,7 +565,7 @@ pub fn extract_text(file_path: &str) -> Result<String, Box<dyn Error>> {
         .page_iter()
         .enumerate()
         .map(|(page_num, page_id)| {
-            log::debug!("\tParsing page {page_num} of {page_count}");
+            log::debug!("\tParsing page {} of {page_count}", page_num + 1);
 
             parser
                 .parse_content(&doc, page_id)
