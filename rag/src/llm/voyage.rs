@@ -52,13 +52,22 @@ where
         let api_key = env::var("VOYAGE_AI_API_KEY")?;
 
         let mut all_embeddings = Vec::new();
-        let batch_size = 3;
 
-        // Gather failed texts.
+        // Wait for two seconds after each batch to avoid RPM and TPM throttling. At the base
+        // tier, Voyage AI has a 3M TPM and a 2K RPM. However, although the context of their
+        // models is 32k, we can't just sent 3M / 32k ~= 93 requests at a time and then wait a
+        // minute, because there is also a 120k token per request limit. This actually means we
+        // can only send floor(120k / 32k) = 3 requests at a time. Now our effective requests
+        // per minute is 3M (tokens / min) / 96k (tokens / request) = 31.25 RPM. Rounding down,
+        // we can send 30 RPM, so we wait 2s between requests.
+        const BATCH_SIZE: usize = 3;
+        const WAIT_AFTER_REQUEST_S: u64 = 2;
+
+        // Gather failed texts
         let mut fail_count = 0;
         let mut failed_texts: Vec<String> = Vec::new();
 
-        for batch in texts.chunks(batch_size) {
+        for batch in texts.chunks(BATCH_SIZE) {
             let cur_texts: Vec<String> = batch
                 .iter()
                 .filter(|s| !s.trim().is_empty())
@@ -66,6 +75,13 @@ where
                 .collect();
 
             if cur_texts.is_empty() {
+                // Push zero-vectors out so the sizes are consistent.
+                let zeros: Vec<Vec<f32>> =
+                    std::iter::repeat(Vec::from([0.0 as f32; VOYAGE_EMBEDDING_DIM as usize]))
+                        .take(batch.len())
+                        .collect();
+                all_embeddings.extend(zeros);
+
                 continue;
             }
 
@@ -81,7 +97,6 @@ where
                 .await?;
 
             let body = response.text().await?;
-
             let voyage_response: VoyageAIResponse = serde_json::from_str(&body)?;
 
             match voyage_response {
@@ -89,36 +104,37 @@ where
                     for embedding_data in success.data {
                         all_embeddings.push(embedding_data.embedding);
                     }
-
-                    bar.inc(batch_size as u64);
-
-                    // Wait for two seconds after each batch to avoid RPM and TPM throttling
-                    if batch.len() == batch_size {
-                        tokio::time::sleep(Duration::from_secs(2)).await;
-                    }
                 }
                 VoyageAIResponse::Error(err) => {
                     eprintln!("Got a 400 response from Voyage AI: {}\n", err.detail);
                     eprintln!("We tried sending the request: {:#?}\n", request);
 
-                    fail_count += batch_size;
+                    fail_count += BATCH_SIZE;
                     failed_texts.extend(batch.iter().map(|s| s.clone()));
                 }
             }
+
+            bar.inc(BATCH_SIZE as u64);
+            tokio::time::sleep(Duration::from_secs(WAIT_AFTER_REQUEST_S)).await;
         }
 
         println!("Processing finished. {fail_count} items failed.");
-        let failed = FailedTexts {
-            embedding_provider: String::from("voyageai"),
-            texts,
-        };
-        let encoded = serde_json::to_string_pretty(&failed)?;
 
-        if let Err(e) = fs::write("failed.json", encoded) {
-            eprintln!("We could not write out the failed texts to 'failed.json': {e}");
-        } else {
-            println!("We have written the failed texts to 'failed.json'. Consider using /repair to fix this.");
+        if fail_count > 0 {
+            let failed = FailedTexts {
+                embedding_provider: String::from("voyageai"),
+                texts: failed_texts,
+            };
+            let encoded = serde_json::to_string_pretty(&failed)?;
+
+            if let Err(e) = fs::write("failed.json", encoded) {
+                eprintln!("We could not write out the failed texts to 'failed.json': {e}");
+            } else {
+                println!("We have written the failed texts to 'failed.json'. Consider using /repair to fix this.");
+            }
         }
+
+        // Write out the embeddings, in case anything below goes wrong
 
         // Convert to Arrow FixedSizeListArray
         let embedding_dim = VOYAGE_EMBEDDING_DIM;
@@ -152,7 +168,7 @@ where
 }
 
 /// A request to Voyage AI's embedding endpoint. This struct should not be created directly.
-/// Instead, use `from_texts` instead for good defaults.
+/// Instead, use `from_texts` for good defaults.
 #[derive(Serialize, Debug, Deserialize)]
 struct VoyageAIRequest {
     pub input: Vec<String>,
@@ -177,19 +193,19 @@ impl VoyageAIRequest {
 }
 
 #[derive(Serialize, Deserialize)]
-pub struct VoyageAIEmbedding {
+struct VoyageAIEmbedding {
     object: String,
     embedding: Vec<f32>,
     index: u32,
 }
 
 #[derive(Serialize, Deserialize)]
-pub struct VoyageAIUsage {
+struct VoyageAIUsage {
     total_tokens: u32,
 }
 
 #[derive(Serialize, Deserialize)]
-pub struct VoyageAISuccess {
+struct VoyageAISuccess {
     object: String,
     data: Vec<VoyageAIEmbedding>,
     model: String,
@@ -197,13 +213,13 @@ pub struct VoyageAISuccess {
 }
 
 #[derive(Serialize, Deserialize)]
-pub struct VoyageAIError {
+struct VoyageAIError {
     pub detail: String,
 }
 
 #[derive(Serialize, Deserialize)]
 #[serde(untagged)]
-pub enum VoyageAIResponse {
+enum VoyageAIResponse {
     Success(VoyageAISuccess),
     Error(VoyageAIError),
 }
