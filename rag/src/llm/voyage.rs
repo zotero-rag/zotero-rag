@@ -134,16 +134,13 @@ where
             }
         }
 
-        // Write out the embeddings, in case anything below goes wrong
-
         // Convert to Arrow FixedSizeListArray
-        let embedding_dim = VOYAGE_EMBEDDING_DIM;
         let flattened: Vec<f32> = all_embeddings.iter().flatten().copied().collect();
         let values = arrow_array::Float32Array::from(flattened);
 
         let list_array = arrow_array::FixedSizeListArray::try_new(
             Arc::new(Field::new("item", DataType::Float32, false)),
-            embedding_dim as i32,
+            VOYAGE_EMBEDDING_DIM as i32,
             Arc::new(values),
             None,
         )
