@@ -70,15 +70,13 @@ where
         for batch in texts.chunks(BATCH_SIZE) {
             let cur_texts: Vec<String> = batch
                 .iter()
-                .filter(|s| !s.trim().is_empty())
-                .map(|s| s.clone())
+                .filter(|s| !s.trim().is_empty()).cloned()
                 .collect();
 
             if cur_texts.is_empty() {
                 // Push zero-vectors out so the sizes are consistent.
                 let zeros: Vec<Vec<f32>> =
-                    std::iter::repeat(Vec::from([0.0 as f32; VOYAGE_EMBEDDING_DIM as usize]))
-                        .take(batch.len())
+                    std::iter::repeat_n(Vec::from([0.0_f32; VOYAGE_EMBEDDING_DIM as usize]), batch.len())
                         .collect();
                 all_embeddings.extend(zeros);
 
@@ -107,10 +105,10 @@ where
                 }
                 VoyageAIResponse::Error(err) => {
                     eprintln!("Got a 400 response from Voyage AI: {}\n", err.detail);
-                    eprintln!("We tried sending the request: {:#?}\n", request);
+                    eprintln!("We tried sending the request: {request:#?}\n");
 
                     fail_count += BATCH_SIZE;
-                    failed_texts.extend(batch.iter().map(|s| s.clone()));
+                    failed_texts.extend(batch.iter().cloned());
                 }
             }
 

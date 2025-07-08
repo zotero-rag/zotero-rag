@@ -166,14 +166,18 @@ pub fn parse_library(
     let n_threads = thread::available_parallelism()
         .unwrap_or(std::num::NonZero::<usize>::MIN)
         .get();
+    log::debug!("Using {n_threads} threads");
 
     let chunk_size = metadata.len().div_ceil(n_threads);
+    log::debug!("Using chunk size of {chunk_size}");
 
     let bar = Arc::new(Mutex::new(ProgressBar::new(
         metadata.len().try_into().unwrap(),
     )));
-    let pbar = bar.lock().unwrap();
-    pbar.inc(1);
+    {
+        let pbar = bar.lock().unwrap();
+        pbar.inc(1);
+    } // Drop the lock
 
     let handles = metadata
         .chunks(chunk_size)
@@ -207,6 +211,7 @@ pub fn parse_library(
                         if !path_str.ends_with(".pdf") {
                             return None;
                         }
+                        log::debug!("Processing {path_str}");
 
                         match extract_text(path_str) {
                             Ok(text) => Some(ZoteroItem {
