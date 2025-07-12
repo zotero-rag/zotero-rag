@@ -1,0 +1,183 @@
+Skip to main content
+Skip to article
+Access through your organization
+Purchase PDF
+Expert Systems with Applications
+Volume 219, 1 June 2023, 119673
+An expert system for redesigning software for cloud applications
+Author links open overlay panel
+Rahul Yedida a
+,
+Rahul Krishna b
+,
+Anup Kalia b
+,
+Tim Menzies a
+,
+Jin Xiao b
+,
+Maja Vukovic b
+Show more
+Share
+Cite
+https://doi.org/10.1016/j.eswa.2023.119673
+Get rights and content
+Highlights
+•
+Prior work on automated microservice partitioning does not generalize well.
+•
+Hyper-parameter optimization yields a Pareto front of options.
+•
+A weighted loss to select from the Pareto front is critical to obtain a good split.
+Abstract
+Cloud-based software has many advantages. When services are divided into many independent components, they are easier to update. Also, during peak demand, it is easier to scale cloud services (just hire more CPUs). Hence, many organizations are partitioning their monolithic enterprise applications into cloud-based microservices.
+Recently there has been much work using machine learning to simplify this partitioning task. Despite much research, no single partitioning method can be recommended as generally useful. More specifically, those prior solutions are “brittle”; i.e. if they work well for one kind of goal in one dataset, then they can be sub-optimal if applied to many datasets and multiple goals.
+This work extends prior work and proposes DEEPLY to fix the brittleness problem. Specifically, we use (a) hyper-parameter optimization to sample from the Pareto frontier of configurations (b) a weighted loss to choose optimally from this Pareto frontier (c) the 1cycle learning rate policy to avoid local minima with Adam and (d) spectral clustering over k-means. Our work shows that DEEPLY outperforms other algorithms in this space across different metrics. Moreover, our ablation study reveals that of the changes, the weighted loss is the most important, followed by hyper-parameter optimization (contrary to prior belief).
+To enable the reuse of this research, DEEPLY is available on-line at .
+Introduction
+As more and more enterprises move to the cloud, new tools are needed. For example, IBM helps clients with millions of lines of code each year in this refactoring process. In one such effort, IBM worked with a Fortune 100 company to recommend partitions for a system with over one million lines of code. These partitions were manually inspected by subject matter experts and verified within weeks (as opposed to a year of manual effort).1 Unfortunately, the tool support needed for this process is still in its infancy. For example, consider the problem of how to divide up old software for the cloud (i.e., into microservices). Informally, we need to encourage cohesion and minimize coupling. However, AI-based tools for doing this require more precise definitions of cohesion and coupling. In this paper, we show six state-of-the-art tools focused on that exact problem, which internally have several internal hyper-parameter choices. The challenge with these tools is to tame that large hyper-parameter space.
+Data mining is a powerful tool but, like any other software system (Xu et al., 2015), analysts are often puzzled by all the options for the control settings. For example, consider the task of converting monolithic enterprise software into cloud microservices. For the task, it is a common practice to apply some clustering algorithm to decide how to break up the code into
+k
+ smaller microservices. A common question asked by programmers is “what is a good value for
+k
+”? More generally, across all the learners used for microservice partitioning, currently there is little support for selecting appropriate control settings (Desai et al., 2021, Yedida et al., 2021).
+Tools that can automatically learn settings for data miners are called hyper-parameter optimizers (HPO). These tools can learn (e.g.) good
+k
+ values while also optimizing for other goals including cluster coherence (which should be maximized) and coupling (which should be minimized). But HPO suffers from hyper-parameter brittleness. For example, Tu and Nair (2018) reported that if an optimizer works well for one kind of goal in one dataset, they can be sub-optimal if applied to multiple datasets and goals. In the case of redesigning software monoliths as cloud microservices, Yedida et al. (2021) recently reported that different HPO tools perform best for different sets of goals being explored on different datasets. To say that another way, based on past results, no specific prior partitioning method can be recommended as generally useful. We consider this as a significant problem. As designs get more complex, partitioning methods become very slow (Yedida et al., 2021). For example, at the time of this writing, we are running our algorithms for an industrial client. That process has taken 282 CPU hours for 1 application. Hence it is less-than-ideal to ask engineers to hunt through the output of multiple partitioning algorithms, looking for results that work best for their particular domain. This especially true when each of those algorithms runs very slowly. Instead, we should be able to offer them one partitioning method that is generally most useful across a wide range of problems.
+To find a generally useful partitioning methods, this paper seeks HPO tools that perform best across multiple datasets and goals (and prior work Desai et al., 2021, Jin et al., 2019, Kalia et al., 2021, Mazlami et al., 2017, Mitchell and Mancoridis, 2006 tended to explore just one or two partitioning methods). Thus, we propose DEEPLY , which is a novel combination of optimization using Bergstra’s hyperopt tool (Bergstra, Yamins, Cox, et al., 2013) and a loss function. As shown by our results, DEEPLY generally works well across multiple goals and datasets.
+To understand the benefits of DEEPLY , we investigate five research questions.
+RQ1: How prevalent is hyper-parameter brittleness in automated microservice partitioning? We verify Yedida et al. (2021)’s results, who showed that hyper-parameter optimizers are “brittle”, i.e., they work well for a few metrics and datasets, but are not useful across multiple goals and datasets. The verification is crucial to set the motivation for our contribution.
+RQ2: Is hyper-parameter optimization enough to curb the aforementioned optimizer brittleness? Here we will show that standard hyper-parameter optimization methods are insufficient for solving brittleness.
+RQ3: Since hyper-parameter optimization methods are not enough, How else might we fix the aforementioned brittleness problem? To that purpose, we propose DEEPLY , a novel combination of hyper-parameter optimizers with a new loss function.
+RQ4: Does DEEPLY generate “dust” (where all functionality is loaded into one partition) or “boulders” (where all partitions contain only one class each)? Here, we show that DEEPLY avoids two anti-patterns. Specifically, DEEPLY does not create “boulders” or “dust”.
+In terms of novelty, this paper makes a core contribution to the black art of hyper-parameter optimization:
+•
+There is a large group of researchers exploring hyper-parameter optimization in AI and SE (Agrawal et al., 2019, Fu and Menzies, 2017, Menzies et al., 2018, Yedida and Menzies, 2021). Normally, such optimization is uninformed by the model being optimized and takes a somewhat random approach to improving a model. Hence, standard hyperparameter optimization is akin to fixing a broken car by hitting it with a hammer (in random locations) until the car works. That kind of optimization can be very slow and can actually fail (see Bergstra’s comment about “grid search” on this issue) (Bergstra, Bardenet, Bengio, & Kégl, 2011).
+•
+What we show here is that it might be better to view hyper-parameter optimization as a data collection exercise that generates an envelope of possibilities, that some secondary process can use to improve a system. The weighted loss function described here is such a secondary function. At first glance, it seems a very minor extension to hyper-parameter optimization (in fact, it is so fast that compared to the cost of running the models during the optimization, we cannot even detect the added computational cost of running the weighted loss function). Regardless, this small extension to standard hyperparameter optimization results in major improvements to the optimization process. From example for one of our case studies (JPetStore) on one of our measured (BCS) we get a 47% improvement in the efficacy of the optimization.
+•
+Why? What is so important about weighted loss function? Based on this work, what we suspect is that standard hyper-parameter optimization is incomplete in the sense that it probes a system, but then does not pause to reflect on what was learned during those probes. HPO is like a scout that runs over a landscape to report back some result. And unless the scout can report their findings to a secondary process, then much of what was learned by that scout is lost.
+•
+Hence, going forward, we would recommend to other researchers that hyper-parameter optimization should be augmented with a reasoning component that reflects on the lessons learned during the optimization. As shown here, that reasoning component need not be complex or slow to run. And, most important of all, that added component can significantly improve the final results.
+(Aside: in the context of the above list, “weighted loss” does not refer to the loss function used by the neural net, but the function minimized by the hyper-parameter optimizer. When we say we “do not perform hyper-parameter optimization”, we mean we use hyperopt with a budget of 1 evaluation.)
+The rest of this paper is structured as follows. We provide a detailed background on the problem and the various attempts at solving it in Section 2. We then formalize the problem and discuss our method in Section 3. In Section 4, we discuss our experimental setup and evaluation system. We present our results in Section 5. Next, we show how the crux of our approach extends beyond this problem in Section 6. We discuss threats to the validity of our study in Section 7. Finally, we conclude in Section 8.
+Before we begin, just to say the obvious, when we say that hyper-parameter optimization is becomes more generally useful method with DEEPLY , we mean “generally useful across the datasets and metrics explored thus far”. It is an open question, worthy of future research, to test if our methods apply to other datasets and goals.
+Access through your organization
+
+Check access to the full text by signing in through your organization.
+
+Access through your organization
+Section snippets
+Designing for the cloud
+To fully exploit the cloud, systems have to be rewritten as “microservices” comprising multiple independent, loosely coupled pieces that can scale independently. Microservice architectures have many advantages (Al-Debagy and Martinek, 2018, Wolff, 2016) such as technology heterogeneity, resilience (i.e., if one service fails, it does not bring down the entire application), and ease of deployment. Therefore, it is of significant business interest to port applications to the cloud under the
+Algorithms for microservice partitioning
+We formalize the problem as follows. Consider classes3 in an application
+A
+ as
+CA
+ such that
+CA={c1A,c2A,…,ckA}
+, where
+ciA
+ represents an individual class. With this, we define a partition as follows:
+
+Definition 1
+
+A partition
+PA
+ on
+CA
+ is a set of subsets
+{P1A,P2A,…,PnA}
+ such that
+•
+⋃i=1nPiA=CA
+, i.e., all classes are assigned to a partition.
+•
+PiA≠ϕ∀i=1,…,n
+, i.e., there are no empty
+Experimental design
+In this section, we detail our experimental setup for the various parts of our research. Broadly, we follow the same experimental setup as Yedida et al. (2021). However, that paper concluded that different optimizers performed differently across datasets and metrics, and that there was no one winning algorithm. In this paper, using the method described in Section 3.5, we show that our approach wins most of the time across all our datasets and metrics.
+Results
+RQ1: How prevalent is hyper-parameter brittleness in automated microservice partitioning?
+Here, we ran the approaches from Table 2, 30 times each, then compared results from those treatments with the statistical methods of Section 4.5. The median results are shown in Table 4 and the statistical analysis is shown in Table 4.
+In those results, we see that across different datasets and metrics, those ranks vary widely, with little consistency across the space of datasets and metrics. For example:
+•
+For 
+Lessons learned
+Yedida et al. (2021) listed four lessons learned from their study. Our results suggest that some of those lessons now need to be revised.
+1.
+We fully concur with Yedida et al. when they said “do not use partitioning methods off-the-shelf since these tend to have subpar results. That said, currently we are planning to package (in Python) the DEEPLY system. Once that is available then Algorithm 1 should accomplish much of the adjustments required to commission DEEPLY for a new domain.
+2.
+Yedida et al.
+Threats to validity
+Sampling bias: With any data mining paper, it is important to discuss sampling bias. Our claim is that by evaluating on four different open-source projects across different metrics, we mitigate this. Nevertheless, it would be important future work to explore this line of research over more data.
+Evaluation bias: While we initially considered comparing across all the metrics we found in the literature, we noticed large correlations between those metrics. Therefore, to reduce the effect of
+Conclusion
+In this paper, we presented a systematic approach for achieving state-of-the-art results in microservice partitioning. Our approach consists of hyper-parameter optimization and the use of weighted losses to choose a configuration from the frontier of best solutions.
+Broadly, the lesson from this work is:
+We first analyzed the existing state-of-the-art. Through this review, we noticed (a) highly correlated, and therefore redundant, metrics used in the literature (b) inconsistent comparisons being 
+Future work
+Our approach being modular leads to several avenues of future work, which we discuss in this section.
+Because we apply weighted losses at the hyper-parameter optimization level, we can apply the same approach using a different base algorithm than CO-GCN. Specifically, we could build a Pareto frontier using a different state-of-the-art algorithm and then use our weighted loss function to choose a “best” candidate.
+Further, it would be useful to explore our methods on more datasets and metrics. In
+CRediT authorship contribution statement
+Rahul Yedida: Methodology, Software, Investigation, Visualization, Writing. Rahul Krishna: Methodology, Supervision, Project administration. Anup Kalia: Conceptualization, Methodology, Software, Validation, Supervision, Project administration, Funding acquisition. Tim Menzies: Methodology, Investigation, Writing, Visualization, Supervision, Project administration, Funding acquisition. Jin Xiao: Supervision, Project administration, Funding acquisition. Maja Vukovic: Supervision, Project
+Declaration of Competing Interest
+The authors declare the following financial interests/personal relationships which may be considered as potential competing interests: Tim Menzies reports financial support was provided by IBM.
+Acknowledgments
+This research was partially funded by an IBM Faculty Award, USA . The funding source had no influence on the study design, collection and analysis of the data, or in the writing of this report.
+References (41)
+ArarÖ.F. et al.
+A feature dependent Naive Bayes approach and its application to the software defect prediction problem
+Applied Soft Computing
+(2017)
+RyuD. et al.
+Effective multi-objective Naïve Bayes learning for cross-project defect prediction
+Applied Soft Computing
+(2016)
+AgrawalA. et al.
+How to “DODGE” complex software analytics
+IEEE Transactions on Software Engineering
+(2019)
+Akiba, T., Sano, S., Yanase, T., Ohta, T., & Koyama, M. (2019). Optuna: A next-generation hyperparameter optimization...
+Al-DebagyO. et al.
+A comparative review of microservices and monolithic architectures
+AlonU. et al.
+code2vec: Learning distributed representations of code
+Proceedings of the ACM on Programming Languages
+(2019)
+Bergstra, J., Bardenet, R., Bengio, Y., & Kégl, B. (2011). Algorithms for hyper-parameter optimization. In 25th annual...
+BergstraJ. et al.
+Hyperopt: A Python library for optimizing the hyperparameters of machine learning algorithms
+BrownW.H. et al.
+AntiPatterns: refactoring software, architectures, and projects in crisis
+(1998)
+ChaudhariP. et al.
+Entropy-sgd: Biasing gradient descent into wide valleys
+Journal of Statistical Mechanics: Theory and Experiment
+(2019)
+View more references
+Cited by (5)
+An Infrastructure Cost Optimised Algorithm for Partitioning of Microservices
+2025, Acmlc 2024 2024 6th Asia Conference on Machine Learning and Computing
+Expert Systems and Epidemiological Surveillance for Tuberculosis: Innovative Tools for Disease Prevention and Control
+2024, International Journal of Engineering Trends and Technology
+An Innovated Microservices Identification Approach Based on Database and Source Code Analysis
+2024, Niles 2024 6th Novel Intelligent and Leading Emerging Sciences Conference Proceedings
+Migrating Monolith System to Microservices with Directed Graph Attention Neural Network
+2024, Proceedings of SPIE the International Society for Optical Engineering
+Fuzzy Petri Nets for Knowledge Representation, Acquisition and Reasoning
+2023, Fuzzy Petri Nets for Knowledge Representation Acquisition and Reasoning
+View full text
+© 2023 Elsevier Ltd. All rights reserved.
+About ScienceDirect
+Remote access
+Advertise
+Contact and support
+Terms and conditions
+Privacy policy
+
+Cookies are used by this site.Cookie Settings
+
+All content on this site: Copyright © 2025 Elsevier B.V., its licensors, and contributors. All rights are reserved, including those for text and data mining, AI training, and similar technologies. For all open access content, the relevant licensing terms apply.
