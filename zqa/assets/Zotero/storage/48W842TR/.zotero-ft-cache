@@ -1,0 +1,131 @@
+This website uses cookies
+
+We occasionally run membership recruitment campaigns on social media channels and use cookies to track post-clicks. We also share information about your use of our site with our social media, advertising and analytics partners who may combine it with other information that you’ve provided to them or that they’ve collected from your use of their services. Use the check boxes below to choose the types of cookies you consent to have stored on your device.
+
+
+Consent Selection
+Necessary
+Preferences
+Statistics
+Marketing
+Show details
+Allow all cookies
+Allow selected cookies
+Use necessary cookies only
+skip to main content
+ Sign in
+RESEARCH-ARTICLE
+An Extensive Comparison of Static Application Security Testing Tools
+Authors: Matteo Esposito, Valentina Falaschi, Davide FalessiAuthors Info & Claims
+EASE '24: Proceedings of the 28th International Conference on Evaluation and Assessment in Software Engineering
+Pages 69 - 78
+https://doi.org/10.1145/3661167.3661199
+Published: 18 June 2024 Publication History
+5
+citation
+202
+Downloads
+Get Access
+Information & Contributors
+Bibliometrics & Citations
+Get Access
+References
+80
+Figures
+Tables
+Media
+Share
+Abstract
+Context: Static Application Security Testing Tools (SASTTs) identify software vulnerabilities to support the security and reliability of software applications. Interestingly, several studies have suggested that alternative solutions may be more effective than SASTTs due to their tendency to generate false alarms, commonly referred to as low Precision. Aim: We aim to comprehensively evaluate SASTTs, setting a reliable benchmark for assessing and finding gaps in vulnerability identification mechanisms based on SASTTs or alternatives. Method: Our SASTTs evaluation is based on a controlled, though synthetic, Java codebase. It involves an assessment of 1.5 million test executions, and it features innovative methodological features such as effort-aware accuracy metrics and method-level analysis. Results: Our findings reveal that SASTTs detect a tiny range of vulnerabilities. In contrast to prevailing wisdom, SASTTs exhibit high Precision while falling short in Recall. Conclusions: Our findings suggest that enhancing Recall, alongside expanding the spectrum of detected vulnerability types, should be the primary focus for improving SASTTs or alternative approaches, such as machine learning-based vulnerability identification solutions.
+References
+[1]
+Virgílio A. F. Almeida, Danilo Doneda, and Jacqueline de Souza Abreu. 2017. Cyberwarfare and Digital Governance. IEEE Internet Comput. 21, 2 (2017), 68–71. https://doi.org/10.1109/mic.2017.23
+Digital Library
+Google Scholar
+[2]
+Midya Alqaradaghi, Gregory Morse, and Tamás Kozsik. 2022. Detecting security vulnerabilities with static analysis – A case study. Pollack Periodica 17, 2 (2022), 1–7. https://doi.org/10.1556/606.2021.00454
+Crossref
+Google Scholar
+[3]
+[3] ArthoSoftware. 2023. http://artho.com/jlint/
+Google Scholar
+[4]
+Andrei Arusoaie, Ştefan Ciobâcă, Vlad Craciun, Dragos Gavrilut, and Dorel Lucanu. 2017. A Comparison of Open-Source Static Analysis Tools for Vulnerability Detection in C/C++ Code. In 19th International Symposium on Symbolic and Numeric Algorithms for Scientific Computing, SYNASC 2017, Timisoara, Romania, September 21-24, 2017, Tudor Jebelean, Viorel Negru, Dana Petcu, Daniela Zaharie, Tetsuo Ida, and Stephen M. Watt (Eds.). IEEE Computer Society, 161–168. https://doi.org/10.1109/SYNASC.2017.00035
+Crossref
+Google Scholar
+Show all references
+Cited By
+View all
+Pham PSridharan MEsposito MLenarduzzi V(2025)Descriptor: C++ Self-Admitted Technical Debt Dataset (CppSATD)IEEE Data Descriptions10.1109/IEEEDATA.2025.35763392(179-186)Online publication date: 2025
+https://doi.org/10.1109/IEEEDATA.2025.3576339
+Hashmat FAljaali ZShen MMachiry A(2024)Insights from Running 24 Static Analysis Tools on Open Source Software RepositoriesInformation Systems Security10.1007/978-3-031-80020-7_13(225-245)Online publication date: 16-Dec-2024
+https://dl.acm.org/doi/10.1007/978-3-031-80020-7_13
+Vargas-Rivera AEsquivel-Vargas H(2024)Towards AI-Based Identification of Publicly Known VulnerabilitiesComputer Security. ESORICS 2024 International Workshops10.1007/978-3-031-82362-6_11(171-192)Online publication date: 16-Sep-2024
+https://dl.acm.org/doi/10.1007/978-3-031-82362-6_11
+Show More Cited By
+Index Terms
+An Extensive Comparison of Static Application Security Testing Tools
+
+Security and privacy
+
+Software and application security
+
+Domain-specific security and privacy architectures
+
+Software security engineering
+
+Software and its engineering
+
+Software creation and management
+
+Software verification and validation
+
+Empirical software validation
+
+Software defect analysis
+
+Recommendations
+Static Application Security Testing (SAST) Tools for Smart Contracts: How Far Are We?
+Read More
+Semgrep*: Improving the Limited Performance of Static Application Security Testing (SAST) Tools
+EASE '24: Proceedings of the 28th International Conference on Evaluation and Assessment in Software Engineering
+Read More
+Comparison and Evaluation on Static Application Security Testing (SAST) Tools for Java
+ESEC/FSE 2023: Proceedings of the 31st ACM Joint European Software Engineering Conference and Symposium on the Foundations of Software Engineering
+Read More
+Comments
+Download PDF
+View Table of Contents
+Footer
+Categories
+Journals
+Magazines
+Books
+Proceedings
+SIGs
+Conferences
+Collections
+People
+About
+About ACM Digital Library
+ACM Digital Library Board
+Subscription Information
+Author Guidelines
+Using ACM Digital Library
+All Holdings within the ACM Digital Library
+ACM Computing Classification System
+Accessibility Statement
+Join
+Join ACM
+Join SIGs
+Subscribe to Publications
+Institutions and Libraries
+Connect
+Contact us via email
+ACM on Facebook
+ACM DL on X
+ACM on Linkedin
+Send Feedback
+Submit a Bug Report
+The ACM Digital Library is published by the Association for Computing Machinery. Copyright © 2025 ACM, Inc.
+Terms of UsagePrivacy PolicyCode of Ethics
