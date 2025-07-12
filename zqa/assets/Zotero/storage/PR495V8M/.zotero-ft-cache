@@ -1,0 +1,1024 @@
+Boston University
+OpenBU http://open.bu.edu
+Cognitive & Neural Systems CAS/CNS Technical Reports
+1991-02
+ART 2-A: An Adaptive Resonance
+Algorithm for Rapid Category Learning
+and Recognition
+https://hdl.handle.net/2144/2066
+Downloaded from OpenBU. Boston University's institutional repository.
+
+
+ART 2A: AN ADAPTIVE RESONANCE
+ALGORITHM FOR RAPID
+CATEGORY LEARNING AND RECOGNITION
+Gail A. Carpenter, Stephen Grossberg, and David Rosen
+February, 1991
+Technical Report CAS/CNS-TR-91-011
+Permission to copy without fee all or part of this material is granted provided that: 1. the copies are not made or distributed for direct commercial advantage, 2. the report title, author, document number, and release date appear, and notice is given that copying is by permission of the BOSTON UNIVI"RSITY CENT'ER FOR ADAPTIVE SYSTJoMS AND DEPARTMENT OF COGNITIVE AND NEURAL SYS'l'EMS. To copy otherwise, or to republish, requires a fee and/or special permission.
+Copyright @ 1991
+Boston University Center for Adaptive Systems and Department of Cognitive and Neural Systems
+111 Cummington Street Boston, MA 02215
+
+
+ART 2-A: An Adaptive Resonance Algorithm for Rapid Category Learning and Recognition
+Gail A. Carpenter* Stephen Grossberg! David B. Rosen!
+Center for Adaptive Systems and Graduate Program in Cognitive and Neural Systems Boston University 111 Cummington Street Boston, MA 02215
+October 1990 Revised January 1991
+Running title: ART 2-A
+*Supported in part by British Petroleum (89-A-1204), DARPA (AFOSR 90-0083), and the National Science Foundation (NSF IRI-90-00530). !Supported in part by the Air Force Office of Scientific Research (AFOSR 90-0175 and AFOSR 90-0128), the Army Research Office (ARO DAAL-03-88-K0088), and DARPA (AFOSR 90-0083). !Supported in part by DARPA (AFOSR 90-0083). The authors wish to thank Carol Yanakakis Jefferson for her valuable assistance in the preparation of this manuscript. •, Requests for reprints should be sent to: Prof. Gail A. Carpenter, Center for Adaptive Systems, 111 Cummington Street, Boston University, Boston, MA 02215 USA
+
+
+ART 2-A: An Adaptive Resonance Algorithm for Rapid Category Learning and Recognition
+Gail A. Carpenter Stephen Grossberg David B. Rosen
+Abstract
+This article introduces ART 2-A, an efficient algorithm that emulates the self-organizing
+pattern recognition and hypothesis testing properties of the ART 2 neural network archi
+tecture, but at a speed two to three orders of magnitude faster. Analysis and simulations
+show how the ART 2-A systems correspond to ART 2 dynamics at both the fast-learn
+limit and at intermediate learning rates. Intermediate learning rates permit fast com
+mitment of category nodes but slow recoding, analogous to properties of word frequency
+effects, encoding specificity effects, and episodic memory. Better noise tolerance is here
+by achieved without a loss of learning stability. The ART 2 and ART 2-A systems are
+contrasted with the leader algorithm. The speed of ART 2-A makes practical the use of
+ART 2 modules in large-scale neural computation.
+Keywords: neural networks, pattern recognition, category formation, fast learning,
+ART.
+
+
+Table of Contents
+1 Introduction . . . . . . . . . . . . . . 2 Analysis of ART 2 System Dynamics 2.1 The Preprocessing Field Fo . . 2.2 The Input Representation Field F1 2.3 The Category Representation Field F2 2.4 F1 Invariance when F2 is Inactive . . . 2.5 F1 Invariance During New Code Learning . 2.6 F2 Activation: Code Selection 2. 7 F1 --> F2 Learning . . . 2.8 Match and Reset . . . . . 2.9 Search and Resonance . . 2.10 ART2 Fast Computation. 3 ART2-A . . . . . . . . . . . . .
+1 2 3 4 6 7 7 9 9 10 13 14 14 3.1 Fast Learning with Linear STM feedback . 15 3.2 Fast Learning with Nonlinear STM Feedback. 16 3.3 Intermediate Learning: Fast Commitment with Slow Recoding 18 3.4 Summary of the ART 2-A Algorithm 21 3.5 Contrast with the Leader Algorithm . . . . . . . . . . . . . . . 23 4 Simulations . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 24 4.1 Comparative Simulations of ART 2-A and ART 2 Fast-Learn Systems 24 4.2 Comparative Simulations of ART 2-A Fast-Learn and Intermediate-Learn Systems . . . . . . . . 26 5 Conclusion . . . . . . . . . 27 Appendix: Proof of Theorem 1 29 References . . . . 30 Tables . . . . . . 31 Figure Captions . 32 Figures . . . . . 33
+
+
+1 Introduction
+Adaptive Resonance Theory (ART) architectures are neural networks that carry
+out stable self-organization of recognition codes for arbitrary sequences of input patterns.
+Adaptive Resonance Theory first emerged from an analysis of the instabilities inherent
+in feedforward adaptive coding structures (Grossberg, 1976a, 1976b). More recent work
+has led to the development of three classes of ART neural network architectures, specified
+as systems of differential equations. The first class, ART 1, self-organizes recognition cat
+egories for arbitrary sequences of binary input patterns (Carpenter & Grossberg, 1987a).
+A second class ART 2, does the same for either binary or analog inputs (Carpenter &
+Grossberg, 1987b). A third class, ART 3, is based on ART 2 but includes a model of
+the chemical synapse that solve the memory search problem of ART systems embedded
+in network hierarchies, where there can, in general, be either fast or slow learning and
+distributed or compressed code representations (Carpenter & Grossberg, 1990).
+This article introduces ART 2-A, a simple computational system that models the
+essential dynamics of the ART 2 analog pattern recognition neural network. The ART 2-A
+system accurately reproduces the behavior of ART 2 in the fast-learn limit, suggests
+an efficient method for simulating slow learning, and sharply delineates the essential
+computations performed by ART 2. ART 2-A runs approximately two to three orders of
+magnitude faster than ART 2 in simulations on conventional computers, thereby making
+it easier to use in solving large problems. The ART 2-A algorithm also suggests efficient
+parallel implementations.
+The improved speed of the ART 2-A algorithm is due, in part, to the explicit specifica
+tion of steady-state variables as a composition of a.small number of nonlinear operations.
+The steady-state equations replace a time-consuming multi-layer iterative component of
+1
+
+
+ART2.
+A second feature of the ART 2-A system is its speed at intermediate learning rates.
+Intermediate learning rates capture many of the desirable properties of slow learning,
+including noise tolerance. However, the property of fast commitment, or asymptotic
+learning when a category first becomes active, allows the ART 2-A algorithm to be used
+as efficiently in this case as in the fast-learn limit. Thus, ART 2 may be needed in some
+cases not covered by ART 2-A; but ART 2-A can be efficiently substituted for ART 2 in
+most applications.
+Section 2 characterizes ART 2. Section 3 motivates and describes the ART 2-A algo
+rithm. Section 4 presents the results of simulations comparing ART 2 and ART 2-A with
+fast learning, and comparing fast and intermediate learning rates in ART 2-A.
+2 Analysis of ART 2 System Dynamics
+Carpenter and Grossberg (1987b) described several ART 2 systems, all having ap
+proximately equivalent dynamics. For definiteness, we here consider one such system,
+shown in Figure 1. This ART 2 module includes the principal components of all ART
+modules, namely an attentional subsystem, which contains an input representation field
+F1 and a category representation field F2, and an orienting subsystem, which interact
+s with the attentional subsystem to carry out an internally controlled search process.
+The two fields are linked by both a bottom-up F\ -> F2 adaptive filter and a top-down
+F2 -+ F1 adaptive filter. A path from the ith F1 node to the jth F2 node contains a long
+term memory (LTM) trace, or adaptive weight, Z;j; a path from the jth F2 node to the
+ith F1 node contains a weight Zji· These weights gate, or multiply, path signals between
+fields.
+2
+
+
+Figure 1
+Figure 1 also illustrates some ART 2 features that are not shared by all ART modules.
+One such feature is the three-layer F1 field. Both F1 and F2, as well as the preprocessing
+field F0 , are shunting competitive networks that contrast-enhance and normalize their
+activation patterns.
+2.1 The Preprocessing Field F0
+We will now outline how an M -dimensional input vector J'l is transformed at F0
+and F1• All equations describe the steady-state values of a corresponding system of
+differential equations (Carpenter & Grossberg, 1987b). Each layer of the F0 and F 1
+short-term memory (STM) fields carries out two computations: intrafield and interfield
+inputs to that layer are summed; and the resulting activity vector is then normalized. At
+the lower layer of F0 , vector w0 is the sum of an input vector J'l and the internal feedback
+signal vector au0 , so that
+(1)
+Next this vector is normalized to yield
+(2)
+where the operator
+(3)
+carries out Euclidean normalization. This normalization step, denoted by large filled cir
+cles in Figure 1, corresponds to the effects of shunting inhibition in the competitive system
+of differential equations that describe the full F0 dynamics. Next, x0 is transformed to
+3
+
+
+y 0 via a nonlinear signal function defined by
+(4)
+where
+1
+x0 if x9 > e
+(.Fox0 ); =f(x?) = ' '
+0 otherwise.
+(5)
+The threshold 0 is assumed to satisfy the constraints
+1
+0 < 0:::; VJJ' (6)
+so that the M-dimensional vector Y 0 is always nonzero if :fl is nonuniform. If B is made
+somewhat larger than v~, input patterns that are nearly uniform will not be stored in
+STM.
+The nonlinearity of the function J, embodied in the positive threshold 0, is critical to
+the contrast enhancement and noise suppression functions of the STM field. Subthreshold
+signals are set to zero, while suprathreshold signals are amplified by the subsequent
+normalization step at the top F0 layer, which sets
+(7)
+As shown in Figure 1, vector u0 equals the output vector from field F0 to the orienting
+subsystem, the internal F0 feedback signal in (1 ), and the input vector I to field F1:
+(8)
+2.2 The Input Representation Field F1
+The Fo --+ F1 input vector I reaches asymptote after a single F0 iteration, as
+follows. Initially all STM variables are zero, so w0 = JD when :fl is first presented, by (1).
+4
+
+
+Equations (3)-(5) next imply that
+v? = f
+0
+I?/IIflll if If> Ollflll
+1
+otherwise.
+Let n denote the suprathreshold index set, defined by
+n = {i: I?> Ollflii}.
+By (7) and (9), there is a constant I< > 1/llflll such that
+f
+J<I 0 if i E f2
+u? = 10 , if i "/. n
+on the first F0 iteration. Next, by (1),
+w? = ~ I?(1 +al<)
+IO,
+if i En
+if i "f. n.
+(9)
+(10)
+(11)
+(12)
+Thus, at the second iteration, the suprathreshold portion of w 0 (where i E n) is amplified.
+The subsequent normalization (2) therefore attenuates the subthreshold portion of the
+pattern. Hence the suprathreshold index set remains equal to n on the second iteration,
+and the normalized vector u 0 is unchanged so long as 1° remains constant. In summary,
+the F0 -> F1 input I is given by
+(13)
+after a single F0 iteration. Note that
+iff i E n, (14)
+and
+I;= 0 iff i if. n, (15)
+5
+
+
+where !1 is defined by (10).
+The F0 preprocessing stage is designed to allow ART 2 to satisfy a fundamental ART
+design constraint; namely, an input pattern must be able to instate itself in F1 STM, with
+out triggering reset, at least until an F2 category representation becomes active and sends
+top-down signals to F1 (Carpenter & Grossberg, 1987a). As described in Section 2.8, the
+orienting subsystem has the property that no reset occurs if vectors I and p are parallel
+(Figure 1). We will now see that, in fact, p equals I so long as F2 is inactive.
+As in F'o, each F! layer sums inputs and normalizes the resulting vector. The opera
+tions at the two lowest F1 layers are the same as those of the two F0 layers. At the top
+F1 layer p sums both the internal F1 signal u and all the F2 -> F1 filtered signals. That
+is,
+Pi= u; + 'I:_g(y;)z;i,
+j
+(16)
+where g(y;) is the output signal from the jth F2 node and z;i is the LTM trace in the
+path from the jth F2 node to the ith F1 node.
+2.3 The Category Representation Field F2
+If F2 is inactive, all g(y;) = 0, so (16) implies
+p = u. (17)
+An active F2 competitive field is said to be designed to make a choice if only one node
+(j = J) has suprathreshold STM. This is the node that receives the largest total input
+from F1 . In this case g(yJ) equals a constant d, and the sum in equation (16) reduces to
+a single term:
+Pi = Ui +dzJ;. (18)
+6
+
+
+2.4 F1 Invariance when F2 is Inactive
+Whether or not F2 is active, the F1 vector p is normalized to q at the top F1 layer.
+At the middle layer, vector v sums intrafield inputs from the bottom layer, where the
+F0 -+ F1 bottom-up input I is read in, and from the top layer, where the F2 -+ F1
+top-down input is read in. Thus
+v; = f(x;) + bf(q;), (19)
+where f is defined as in (5).
+Let us now compute the F1 STM values that evolve when I is first presented, with
+F2 inactive. First, w (Figure 1) equals I. By (13), x also equals I, since I is already
+normalized. Next, (5), (14), (15), and (19) imply that v, too, equals I, on the first
+iteration, when q still equals 0. Similarly, u = p = q = I. On subsequent iterations w
+and v are amplified by intrafield feedback, but all F1 STM nodes remain proportional to
+I so long as F2 remains inactive.
+2.5 F1 Invariance During New Code Learning
+With p equal to I, ART 2 satisfies the design constraint that no reset occur when
+F2 is inactive. Another ART design constraint specifies that there be no reset when a
+new Fz category representation becomes active. That is, no reset should occur when the
+LTM traces in paths between F1 and an active F2 node have not been changed by pattern
+learning on any prior input presentation. When F2 is designed to make a choice and when
+the active Fz node with index j = J has never been active previously, we say that the
+active node is uncommitted. After learning occurs, this node is said to be committed.
+Suppose that the active F2 node is uncommitted. One ART 2 system hypothesis
+specifies that the top-down LTM traces are initially equal to zero. Recall that p = I
+7
+
+
+when F2 is inactive. By (18), p remains equal to I immediately after F2 becomes active
+as well. The no-reset constraint will continue to be satisfied if the ART 2 learning laws
+are chosen so that p remains proportional to I during learning by an uncommitted node.
+We will now see that this is the case.
+The ART 2 top-down adaptive filter is composed of a set of outstars (Grossberg, 1967).
+That is, when the Jth F2 node is active, top-down weights in paths fanning out from
+node J learn the activity pattern at the border of this star-like formation. In ART 2, an
+active F2 --+ F1 outstar learns the F1 activity pattern. That is, while the Jth F2 node is
+active
+dZJi
+d t =Pi- ZJi· (20)
+By (18), therefore,
+dzJ [ u· ]
+dt I = ( 1 - d) .J ~ d - ZJi ' (21)
+where 0 < d < 1. At the start of learning, u equals I. Since p; is a linear combination of
+u; and ZJ;, p; will remain proportional to I; during learning by an uncommitted node if
+ZJi remains proportional to u;. By (21), this will be true since the F2 --+ F1 LTM traces
+from an uncommitted node are initially zero.
+In summary, during learning by an uncommitted node J, the normalized F1 STM
+vectors q, u, and x remain identically equal to I, while the remaining STM vectors p, v,
+and w remain proportional to I. During ART 2 learning, moreover, the top-down LTM
+weight vector approaches p. By (18), when J is an uncommitted node, the norm of p
+rises from 1 toward 1/(1 -d). By (20), the norm of the top-down LTM weight vector
+rises from zero toward 1/(l -d) while
+I;
+ZJ· -t - 
+' 1 - d"
+8
+(22)
+
+
+2.6 F2 Activation: Code Selection
+The F2 -> F1 input is a sum of weighted path signals, as in (16). The F1 -> F2 input
+is also a sum of weighted path signals, the input to the jth F2 node being proportional
+to the sum
+(23)
+When F2 is inactive, the F1 -> F2 input is proportional to
+(24)
+When F2 is designed to make a choice, the Jth node becomes active if
+(25)
+In ART 2, all F1 -> F2 LTM traces to an uncommitted node are initially chosen randomly
+around a constant value. This constant needs to be small enough so that, after learning,
+an input will subsequently select its own category node over an uncommitted node. Larger
+values of this constant bias the system toward selection of an uncommitted node over
+another node whose LTM vector only partially matches the input. The initial choice of
+LTM values includes small random noise so that not all terms (24) to uncommitted nodes
+are exactly equal.
+2. 7 F1 -+ F2 Learning
+If an uncommitted node does become active, p remains proportional to I throughout
+learning (Section 2.5). The top-down filter performs outstar learning (20). The bottom
+up filter performs instar learning (Grossberg, 1976a), which is dual to outstar learning
+in tbe sense that, when the Jth F2 node is active, bottom-up weights in paths fanning
+9
+
+
+in to node J learn the activity pattern from the border into the center of this star-like
+formation. In ART 2, an active F1 -> F2 instar learns the F1 activity pattern. That is,
+while the Jth F2 node is active
+dzu
+- =p;-ZiJ•
+dt . (26)
+Thus if J is an uncommitted node,
+(27)
+during learning, as in (22) for the top-down LTM traces.
+2.8 Match and Reset
+While the initial F2 node selection is determined by (25), the LTM trace pattern of
+the chosen category may or may not be considered a good enough pattern match to the
+input I. If not, the orienting subsystem resets the active category, thus protecting that
+category from adventitious recoding. The match and reset process proceeds as follows.
+Let ZJ denote the vector of top-down LTM traces. The vector r (Figure 1) monitors
+the degree of match between the F1 bottom-up input I and the top-down input dz1 .
+System reset occurs iff
+llrll < p, (28)
+where p is a dimensionless vigilance pammeter between 0 and 1. Vector r obeys the
+equation I+ cp
+r = IIIll + llcrll' (29)
+where c > 0. Thus
+1
+llrll = [11111 2 + 2ciiiiiiiPII cos(I, p) + c2llrii2P.
+IIlii +cliPII (30)
+10
+
+
+If p is proportional to I, llrll = 1, so reset does not occur. This is always the case when
+J is an uncommitted node (Section 2.5).
+Suppose, on the other hand, that J is a committed node. By (21 ), ZJ has previously
+converged toward the vector p = u/(1 - d) which was active at F1 when node J was
+active at F2. We will illustrate how llrll reflects the degree of match between I and ZJ
+by analyzing a special case of ART 2 dynamics. Consider the fast-learn limit, in which
+LTM convergence is complete on each input presentation, and assume that parameter d
+is close to 1. Then, in the sum
+p = u + dzJ, (31)
+the norm of the first term on the right is 1 while the norm of the second term is d/(1-d),
+which is much greater than 1. In this case,
+Then, since IIlii = 1 and liP II~ d/(1- d), (30) and (31) imply that
+llrll ~ [1 + 20' cos(I, ZJ) +0'2]1/2, l+o
+where
+cd
+a::::--.
+1-d
+Thus llrll is an increasing function of cos(I, ZJ) such that
+and llrll = 1 iff cos(I, ZJ) = 1. In fact, by (28) and (33), reset occurs iff
+cos(I, ZJ) < p*,
+11
+(32)
+(33)
+(34)
+(35)
+(36)
+
+
+where
+(37)
+Note that p* = 1 iff p = 1 and that p* < 0 if p = 0. Since all components of I and ZJ are
+nonnegative, reset never occurs if p* :::; 0, thereby eliminating the search/reset process
+altogether. On the other hand, reset would always occur if p* were greater than 1. Thus,
+by hypothesis, 0 :::; p* :::; 1.
+Remark. ART 2 includes the additional constraint
+o·:::; 1. (38)
+This implies that llrll in (33) is a decreasing function of o for each fixed value of cos(I, ZJ)
+(Carpenter & Grossberg, 1987b, Figure 7). In ART 2, (38) implies that, during fast or
+slow learning, llrll in (30) decreases as llzJII increases, all other things being equal. This
+corresponds to the idea that liz.~ II reflects the degree of commitment of category J. For
+a given pattern match, i.e., for a fixed value of cos(I, p), the matching criterion defined
+jointly by (28) and (30) becomes stricter as llz.JII grows toward its asymptotic limit of
+d/(1 -d). In fast learning, this limit is reached on a single input presentation. With
+slow learning, constraint (38) implies that more learning by a committed node carries a
+greater tendency for mismatched bottom-up and top-down vectors to trigger reset and
+hence greater permanence of that node's category LTM representation. For both the fast
+learning and the intermediate learning cases considered below, !lzJII ~ d/(1 -d) once J
+becomes a committed node. This is why constraint (38) does not appear in the ART 2-A
+algorithm.
+12
+
+
+2.9 Search and Resonance
+Once one F2 node is reset, ART 2 activates the F2 node J with the next highest input
+(24). As above, the search process will cease if J is uncommitted. Among committed
+nodes, the order of search is determined by the product of the norm of the bottom-up
+LTM vector times the cosine of the angle between I and that vector. With slow learning,
+bottom-up weights may be small if little coding has already occurred at that node. In
+this case an extended search may ensue. However, in the special case where weights are
+normalized by the end of each input presentation, the search process may be replaced
+by an abbreviated algorithm, as follows. Note first that the bottom-up weight vector of
+each committed node j equals the corresponding top-down weight vector Zj, by (20) and
+(26). By (24) the order of search among committed nodes is determined by the size of
+terms
+IIIIIIIzJ II cos(I, Zj ). (39)
+The order of search therefore depends on cos(I, ZJ) alone, since IIlii = 1 and llzJII =
+1/(l -d). By (36), if the ftrst chosen node resets then all other committed nodes will
+also reset if chosen. Eventually, either an uncommitted node will be chosen and coded,
+or, if no uncommitted nodes remain, the system has exceeded its capacity and the input
+r' is not coded. Thus if one reset occurs, algorithmic search immediately selects an
+uncommitted node at random.
+In all cases, resonance is the state in which the system retains a constant code rep
+resentation over a time interval that is long relative to the transient time scale of F2
+activation and search.
+13
+
+
+2.10 ART 2 Fast Computation
+The abbreviated ART 2 search process described in Section 2.9 is insufficient in
+general. Search of committed nodes may be necessary with slow learning, in order to
+allow a given input access to a given node, until weights grow toward their asymptotic
+size. In addition, the ART reset process is used for other functions besides search: it can
+signal the presence of a new input for classification, or it can be modulated by reinforcing
+or other evaluative inputs. These various cases, as well as a neural implementation of the
+search process, are the primary focus of ART 3 (Carpenter & Grossberg, 1990).
+The purpose of the present article, in contrast, is to consider cases in which ART 2.
+dynamics can be approximated by efficient algorithms, such as the fast-search algorithm
+of Section 2.9. One of these special cases is the fast-learn limit. However, fast learning
+may be too drastic for certain applications, as when the input set is degraded by high noise
+levels. ART 2 slow learning is better able to cope with noise, but has not previously been
+amenable to rapid computation. In the present article, we develop an efficient algorithm
+that approximates ART 2 dynamics not only for fast learning but also for a much larger
+set of cases that we here call intermediate learning. Intermediate learning permits partial
+receding of the LTM vectors on each input presentation, thus retaining the increased
+noise-tolerance of slow learning. In addition, however, an ART 2 intermediate learning
+system operates in a range where algorithmic approximations enable rapid computation.
+Dynamics of ART 2 with both fast learning and intermediate learning are approximated
+by the algorithmic system ART 2-A described in Section 3.
+14
+
+
+3 ART2-A
+3.1 Fast Learning with Linear STM feedback
+ART 2-A approximates the STM and LTM dynamics of an ART 2 system with choice
+at F2• The ART 2-A equations are partially motivated by the following theorem about
+fast-learn ART 2 with the signal function threshold B set equal to 0 in F0 and F1 • Note
+that the key ART 2 hypothesis (6) is violated here, and the F1 signal function therefore
+is linear.
+Theorem 1 states that when the F1 feedback function has zero threshold, the LTM
+vectors of the active category approach a vector proportional to I. In fast learning, the
+system retains no trace of previous inputs coded in this category.
+Theorem 1 Consider fast-learn ART 2 with the F1 signal threshold B set equal to 0.
+Then, after an F2 node J has coded an input I, both bottom-up and top-down LTM
+vectors are proportional to I. In fact
+1
+ZJ == 1- i· (40)
+Theorem 1 is proved in the Appendix.
+Remark. Figure 8(e) of Carpenter and Grossberg (1987b) shows an ART2 simulation
+with (} == 0, in which nonzero components of LTM vectors after learning retain traces
+of previous inputs rather than fully tracking the relative values of the current input, in
+contradiction to Theorem 1. That simulation illustrates an intermediate learning situa
+tion in which LTM traces are approaching, but have not yet reached, equilibrium when
+a committed node is chosen. Some of these traces approach zero when the current input
+15
+
+
+component is zero. With 0 = 0, the ART 2 system allows traces that are approaching
+zero, but have not reached it, to grow again during subsequent input presentations.
+3.2 Fast Learning with Nonlinear STM Feedback
+Consider now a fast-learn ART 2 system with 0 > 0, and hence the nonlinear signal
+function f of (5) at Fo and Ft. As in Section 2.8, assume that parameter dis close to 1,
+so that p ~ dzJ when a committed node J is active, as in (32). In this case, to a first
+approximation,
+iff ZJi ::; 0/(1- d), (41)
+where q is the normalized STM vector in the top F1 layer (Figure 1). When q; ::; 0,
+f(q;) = 0 in (19). The ART2 internal F1 feedback parameters a and bare assumed to
+be large enough so that, if the ith F1 node receives no top-down amplification via f(q;),
+then STM at that node is quenched, even if I; is relatively large. As in (41), this property
+allows the system to satisfy the ART design constraint that, once a trace ZJ; falls below
+a certain positive value, it will decay permanently to zero.
+In (10), we defined an index set D, which has the property that i E D, iff I; > 0. The
+preceding discussion leads us now to define analogous index sets D,J. During resonance
+on a given input presentation in which the committed node J is active, let
+'ff (old) e
+1 ZJi > 1 - d' (42)
+where z)old) denotes the top-down LTM vector at the start of the input presentation.
+Intuitively, D,J is the index set of "critical features" that define category J. Set D,J cor
+responds approximately to the ART 1 template index set y(J) (Carpenter & Grossberg,
+1987a).
+16
+
+
+Since all features can a priori be coded by an uncommitted node, each set
+nJ = {i : i = 1, 2, ... , M} (43)
+on the first input presentation in which node J is active.
+In fast-learn ART 2, the set nJ can shrink when J is active, but flJ can never grow.
+This monotonicity property is necessary for overall code stability. On the other hand,
+ZJi learning is still possible for i E flJ when J is active. This observation leads to the
+following conjecture.
+Conjecture 1 Consider fast-learn ART 2, with () > 0, when an F2 node J is coding a
+fixed F1 input I. Let fl denote the Fa --+ F1 input index set
+n = {i: I,> o}, (44)
+which in ART 2 is equivalent to
+rl={i:I;>O}. (45)
+Let flJ denote the category index set, as follows. If J is an uncommitted node, let
+nJ == {i: i = 1,2, ... ,M}. (46)
+If J is a committed node, let
+(47)
+(old)
+where zJi denotes the F2 -t F1 LTM vector at the start of the input presentation. In
+ART2, (41) is equivalent to
+(48)
+17
+
+
+Define the vector \!! by
+(49)
+Then, during learning, both the bottom-up and the top-down LTM vectors approach a
+limit vector proportional to \!!. At the end of the input presentation,
+(newl Nw
+ZJ = ZJ / = - - ,
+1-d (50)
+Moreover
+f),~new) =f),~old) n n. (51)
+By characterizing fast-learn ART 2 system dynamics, Conjecture 1 directly motivates
+the fast-learn limit of the ART 2-A algorithm. On a given input presentation, the algo
+rithm partitions the F1 index set into two classes, and defines different dynamic properties
+for each class. If i cf. nJ, ZJ; remains equal to 0 during learning; that is, it retains its
+memory of the past, independent of the present F1 input I;. In contrast, if i E nJ,
+ZJi nearly forgets the past by becoming proportional to I;. The only reflection of past
+learning for i E D,J is in the proportionality constant.
+3.3 Intermediate Learning: Fast Commitment with Slow Recoding
+The fast-learn limit is important for system analysis and is useful in many applica
+tions. However, a finite learning rate is often desirable in ART 2 to increase stability and
+noise tolerance, and to make the category structure less dependent on input presentation
+order. Here we consider intermediate learning rates, which provide these advantages, and
+show how they can be approximated by an ART 2-A algorithm that includes fast learning
+as a limiting case.
+18
+
+
+The ART 2-A intermediate learning algorithm embodies the properties of fast commit
+ment and slow recoding. These properties are based on an analysis of ART 2 dynamics.
+In particular, the ART 2 LTM vectors tend to approach asymptote much more quickly
+when the active node J is uncommitted than when J is committed; and once J is com
+mitted, lfzJII stays close to 1/(1 -d). For convenience let zj denote the scaled LTM
+vector
+zj =(1- d)z,. (52)
+The approximations (i}-(iii) below characterize the value of zj at the end of an input
+presentation during which the F2 node J is in resonance:
+(i) If J is an uncommitted node, zj is set equal to I.
+(ii) If J is a committed node, zj is set equal to a convex combination of its previous
+value and the vector Nw defined by (3) and (49).
+(iii) zj is renormalized so that its magnitude always equals 1.
+The fast-learn limit corresponds to setting zj equal to N'I! in (ii). Slower ART 2learning
+corresponds to keeping zj closer to its previous value in (ii). Previous simplified versions
+of ART 2, such as that of Ryan (1988), have included computations similar to setting zj
+equal to a convex combination of I and the previous zj vector. ART2-A uses Nw in (ii),
+rather than I. The vector 'I!, defined by equation (49), endows ART2-A with the critical
+stability properties of ART 2.
+The existence of distinct ART 2 operating modes, fast commitment and slow recoding,
+can be explained as follows. By (21) and (52),
+ddz': = (1- d)(u- zj). (53)
+19
+
+
+By (53), zj approaches u at a fixed rate. As described in Section 2.5, when J is an
+uncommitted node, u remains identically equal to I throughout the input presentation.
+Thus vector zj approaches I exponentially, and zj ~ I at the end of the input presentation
+if the presentation interval is long relative to 1/(1 - d). On the other hand, if J is a
+committed node, as in Section 2.8, u is close to zj. In other words,
+u = N(c.N'I! +(1- c)zj), (54)
+where 'I! is defined by (49) and 0 < E <t: 1. Since E is small,
+u ~ c./I!'I! + (1- c)zj. (55)
+Thus, (53) and (55) imply
+ddz*: ~ c(l- d)(N'I!- zj ). (56)
+Hence zj begins to approach N'I! at a rate that is slower, by a factor e, than the rate
+of convergence of an uncommitted node. In ART 2, the size of c is determined by the
+parameters a and b (Figure 1). The normal ART2 parameter constraints that a and b
+be large conspire to make E small.
+In summary, if the ART 2 input presentation time is large relative to 1/(1-d), the
+LTM vectors of an uncommitted node J converge to I on the first activation of that node.
+Subsequently the LTM vectors remain approximately equal to a vector ZJ, where
+(57)
+Because zj is normalized when J first becomes committed, and, by (53), it approaches
+u, which is both normalized and approximately equal to zj, zj remains approximately
+normalized during learning. Thus, the rapid-search algorithm (Section 2.9) remains valid
+20
+
+
+for intermediate learning as well as for fast learning. Finally, (53) and (54) suggest that a
+(normalized) convex combination of the N"il! and zj vector values at the start of an input
+presentation gives a reasonable first approximation to zj at the end of the presentation.
+The ART 2-A algorithm summarized in the next section includes both the fast and the
+intermediate learning cases.
+3.4 Summary of the ART 2-A Algorithm
+Equations (58)-(70) summarize the ART 2-A system for both intermediate and fast
+learning rates. The heart of the ART 2-A algorithm is an update rule that adjusts LTM
+weights in a single step for each presentation interval during which the input vector is
+held constant.
+Input
+Given a nonuniform M-dimensional input vector 1° to F0 , the input I to F1 satisfies
+I= N:FoNI0 (58)
+where
+(59)
+and lX;
+(:Fox); = 0
+if x; > e (60)
+otherwise.
+Threshold 0 in (60) satisfies the inequalities
+o< o::; 1/VM. (61)
+Equations (58)-(61) imply that I is nonzero.
+21
+
+
+F2 Activation
+The input to the jth F2 node is given by
+The constant a in (62) satisfies
+if j is an uncommitted node
+if j is a committed node.
+1
+a < r;;:;·
+-vM
+(62)
+(63)
+Initially, all F2 nodes are uncommitted. The set of committed F2 nodes and the scaled
+LTM vectors zj are defined iteratively below.
+Choice Function
+The initial choice at F2 is one node with index J satisfying
+(64)
+If more than one node is maximal, choose one at random. After an input presentation
+on which node J is chosen, J becomes committed.
+Resonance or Reset
+The node J initially chosen by (64) remains constant if J is uncommitted or if J is
+committed and
+(65)
+where p* is constrained so that
+0 ::; p* ::; 1. (66)
+If J is committed and
+(67)
+22
+
+
+then J is reset to the index of an arbitrary uncommitted node. Because the Euclidean
+norms of I and z; are all equal to l for commmitted nodes, Ti in (62) equals the cosine
+of the angle between I and zj.
+Learning
+At the end of an input presentation, zj is set equal to zj(new) defined by
+l
+I
+z*(new) _
+J - N({3N'I! + (1 - f3)zj(old))
+if J is an uncommitted node (68)
+if J is a committed node
+where, if J is a committed node, zj(old) denotes the value of zj at the start of the input
+presentation,
+and lI;
+\!i;:= 0
+"f •(Old) > ()
+1 ZJi
+otherwise,
+0~{3~1.
+3.5 Contrast with the Leader Algorithm
+(69)
+(70)
+The ART 2-A weight update rule (68) for a committed node is similar in form to
+equation (54). However (54) describes the STM vector u immediately after a node J has
+become active, before any significant learning has taken place, and parameter E in (54)
+is small. ART 2-A approximates a process that integrates the form factor (54) over the
+entire input presentation interval. Hence {3 ranges from 0 to 1 in (70). Setting {3 equal to
+1 gives ART2-A in the fast-learn limit. Setting {3 equal to 0 turns ART2-A into a type of
+leader algorithm (Hartigan, 1975, Ch. 3), with the weight vector zj remaining constant
+once J is committed. Small positive values of {3 yield system properties similar to those
+23
+
+
+of an ART 2 slow learning system. Fast commitment obtains, however, for all values of
+fj. Note that fJ could vary from one input presentation to the next, with smaller values
+of fJ corresponding to shorter presentation intervals and larger values of fJ corresponding
+to longer presentation intervals.
+Parameter a in (62) corresponds to the initial values of LTM components in an ART 2
+F1 --+ F2 weight vector. As described in Section 2.6, a needs to be small enough, as in
+(63), so that if zj = I for some J, then J will be chosen when I is presented. Setting
+a close to 1/v'M biases the network toward selection of an uncommitted node over
+category nodes that only partially match I. In the simulations described below, a is set
+equal to 1/,fM. Thus even when p* = 0 and reset never occurs, ART 2-A can establish
+several categories. Instead of randomly selecting any uncommitted node after reset, the
+value a for all T; in (62) could be replaced by any function of j, such as a ramp or
+random function, that achieves the desired balance between selection of committed and
+uncommitted nodes, and a determinate selection of a definite uncommitted node after a
+reset event.
+4 Simulations
+4.1 Comparative Simulations of ART 2-A and ART 2 Fast-Learn Systems
+The simulation summarized in Figure 2 illustrates how ART 2-A groups 50 ana
+log input patterns. The ART 2-A simulation gives a result essentially identical to the
+simulation result of a fast-learn ART 2 system with comparable parameters. The input
+set consisted of the 50 patterns used in the original ART 2 simulations (Carpenter &
+Grossberg, 1987b). The inputs, indexed in the left column of Figure 2, were repeatedly
+presented in the order 1, 2, ... , 50 until the category structure stabilized.
+24
+
+
+Figure 2
+Table 1 shows the parameters used for one of the fast-learn simulations (Carpenter
+& Grossberg, 1987b, Figure 11). Since fast-learn LTM components approach but never
+reach a limit on each input presentation, each ART 2 simulation requires selection of a
+convergence criterion. As described below, different criteria can produce slight variations
+in category structure.
+Table 1
+The ART2-A parameters for Figure 2 (see Table 2) correspond to the ART2 pa
+rameters. For example, equation (37) is used to set p' = .92058 when p = .98 and
+a= cd/(1- d) = .9. Since ART 2-A gives formula (68) for the LTM limit, no convergence
+criterion is necessary.
+Table 2
+The ART 2 and ART 2-A simulations give identical partitions of the 50 patterns into
+23 recognition categories (Figure 2). Each component of the final LTM vectors differs
+at most by 0.5%. The difference between the two results decreases as the convergence
+criterion on the ART 2 simulation is tightened.
+For both ART 2 and ART 2-A, the category structure stabilizes to its asymptotic state
+during the second presentation of the entire input set. However, the suprathreshold LTM
+components continue to track the relative magnitudes of the components in the most
+recent input. The inputs and fmal templates of the ART 2-A simulation are shown in
+Figure 2. Inputs are shown grouped according to the F2 node category J chosen during
+the second and subsequent presentations of each input. Category 23 shows how zj tracks
+25
+
+
+the suprathreshold analog input values in feature set OJ while ignoring input values
+outside that set. The corresponding figure for the ART 2 simulation is indistinguishable
+from Figure 2.
+The earlier ART 2 simulation (Carpenter & Grossberg, 1987b, Figure 11) had one
+fewer category than Figure 2, even though the model parameters were the same as in
+Table 1. This difference appears to be due to different convergence criteria.
+The ART 2-A fast-learn simulation in Figure 2 used only four seconds of Sun4/110
+CPU time to run through the 50 patterns three times. The corresponding ART 2 sim
+ulation took 25 to 150 times as long, depending on the fast-learn convergence criterion
+imposed. This speed-up occurred even using a fast integration method for ART 2, in
+which LTM values were allowed to relax to equilibrium alternatively with STM variables.
+Carpenter and Grossberg (1987b) employed a slower integration method, in which LTM
+values changed only slightly for each STM relaxation. Compared to this latter method,
+the ART 2-A speedup is even greater. Finally, integration of the full ART 2 dynamical
+system would take longer still.
+4.2 Comparative Simulations of ART 2-A Fast-Learn and Intermediate-Learn Systems
+Simulation results of ART 2-A with fast learning (Figure 3) and intermediate learn
+ing (Figure 4) use the same 50 input patterns as in Figure 2, but the inputs are now
+presented randomly, rather than cyclically. This random presentation regime simulates
+a statistically stationary environment, in which each member of a fixed set of patterns
+is encountered with equal probability at any given time. In addition, p' was set to zero
+in these simulations, making the number of categories more dependent on parameter a
+than when p' is larger. Other parameters are given in Table 2.
+26
+
+
+Figure 3
+Figure 4
+Figures 3 and 4 show the asymptotic category structure and scaled LTM weight vec
+tors established after an initial transient phase of 2, 000 to 3, 000 input presentations.
+Figure 3 illustrates that category nodes may occasionally be abandoned after a transient
+encoding phase (see nodes J = 1,6, and 7). Figure 3 also includes a single input pat
+tern (39) that appears in two categories (J = 12 and 15). In the simulation, input 39 was
+usually placed in category 12. However, when the most recent input to category 12 was
+pattern 21, category 15 could win in response to input 39, though whether or not it did
+depended on which pattern category 15 had coded most recently as well. In addition to
+depending on input presentation order, the instability of pattern 39 is promoted by the
+system being in the fast-learn limit with a small value of p*, here p* = 0. A corresponding
+ART 2 system gives similar results.
+These anomalies did not occur in the intermediate-learn case, in which there is not
+such drastic recoding on each input presentation. Similarly, intermediate learning copes
+better with noisy inputs than does fast learning. Figure 4 illustrates an ART 2-A sim
+ulation run with the inputs and parameters of Figure 3, except that the learning rate
+parameter is small ((3 = .01 ). The analog values of the suprathreshold LTM components
+do not vary with the most recent input nearly as much as the components in Figure 3. A
+slower learning rate helps ART 2-A to stabilize the category structure by making coding
+less dependent on order of input presentation.
+27
+
+
+5 Conclusion
+ART 2 fast-learn and interrr:ediate-learn systems combine analog and binary coding
+functions. The analog portion encodes the recent past while the binary portion retains
+the distant past. On the one hand, LTM traces that fall below threshold remain below
+threshold at all future times. Thus once a feature is deemed "irrelevant" in a given
+category, it will remain irrelevant throughout the future learning experiences of that
+category in that such a feature will never again be encoded into the LTM of that category,
+even if the feature is present in the input pattern. For example, the color features of a
+chair may come to be suppressed during learning of the category "chair" if these color
+features have not been consistently present during learning of this category.
+On the other hand, the suprathreshold LTM traces track a time-average of recent in
+put patterns, even while they are being renormalized due to suppression of other compo
+nents. Intuitively, a feature that is consistently present tracks the most recent amplitudes
+of that feature, eventually forgetting subtle differences of its past exemplars, much as in
+word frequency effects, encoding specificity effects, and episodic memory (Mandler, 1980;
+Underwood & Freund, 1970), which are qualitatively explained in terms of a time
+averaged ART learning equation analogous to (68) in Grossberg and Stone (1986).
+The ART 2-A algorithm incorporates these coding features while achieving an increase
+in computational efficiency of two to three orders of magnitude over the full ART 2 system.
+28
+
+
+Appendix: Proof of Theorem 1
+During resonance with the Jth F2 node active, when the threshold 0 equals 0, the ART 2
+STM vector u satisfies the implicit equation
+d
+u = N[N(I +au)+ bN(u + 1 _ dzj)]. (71)
+When the scaled LTM vector z; =(1 - d)z; reaches equilibrium, it equals u. Then,
+denoting z =zj,
+d
+z = N[N(I + az) + bN(z + 1 _ dz)]
+= N[N(I + az) + bz]
+= cl~: ::II +bz) Ill!~: ::II +bzr (72)
+from which it follows that
+(1- A(Ba + b))z = ABI (73)
+where
+II I+az ~~-l
+A = III+ azl! + bz (74)
+and
+(75)
+Since A =f- 0 and B =f- 0,
+I_ (1- A(Ba +b))
+- AB z. (76)
+Since also !III! = liz!! = 1, it follows from (76) that I= z, which completes the proof.
+29
+
+
+References
+Carpenter, G. A., & Grossberg, S. (1987a). A massively parallel architecture for a selforganizing neural pattern recognition machine. Computer Vision, Graphics, and Image Processing, 37, 54-115.
+Carpenter, G. A., & Grossberg, S. (1987b). ART2: Self-organization of stable category recognition codes for analog input patterns. Applied Optics, 26, 4919-4930.
+Carpenter, G. A., & Grossberg, S. (1990). ART 3: Hierarchical search using chemical transmitters in self-organizing pattern recognition architectures. Neural Networks, 3, 129-152.
+Grossberg, S. (1967). Nonlinear difference-differential equations in prediction and learning theory. Proceedings of the National Academy of Sciences (USA), 58, 1329-1334.
+Grossberg, S. (1976a). Adaptive pattern classification and universal recoding, I: Parallel development and coding of neural feature detectors. Biological Cybernetics, 23, 121-134.
+Grossberg, S. (1976b). Adaptive pattern classification and universal recoding, II: Feedback, expectation, olfaction, and illusions. Biological Cybernetics, 23, 187-202.
+Grossberg, S., & Stone, G. 0. (1986). Neural dynamics of word recognition and recall: Attentional priming, learning, and resonance. Psychological Review, 93, 46-74.
+Hartigan, J. A. (1975). Clustering Algorithms. Wiley, New York.
+Mandler, G. (1980). Recognizing: The judgement of previous occurrence. Psychological Review, 87, 252-271.
+Ryan, T. W. (1988). The resonance correlation network. Proceedings of the IEEE International Conference on Neural Networks, I, 673-680.
+Underwood, B. J., & Freund, J. S. (1970). Word frequency and short term recognition memory. America! Journal of Psychology, 83, 343-351.
+30
+
+
+Tables
+Table 1: ART2 simulation parameters (Carpenter & Grossberg, 1987b, Figure 11).
+Parameter Value M 25
+Zij(O) 1 -2
+(1-d)VM () 1 - 2
+'IM- .
+p .98 a 10
+b 10 c .1 d .9
+Table 2: ART 2-A simulation parameters for Figures 2-4.
+Parameter Value M 25
+a 1- 2
+'IM-.
+0 1- 2
+7fJ-·
+Figure 2 Figure 3 Figure 4 p* .92058 0 0 (3 1 1 .01
+31
+
+
+Figure Captions
+Figure 1: ART2 architecture. Large filled circles represent normalization oper
+ations carried out by the network. Adapted from Carpenter and Grossberg (1987b,
+Figure 10).
+Figure 2: ART 2-A fast-learn simulation. fl is the input to Fa. I is the input to F1•
+zj is the scaled LTM vector of the winning F2 category node J at the end of each input
+presentation intervaL The numbers in the left column index the input vectors and give
+their order of presentation. The vertical axes of the inputs fl all have the same scale,
+which is arbitrary due to the initial normalization in Fa. The vertical axes for I and zj
+run from 0 to 1.
+Figure 3: ART 2-A fast-learn simulation. Input presentation order is random and
+p* = 0. Otherwise the system is the same as in Figure 2. The three categories (J = 1, 6,
+and 7) showing no inputs were coded only during early presentations. Pattern 39 appears
+in both categories 12 and 15.
+Figure 4: ART 2-A intermediate-learn simulation. The learning rate parameter (J
+is set equal to .OL Otherwise the system is the same as in Figure 3, including a zero
+value of vigilance that leads to coarse, but stable, categories.
+32
+
+
+ri
+ORIENTING
+SUBSYSTEM
+RESET
+cp.I
+U·I
+Uj
+au
+w.I
+0
+au.I
+w.0I
+I.I
+,o
+I
+ATTENTIONAL
+SUBSYSTEM
+F2
+(CHOICE)
+g( YJ)
+(d )
+~
+MATCH
+~·
+READ BU
+Figure 1:
+33
+qi
+bf( q I.)
+~
+v.I
+f(xi)
+X.I
+v.I0
+f(x~)
+X.I0
+
+
+I 0 I zj J Io I z*J J
+lll!u,.. .,,ullllilh.. l,, """' 1,, ""'" I 1 2109
+; 1:1:::::::::::::::::::::::1:::: ::::::::: 1:::: ::::::::: I 2 43 12
+4445
+Jl:::::::::::::::::::::::t::::::::::: 1:::::::::::: I 3 ~ ~ 1:~~~~11111~~~~~~~~~~~~~~~1 ::::: I ::::: 113
+4~ 1:11111:::::::;;::::::::::1:::::::::. 1::::::::: I 4
+71... 11111111<............1 11111111 I IIIIIII _ j 5
+all II II I 6
+~~ 1:::1::::::::::::::::::::1 :i: I:i: I 7
+231 IIIII I IIIII I IIIII 114
+241 11.11 I 1111 I 1111 115
+H\:::::::!!!!::::::::::::::1 ::::::::::. I::::::::: 116
+~~I :::::::1::::::::::1 ::::::::::: I::::::::::: 117
+12llll!ho<!lll luu Iill !uu ull l 8 32 l.il1 "" .., ,,.. !11, ... . .. l1h ... . .. I 18
+13luu,,,u! !tlu Ill ltlu Ill I 9
+14 lui!,,,,IL ., ,11!, I,, ,, '" I, ,, '" I 1 o ~; 1::::111:: :: :::::::::1 : I ::::: 119
+15 ~--"""" --'lllllllj-__llllllilj
+H~~, ~=t=~ i~ J::!illii::::::::::!~:::l ::;:::. .. i::;;;: 121
+47 11
+4 8 ~ ----.JillJllilj--Jllillllj
+4 9 j--udlllllll -------"'lJJllilj--..illlllllj
+5 0 lu-uullllliiJJ! ____uwjliJlll__JWlJlll
+3 9 LUillllhtth,t,J,J, 1 Ir!l!hl!l I I I!!UlllJ.LJ..~ 2 2
+Figure 2:
+34
+
+
+I z* J
+J I 0 I zj J
+I uu I 1 231 IIIII I IIIII I 1111 110
+i
+l:i!!i:::::::i!!iii!!i::J::: ::::::::: 1::: ::::::: I 4
+2
+: I ll.ll I ill!
+I ill! 113
+lil!lllnllli o!l!lll!llll 11111111
+5 1111111111111 11111111
+!liJ::;::~It.... li J 5 l! !!IIIII!
+.l.lhllhh.l. lolllolo hllhl ••!11111111, !!IIIII 1111111
+1111111.11 """' !!llllu_
+14
+28 .1.1hill1h.l. ,,,,,, lolllol
+I
+111 I 6 29 111111111111- !1111111111 lll!lll
+I
+111 I 1 6 11111111 IIIII IIIII
+33
+19 ~ ~~--'lllllllllllll 35
+20 36 4 3 _J1111UJJJJumJ---mu~ 8 3 7
+44 111 38
+.. IIIII !!II! .JJltl
+'"'' '""
+..IIIII IIIII! IIIII
+1!, !IIIIo ..Jill•
+o!illl, IIIII
+15
+45 39
+46 ~· lololo IIIII
+IIIII
+Figure 3:
+35
+
+
+'.
+4 5 6 7 10 11 21 22
+2234
+25 26 27 28
+3293
+34 35 36 37 38 39 40 41 42 46
+!!
+llllflllllu
+'"""
+.••nllllo.
+•
+"": -!
+,,,,h!lhh.l. .. nllfllll~o mlll!m .•.•hllhh.!.
+"""'"
+...!! llo. .......
+!.' ,1., II..
+II!Ih.
+..lllllh ..!loll •!!lh, . nhhhl.1.1. .o!lllllh..
+'"""'·"''
+11111111111.
+"'"""'"
+"'"""'"
+",",,",,"
+IIIII IIIII
+1111
+'"''"'
+"'"""
+""""
+'""""
+"""
+.'""''o'''l""'''l"""""h
+"'"""
+"""'"
+""'"''
+""""
+"""'"
+''''''"""''"""'
+""""""''"""'
+··'"'''""""'''""""'
+IIIIIII
+'''''·'"''''''"""""""""''''''""""""""'
+.. olllllo
+'·o"''l""l"l'''ll"""l
+''''""''""
+15 I--'"""' -lllll1llj-----
+16 ~'---"""" - " " " " ! - - - - " ' "
+17 ~ ---'--'""""!----"'"
+18 2
+4 7 ~--"""""" ---"lllll1llj-----
+48 ~ ----'""""!----"'"
+4 9 ~ ----"lllll1llj-----
+50 ~ ----"llllllll1.___..
+~
+tiiil:::::::liii!ilil::t::: ::::::::: JL ::::::: I 3
+:i~~!~ii:li: :: .. li ~ I,
+!!~~::IL ... I! I,
+Figure 4:
+36

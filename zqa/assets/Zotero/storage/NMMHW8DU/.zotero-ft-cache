@@ -1,0 +1,745 @@
+International Journal of Computer Vision (2025) 133:291–314 https://doi.org/10.1007/s11263-024-02186-5
+Learning Rate Curriculum
+Florinel-Alin Croitoru1 · Nicolae-Ca ̆ t  ̆alin Ristea1,2 · Radu Tudor Ionescu1 · Nicu Sebe3
+Received: 20 January 2024 / Accepted: 4 July 2024 / Published online: 27 July 2024 © The Author(s) 2024
+Abstract
+Most curriculum learning methods require an approach to sort the data samples by difficulty, which is often cumbersome to perform. In this work, we propose a novel curriculum learning approach termed Learning Rate Curriculum (LeRaC), which leverages the use of a different learning rate for each layer of a neural network to create a data-agnostic curriculum during the initial training epochs. More specifically, LeRaC assigns higher learning rates to neural layers closer to the input, gradually decreasing the learning rates as the layers are placed farther away from the input. The learning rates increase at various paces during the first training iterations, until they all reach the same value. From this point on, the neural model is trained as usual. This creates a model-level curriculum learning strategy that does not require sorting the examples by difficulty and is compatible with any neural network, generating higher performance levels regardless of the architecture. We conduct comprehensive experiments on 12 data sets from the computer vision (CIFAR-10, CIFAR-100, Tiny ImageNet, ImageNet-1K, Food-101, UTKFace, PASCAL VOC), language (BoolQ, QNLI, RTE) and audio (ESC-50, CREMA-D) domains, considering various convolutional (ResNet-18, Wide-ResNet-50, DenseNet-121, YOLOv5), recurrent (LSTM) and transformer (CvT, BERT, SepTr) architectures. We compare our approach with the conventional training regime, as well as with Curriculum by Smoothing (CBS), a state-of-the-art data-agnostic curriculum learning approach. Unlike CBS, our performance improvements over the standard training regime are consistent across all data sets and models. Furthermore, we significantly surpass CBS in terms of training time (there is no additional cost over the standard training regime for LeRaC). Our code is freely available at: https://github.com/CroitoruAlin/LeRaC.
+Keywords Curriculum learning · Deep learning · Neural networks · Training regime
+1 Introduction
+Curriculum learning (Bengio et al., 2009) refers to efficiently training effective neural networks by mimicking how humans learn, from easy to hard. As originally introduced by Bengio et al. (2009), curriculum learning is a training procedure that first organizes the examples in their increasing order
+Communicated by Zhouchen Lin.
+B Radu Tudor Ionescu raducu.ionescu@gmail.com
+1 Department of Computer Science, University of Bucharest, 14 Academiei, 010014 Bucharest, Romania
+2 Faculty of Electronics, Telecommunications, and Information Technology, National University of Science and Technology Politehnica Bucharest, 313 Splaiul Independentei, 060042 Bucharest, Romania
+3 Department of Information Engineering and Computer Science, University of Trento, 9 via Sommarive, 38123 Povo-Trento, Italy
+of difficulty, then starts the training of the neural network on the easiest examples, gradually adding increasingly more difficult examples along the way, until all training examples are fed into the network. The success of the approach relies in avoiding imposing the learning of very difficult examples right from the beginning, instead guiding the model on the right path through the imposed curriculum. This type of curriculum is later referred to as data-level curriculum learning (Soviany et al., 2022). Indeed, Soviany et al. (2022) identified several types of curriculum learning approaches in the literature, dividing them into four categories based on the components involved in the definition of machine learning given by Mitchell (1997). The four categories are: data-level curriculum (examples are presented from easy to hard), model-level curriculum (the modeling capacity of the network is gradually increased), task-level curriculum (the complexity of the learning task is increased during training), objective-level curriculum (the model optimizes towards an increasingly more complex objective). While data-level
+123
+
+
+292 International Journal of Computer Vision (2025) 133:291–314
+Fig. 1 Training based on Learning Rate Curriculum
+curriculum is the most natural and direct way to employ curriculum learning, its main disadvantage is that it requires a way to determine the difficulty of data samples. Despite having many successful applications (Soviany et al., 2022; Wang et al., 2022), there is no universal way to determine the difficulty of the data samples, making the data-level curriculum less applicable to scenarios where the difficulty is hard to estimate, e.g. classification of radar signals. The task-level and objective-level curriculum learning strategies suffer from similar issues, e.g. it is hard to create a curriculum when the model has to learn an easy task (binary classification) or the objective function is already convex. Considering the above observations, we recognize the potential of model-level curriculum learning strategies of being applicable across a wider range of domains and tasks. To date, there are only a few works (Burduja, 2021; Karras et al., 2018; Sinha et al., 2020) in the category of pure modellevel curriculum learning methods. However, these methods have some drawbacks caused by their domain-dependent or architecture-specific design. To benefit from the full potential of the model-level curriculum learning category, we propose LeRaC (Learning Rate Curriculum), a novel and simple curriculum learning approach which leverages the use of a different learning rate for each layer of a neural network to create a data-agnostic curriculum during the initial training epochs. More specifically, LeRaC assigns higher learning rates to neural layers closer to the input, gradually decreasing the learning rates as the layers are placed farther away from the input. This reduces the propagation of noise caused by the multiplication operations inside the network, a phenomenon
+Fig. 2 Convolving an image of a car with random noise filters progressively increases the level of noise in the features. A theoretical proof of this observation is given in “Appendix A”
+that is more prevalent when the weights are randomly initialized. The learning rates increase at various paces during the first training iterations, until they all reach the same value, as illustrated in Fig. 1. From this point on, the neural model is trained as usual. This creates a model-level curriculum learning strategy that is applicable to any domain and compatible with any neural network, generating higher performance levels regardless of the architecture, without adding any extra training time. To the best of our knowledge, we are the first to employ a different learning rate per layer to achieve the same effect as conventional (data-level) curriculum learning. As hinted above, the underlying hypothesis that justifies the use of LeRaC is that the level of noise grows from one neural layer to the next, especially when the input is multiplied with randomly initialized weights having low signal-to-noise ratios. We briefly illustrate this phenomenon through an example. Suppose an image x is successively convolved with a set of random filters c1, c2, . . . , cn. Since the filters are uncorrelated, each filter distorts the image in a different way, degrading the information in x with each convolution. The information in x is gradually replaced by noise (see Fig. 2), i.e. the signal-to-noise ratio increases with each layer. Optimizing the filter cn to learn a pattern from the image convolved with c1, c2, . . . , cn−1 is suboptimal, because the filter cn will adapt to the noisy (biased) activation map induced by filters c1, c2, . . . , cn−1. This suggests that earlier filters need to be optimized sooner to reduce the level of noise of the activation map passed to layer n. In general, this phenomenon becomes more obvious as the layers get deeper, since the number of multiplication operations grows along the way. Hence, in the initial training stages, it makes sense to use gradually lower learning rates, as the layers get father away from the input. Our hypothesis is theoretically supported by Theorem 1, and empirically validated in “Appendix B”. We conduct comprehensive experiments on 12 data sets from the computer vision (CIFAR-10 (Krizhevsky, 2009), CIFAR-100 (Krizhevsky, 2009), Tiny ImageNet (Russakovsky et al., 2015), ImageNet-1K (Russakovsky et al., 2015), Food-101 (Bossard et al. 2014), UTKFace (Zhang et al., 2017), PASCAL VOC (Everingham et al., 2010)), language (BoolQ (Clark et al., 2019), QNLI (Wang et al., 2019), RTE (Wang et al., 2019)) and audio (ESC-50 (Piczak, 2015), CREMA-D (Cao et al., 2014)) domains, considering various
+123
+
+
+International Journal of Computer Vision (2025) 133:291–314 293
+convolutional (ResNet-18 (He et al., 2016), Wide-ResNet-50 (Zagoruyko & Komodakis, 2016), DenseNet-121 (Huang et al., 2017), YOLOv5 (Jocher et al., 2022)), recurrent (LSTM (Hochreiter & Schmidhuber, 1997)) and transformer (CvT (Wu et al., 2021), BERT (Devlin et al., 2019), SepTr (Ristea et al., 2022)) architectures. We compare our approach with the conventional training regime and Curriculum by Smoothing (CBS) (Sinha et al., 2020), our closest competitor. Unlike CBS, our performance improvements over the standard training regime are consistent across all data sets and models. Furthermore, we significantly surpass CBS in terms of training time, since there is no additional cost over the conventional training regime for LeRaC, whereas CBS adds Gaussian smoothing layers. We also compare with several data-level and task-level curriculum learning methods (Dogan et al., 2020; Wang et al., 2023; Khan et al., 2024, 2023a, b), and show that our method scores best in most of the experiments. In summary, our contribution is threefold:
+• We propose a novel and simple model-level curriculum learning strategy that creates a curriculum by updating the weights of each neural layer with a different learning rate, considering higher learning rates for the low-level feature layers and lower learning rates for the high-level feature layers. • We empirically demonstrate the applicability to multiple domains (image, audio and text), the compatibility to several neural network architectures (convolutional neural networks, recurrent neural networks and transformers), and the time efficiency (no extra training time added) of LeRaC through a comprehensive set of experiments. • We demonstrate our underlying hypothesis stating that the level of noise increases from one neural layer to another, both theoretically and empirically.
+2 Related Work
+2.1 Curriculum Learning
+Curriculum learning was initially introduced by Bengio et al. (2009) as a training strategy that helps machine learning models to generalize better when the training examples are presented in the ascending order of their difficulty. Extensive surveys on curriculum learning methods, including the most recent advancements on the topic, were conducted by Soviany et al. (2022) and Wang et al. (2022). In the former survey, Soviany et al. (2022) emphasized that curriculum learning is not only applied at the data level, but also with respect to the other components involved in a machine learning approach, namely at the model level, the task level and the objective (loss) level. Regardless of the component on which
+curriculum learning is applied, the technique has demonstrated its effectiveness on a broad range of machine learning tasks, from computer vision (Bengio et al., 2009; Gui et al., 2017; Jiang et al., 2018; Shi & Ferrari, 2016; Soviany et al., 2021; Chen & Gupta, 2015; Sinha et al., 2020; Khan et al., 2024, 2023a, b) to natural language processing (Platanios et al., 2019; Kocmi & Bojar, 2017; Spitkovsky et al., 2009; Liu et al., 2018; Bengio et al., 2009) and audio processing (Ranjan & Hansen, 2018; Amodei et al., 2016). The main challenge for the methods that build the curriculum at the data level is measuring the difficulty of the data samples, which is required to order the samples from easy to hard. Most studies have addressed the problem with human input (Pentina et al., 2015; Jiménez-Sánchez et al., 2019; Wei et al., 2021) or metrics based on domain-specific heuristics. For instance, the text length (Kocmi & Bojar, 2017; Cirik et al., 2016; Tay et al., 2019; Zhang et al., 2021) and the word frequency (Bengio et al., 2009; Liu et al., 2018) have been employed in natural language processing. In computer vision, the samples containing fewer and larger objects have been considered to be easier in some works (Soviany et al., 2021; Shi & Ferrari, 2016). Other solutions employed difficulty estimators (Ionescu et al., 2016) or even the confidence level of the predictions made by the neural network (Gong et al., 2016; Hacohen & Weinshall, 2019) to approximate the complexity of the data samples. Other studies (Khan et al., 2024, 2023a, b) used the error of a previously trained model to estimate the difficulty of each sample. Such solutions have shown their utility in specific application domains. Nonetheless, measuring the difficulty remains problematic when implementing standard (data-level) curriculum learning strategies, at least in some application domains. Therefore, several alternatives have emerged over time, handling the drawback and improving the conventional curriculum learning approach. In (Kumar et al. 2010), the authors introduced self-paced learning to evaluate the learning progress when selecting training samples. The method was successfully employed in multiple settings (Kumar et al., 2010; Gong et al., 2019; Fan et al., 2017; Li et al., 2016; Zhou et al., 2018; Jiang et al., 2015; Ristea & Ionescu, 2021). Furthermore, some studies combined self-paced learning with the traditional pre-computed difficulty metrics (Jiang et al., 2015; Ma et al., 2017). An additional advancement related to self-paced learning is the approach called self-paced learning with diversity (Jiang et al., 2014). The authors demonstrated that enforcing a certain level of variety among the selected examples can improve the final performance. Another set of methods that bypass the need for predefined difficulty metrics is known as teacher-student curriculum learning (Zhang et al., 2019; Wu et al., 2018). In this setting, a teacher network learns a curriculum to supervise a student neural network. Closer to our work, a few methods (Karras et al., 2018; Sinha et al., 2020; Burduja, 2021) proposed to apply cur
+123
+
+
+294 International Journal of Computer Vision (2025) 133:291–314
+riculum learning at the model level, by gradually increasing the learning capacity (complexity) of the neural architecture. Such curriculum learning strategies do not need to know the difficulty of the data samples, thus having a great potential to be useful in a broad range of tasks. For example, Karras et al. (2018) proposed to gradually add layers to generative adversarial networks during training, while increasing the resolution of the input images at the same time. They are thus able to generate realistic high-resolution images. However, their approach is not applicable to every domain, since there is no notion of resolution for some input data types, e.g. text. Sinha et al. (2020) presented a strategy that blurs the activation maps of the convolutional layers using Gaussian kernel layers, reducing the noisy information caused by the network initialization. The blur level is progressively reduced to zero by decreasing the standard deviation of the Gaussian kernels. With this mechanism, they obtain a training procedure that allows the neural network to see simple information at the start of the process and more intricate details towards the end. Curriculum by Smoothing (CBS) (Sinha et al., 2020) was only shown to be useful for convolutional architectures applied in the image domain. Although we found that CBS is applicable to transformers by blurring the tokens, it is not necessarily applicable to any neural architecture, e.g. standard feed-forward neural networks. As an alternative to CBS, Burduja (2021) proposed to apply the same smoothing process on the input image instead of the activation maps. The method was applied with success in medical image alignment. However, this approach is not applicable to natural language input, as it is not clear how to apply the blurring operation on the input text. Different from Burduja (2021) and Karras et al. (2018), our approach is applicable to various domains, including but not limited to natural language processing, as demonstrated throughout our experiments. To the best of our knowledge, the only competing model-level curriculum method which is applicable to various domains is CBS (Sinha et al., 2020). Unlike CBS, LeRaC does not introduce new operations, such as smoothing with Gaussian kernels, during training. As such, our approach does not increase the training time with respect to the conventional training regime, as later shown in the experiments included in Sect. 4. To classify our approach as a curriculum learning framework, we consider the extreme case when the learning rate is set to zero for later layers, which is equivalent to freezing those layers. This clearly reduces the learning capacity of the model. If layers are unfrozen one by one, the capacity of the model grows. LeRaC can be seen as a soft version of the model-level curriculum method described above. We
+thus classify LeRaC as a model-level curriculum method. However, our method can also be seen as a curriculum learning strategy that simplifies the optimization (Pentina et al., 2015; Jiménez-Sánchez et al., 2019; Wei et al., 2021; Kocmi & Bojar, 2017; Cirik et al., 2016; Tay et al., 2019; Zhang et al., 2021; Bengio et al., 2009; Liu et al., 2018) in the early training stages by restricting the model updates (in a soft manner) to certain directions (corresponding to the weights of the earlier layers). Due to the imposed soft restrictions (lower learning rates for deeper layers), the optimization is easier at the beginning. As the training progresses, all directions become equally important, and the network is permitted to optimize the loss function in any direction. As the number of directions grows, the optimization task becomes more complex (it is harder to find the optimum). Hence, a relationship to curriculum learning can be discovered by noting that the complexity of the optimization increases over time, just as in curriculum learning. In summary, we consider that the simplicity of our approach comes with many important advantages: applicability to any domain and task, compatibility with any neural network architecture, and time efficiency (adds no extra training time). We support all these claims through the comprehensive experiments presented in Sect. 4.
+2.2 Learning Rate Schedulers
+There are some contributions (Singh et al., 2015; You et al., 2017) showing that using adaptive learning rates can lead to improved results. We explain how our method is different below. In (Singh et al., 2015), the main goal is increasing the learning rate of certain layers as necessary, to escape saddle points. Different from Singh et al. (2015), our strategy reduces the learning rates of deeper layers, introducing soft optimization restrictions in the initial training epochs. You et al. (2017) proposed to train models with very large batches using a learning rate for each layer, by scaling the learning rate with respect to the norms of the gradients. The goal of You et al. (2017) is to specifically learn models with large batch sizes, e.g. formed of 8K samples. Unlike You et al. (2017), we propose a more generic approach that can be applied to multiple architectures (convolutional, recurrent, transformer) under unrestricted training settings. Gotmare et al. (2019) point out that learning rate with warm-up and restarts is an effective strategy to improve stability of training neural models using large batches. Different from LeRaC, this approach does not employ a different learning rate for each layer. Moreover, the strategy restarts the learning rate at different moments during the entire training process, while LeRaC is applied only during the first few training epochs.
+123
+
+
+International Journal of Computer Vision (2025) 133:291–314 295
+2.3 Optimizers
+We consider Adam (Kingma & Ba, 2015) and related optimizers as orthogonal approaches that perform the optimization rather than setting the learning rate. Our approach, LeRaC, only aims to guide the optimization during the initial training iterations by reducing the relevance of optimizing deeper network layers. Most of the baseline architectures used in our experiments are already based on Adam or some of its variations, e.g. AdaMax, AdamW (Loshchilov & Hutter, 2019). LeRaC is applied in conjunction with these optimizers, showing improved performance over various architectures and application domains. This supports our claim that LeRaC is an orthogonal contribution to the family of Adam optimizers.
+3 Method
+Deep neural networks are commonly trained on a set of labeled data samples denoted as:
+S = {(xi , yi )|xi ∈ X , yi ∈ Y , ∀i ∈ {1, 2, . . . , m}}, (1)
+where m is the number of examples, xi is a data sample and yi is the associated label. The training process of a neural network f with parameters θ consists of minimizing some objective (loss) function L that quantifies the differences between the ground-truth labels and the predictions of the model f :
+mθin
+1
+m
+m ∑
+i =1
+L (yi , f (xi , θ )) . (2)
+The optimization is generally performed by some variant of Stochastic Gradient Descent (SGD), where the gradients are back-propagated from the neural layers closer to the output towards the neural layers closer to input through the chain rule. Let f1, f2, . . . , fn and θ1, θ2, . . . , θn denote the neural layers and the corresponding weights of the model f , such that the weights θ j belong to the layer f j , ∀ j ∈ {1, 2, . . . , n}. The output of the neural network for some training data sample xi ∈ X is formally computed as follows:
+yˆi = f (xi , θ ) = fn(. . . f2 ( f1 (xi , θ1) , θ2) . . . , θn). (3)
+To optimize the model via SGD, the weights are updated as follows:
+θ (t+1)
+j = θ (t)
+j − η(t) · ∂L
+∂θ (t)
+j
+, ∀ j ∈ {1, 2, . . . , n}, (4)
+where t is the index of the current training iteration, η(t) > 0 is the learning rate at iteration t, and the gradient of L
+with respect to θ (t)
+j is computed via the chain rule. Before
+starting the training process, the weights θ (0)
+j are commonly initialized with random values, e.g. using Glorot initialization (Glorot & Bengio, 2010). Sinha et al. (2020) suggested that the random initialization of the weights produces a large amount of noise in the information propagated through the neural model during the early training iterations, which can negatively impact the learning process. Due to the feed-forward processing that involves several multiplication operations, we argue that the noise level grows with each neural layer, from f j to f j+1. This statement is confirmed by the following theorem:
+Theorem 1 Let s1 = u1 +z1 and s2 = u2 +z2 be two signals, where u1 and u2 are the clean components, and z1 and z2 are the noise components. The signal-to-noise ratio of the product between the two signals is lower than the signal-tonoise ratios of the two signals, i.e.:
+SNR(s1 · s2) ≤ SNR(si ), ∀i ∈ {1, 2}. (5)
+Proof The proof is given in “Appendix A”.
+The same issue can occur if the weights are pre-trained on a distinct task, where the misalignment of the weights with a new task is likely higher for the high-level (specialized) feature layers. To alleviate this problem, we propose to introduce a curriculum learning strategy that assigns a different learning rate η j to each layer f j , as follows:
+θ (t+1)
+j = θ (t)
+j − η(t)
+j · ∂L
+∂θ (t)
+j
+, ∀ j ∈ {1, 2, . . . , n}, (6)
+such that:
+η(0) ≥ η(0)
+1 ≥ η(0)
+2 ≥ · · · ≥ η(n0), (7)
+η(k) = η(k)
+1 = η(k)
+2 = · · · = η(nk), (8)
+where η(0)
+j are the initial learning rates and η(k)
+j are the updated learning rates at iteration k. The condition formu
+lated in Eq. (7) indicates that the initial learning rate η(0)
+j of a neural layer f j gets lower as the level of the respective neural layer becomes higher (farther away from the input). With each training iteration t ≤ k, the learning rates are gradually increased, until they become equal, according to Eq. (8). Thus, our curriculum learning strategy is only applied during the early training iterations, where the noise caused by the misfit (randomly initialized or pre-trained) weights is most prevalent. Hence, k is a hyperparameter of LeRaC that is usually adjusted such that k T , where T is the total number of training iterations.
+123
+
+
+296 International Journal of Computer Vision (2025) 133:291–314
+At this point, various schedulers can be used to increase each learning rate η j from iteration 0 to iteration k. We empirically observed that an exponential scheduler is a better option than linear or logarithmic schedulers. We thus propose to employ the exponential scheduler, which is based on the following rule:
+η(l)
+j = η(0)
+j ·c
+l
+k·
+(
+logc η(k)
+j −logc η(0)
+j
+)
+, ∀l ∈ {0, 1, . . . , k}. (9)
+We set c = 10 in Eq. (9) across all our experiments. This is because learning rates are usually expressed as a power of c =
+10, e.g. 10−4. If we start with a learning rate of η(0)
+j = 10−8
+for some layer j and we want to increase it to η(k)
+j = 10−4 during the first 5 epochs (k = 4), the intermediate learning
+rates generated via Eq. (9) are η(1)
+j = 10−7, η(2)
+j = 10−6, η(3)
+j = 10−5 and η(4)
+j = 10−4. We thus believe it is more intuitive to understand what happens when setting c = 10 in Eq. (9), as opposed to using some tuned value for c. To this end, we refrain from tuning c and fix it to c = 10. In practice, we obtain optimal results by initializing the
+lowest learning rate η(n0) with a value that is around five or
+six orders of magnitude lower than η(0), while the highest
+learning rate η(0)
+1 is always equal to η(0). Apart from such general practical notes, the exact LeRaC configuration for each neural architecture is established by tuning its two hyperpa
+rameters (k, η(n0)) on the available validation sets. We underline that the output feature maps of a layer j are
+affected (i) by the misfit weights θ (0)
+j of the respective layer, and (ii) by the input feature maps, which are in turn affected
+by the misfit weights of the previous layers θ (0)
+1 , . . . , θ (0)
+j −1 . Hence, the noise affecting the feature maps increases with each layer processing the feature maps, being multiplied with the weights from each layer along the way. Our curriculum learning strategy imposes the training of the earlier layers at a faster pace, transforming the noisy weights into discriminative patterns. As noise from the earlier layer weights is eliminated, we train the later layers at faster and faster paces, until all learning rates become equal at epoch k. From a technical point of view, we note that our approach can also be regarded as a way to guide the optimization, which we see as an alternative to loss function smoothing. The link between curriculum learning and loss smoothing is discussed by Soviany et al. (2022), who suggest that curriculum learning strategies induce a smoothing of the loss function, where the smoothing is higher during the early training iterations (simplifying the optimization) and lower to non-existent during the late training iterations (restoring the complexity of the loss function). LeRaC is aimed at producing a similar effect, but in a softer manner by dampening the importance of optimizing the weights of high-level layers in the early training iterations. Additionally, we empirically observe (see results in “Appendix B”) that LeRaC tends to balance the training
+pace of low-level and high-level features, while the conventional regime seems to update the high-level layers at a faster pace. This could provide an additional intuitive explanation of why our method works better.
+4 Experiments
+4.1 Data Sets
+We perform experiments on 12 benchmarks: CIFAR-10 (Krizhevsky, 2009), CIFAR-100 (Krizhevsky, 2009), Tiny ImageNet (Russakovsky et al., 2015), ImageNet-1K (Russakovsky et al., 2015), Food-101 (Bossard et al., 2014), UTKFace (Zhang et al., 2017), PASCAL VOC 2007+2012 (Everingham et al., 2010), BoolQ (Clark et al., 2019), QNLI (Wang et al., 2019), RTE (Wang et al., 2019), CREMA-D (Cao et al., 2014), and ESC-50 (Piczak, 2015). We adopt the official data splits for the 12 benchmarks considered in our experiments. When a validation set is not available, we keep 10% of the training data for validation. CIFAR-10. CIFAR-10 (Krizhevsky, 2009) is a popular data set for object recognition in images. It consists of 60,000 color images with a resolution of 32 × 32 pixels. An image depicts one of 10 object classes, each class having 6000 examples. We use the official data split with a training set of 50,000 images and a test set of 10,000 images. CIFAR-100. The CIFAR-100 (Krizhevsky, 2009) data set is similar to CIFAR-10, except that it has 100 classes with 600 images per class. There are 50,000 training images and 10,000 test images. Tiny ImageNet. Tiny ImageNet is a subset of ImageNet-1K (Russakovsky et al., 2015) which provides 100,000 training images, 25,000 validation images and 25,000 test images representing objects from 200 different classes. The size of each image is 64 × 64 pixels. ImageNet. ImageNet-1K (Russakovsky et al., 2015) is the most popular bemchmark in computer vision, comprising about 1.2 million images from 1000 object categories. We set the resolution of all images to 224 × 224 pixels. Food-101. Food-101 Bossard et al. (2014) is a data set that contains images from 101 food categories. For each category, there are 750 training images and 250 test images. Thus, the total number of images is 101,000. We resize all images to 224 × 224 pixels. The test set is manually cleaned, while the training set is purposely left uncurated, being affected by labeling noise. This makes Food-101 suitable for testing the robustness of models to labeling noise. UTKFace. The UTKFace data set (Zhang et al., 2017) contains face images representing various gender, age and ethnic groups. It consists of 23,709 images of 200 × 200 pixels. The data set is divided into 16,597 training images, 3556 validation images, and 3556 test images. Each image is anno
+123
+
+
+International Journal of Computer Vision (2025) 133:291–314 297
+tated with the corresponding age and gender label, which makes UTKFace suitable for evaluating models in a multitask learning setup. PASCAL VOC 2007+2012. One of the most popular benchmarks for object detection is PASCAL VOC (Everingham et al., 2010). The data set consists of 21,503 images which are annotated with bounding boxes for 20 object categories. The official split has 16,551 training images and 4952 test images. BoolQ. BoolQ (Clark et al., 2019) is a question answering data set for yes/no questions containing 15,942 examples. The questions are naturally occurring, being generated in unprompted and unconstrained settings. Each example is a triplet of the form: {question, passage, answer}. We use the data split provided in the SuperGLUE benchmark (Wang et al., 2019), containing 9427 examples for training, 3270 for validation and 3245 for testing. QNLI. The QNLI (Question-answering Natural Language Inference) data set (Wang et al., 2019) is a natural language inference benchmark automatically derived from SQuAD (Rajpurkar et al., 2016). The data set contains {question, sentence} pairs and the task is to determine whether the context sentence contains the answer to the question. The data set is constructed on top of Wikipedia documents, each document being accompanied, on average, by 4 questions. We consider the data split provided in the GLUE benchmark (Wang et al., 2019), which comprises 104,743 examples for training, 5463 for validation and 5463 for testing. RTE. Recognizing Textual Entailment (RTE) (Wang et al., 2019) is a natural language inference data set containing pairs of sentences with the target label indicating if the meaning of one sentence can be inferred from the other. The training subset includes 2490 samples, the validation set 277 samples, and the test set 3000 samples. CREMA-D. The CREMA-D multi-modal database (Cao et al., 2014) is formed of 7442 videos of 91 actors (48 male and 43 female) of different ethnic groups. The actors perform various emotions while uttering 12 particular sentences that evoke one of the 6 emotion categories: anger, disgust, fear, happy, neutral, and sad. Following previous work (Ristea & Ionescu, 2021), we conduct experiments only on the audio modality, dividing the set of audio samples into 70% for training, 15% for validation and 15% for testing. ESC-50. The ESC-50 (Piczak, 2015) data set is a collection of 2000 samples of 5 s each, comprising 50 classes of various common sound events. Samples are recorded at a 44.1 kHz sampling frequency, with a single channel. In our evaluation, we employ the 5-fold cross-validation procedure, as described in related works (Piczak, 2015; Ristea et al., 2022).
+4.2 Experimental Setup
+Architectures. To demonstrate the compatibility of LeRaC with multiple neural architectures, we select several con
+volutional, recurrent and transformer models. As representative convolutional neural networks (CNNs), we opt for ResNet-18 (He et al., 2016), Wide-ResNet-50 (Zagoruyko & Komodakis, 2016) and DenseNet-121 (Huang et al., 2017). For the object detection experiments on PASCAL VOC, we use the YOLOv5 (Jocher et al., 2022) model based on the CSPDarknet53 (Wang et al., 2020) backbone, which is pretrained on the MS COCO data set (Lin et al., 2014). As representative transformers, we consider CvT-13 (Wu et al., 2021), BERTuncased−large (Devlin et al., 2019) and SepTr (Ristea et al., 2022). For CvT, we consider both pre-trained and randomly initialized versions. We use an uncased large pre-trained version of BERT. As Ristea et al. (2022), we train SepTr from scratch. In addition, we employ a long shortterm memory (LSTM) network (Hochreiter & Schmidhuber, 1997) to represent recurrent neural networks (RNNs). The recurrent neural network contains two LSTM layers, each having a hidden dimension of 256 components. These layers are preceded by one embedding layer with the embedding size set to 128 elements. The output of the last recurrent layer is passed to a classifier composed of two fully connected layers. The LSTM is activated by rectified linear units (ReLU). We apply the aforementioned models on distinct input data types, considering the intended application domain of each model. Hence, ResNet-18, Wide-ResNet-50, CvT and YOLOv5 are applied on images, BERT and LSTM are applied on text, and SepTr and DenseNet-121 are applied on audio.
+Multi-task architectures. To determine the impact of LeRaC on multi-task learning models, we conduct experiments on the UTKFace data set, where the face images are annotated with gender and age labels. We consider two models for the multi-task learning setup, namely ResNet-18 and CvT-13. Each model is jointly trained on the two tasks (gender prediction and age estimation). To each model, we attach two heads, one for gender classification and one for age estimation, respectively. The classification head is trained using the cross-entropy loss with respect to the gender label, while the regression head uses the mean squared error with respect to the age label. The models are trained using a joint objective defined as follows:
+LMTL = 1
+m
+m ∑
+i =1
+LCE
+(yg
+i , yˆg
+i
+)+λ·LMSE
+(ya
+i , yˆa
+i
+) , (10)
+where yg
+i and ya
+i are the ground-truth gender and age labels,
+yˆ g
+i and yˆa
+i are the predicted gender and age labels, λ ∈ R+ is a weight factor, and LCE is the cross-entropy loss for the gender prediction task, defined as:
+LCE
+(yg
+i , yˆg
+i
+)=− (yg
+i log(yˆg
+i )+(1− yg
+i ) log(1 − yˆg
+i )) , (11)
+123
+
+
+298 International Journal of Computer Vision (2025) 133:291–314
+Table 1 Optimal hyperparameter settings for the various neural architectures used in our experiments
+Model Optimizer Mini-batch #Epochs η(0) CBS LeRaC
+σ d u k η(0)
+1 –η(n0)
+ResNet-18 SGD 64 100–200 10−1 1 0.9 2–5 5–7 10−1–10−8
+Wide-ResNet-50 SGD 64 100–200 10−1 1 0.9 2–5 5–7 10−1–10−8
+CvT-13 AdaMax 64–128 150–200 2 × 10−3 1 0.9 2–5 2–5 2 × 10−3–2 × 10−8
+CvT-13 pre-trained AdaMax 64–128 25 5 × 10−4 1 0.9 2–5 3–6 5 × 10−4–5 × 10−10
+YOLOv5pre-trained SGD 16 100 10−2 1 0.9 2 3 10−2–10−5
+BERTlarge-uncased AdaMax 10 7–25 5 × 10−5 1 0.9 1 3 5 × 10−5–5 × 10−8
+LSTM AdamW 256–512 25–70 10−3 1 0.9 2 3–4 10−3–10−7
+SepTR Adam 2 50 10−4 0.8 0.9 1–3 2–5 10−4–10−8
+DenseNet-121 Adam 64 50 10−4 0.8 0.9 1–3 2–5 10−4–5 × 10−8
+Notice that η(0)
+1 is always equal to η(0), being set without tuning. This means that LeRaC has only two tunable hyperparameters, k and η(n0), while CBS (Sinha et al., 2020) has three
+and LMSE is the mean squared error for the age estimation task, defined as:
+LMSE
+(ya
+i , yˆa
+i
+) = (ya
+i − yˆa
+i )2. (12)
+The factor λ ensures the two tasks are equally important by weighting LMSE to have approximately the same range of values as LCE. As such, we set λ = 10. Baselines. We compare LeRaC with two baselines: the conventional training regime (which uses early stopping, reduces the learning rate on plateau, and employs linear warm-up and cosine annealing when required) and the state-of-the-art Curriculum by Smoothing (Sinha et al., 2020). For CBS, we use the official code released by Sinha et al. (2020) at https:// github.com/pairlab/CBS, to ensure the reproducibility of their method in our experimental settings, which include a more diverse selection of input data types and neural architectures. In addition, we compare with several data-level and task-level curriculum learning methods (Dogan et al., 2020; Wang et al., 2023; Khan et al., 2023a, b, 2024) on CIFAR-10 and CIFAR-100. To apply CBS to non-convolutional architectures, we use 1D convolutional layers based on Gaussian filters with a receptive field of 3. For transformers, we integrate a 1D Gaussian layer before each transformer block, so the smoothing is applied on the sequence of tokens. Similarly, for recurrent neural networks, before each LSTM layer, we process the sequence of tokens with 1D convolutional layers based on Gaussian filters. For both transformers and RNNs, we anneal, during training, the standard deviation of the Gaussian filters to enhance the information propagated through the network. This approach mirrors the implementation of CBS for convolutional neural networks. Hyperparameter tuning. We tune all hyperparameters on the validation set of each benchmark. In Table 1, we present
+the optimal hyperparameters chosen for each architecture. In addition to the standard parameters of the training process, we report the parameters that are specific for the CBS (Sinha et al., 2020) and LeRaC strategies. In the case of CBS, σ denotes the standard deviation of the Gaussian kernel, d is the decay rate for σ , and u is the decay step. Regarding the parameters of LeRaC, k represents the number of iterations
+used in Eq. (9), and η(0)
+1 and η(n0) are the initial learning rates for the first and last layers of the architecture, respectively.
+We set η(0)
+1 = η(0) and c = 10 in all experiments, with
+out tuning. In addition, the intermediate learning rates η(0)
+j, ∀ j ∈ {2, 3, . . . , n−1}, are automatically set to be equally dis
+tanced between η(0)
+1 and η(n0). Moreover, η(k)
+j = η(0), i.e. the initial learning rates of LeRaC converge to the original learning rate set for the conventional training regime. All models are trained with early stopping and the learning rate is reduced by a factor of 10 when the loss reaches a plateau. We use linear warm-up with cosine annealing, whenever it is found useful for models based on conventional or CBS training. The learning rate warm-up is switched off for LeRaC to avoid unwanted interactions with our training strategy. Except for the pre-trained models, the weights of all models are initialized with Glorot initialization (Glorot & Bengio, 2010). We underline that some parameters are the same across all data sets, while others need to be established per data set. For example, the parameter u of CBS and the parameter k of LeRaC are validated on each data set. As such, for the ResNet-18 model, the parameter u of CBS takes one value on each data set (CIFAR-10, CIFAR-100, Tiny ImageNet, ImageNet, Food-101, UTKFace), but the values of u on all five data sets can range between 2 and 5. Similarly, the parameter k of LeRaC takes one value per data set, with the range of values being 5–7. In Table 1, we aggregate the optimal parameters of each model for all data sets. This explains why some hyperparameters are specified in terms of ranges.
+123
+
+
+International Journal of Computer Vision (2025) 133:291–314 299
+Setting the initial learning rates. We should emphasize that
+the different learning rates η(0)
+j , ∀ j ∈ {1, 2, . . . , n}, are not optimized nor tuned during training. Instead, we set the initial
+learning rates η(0)
+j through validation, such that η(n0) is around
+five or six orders of magnitude lower than η(0), and η(0)
+1=
+η(0). After initialization, we apply our exponential scheduler, until all learning rates become equal at iteration k. In addition, we would like to underline that the difference δ between the initial learning rates of consecutive layers is automatically
+set based on the range given by η(0)
+1 and η(n0). For example,
+let us consider a network with 5 layers. If we choose η(0)
+1=
+10−1 and η(0)
+5 = 10−2, then the intermediate initial learning
+rates are automatically set to η(0)
+2 = 10−1.25, η(0)
+3 = 10−1.5,
+η(0)
+4 = 10−1.75, i.e. δ is used in the exponent and is equal to −0.25 in this case. To obtain the intermediate learning rates according to this example, we actually apply the exponential scheduler defined in Eq. (9). This reduces the number of tunable hyperparameters from n (the number layers) to two,
+namely η(0)
+1 and η(n0). We go even further, setting η(0)
+1 = η(0)
+without tuning, in all our experiments. Hence, tuning is only performed for the initial learning rate of the last layer, namely
+η(n0). Although tuning all η(0)
+j , ∀ j ∈ {1, 2, . . . , n}, might lead to better results, we refrain from meticulously tuning every possible value to avoid overfitting in hyperparameter space. Number of hyperparameters. We further emphasize that LeRaC adds only two additional tunable hyperparameters with respect to the conventional training regime. These are
+the lowest learning rate η(n0) and the number of iterations k to employ LeRaC. We reduce the number of hyperparameters that require tuning by using a fixed rule to adjust the intermediate learning rates, e.g. by employing an exponential scheduler, or by fixing some hyperparameters, e.g. c = 10. In contrast, CBS (Sinha et al., 2020) has three additional hyperparameters, thus having one extra hyperparameter compared with LeRaC. Furthermore, we note that data-level curriculum methods also introduce additional hyperparameters. Even a simple method that splits the examples into easy-to-hard batches that are gradually added to the training set requires at least two hyperparameters: the number of batches, and the number of iterations before introducing a new training batch. We thus believe that, in terms of the number of additional hyperparameters, LeRaC is comparable to CBS and other curriculum learning strategies. We emphasize that the same happens if we look at new optimizers, e.g. Adam (Kingma & Ba, 2015) adds three additional hyperparameters compared with SGD.
+Avoiding too large learning rates. In principle, a larger learning rate implies a larger update. However, if the learning rate is too high, the model can actually diverge. This is because the gradient describes the loss function in the vicinity of the current location, providing no guarantee for the value of the loss outside this vicinity. Our implementation takes this
+aspect into account. Instead of increasing the learning rate for earlier layers, we reduce the learning rate for the deeper layer to avoid divergence. More precisely, we set the learning rate
+for the first layer η(0)
+1 to the original learning rate η(0) and the other initial learning rates are gradually reduced with each layer. During training, the lower learning rates are gradually increased, until epoch k. Hence, LeRaC actually slows down the learning for deeper layers, until the earlier layers have learned representative features. Evaluation. For the classification tasks, we evaluate all models in terms of the accuracy rate. For the regression task (age estimation), we use the mean absolute error. For the object detection task, we employ the mean Average Precision (mAP) at an intersection over union (IoU) threshold of 0.5. We repeat the training process of each model for 5 times and report the average performance and the standard deviation.
+4.3 Domain-Specific Preprocessing
+Image preprocessing. For the image classification experiments, we apply the same data preprocessing approach as Sinha et al. (2020). Hence, we normalize the images and maintain their original resolution, 32 × 32 pixels for CIFAR10 and CIFAR-100, 64 × 64 pixels for Tiny ImageNet, 224 × 224 pixels for ImageNet and Food-101, and 200 × 200 pixels for UTKFace. Similar to Sinha et al. (2020), we do not employ data augmentation. Text preprocessing. For the text classification experiments with BERT, we lowercase all words and add the classification token ([CLS]) at the start of the input sequence. We add the separator token ([SEP]) to delimit sentences. For the LSTM network, we lowercase all words and replace them with indexes from vocabularies constructed from the training set. The input sequence length is limited to 512 tokens for BERT and 200 tokens for LSTM. Speech preprocessing. The speech preprocessing steps are carried out following Ristea et al. (2022). We thus transform each audio sample into a time-frequency matrix by computing the discrete Short Time Fourier Transform (STFT) with Nx FFT points, using a Hamming window of length L and a hop size R. For CREMA-D, we first standardize all audio clips to a fixed dimension of 4 seconds by padding or clipping the samples. Then, we apply the STFT with Nx = 1024, R = 64 and a window size of L = 512. For ESC-50, we keep the same values for Nx and L, but we increase the hop size to R = 128. Next, for each STFT, we compute the square root of the magnitude and map the values to 128 Mel bins. The result is converted to a logarithmic scale and normalized to the interval [0, 1]. Furthermore, in all our speech classification experiments, we use the following data augmentation methods: noise perturbation, time shifting, speed perturbation, mix-up and SpecAugment (Park et al., 2019).
+123
+
+
+300 International Journal of Computer Vision (2025) 133:291–314
+Table 2 Average accuracy rates (in %) over 5 runs on CIFAR-10, CIFAR-100 and Tiny ImageNet for various neural models based on different training regimes: learning rate decay, linear warm-up, cosine annealing, constant learning rate, and LeRaC
+Model Training Regime CIFAR-10 CIFAR-100 Tiny ImageNet
+ResNet-18 Learning rate decay 89.20 ± 0.43 71.70 ± 0.06 57.41 ± 0.05
+Constant learning rate 72.30 ± 1.08 62.06 ± 0.41 49.42 ± 0.37
+LeRaC (ours) 89.56 ± 0.16 72.72 ± 0.12 57.86 ± 0.20
+Wide-ResNet-50 Learning rate decay 91.22 ± 0.24 68.14 ± 0.16 55.97 ± 0.30
+Constant learning rate 86.62 ± 0.27 61.67 ± 0.12 41.87 ± 0.61
+LeRaC (ours) 91.58 ± 0.16 69.38 ± 0.26 56.48 ± 0.60
+CvT-13 Linear warmup + Cosine annealing 71.84 ± 0.37 41.87 ± 0.16 33.38 ± 0.27
+Constant learning rate 71.75 ± 0.07 41.62 ± 0.20 30.68 ± 0.10
+LeRaC (ours) 72.90 ± 0.28 43.46 ± 0.18 33.95 ± 0.28
+CvT-13pre-trained Cosine annealing 93.06 ± 0.06 77.76 ± 0.38 70.91 ± 0.24
+Constant learning rate 93.56 ± 0.05 77.80 ± 0.16 70.71 ± 0.35
+LeRaC (ours) 94.15 ± 0.03 78.93 ± 0.05 71.34 ± 0.08
+The accuracy of the best training regime in each experiment is highlighted in bold
+Table 3 Average accuracy rates (in %) over 5 runs on CIFAR-10, CIFAR-100, Tiny ImageNet, ImageNet and Food-101 for various neural models based on different training regimes: conventional, CBS (Sinha et al., 2020) and LeRaC
+Model Training Regime CIFAR-10 CIFAR-100 Tiny ImageNet ImageNet Food-101
+ResNet-18 Conventional 89.20 ± 0.43 71.70 ± 0.06 57.41 ± 0.05 68.44 ± 0.65 68.31 ± 0.09
+CBS 89.53 ± 0.22 72.80 ± 0.18 55.49 ± 0.20 71.02 ± 0.80 65.09 ± 0.47
+LeRaC (ours) 89.56 ± 0.16 72.72 ± 0.12 57.86 ± 0.20 71.96 ± 0.72 69.57 ± 0.07
+Wide-ResNet-50 Conventional 91.22 ± 0.24 68.14 ± 0.16 55.97 ± 0.30 70.25 ± 0.82 67.54 ± 0.66
+CBS 89.05 ± 1.00 65.73 ± 0.36 48.30 ± 1.53 72.10 ± 0.71 58.95 ± 1.80
+LeRaC (ours) 91.58 ± 0.16 69.38 ± 0.26 56.48 ± 0.60 72.49 ± 0.64 67.96 ± 0.35
+CvT-13 Conventional 71.84 ± 0.37 41.87 ± 0.16 33.38 ± 0.27 81.33 ± 0.75 39.17 ± 1.26
+CBS 72.64 ± 0.29 44.48 ± 0.40 33.56 ± 0.36 80.42 ± 0.58 38.63 ± 0.49
+LeRaC (ours) 72.90 ± 0.28 43.46 ± 0.18 33.95 ± 0.28 82.19 ± 0.68 41.42 ± 0.72
+CvT-13pre-trained Conventional 93.56 ± 0.05 77.80 ± 0.16 70.71 ± 0.35 – 85.22 ± 0.11
+CBS 85.85 ± 0.15 62.35 ± 0.48 68.41 ± 0.13 – 81.41 ± 0.42
+LeRaC (ours) 94.15 ± 0.03 78.93 ± 0.05 71.34 ± 0.08 – 86.05 ± 0.08
+The accuracy of the best training regime in each experiment is highlighted in bold
+Table 4 Multi-task learning results for ResNet-18 and CvT-13 (pre-trained) on UTKFace, using three different training regimes: conventional, CBS (Sinha et al., 2020) and LeRaC
+Model Training Regime Gender accuracy ↑ Age MAE ↓
+ResNet-18 Conventional 88.63 ± 0.12 6.75 ± 0.22
+CBS 89.23 ± 0.11 6.24 ± 0.22
+LeRaC (ours) 90.07 ± 0.12 5.97 ± 0.20
+CvT-13pre-trained Conventional 92.57 ± 0.15 4.78 ± 0.18
+CBS 92.61 ± 0.14 4.61 ± 0.17
+LeRaC (ours) 93.19 ± 0.14 4.06 ± 0.15
+We report the accuracy (in %) for gender prediction and the mean absolute error (MAE) for age estimation. The ↓ and ↑ symbols indicate when lower or upper values are better, respectively. The best scores are highlighted in bold
+Table 5 Object detection results of YOLOv5 on PASCAL VOC, using three different training regimes: conventional, CBS (Sinha et al., 2020) and LeRaC
+Training Regime Conventional CBS LeRaC (ours)
+mAP 0.832 ± 0.006 0.829 ± 0.003 0.846±0.004
+The best mAP is highlighted in bold
+123
+
+
+International Journal of Computer Vision (2025) 133:291–314 301
+Table 6 Left side: average accuracy rates (in %) over 5 runs on BoolQ, RTE and QNLI for BERT and LSTM
+Training Text Audio Regime Model BoolQ RTE QNLI Model CREMA-D ESC-50
+Conventional BERTlarge 74.12 ± 0.32 74.48 ± 1.36 92.13 ± 0.08 70.47 ± 0.67 91.13 ± 0.33
+CBS 74.37 ± 1.11 74.97 ± 1.96 91.47 ± 0.22 SepTr 69.98 ± 0.71 91.15 ± 0.41
+LeRaC (ours) 75.55 ± 0.66 75.81 ± 0.29 92.45 ± 0.13 70.95 ± 0.56 91.58 ± 0.28
+Conventional LSTM 64.40 ± 1.37 54.12 ± 1.60 59.42 ± 0.36 67.21 ± 0.12 88.91 ± 0.11
+CBS 64.75 ± 1.54 54.03 ± 0.45 59.89 ± 0.38 DenseNet-121 68.16 ± 0.19 88.76 ± 0.17
+LeRaC (ours) 65.80 ± 0.33 55.71 ± 1.04 59.98 ± 0.34 68.99 ± 0.08 90.02 ± 0.10
+Right side: average accuracy rates (in %) over 5 runs on CREMA-D and ESC-50 for SepTr and DenseNet-121. In both domains (text and audio), the comparison is between different training regimes: conventional, CBS (Sinha et al., 2020) and LeRaC. The accuracy of the best training regime in each experiment is highlighted in bold
+0 0.5 1 1.5 2 2.5 3
+0
+10
+20
+30
+40
+50
+60
+(a) ResNet-18 on Tiny ImageNet.
+0 2 4 6 8 10
+0
+10
+20
+30
+40
+50
+60
+(b) Wide-ResNet-50 on Tiny ImageNet.
+0 0.2 0.4 0.6 0.8 1 1.2
+55
+60
+65
+70
+75
+80
+(c) BERT on BoolQ.
+0 5 10 15 20 25 30
+20
+30
+40
+50
+60
+70
+80
+(d) SepTr on CREMA-D.
+Fig. 3 Validation accuracy (on the y-axis) versus training time (on the x-axis) for four distinct architectures. The number of training epochs is the same for both LeRaC and CBS, the observable time difference being caused by the overhead of CBS due to the Gaussian kernel layers
+123
+
+
+302 International Journal of Computer Vision (2025) 133:291–314
+4.4 Preliminary Results
+We present preliminary experiments to show the effect of various learning rate schedulers for different architectures. For each architecture, we compare the constant learning rate scheduler with an adaptive learning rate scheduler. The aim is to find the best scheduler for the conventional training regime, which is used as baseline in the subsequent experiments. Table 2 showcases the preliminary results on CIFAR-10, CIFAR-100 and Tiny ImageNet. We compare the outcomes of the adaptive and constant learning rate schedulers with those of LeRaC. In most cases, the adaptive scheduler yields better results than the constant learning rate. Using a constant learning rate seems to work only for the pre-trained CvT-13. Notably, the analysis also reveals that LeRaC consistently outperforms the other baseline schedulers, achieving the highest accuracy rates across all data sets. We emphasize that, for the subsequent experiments, the conventional regime is always represented by the best scheduler among the following options: learning rate decay, learning rate warm-up, cosine annealing, or combinations of the aforementioned options.
+4.5 Main Results
+Image classification. In Table 3, we present the image classification results on CIFAR-10, CIFAR-100, Tiny ImageNet, ImageNet and Food-101. Since CvT-13 is pre-trained on ImageNet, it does not make sense to fine-tune it on ImageNet. Thus, the respective results are not reported. On the one hand, there are two scenarios (ResNet-18 on CIFAR100, and CvT-13 on CIFAR-100) in which CBS provides the largest improvements over the conventional regime, surpassing LeRaC in the respective cases. On the other hand, there are more than 10 scenarios where CBS degrades the accuracy with respect to the standard training regime. This shows that the improvements attained by CBS are inconsistent across models and data sets. Unlike CBS, our strategy surpasses the baseline regime in all 19 cases, thus being more consistent. In 8 of these cases, the accuracy gains of LeRaC are higher than 1%. Moreover, LeRaC outperforms CBS in 17 out of 19 cases. We thus consider that LeRaC can be regarded as a better choice than CBS, bringing consistent performance gains. Multi-task learning. In Table 4, we include the multi-task learning results on the UTKFace data set (Zhang et al., 2017). We evaluate the multi-task ResNet-18 and CvT-13pre-trained models under various training regimes, reporting the accuracy rates for gender prediction, and the mean absolute errors for age estimation, respectively. LeRaC achieves the best scores in each and every case, surpassing the other training regimes in the multi-task learning setup. Moreover, its results are statistically better with respect to both competing
+regimes. In contrast, the CBS regime remains in the statistical margin of the conventional regime for the pre-trained CvT-13 network. Object detection. In Table 5, we include the object detection results of YOLOv5 (Jocher et al., 2022) based on different training regimes on PASCAL VOC 2007+2012 (Everingham et al., 2010). LeRaC exhibits a superior mAP score, significantly surpassing the other training regimes. In contrast, CBS leads to suboptimal performance, hinting towards the inconsistency of CBS across different evaluation scenarios. Text classification. In Table 6 (left side), we report the text classification results on BoolQ, RTE and QNLI. Here, there are two cases (BERT on QNLI and LSTM on RTE) where CBS leads to performance drops compared with the conventional training regime. In all other cases, the improvements of CBS are below 0.6%. Just as in the image classification experiments, LeRaC brings accuracy gains for each and every model and data set. In four out of six scenarios, the accuracy gains yielded by LeRaC are higher than 1.3%. Once again, LeRaC proves to be the most consistent regime, generally surpassing CBS by significant margins. Speech classification. In Table 6 (right side), we present the results obtained on the audio data sets, namely CREMAD and ESC-50. We observe that the CBS strategy obtains lower results compared with the baseline in two cases (SepTr on CREMA-D and DenseNet-121 on ESC-50), while our method provides superior results for each and every case. By applying LeRaC on SepTr, we set a new state-of-the-art accuracy level (70.95%) on the CREMA-D audio modality, surpassing the previous state-of-the-art value attained by Ristea et al. (2022) with SepTr alone. When applied on DenseNet-121, LeRaC brings performance improvements higher than 1%, the highest improvement (1.78%) over the baseline being attained on CREMA-D. Significance testing. To determine if the reported accuracy gains observed for LeRaC with respect to the baseline are significant, we apply McNemar/Cochran Q significance testing (Dietterich, 1998) to the results reported in Tables 3, 4, 5 and 6 on all 12 data sets. In 27 of 34 cases, we found that our results are significantly better than the corresponding baseline, at a p-value of 0.001. This confirms that our gains are statistically significant in the majority of cases. Training time comparison. For a particular model and data set, all training regimes are executed for the same number of epochs, for a fair comparison. However, the CBS strategy adds the smoothing operation at multiple levels inside the architecture, which increases the training time. To this end, we compare the training time (in hours) versus the validation error of CBS and LeRaC. For this experiment, we selected four neural models and illustrate the evolution of the validation accuracy over time in Fig. 3. We underline that LeRaC introduces faster convergence times, being around 7
+123
+
+
+International Journal of Computer Vision (2025) 133:291–314 303
+Table 7 Average accuracy rates (in %) over 5 runs for ResNet-18, Wide-ResNet-50 and CvT-13 (pre-trained) on CIFAR-10 and CIFAR-100 using different training regimes: conventional, CBS (Sinha et al., 2020), LSCL (Dogan et al., 2020), EfficientTrain (Wang et al., 2023), Self-taught (Khan et al., 2024), CLIP (Khan et al., 2023a), LCDnet-CL (Khan et al., 2023b) and LeRaC (ours)
+Model Training Regime CIFAR-10 CIFAR-100
+ResNet-18 Conventional 89.20 ± 0.43 71.70 ± 0.06
+CBS (Sinha et al., 2020) 89.53 ± 0.22 72.80 ± 0.18
+LSCL (Dogan et al., 2020) 88.28 ± 0.14 68.42 ± 0.25
+EfficientTrain (Wang et al., 2023) 89.51 ± 0.13 72.83 ± 0.12
+Self-taught (Khan et al., 2024) 89.48 ± 0.17 72.10 ± 0.32
+LCDnet-CL (Khan et al., 2023b) 89.36 ± 0.38 71.06 ± 0.27
+CLIP (Khan et al., 2023a) 89.11 ± 0.02 70.03 ± 0.27
+LeRaC (ours) 89.56 ± 0.16 72.72 ± 0.12
+Wide-ResNet-50 Conventional 91.22 ± 0.24 68.14 ± 0.16
+CBS (Sinha et al., 2020) 89.05 ± 1.00 65.73 ± 0.36
+LSCL (Dogan et al., 2020) 88.28 ± 0.14 72.59 ± 0.25
+EfficientTrain (Wang et al., 2023) 91.03 ± 0.28 69.14 ± 0.20
+Self-taught (Khan et al., 2024) 91.00 ± 0.24 68.48 ± 0.26
+LCDnet-CL (Khan et al., 2023b) 91.38 ± 0.18 68.85 ± 0.13
+CLIP (Khan et al., 2023a) 91.18 ± 0.11 68.13 ± 0.39
+LeRaC (ours) 91.58 ± 0.16 69.38 ± 0.26
+CvT-13pre-trained Conventional 93.56 ± 0.05 77.80 ± 0.16
+CBS (Sinha et al., 2020) 85.85 ± 0.15 62.35 ± 0.48
+LSCL (Dogan et al., 2020) 93.91 ± 0.20 78.63 ± 0.12
+EfficientTrain (Wang et al., 2023) 94.50 ± 0.17 78.20 ± 0.34
+Self-taught (Khan et al., 2024) 92.25 ± 0.22 77.95 ± 0.32
+LCDnet-CL (Khan et al., 2023b) 92.72 ± 0.16 78.57 ± 0.16
+CLIP (Khan et al., 2023a) 92.61 ± 0.36 76.18 ± 1.45
+LeRaC (ours) 94.15 ± 0.03 78.93 ± 0.05
+The accuracy of the best training regime on each data set is highlighted in bold
+12% faster than CBS. It is trivial to note that LeRaC requires the same time as the conventional regime.
+4.6 More Comparative Results
+Comparing with domain-specific curriculum learning strategies. Although we consider CBS (Sinha et al., 2020) as our closest competitor in terms of applicability across architectures and domains, there are domain-specific curriculum learning methods reporting promising results. To this end, we perform additional experiments on CIFAR10 and CIFAR-100 with ResNet-18, Wide-ResNet-50 and CvT-13 (pre-trained), considering two recent curriculum learning strategies applied in the image domain, namely Label-Similarity Curriculum Learning (LSCL) (Dogan et al., 2020) and EfficientTrain (Wang et al., 2023). Dogan et al. (2020) proposed LSCL, a strategy that relies on hierarchically clustering the classes (labels) based on inter-label similarities determined with the help of document embeddings representing the Wikipedia pages of the respective classes. The corresponding results shown in Table 7 indicate that label-similarity curriculum is useful for CIFAR100, but not for CIFAR-10. This suggests that the method
+needs a sufficiently large number of classes to benefit from the constructed hierarchy of classes. In contrast, LeRaC does not rely on external components, such as the similarity measure used by Dogan et al. (2020) in their strategy. Another important limitation of LSCL (Dogan et al., 2020) is its restricted use, e.g. LSCL is not applicable to regression tasks, where there are no classes. Therefore, we consider LeRaC as a more versatile alternative. EfficientTrain is an alternative to CBS, which introduces a cropping operation in the Fourier spectrum of the inputs instead of blurring the activation maps. The method is not suitable for text data, so the comparison between EfficientTrain and LeRaC can only be performed in the image domain. Consequently, we compare with EfficientTrain (Wang et al., 2023) on CIFAR-10 and CIFAR-100, and show the corresponding results in Table 7. Notably, our method surpasses EfficientTrain (Wang et al., 2023) in 4 out of 6 evaluation scenarios. These results confirm the competitiveness of LeRaC in comparison to very recent methods, such as EfficientTrain (Wang et al., 2023). Aside from outperforming EfficientTrain and LSCL in the image domain, our method has another important advantage: it is generally applicable to any domain.
+123
+
+
+304 International Journal of Computer Vision (2025) 133:291–314
+Table 8 Average accuracy rates (in %) over 5 runs on CIFAR-10, CIFAR-100 and Tiny ImageNet for CvT-13 based on different training regimes: conventional, LeRaC with logarithmic update, LeRaC with linear update, and LeRaC with exponential update (proposed)
+Model Training Regime CIFAR-10 CIFAR-100 Tiny ImageNet
+CvT-13 Conventional 71.84 ± 0.37 41.87 ± 0.16 33.38 ± 0.27
+LeRaC (logarithmic update) 72.14 ± 0.13 43.37 ± 0.20 33.82 ± 0.15
+LeRaC (linear update) 72.49 ± 0.27 43.39 ± 0.14 33.86 ± 0.07
+LeRaC (exponential update) 72.90 ± 0.28 43.46 ± 0.18 33.95 ± 0.28
+The accuracy rates surpassing the baseline training regime are highlighted in bold
+Comparing with data-level curriculum learning methods. In Table 7, we also compare LeRaC with three data-level curriculum learning methods (Khan et al., 2024, 2023a, b). These methods share a common framework, where a scoring function ranks samples based on their difficulty, and a pacing function determines the timing for introducing new batches during training. Khan et al. (2024) examine various pacing functions and classify scoring functions into two categories: self-taught and transfer-scoring functions. Self-taught functions involve training a model on a subset of data batches and then using this model to assess the difficulty of examples. In contrast, transfer-scoring functions utilize a pre-trained model for this purpose. For the results reported in Table 7 for Khan et al. (2024), we use the self-taught scoring function and a linear pacing function. To compare with Khan et al. (2023b), we use a transfer-scoring function and a ResNet50 model pre-trained on ImageNet. For Khan et al. (2023a), aside from using the pre-trained model for assessing the difficulty of the samples, we also remove the least significant samples during training. The results reported in Table 7 indicate that LeRaC outperforms the data-level curriculum learning methods. We note that these methods were exclusively tested on crowd density estimation tasks, which could explain why their effectiveness might not generalize to different types of tasks. For instance, the method described by Khan et al. (2023a) is suboptimal even when compared with conventional training, suggesting that the strategy of removing easy examples is not always effective for image classification tasks.
+4.7 Ablation Studies
+Comparing different schedulers. We first aim to establish if the exponential learning rate scheduler proposed in Eq. (9) is a good choice. To test this out, we select the CvT-13 model and change the LeRaC regime to use linear or logarithmic updates of the learning rates. The corresponding results are shown in Table 8. We observe that both alternative schedulers obtain performance gains, but our exponential learning rate scheduler brings higher gains on all three data sets. We thus conclude that the update rule defined in Eq. (9) is a sound option. Our previous ablation study shows that the exponential scheduler leads to higher gains than the linear or the loga
+Fig. 4 Average SNR of the feature maps at each layer of the randomly initialized LeNet architecture. The SNR at each layer is averaged for 100 randomly picked images from the CIFAR-100 data set. For the later layers, the SNR is negative because the signal is dominated by noise
+rithmic schedulers. In general, a suitable scheduler is one that adjusts the learning rate at each layer proportionally to the estimated signal-to-noise drop from one layer to the next. To understand how the average SNR drops from one neural layer to the next, we plot the average SNR of the features maps at each layer of the randomly initialized LeNet architecture, computed over 100 images from CIFAR-100, in Fig. 4. As anticipated, the average SNR decreases along with the layer index. Notably, we observe that the drop in SNR follows an exponential trend. This can explain why the exponential scheduler is a more suitable choice. To further justify our preference towards the exponential scheduler, we analyze the training progress of the ResNet-18 and the pre-trained CvT-13 models using various schedulers (logarithmic, linear, exponential) for LeRaC. Figure 5 shows the results for ResNet-18, while Fig. 6 illustrates the results for CvT-13. In both cases, the exponential scheduler leads to a better training progress than the conventional regime, but the linear and logarithmic schedulers are not as good. These results further confirm that the exponential scheduler is optimal.
+Varying value ranges for initial learning rates. All our hyperparameters are either fixed without tuning or tuned on
+123
+
+
+International Journal of Computer Vision (2025) 133:291–314 305
+20
+40
+60
+0 50 100 150 200 Epoch
+Accuracy
+Linear Logarithmic Exponential Baseline
+Fig. 5 Test accuracy (on the y-axis) versus training time (on the x-axis) for ResNet-18 on CIFAR-100 with various curriculum schedulers. The dashed line corresponds to the conventional regime, while the continuous lines correspond to LeRaC with various schedulers. Best viewed in color (Color figure online)
+the validation data. In this ablation experiment, we present
+results with LeRaC using multiple ranges for η(0)
+1 and η(n0) to demonstrate that LeRaC is sufficiently stable with respect to suboptimal hyperparameter choices. We carry out experiments with ResNet-18 and Wide-ResNet-50 on CIFAR-100. We report the corresponding results in Table 9. We observe that all hyperparameter configurations lead to surpassing the baseline regime. This indicates that LeRaC can bring performance gains even outside the optimal learning rate bounds, demonstrating low sensitivity to suboptimal hyperparameter tuning. Varying k. In Table 10, we present additional results with ResNet-18 and Wide-ResNet-50 on CIFAR-100, considering various values for k (the last iteration for our training regime). We observe that all configurations surpass the baselines on CIFAR-100. Moreover, we observe that the optimal values for k (k = 7 for ResNet-18 and k = 7 for Wide-ResNet-50) obtained on the validation set are not the values producing
+85
+90
+0 5 10 15 20 25 Epoch
+Accuracy
+Linear Logarithmic Exponential Baseline
+Fig. 6 Test accuracy (on the y-axis) versus training time (on the x-axis) for the pre-trained CvT-13 on CIFAR-10 with various curriculum schedulers. The dashed line corresponds to the conventional regime, while the continuous lines correspond to LeRaC with various schedulers. Best viewed in color (Color figure online)
+Table 10 Average accuracy rates (in %) over 5 runs for ResNet-18 and Wide-ResNet-50 on CIFAR-100 using the LeRaC regime until iteration k, while varying k
+Training Regime k ResNet-18 Wide-ResNet-50
+Conventional – 71.70 ± 0.06 68.14 ± 0.16
+LeRaC (ours) 5 73.04 ± 0.09 68.86 ± 0.76
+6 72.87 ± 0.07 69.78 ± 0.16
+7 72.72 ± 0.12 69.38 ± 0.26
+8 73.50 ± 0.16 69.30 ± 0.18
+9 73.29 ± 0.28 68.94 ± 0.30
+The accuracy rates surpassing the baseline training regime are highlighted in bold
+the best results on the test set. This confirms that we did not overfit the hyperparameters of LeRaC. Anti-curriculum. Since our goal is to perform curriculum learning (from easy to hard), we restrict the settings for
+Table 9 Average accuracy rates (in %) over 5 runs for ResNet-18 and Wide-ResNet-50 on CIFAR-100 based on different ranges for the initial learning rates
+Training Regime η(0)
+1 –η(n0) ResNet-18 Wide-ResNet-50
+Conventional 10−1–10−1 71.70 ± 0.06 68.14 ± 0.16
+LeRaC (ours) 10−1–10−6 72.48 ± 0.10 68.64 ± 0.52
+10−1–10−7 72.52 ± 0.17 69.25 ± 0.37
+10−1–10−8 72.72 ± 0.12 69.38 ± 0.26
+10−1–10−9 72.29 ± 0.38 69.26 ± 0.27
+10−1–10−10 72.45 ± 0.25 69.66 ± 0.34
+10−2–10−8 72.41 ± 0.08 68.51 ± 0.52
+10−3–10−8 72.08 ± 0.19 68.71 ± 0.47
+The accuracy rates surpassing the baseline training regime are highlighted in bold
+123
+
+
+306 International Journal of Computer Vision (2025) 133:291–314
+Table 11 Average accuracy rates (in %) over 5 runs for ResNet-18 and Wide-ResNet-50 on CIFAR-100, as well as SepTr on CREMA-D, based on different training regimes: conventional, anti-LeRaC and LeRaC
+Data set Model Training Regime Accuracy
+CIFAR-100 ResNet-18 Conventional 71.70 ± 0.06 Anti-LeRaC 71.24 ± 0.11
+LeRaC (ours) 72.72 ± 0.12
+Wide-ResNet-50 Conventional 68.14 ± 0.16
+Anti-LeRaC 67.47 ± 0.15
+LeRaC (ours) 69.38 ± 0.26
+CREMA-D SepTr Conventional 70.47 ± 0.67
+Anti-LeRaC 68.33 ± 0.61
+LeRaC (ours) 70.95 ± 0.56
+The accuracy of the best training regime in each experiment is highlighted in bold
+η j , ∀ j ∈ {1, 2, . . . , n}, such that deeper layers start with lower learning rates. However, another strategy is to consider the opposite setting, where we use higher learning rates for deeper layers. If we train later layers at a faster pace (anti-curriculum), we conjecture that the later layers get adapted to the noise from the early layers, which could likely lead to local optima or difficult training (due to the need of readapting to the earlier layers, once these layers start learning useful features). We tested this approach (anti-LeRaC), which belongs to the category of anti-curriculum learning strategies (Soviany et al., 2022), in a set of new experiments with ResNet-18 and Wide-ResNet-50 on CIFAR-100, as well as SepTr on CREMA-D. We report the corresponding results with LeRaC and anti-LeRaC in Table 11. Although anticurriculum, e.g. hard negative sample mining, was shown to be useful in other tasks (Soviany et al., 2022), our results indicate that learning rate anti-curriculum attains inferior performance compared with our approach. Furthermore, anti-LeRaC is also below the conventional regime, confirming our conjecture regarding this strategy. Summary. Notably, our ablation results show that the majority of hyperparameter configurations tested for LeRaC lead to outperforming the conventional regime, demonstrating the stability of LeRaC. We present additional experiments in “Appendix C”.
+5 Discussion
+Interaction with optimization algorithms. Throughout our experiments, we always keep using the same optimizer for a certain neural model, for all training regimes (conventional, CBS, LeRaC). The best optimizer for each neural model is established for the conventional training regime. We underline that our initial learning rates and scheduler are used independently of the optimizers. Although our learning rate scheduler updates the learning rates at the beginning of every iteration, we did not observe any stability or interaction issues with any of the optimizers (SGD, Adam, AdaMax, AdamW).
+Interaction with other curriculum learning strategies. Our simple and generic curriculum learning scheme can be integrated into any model for any task, not relying on domain or task dependent information, e.g. the data samples. In Table 16 from “Appendix C”, we show that combining LeRaC and CBS can boost performance. In a similar fashion, LeRaC can be combined with data-level curriculum strategies for improved performance. We leave this exploration for future work.
+Interaction with other learning rate schedulers. Whenever a learning rate scheduler is used for training a model in our experiments, we simply replace the scheduler with LeRaC until epoch k. For example, all the baseline CvT results are based on linear warm-up with cosine annealing, this being the recommended scheduler for CvT (Wu et al., 2021). When we introduce LeRaC, we simply deactivate alternative schedulers between epochs 0 and k. In general, we recommend deactivating other schedulers while using LeRaC for simplicity in avoiding stability issues. Limitations of our work. One limitation is the need to disable other learning rate schedulers while using LeRaC. We already tested this scenario with linear warm-up with cosine annealing, which is removed when using LeRaC, observing consistent performance gains (see Table 3). However, disabling alternative learning rate schedulers might bring performance drops in other cases. Hence, this has to be decided on a case by case basis. Another limitation is the possibility of encountering longer training times or poor convergence when the hyperparameters are not properly configured. We recommend hyperparameter tuning on the validation set to avoid this outcome.
+6 Conclusion
+In this paper, we introduced a novel model-level curriculum learning approach that is based on starting the training process with increasingly lower learning rates per layer, as the layers get closer to the output. We conducted compre
+123
+
+
+International Journal of Computer Vision (2025) 133:291–314 307
+hensive experiments on 12 data sets from three domains (image, text and audio), considering multiple neural architectures (CNNs, RNNs and transformers), to compare our novel training regime (LeRaC) with a state-of-the-art regime (CBS (Sinha et al., 2020)), as well as the conventional training regime (based on early stopping and reduce on plateau). The empirical results demonstrate that LeRaC is significantly more consistent than CBS, perhaps being one of the most versatile curriculum learning strategy to date, due to its compatibility with multiple neural models and its usefulness across different domains. Remarkably, all these benefits come for free, i.e. LeRaC does not add any extra time over the conventional approach.
+A Theoretical Proof
+The motivation behind using LeRaC stems from our conjecture stating that the level of noise inside features gradually increases with every layer of a neural network. Regardless of the type of layer (convolutional, transformer or fully connected), the operation performed inside a neural layer boils down to matrix or vector multiplications. To this end, we set out to demonstrate that the signal resulting from the multiplication of two signals has a lower signal-to-noise ratio (SNR) than the multiplied factors. We start with the definition of the variance of a signal, which is given below:
+Definition 1 The variance of a signal s is given by:
+Var(s) = E[s2] − E[s]2. (13)
+From Definition 1, it results that the expected value of s2, which represents the power of signal s, is equal to:
+E[s2] = E[s]2 + Var(s) = μ2
+s + σ2
+s , (14)
+where μs is the mean of s, and σs2 is the variance of s. We use Eq. (14) to define the SNR of a signal as follows:
+Definition 2 The signal-to-noise ratio (SNR) of a signal s = u+z, where u is the clean signal and z is the noise component, is the ratio between the power of u and the power of z, which is given by:
+SNR(s) = E[u2]
+E[z2] = μ2u + σu2
+μz2 + σz2
+, (15)
+where μu and μz are the means of u and z, and σu2 and σz2 are the variances of u and z, respectively.
+The noise contained by data samples given as input to neural networks is usually uncorrelated, e.g. the noise in images is assumed to come from a random normal distribution of
+zero mean. Moreover, the weights of a neural network are usually initialized by sampling them from a random normal distribution of zero mean (Glorot & Bengio, 2010). Hence, without loss of generality, we can naturally assume that the noise component has zero mean. This means that we can simplify Eq. (15) to:
+SNR(s) = μ2u + σu2
+σz2
+. (16)
+If the power of the signal u is higher than the power of the noise z, then SNR(s) is higher than 1. If the signal is dominated by noise, then SNR(s) is between 0 and 1. Note that the SNR does not take negative values. To avoid discussing edge cases, we assume that the SNR of any signal is always defined, i.e. the power of the noise is never 0.
+Theorem 2 Let s1 = u1 +z1 and s2 = u2 +z2 be two signals, where u1 and u2 are the clean components, and z1 and z2 are the noise components. The signal-to-noise ratio of the product between the two signals is lower than the signal-tonoise ratios of the two signals, i.e.:
+SNR(s1 · s2) ≤ SNR(si ), ∀i ∈ {1, 2}. (17)
+Proof To demonstrate our theorem, we rely on the formula of variance for the sum of two signals with zero mean:
+Var(s1 + s2) = Var(s1) + Var(s2). (18)
+We also rely on the formula of variance for the product of two signals:
+Var(s1 · s2) =Var(s1) · Var(s2) + Var(s1) · E[s2]2
++ Var(s2) · E[s1]2. (19)
+Let s denote the product of the two signals, i.e. s = s1 · s2. Expanding the signals s1 and s2 leads to the following formulation of s:
+s = s1 · s2 = (u1 + z1) · (u2 + z2)
+= u1 · u2 + u1 · z2 + u2 · z1 + z1 · z2, (20)
+where the clean component is u = u1 · u2, and the noise component is z = u1 · z2 + u2 · z1 + z1 · z2. Hence, s = u + z. An example given as input to a neural network and the initial weights of the respective neural network are not correlated under any practical circumstances. Hence, without loss of generality, we can assume that the signals s1 and s2 are independent of each other, i.e. their covariance is equal to 0. This assumption allows us to simplify the signal power
+123
+
+
+308 International Journal of Computer Vision (2025) 133:291–314
+of u to:
+E[u2] = E[u2
+1 · u2
+2] = E[u2
+1] · E[u2
+2]
+=
+(
+μ2
+u1 + σ 2
+u1
+) ·
+(
+μ2
+u2 + σ 2
+u2
+)
+. (21)
+The signal power of z is given by:
+E[z2] = E[z]2 + Var(z) = Var(z), (22)
+since the noise is of zero mean, i.e. E[z] = 0. By employing Eq. (18), we can compute the power of z as follows:
+E[z2] = Var(z) = Var(u1 · z2 + u2 · z1 + z1 · z2)
+= Var(u1 · z2) + Var(u2 · z1) + Var(z1 · z2). (23)
+By applying Eq. (19) in Eq. (23), and considering that z1 and z2 have zero mean, we obtain:
+Var(u1 · z2) =
+(
+μ2
+u1 + σ 2
+u1
+)
+· σ2
+z2 ,
+Var(u2 · z1) =
+(
+μ2
+u2 + σ 2
+u2
+)
+· σ2
+z1 ,
+Var(z1 · z2) = σ 2
+z1 · σ 2
+z2 .
+(24)
+Replacing Eq. (21) and Eq. (24) inside Definition 2 leads to the following expression of the signal-to-noise ratio of signal s:
+SNR(s) = E[u2]
+E [z2]
+=
+(μ2u1 + σu21
+) · (μ2u2 + σu22
+)
+(μ2u1 +σu21
+)·σz22 +(μ2u2 +σu22
+)·σz21 +σz21 ·σz22
+=
+(μ2u1 + σu21
+) · (μ2u2 + σu22
+)
+σz21 ·σz22 ·
+( μ2u1+σu21
+σz21
++ μ2u2+σu22
+σz22
++1
+)
+=
+μ2u1 +σu21
+σz21
+· μ2u2 +σu22
+σz22 μ2u1+σu21
+σz21
++ μ2u2+σu22
+σz22
++1
+= SNR(s1) · SNR(s2)
+SNR(s1) + SNR(s2) + 1 .
+(25)
+To simplify our notations in the remainder of this proof, we define a = SNR(s1) and b = SNR(s2). By introducing these notations in Eq. (25), we obtain the following:
+SNR(s) = a · b
+a + b + 1 . (26)
+Now, it remains to prove that:
+a·b
+a + b + 1 ≤ a, a · b
+a + b + 1 ≤ b. (27)
+Table 12 Distances between feature maps at epoch k = 0 and feature maps after the final epoch for ResNet-18 on CIFAR-10, while using the conventional training regime
+Training Regime Distance First Conv Layer Last Conv Layer
+Conventional 38.36 709.93
+Distances are independently computed for the first and last convolutional layers
+However, since a and b are commutable in Eq. (26), it is sufficient to prove only one of the inequalities. We choose to provide the complete proof for the first inequality in Eq. (27) (as the proof for the other is analogous). We consider two separate cases, a = 0 and a > 0. • Case (i): When a = 0, we obtain the following inequality:
+0
+b + 1 ≤ 0, (28)
+which clearly holds for any b ≥ 0. • Case (ii): When a > 0, we can divide both terms of the inequality by a and arrive to:
+b
+a + b + 1 ≤ 1. (29)
+Next, we multiply both terms by a + b + 1, obtaining that:
+b ≤ a + b + 1. (30)
+We can subtract b from both terms and obtain the following:
+0 ≤ a + 1. (31)
+Since a > 0, it results that Eq. (31) is true. Moreover, the inequality is strict when a > 0. This concludes our proof.
+Corollary 1 Let {s1, s2, . . . sn} be a set of n signals, where each signal si = ui + zi is formed of a clean component ui and a noise component zi . The following equation is true:
+SNR
+(∏p
+i =1
+si
+)
+≤ SNR
+⎛
+⎝
+p∏−1
+j =1
+sj
+⎞
+⎠ , ∀ p ∈ {2, . . . , n}. (32)
+Proof The proof results immediately by induction from Theorem 1. Note that the inequality is strict when SNR(si ) > 0, ∀i ∈ {1, 2, . . . , p}.
+We employ Corollary 1 in the context of neural networks, where the input signal, which is expected to bear meaningful information and thus have a high SNR, is initially multiplied
+123
+
+
+International Journal of Computer Vision (2025) 133:291–314 309
+Fig. 7 Activation maps with low and high entropy from the first and last conv layers of ResNet-18 trained on CIFAR-10 for k = 6 epochs with the conventional (baseline) and LeRaC (ours) regimes. The input images are taken from ImageNet. Best viewed in color (Color figure online)
+Table 13 Entropy after k = 6 epochs for ResNet-18 on CIFAR-10, while alternating between the conventional and LeRaC training regimes
+Training Regime Entropy First Conv Layer Last Conv Layer
+Conventional 0.9965 0.9905
+LeRaC (ours) 0.9970 0.9968
+with random weights, which are expected to have low SNR values just after initialization. According to Corollary 1, the SNR of the resulting signal (features) is gradually decreasing, layer by layer. In this context, we conjecture that optimizing the weights θi of layer i to learn patterns from the signal (features) given as input to layer i is suboptimal for layers that are sufficiently far away from the input. This happens because
+123
+
+
+310 International Journal of Computer Vision (2025) 133:291–314
+Table 14 Distances between feature maps at epoch k = 6 and feature maps after the final epoch for ResNet-18 on CIFAR-10, while alternating between the conventional and LeRaC training regimes
+Training Regime Distance First Conv Layer Last Conv Layer
+Conventional 0.60 0.37
+LeRaC (ours) 0.61 0.66
+Distances are independently computed for the first and last convolutional layers
+the respective features (passed to layer i) can contain a large amount of noise, which can derail the network towards adapting the weights θi to the noise instead of the clean signal. This phenomenon becomes more and more prevalent as the layer i is placed farther away from the input. To regulate this phenomenon during the initial stages of the learning process, we propose to employ LeRaC and gradually decrease the learning rate as layers get deeper, allowing the network to optimize the earlier weights sooner. We underline that training the earlier layers also reduces the amount of noise in later layers, since the amount of noise in later layers is bounded by the amount of noise in earlier layers (according to Corollary 1). As the amount of noise in later layers is progressively diminished, we can gradually increase the learning rates of later layers, allowing them to optimize their weights to cleaner signals (meaningful patterns).
+B Empirical Proof
+Noise quantification of early and later layers. The application of LeRaC is justified by the fact that the level of noise gradually grows with each layer during a forward pass through a neural network with randomly initialized weights. To empirically confirm this statement, we have computed the distances for the low-level (first conv) and high-level (last conv) layers between the activation maps at iteration 0 (based on random weights) and the last iteration (based on weights optimized until convergence) for ResNet-18 on CIFAR-10, while using the conventional training regime. The computed distances shown in Table 12 confirm our conjecture, namely that shallow layers contain less noise than deep layers when applying the conventional training regime.
+Entropy of low-level versus high-level features. We show a few examples of training dynamics in Fig. 3. All four graphs exhibit a higher gap between CBS and LeRaC in the first half of the training process, suggesting that LeRaC has an important role towards faster convergence. To assess the comparative quality of low-level versus high-level feature maps obtained either with conventional or LeRaC training, we compute the entropy of the first and last conv layers of ResNet-18 on CIFAR-10, after k = 6 iterations. We report
+the computed entropy levels in Table 13. Conventional training seems to update deeper layers faster, observing a higher difference between the entropy levels of low-level and highlevel features obtained with conventional training than with LeRac. This shows that LeRaC balances the training pace of low-level and high-level features. We conjecture that updating the deeper layers too soon could lead to overfitting to the noise still present in the early layers. This statement is supported by our empirical results on 12 data sets, showing that giving a chance to the early layers to converge before introducing large updates to the later layers leads to superior performance. Aside from computing the global entropy over all training samples, in Fig. 7, we illustrate some activation maps with the highest and lowest entropy from the first and last conv layers for three randomly chosen examples from ImageNet. The activation maps are extracted at epoch k = 6 from the ResNet-18 model trained on CIFAR-10 either with the conventional regime, the CBS regime or the LeRaC regime. In general, we observe that the low-level activation maps corresponding to LeRaC and CBS exhibit a higher degree of variability (being more distinct from each other), regardless of the entropy level (low or high). In the case of LeRaC, we believe the higher degree of variability comes from the fact that, having lower learning rates for the deeper layers, the model based on LeRaC is likely focused on finding a higher variety of patterns within the first layers to minimize the loss. Similarly, in the case of CBS, blurring the intermediary feature maps reduces the information propagated within the network. This compels the lower layers to identify and learn more distinctive patterns to minimize the loss. However, in general, the patterns found by LeRaC are more diverse. For instance, in the case of CBS, the low-level activation maps of the first image show greater similarity to each other, in contrast to those generated by LeRaC. For the third example (the image of an airplane), we observe that the activation maps with the highest entropy from the last conv layer produced by LeRaC have a higher entropy than the activation maps with the highest entropy produced by the conventional regime. This observation is in line with the results reported in Table 13, confirming that LeRaC is able to better balance the entropy of low-level and high-level features by preventing the faster convergence of the deeper layers.
+Distances at epoch k versus final epoch. As discussed above, in Table 13, we report the entropy of the low-level and high-level layers after k = 6 epochs, before and after using LeRaC to train ResNet-18 on CIFAR-10. However, we consider that using the distance to the final feature maps provides additional useful insights about how LeRaC works. To this end, we compute the Euclidean distances of both lowlevel and high-level features between epoch k and the final epoch, before and after using LeRaC. We report the distances in Table 14. The computed distances confirm our previous
+123
+
+
+International Journal of Computer Vision (2025) 133:291–314 311
+50
+60
+70
+80
+90
+0 50 100 150 200 Epoch
+Accuracy
+LR ∈ [1e-5, 1e-1] LR ∈ [1e-6, 1e-2] LR ∈ [1e-7, 1e-3] LR=1e-1 (baseline) LR=1e-2 (baseline) LR=1e-3 (baseline)
+Fig. 8 Test accuracy (on the y-axis) versus training time (on the x-axis) for ResNet-18 on CIFAR-10 with various configurations for the initial learning rates. Dashed lines correspond to the conventional regime, while continuous lines correspond to LeRaC. The different colors correspond to different initial learning rates. Best viewed in color (Color figure online)
+observations, namely that LeRaC is capable of balancing the training pace of low-level and high-level layers.
+C Additional Experiments
+Training progress for various initial learning rates. We compare the training progress of the conventional and LeRaC training regimes. We first comparatively consider the progress of ResNet-18 on CIFAR-10, shown in Fig. 8, and CIFAR-100, shown in Fig. 9, respectively. LeRaC is consistently better than the conventional regime for all initial learning rate configurations, on both data sets. We next com
+20
+40
+60
+0 50 100 150 200 Epoch
+Accuracy
+LR ∈ [1e-5, 1e-1] LR ∈ [1e-6, 1e-2] LR ∈ [1e-7, 1e-3] LR=1e-1 (baseline) LR=1e-2 (baseline) LR=1e-3 (baseline)
+Fig. 9 Test accuracy (on the y-axis) versus training time (on the x-axis) for ResNet-18 on CIFAR-100 with various configurations for the initial learning rates. Dashed lines correspond to the conventional regime, while continuous lines correspond to LeRaC. The different colors correspond to different initial learning rates. Best viewed in color (Color figure online)
+pare the progress on CIFAR-10 for ResNet-18, illustrated in Fig. 8, and CvT-13 (pre-trained), illustrated in Fig. 10. The training progress of LeRaC is consistently above the training progress of the conventional regime, for both ResNet-18 and CvT-13. In summary, the results showcase the benefits on the training progress offered by LeRaC across distinct models and data sets. SGD+LeRaC versus Adam. In Table 15, we present results showing that SGD and SGD+LeRaC obtain better accuracy rates than Adam (Kingma & Ba, 2015) for the WideResNet-50 model on CIFAR-100. This indicates that a simple optimizer combined with LeRaC can obtain better results than a state-of-the-art optimizer such as Adam. This justi
+Table 15 Average accuracy rates (in %) over 5 runs for Wide-ResNet-50 on CIFAR-100 using different optimizers and training regimes (conventional versus LeRaC)
+Model Optimizer Training Regime Accuracy
+Wide-ResNet-50 Adam Conventional 66.48 ± 0.50
+SGD Conventional 68.14 ± 0.16
+SGD LeRaC (ours) 69.38 ± 0.26
+The accuracy of the best training regime is highlighted in bold
+Table 16 Average accuracy rates (in %) over 5 runs on CIFAR-10, CIFAR-100 and Tiny ImageNet for CvT-13 based on different training regimes: conventional, CBS (Sinha et al., 2020), LeRaC with linear update, LeRaC with exponential update (proposed), and a combination of CBS and LeRaC
+Model Training Regime CIFAR-10 CIFAR-100 Tiny ImageNet
+CvT-13 Conventional 71.84 ± 0.37 41.87 ± 0.16 33.38 ± 0.27
+CBS 72.64 ± 0.29 44.48 ± 0.40 33.56 ± 0.36
+LeRaC 72.90 ± 0.28 43.46 ± 0.18 33.95 ± 0.28
+CBS+ LeRaC 73.25 ± 0.19 44.90 ± 0.41 34.20 ± 0.61
+123
+
+
+312 International Journal of Computer Vision (2025) 133:291–314
+60
+70
+80
+90
+0 5 10 15 20 25 Epoch
+Accuracy
+LR ∈ [5e-3, 5e-8] LR ∈ [5e-4, 5e-9] LR ∈ [5e-5, 5e-10] LR=5e-3 (baseline) LR=5e-4 (baseline) LR=5e-5 (baseline)
+Fig. 10 Test accuracy (on the y-axis) versus training time (on the x-axis) for the pre-trained CvT-13 on CIFAR-10 with various configurations for the initial learning rates. Dashed lines correspond to the conventional regime, while continuous lines correspond to LeRaC. The different colors correspond to different initial learning rates. Best viewed in color (Color figure online)
+Table 17 Average accuracy rates (in %) over 5 runs for ResNet-18 and Wide-ResNet-50 on CIFAR-100 using data augmentation and different training regimes (conventional versus LeRaC)
+Model Training Regime Accuracy
+ResNet-18 Conventional 72.25 ± 0.04
+LeRaC (ours) 73.51 ± 0.22
+Wide-ResNet-50 Conventional 65.42 ± 0.66
+LeRaC (ours) 67.00 ± 0.55
+The accuracy of the best training regime in each experiment is highlighted in bold
+fies our decision to use a different optimizer for each neural model (see Table 1). Combining CBS and LeRaC. Another interesting aspect worth studying is to determine if putting the CBS and LeRaC regimes together could bring further performance gains. We study the effect of combining CBS and LeRaC for CvT-13, since both CBS and LeRaC improve this model. In Table 16, we present the results with CvT-13 on CIFAR-10, CIFAR100 and Tiny ImageNet. The reported results show that the combination brings accuracy gains across all three data sets. We thus conclude that the combination of curriculum learning regimes is worth a try, whenever the two independent regimes boost performance.
+Data augmentation on vision data sets. Following Sinha et al. (2020), we did not use data augmentation for the
+Table 18 Average accuracy rates (in %) over 5 runs for ResNet-18 on CIFAR-100 using limited training data (only 5% of the full training set) and different training regimes: conventional, CBS (Sinha et al., 2020) and LeRaC
+Training Set Size Training Regime Accuracy
+5% Conventional 23.86 ± 0.32
+CBS 24.79 ± 0.17
+LeRaC (ours) 25.04 ± 0.22
+The accuracy of the best training regime is highlighted in bold
+vision data sets. We consider training data augmentation as an orthogonal method for improving results, expecting improvements for both baseline and LeRaC models. Nevertheless, since we extended the experimental settings considered in Sinha et al. (2020) to other domains, we took the liberty to use data augmentation in the audio domain (see the results in Table 6). The same augmentations (noise perturbation, time shifting, speed perturbation, mix-up and SpecAugment) are used for all audio models, ensuring a fair comparison. Moreover, we next present additional results with ResNet18 and Wide-ResNet-50 on CIFAR-100 using the following augmentations: horizontal flip, rotation, solarization, blur, sharpening and auto-contrast. The results reported in Table 17 confirm that the performance gaps in the vision domain are in the same range after introducing data augmentation. In addition, we note that data augmentation seems to be rather harmful for the Wide-ResNet-50 model, which attains better results without data augmentation. Limited data regime. In all our experiments carried out so far, the evaluated models were trained on the complete training sets. However, it is interesting to find out how our strategy behaves in a limited data regime. To this end, we conduct another experiment to compare LeRaC with the conventional and CBS regimes in a limited data scenario, considering only 5% of the training data. We present the results for ResNet-18 on CIFAR-100 in Table 18. The results indicate that LeRaC keeps its performance edge in the limited data regime. We therefore conclude that LeRaC can also be useful when limited training data is available.
+Funding This work was supported by a grant of the Romanian Ministry of Education and Research, CNCS—UEFISCDI, project number PNIII-P2-2.1-PED-2021-0195, within PNCDI III.
+Data Availability The data sets are publicly available online.
+Code Availability The code has been made publicly available for noncommercial use at https://github.com/CroitoruAlin/LeRaC.
+Declarations
+Conflict of interest The authors have no Conflict of interest to declare that are relevant to the content of this article.
+123
+
+
+International Journal of Computer Vision (2025) 133:291–314 313
+Open Access This article is licensed under a Creative Commons Attribution 4.0 International License, which permits use, sharing, adaptation, distribution and reproduction in any medium or format, as long as you give appropriate credit to the original author(s) and the source, provide a link to the Creative Commons licence, and indicate if changes were made. The images or other third party material in this article are included in the article’s Creative Commons licence, unless indicated otherwise in a credit line to the material. If material is not included in the article’s Creative Commons licence and your intended use is not permitted by statutory regulation or exceeds the permitted use, you will need to obtain permission directly from the copyright holder. To view a copy of this licence, visit http://creativecomm ons.org/licenses/by/4.0/.
+References
+Amodei, D., Ananthanarayanan, S., Anubhai, R., Bai, J., Battenberg, E., Case, C., et al. (2016). Deep speech 2: End-to-end speech recognition in English and Mandarin. In Proceedings of ICML (pp. 173–182). Bengio, Y., Louradour, J., Collobert, R., & Weston, J. (2009). Curriculum learning. In Proceedings of ICML (pp. 41–48). Bossard, L., Guillaumin, M., & Van Gool, L. (2014). Food-101Mining discriminative components with random forests. In Proceedings of ECCV (pp. 446–461).
+Burduja, M., & Ionescu, R.T. (2021). Unsupervised medical image alignment with curriculum learning. In Proceedings of ICIP (pp. 3787–3791). Cao, H., Cooper, D. G., Keutmann, M. K., Gur, R. C., Nenkova, A., & Verma, R. (2014). CREMA-D: Crowd-sourced emotional multimodal actors dataset. IEEE Transactions on Affective Computing, 5(4), 377–390. Chen, X., & Gupta, A. (2015). Webly supervised learning of convolutional networks. In Proceedings of ICCV (pp. 1431–1439). Cirik, V., Hovy, E., & Morency, L.P. (2016). Visualizing and understanding curriculum learning for long short-term memory networks. arXiv preprint arXiv:1611.06204. Clark, C., Lee, K., Chang, M.W., Kwiatkowski, T., Collins, M., & Toutanova, K. (2019). BoolQ: Exploring the surprising difficulty of natural yes/no questions. In Proceedings of NAACL (pp. 29242936). Devlin, J., Chang, M.W., Lee, K., & Toutanova, K. (2019). BERT: Pre-training of deep bidirectional transformers for language understanding. In Proceedings of NAACL (pp. 4171–4186). Dietterich, T. G. (1998). Approximate statistical tests for comparing supervised classification learning algorithms. Neural Computation, 10(7), 1895–1923. Dogan, Ü., Deshmukh, A. A, Machura, M. B.,& Igel, C. (2020). Labelsimilarity curriculum learning. In Proceedings of ECCV (pp. 174190). Everingham, M., Gool, L., Williams, C. K., Winn, J., & Zisserman, A. (2010). The PASCAL visual object classes (VOC) challenge. Intenational Journal of Computer Vision, 88(2), 303–338.
+Fan, Y., He, R., Liang, J., & Hu, B. G. (2017). Self-paced learning: An implicit regularization perspective. In Proceedings of AAAI (pp. 1877–1883). Glorot, X., & Bengio, Y. (2010). Understanding the difficulty of training deep feedforward neural networks. In Proceedings of AISTATS (pp. 249–256). Gong, C., Tao, D., Maybank, S. J., Liu, W., Kang, G., & Yang, J. (2016). Multi-modal curriculum learning for semi-supervised image classification. IEEE Transactions on Image Processing, 25(7), 3249–3260.
+Gong, M., Li, H., Meng, D., Miao, Q., & Liu, J. (2019). Decompositionbased evolutionary multiobjective optimization to self-paced learning. IEEE Transactions on Evolutionary Computation, 23(2), 288–302. Gotmare, A., Keskar, N. S., Xiong, C., & Socher, R. (2019). A closer look at deep learning heuristics: Learning rate restarts, warmup and distillation. In Proceedings of ICLR. Gui, L., Baltrušaitis, T., & Morency, L.P. (2017). Curriculum learning for facial expression recognition. In Proceedings of FG (pp. 505511). Hacohen, G., & Weinshall, D. (2019). On the power of curriculum learning in training deep networks. In Proceedings of ICML (pp. 2535–2544). He, K., Zhang, X., Ren, S., & Sun, J. (2016). Deep residual learning for image recognition. In Proceedings of CVPR (pp. 770–778). Hochreiter, S., & Schmidhuber, J. (1997). Long short-term memory. Neural Computing, 9(8), 1735–1780.
+Huang, G., Liu, Z., Van Der Maaten, L., & Weinberger, K. Q. (2017). Densely connected convolutional networks. In Proceedings of CVPR (pp. 2261–2269). Ionescu, R.T., Alexe, B., Leordeanu, M., Popescu, M., Papadopoulos, D. P., & Ferrari, V. (2016). How hard can it be? Estimating the difficulty of visual search in an image. In Proceedings of CVPR (pp. 2157–2166). Jiang, L., Meng, D., Yu, S.I., Lan, Z., Shan, S., & Hauptmann, A. G. (2014). Self-paced learning with diversity. In Proceedings of NIPS (pp. 2078–2086). Jiang, L., Meng, D., Zhao, Q., Shan, S., & Hauptmann, A. G. (2015). Self-paced curriculum learning. In Proceedings of AAAI (pp. 2694–2700). Jiang, L., Zhou, Z., Leung, T., Li, L.J,. & Fei-Fei, L. (2018). MentorNet: learning data-driven curriculum for very deep neural networks on corrupted labels. In Proceedings of ICML (pp. 2304–2313). Jiménez-Sánchez, A., Mateus, D., Kirchhoff, S., Kirchhoff, C., Biberthaler, P., Navab, N. et al. (2019). Medical-based deep curriculum learning for improved fracture classification. In Proceedings of MICCAI (pp. 694–702). Jocher, G., Chaurasia, A., Stoken, A., Borovec, J., NanoCode012, Kwon Y, et al. (2022). ultralytics/yolov5: v7.0—YOLOv5 SOTA Realtime Instance Segmentation. Zenodo. Karras, T., Aila, T., Laine, S., & Lehtinen, J. (2018). Progressive growing of GANs for improved quality, stability, and variation. In Proceedings of ICLR.
+Khan, M., Hamila, R., & Menouar, H. (2023a). CLIP: Train faster with less data. In Proceedings of BigComp (pp. 34–39). Khan, M. A., Menouar, H., & Hamila, R. (2023b). LCDnet: A lightweight crowd density estimation model for real-time video surveillance. Journal of Real-Time Image Processing, 20(2), 29. Khan, M.A., Menouar, H., & Hamila, R. (2024). Curriculum for crowd counting—Is it worthy? In Proceedings of VISAPP (pp. 583–590). Kingma, D. P., & Ba, J. L. (2015). Adam: A method for stochastic gradient descent. In Proceedings of ICLR. Kocmi, T., & Bojar, O. (2017). Curriculum learning and minibatch bucketing in neural machine translation. In Proceedings of RANLP (pp. 379–386).
+Krizhevsky, A. (2009). Learning multiple layers of features from tiny images. University of Toronto. Kumar, M., Packer, B., & Koller, D. (2010). Self-paced learning for latent variable models. In Proceedings of NIPS (Vol. 23, pp. 11891197). Li, H., Gong, M., Meng, D., & Miao, Q. (2016). Multi-objective selfpaced learning. In Proceedings of AAAI (pp. 1802–1808). Lin, T.Y., Maire, M., Belongie, S., Hays, J., Perona, P., Ramanan, D., et al. (2014). Microsoft COCO: Common objects in context. In Proceedings of ECCV (pp. 740–755).
+123
+
+
+314 International Journal of Computer Vision (2025) 133:291–314
+Liu, C., He, S., Liu, K., & Zhao, J. (2018). Curriculum learning for natural answer generation. In Proceedings of IJCAI (pp. 42234229). Loshchilov, I., & Hutter, F. (2019). Decoupled weight decay regularization. In Proceedings of ICLR.
+Ma, F., Meng, D., Xie, Q., Li, Z., & Dong, X. (2017). Self-paced cotraining. In Proceedings of ICML (Vol. 70, pp. 2275–2284). Mitchell, T. M. (1997). Machine learning. New York: McGraw-Hill. Park, D. S., Chan, W., Zhang, Y., Chiu, C. C., Zoph, B., Cubuk, E. D., et al. (2019). SpecAugment: A simple data augmentation method for automatic speech recognition. In Proceedings of INTERSPEECH (pp. 2613–2617). Pentina, A., Sharmanska, V., & Lampert, C.H. (2015). Curriculum Learning of Multiple Tasks. In Proceedings of CVPR (pp. 54925500). Piczak, K.J. (2015). ESC: Dataset for environmental sound classification. In Proceedings of ACMMM (pp. 1015–1018). Platanios, E.A., Stretcu, O., Neubig, G., Poczos, B., & Mitchell, T. (2019). Competence-based curriculum learning for neural machine translation. In Proceedings of NAACL (pp. 1162–1172). Rajpurkar, P., Zhang, J., Lopyrev, K., & Liang, P. (2016). SQuAD: 100,000+ questions for machine comprehension of text. In Proceedings of EMNLP (pp. 2383–2392).
+Ranjan, S., & Hansen, J. H. L. (2018). Curriculum learning based approaches for noise robust speaker recognition. IEEE/ACM Transactions on Audio, Speech, and Language Processing, 26, 197–210. Ristea, N. C., & Ionescu, R. T. (2021). Self-paced ensemble learning for speech and audio classification. In Proceedings of INTERSPEECH (pp. 2836–2840). Ristea, N.C., Ionescu, R. T., & Khan, F. S. (2022). SepTr: Separable transformer for audio spectrogram processing. In Proceedings of INTERSPEECH (pp. 4103–4107). Russakovsky, O., Deng, J., Su, H., Krause, J., Satheesh, S., Ma, S., et al. (2015). ImageNet large scale visual recognition challenge. International Journal of Computer Vision, 115(3), 211–252.
+Shi, M., & Ferrari, V. (2016). Weakly supervised object localization using size estimates. In Proceedings of ECCV (pp. 105–121). Singh, B., De, S., Zhang, Y., Goldstein, T., & Taylor, G. (2015). Layerspecific adaptive learning rates for deep networks. In Proceedings of ICMLA (pp. 364–368). Sinha, S., Garg, A., & Larochelle, H. (2020). Curriculum by smoothing. In Proceedings of NeurIPS (pp. 21653–21664).
+Soviany, P., Ionescu, R. T., Rota, P., & Sebe, N. (2021). Curriculum self-paced learning for cross-domain object detection. Computer Vision and Image Understanding., 204, 103–166.
+Soviany, P., Ionescu, R. T., Rota, P., & Sebe, N. (2022). Curriculum learning: A survey. International Journal of Computer Vision, 130(6), 1526–1565. Spitkovsky, V.I., Alshawi, H., & Jurafsky, D. (2009). Baby Steps: How “Less is More” in unsupervised dependency parsing. In Proceedings of NIPS.
+Tay, Y., Wang, S., Luu, A.T., Fu, J., Phan, M.C., Yuan, X. et al. (2019). Simple and effective curriculum pointer-generator networks for reading comprehension over long narratives. In Proceedings of ACL (pp. 4922–4931). Wang, A., Pruksachatkun, Y., Nangia, N., Singh, A., Michael, J., Hill, F., et al. (2019). SuperGLUE: A stickier benchmark for general-purpose language understanding systems. Proceedings of NeurIPS, 32, 3266–3280.
+Wang, A., Singh, A., Michael, J., Hill, F., Levy, O., & Bowman, S. R. (2019). GLUE: A multi-task benchmark and analysis platform for natural language understanding. In Proceedings of ICLR. Wang, C. Y., Liao, H. Y. M., Wu, Y. H., Chen, P. Y., Hsieh, J. W., & Yeh, I. H. (2020). CSPNet: A new backbone that can enhance learning capability of CNN. In Proceedings of CVPRW (pp. 390–391). Wang, X., Chen, Y., & Zhu, W. (2022). A survey on curriculum learning. IEEE Transactions on Pattern Analysis and Machine Intelligence, 44(9), 4555–4576. Wang, Y., Yue, Y., Lu, R., Liu, T., Zhong, Z., Song, S., et al. (2023). EfficientTrain: Exploring generalized curriculum learning for training visual backbones. In Proceedings of ICCV (pp. 5852–5864). Wei, J., Suriawinata, A., Ren, B., Liu, X., Lisovsky, M., Vaickus, L, et al. (2021). Learn like a pathologist: Curriculum learning by annotator agreement for histopathology image classification. In Proceedings of WACV (pp. 2472–2482). Wu, H., Xiao, B., Codella, N., Liu, M., Dai, X., Yuan, L., et al. (2021). CvT: Introducing convolutions to vision transformers. In Proceedings of ICCV (pp. 22–31).
+Wu, L., Tian, F., Xia, Y., Fan, Y., Qin, T., Jian-Huang, L., et al. (2018). Learning to teach with dynamic loss functions. In: Proceedings of NeurIPS (Vol. 31, pp. 6467–6478). You, Y., Gitman, I., & Ginsburg, B. (2017). Large batch training of convolutional networks. arXiv preprint arXiv:1708.03888. Zagoruyko, S., & Komodakis, N. (2016). Wide residual networks. arXiv preprint arXiv:1605.07146. Zhang, M., Yu, Z., Wang, H., Qin, H., Zhao, W., & Liu, Y. (2019). Automatic digital modulation classification based on curriculum learning. Applied Sciences, 9(10), 2171. Zhang, W., Wei, W., Wang, W., Jin, L., & Cao, Z. (2021). Reducing BERT computation by padding removal and curriculum learning. In Proceedings of ISPASS (pp. 90–92).
+Zhang, Z., Song, Y., & Qi, H. (2017). Age progression/regression by conditional adversarial autoencoder. In Proceedings of CVPR (pp. 5810–5818). Zhou, S., Wang, J., Meng, D., Xin, X., Li, Y., Gong, Y., et al. (2018). Deep self-paced learning for person re-identification. Pattern Recognition, 76, 739–751.
+Publisher’s Note Springer Nature remains neutral with regard to jurisdictional claims in published maps and institutional affiliations.
+123
