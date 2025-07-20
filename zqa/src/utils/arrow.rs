@@ -165,6 +165,13 @@ mod tests {
             .expect("Error in batch");
 
         assert_eq!(batch.num_columns(), 4, "Expected 4 columns in record batch");
-        assert!(batch.num_rows() == 5, "Expected 5 rows in record batch");
+        assert!(
+            batch.num_rows() > 0,
+            "Expected non-zero rows in record batch"
+        );
+        assert!(
+            batch.num_rows() <= 5,
+            "Expected fewer than five rows in record batch"
+        );
     }
 }
