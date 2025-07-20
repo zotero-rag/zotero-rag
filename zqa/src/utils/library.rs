@@ -18,17 +18,9 @@ use pdftools::parse::extract_text;
 /// get the directory.
 fn get_lib_path() -> Option<PathBuf> {
     if env::var("CI").is_ok() {
-        let mut assets_dir: PathBuf = std::env::current_dir().ok()?;
-
-        // In some cases, the cwd can have a trailing `zqa/` already, so check
-        // before adding an extra one.
-        if let Some(cwd_str) = assets_dir.to_str() {
-            if !cwd_str.contains("zqa") {
-                assets_dir = assets_dir.join("zqa");
-            }
-        }
-
-        assets_dir = assets_dir.join("assets").join("Zotero");
+        let assets_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("assets")
+            .join("Zotero");
 
         if assets_dir.exists() {
             return Some(assets_dir);
