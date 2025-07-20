@@ -11,8 +11,8 @@ env:
 
 jobs:
   build:
-
-    runs-on: ubuntu-latest
+    runs-on:
+      labels: runner-large-linux-x64
 
     steps:
     - name: Dependencies
