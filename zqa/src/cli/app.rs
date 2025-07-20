@@ -80,7 +80,7 @@ async fn embed(args: &Args) -> Result<(), CLIError> {
 /// in `BATCH_ITER_FILE`.
 async fn process(args: &Args) -> Result<(), CLIError> {
     const WARNING_THRESHOLD: usize = 100;
-    let item_metadata = parse_library_metadata(None, None);
+    let item_metadata = parse_library_metadata(None, Some(50));
 
     if let Err(parse_err) = item_metadata {
         println!("Could not parse library metadata: {parse_err}");
@@ -103,7 +103,7 @@ async fn process(args: &Args) -> Result<(), CLIError> {
         }
     }
 
-    let record_batch = library_to_arrow(None, None)?;
+    let record_batch = library_to_arrow(None, Some(50))?;
     let schema = record_batch.schema();
     let batches = vec![Ok(record_batch.clone())];
     let batch_iter = RecordBatchIterator::new(batches.into_iter(), schema.clone());
