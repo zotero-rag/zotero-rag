@@ -138,17 +138,13 @@ pub fn library_to_arrow(
 mod tests {
     use super::*;
     use arrow_array::RecordBatchIterator;
+    use dotenv::dotenv;
     use ftail::Ftail;
-    use std::env;
 
     #[test]
     fn test_library_to_arrow_works() {
+        dotenv().ok();
         Ftail::new().console(log::LevelFilter::Info).init().unwrap();
-
-        if env::var("CI").is_ok() {
-            // Skip this test in CI environments
-            return;
-        }
 
         let record_batch = library_to_arrow(Some(0), Some(5));
         assert!(
