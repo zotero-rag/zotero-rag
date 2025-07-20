@@ -349,7 +349,7 @@ mod tests {
         // Two of the items in the toy library are HTML files, so we actually
         // expect those to fail.
         let items = items.unwrap();
-        assert!(items.len() > 0);
+        assert!(!items.is_empty());
         assert!(items.len() <= 5);
     }
 }
