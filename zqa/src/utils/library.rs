@@ -12,10 +12,31 @@ use std::time::Instant;
 use pdftools::parse::extract_text;
 
 /// Gets the Zotero library path. Works on Linux, macOS, and Windows systems.
+/// On CI environments, returns a location to a toy library in assets/ instead.
 ///
 /// Returns None if either the OS is not one of the above, or if we could not
 /// get the directory.
 fn get_lib_path() -> Option<PathBuf> {
+    if env::var("CI").is_ok() {
+        let mut assets_dir: PathBuf = std::env::current_dir().ok()?;
+
+        // In some cases, the cwd can have a trailing `zqa/` already, so check
+        // before adding an extra one.
+        if let Some(cwd_str) = assets_dir.to_str() {
+            if !cwd_str.contains("zqa") {
+                assets_dir = assets_dir.join("zqa");
+            }
+        }
+
+        assets_dir = assets_dir.join("assets").join("Zotero");
+
+        if assets_dir.exists() {
+            return Some(assets_dir);
+        } else {
+            return None;
+        }
+    }
+
     match env::consts::OS {
         "linux" | "macos" | "windows" => {
             UserDirs::new().map(|user_dirs| PathBuf::from(user_dirs.home_dir()).join("Zotero"))
@@ -274,14 +295,11 @@ pub fn parse_library(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dotenv::dotenv;
 
     #[test]
     fn test_library_fetching_works() {
-        if env::var("CI").is_ok() {
-            // Skip this test in CI environments
-            return;
-        }
-
+        dotenv().ok();
         let library_items = parse_library_metadata(None, None);
 
         assert!(library_items.is_ok());
@@ -289,13 +307,46 @@ mod tests {
         assert!(!items.is_empty());
     }
 
+    /// Test that on CI, the toy library is loaded instead of searching for a non-existent "real"
+    /// library. The "toy" library is a real Zotero library copied over to the `assets/` directory,
+    /// but only contains 10 papers, so that the other tests can run much faster.
+    ///
+    /// This is never meant to run on CI! Use this locally to ensure that the `get_lib_path`
+    /// function correctly handles CI instead, by removing the `#[ignore]` and adding a `FAKE_CI`
+    /// variable to your `.env`. The value of this does not matter, it just has to exist.
+    #[test]
+    #[ignore]
+    fn test_toy_library_loaded_in_ci() {
+        dotenv().ok();
+
+        if let Ok(_) = env::var("FAKE_CI") {
+            std::env::set_var("CI", "true");
+
+            let lib_path = get_lib_path();
+
+            assert!(lib_path.is_some());
+            let lib_path = lib_path.unwrap();
+            assert!(lib_path.to_str().unwrap().contains("zqa"));
+
+            let library_items = parse_library_metadata(None, None);
+            assert!(library_items.is_ok());
+
+            let items = library_items.unwrap();
+            assert!(!items.is_empty());
+            assert_eq!(items.len(), 10);
+
+            std::env::remove_var("CI");
+        } else {
+            panic!(concat!(
+                "You have enabled `test_toy_library_loaded_in_ci`, but ",
+                "have not set the `FAKE_CI` variable. This is not valid."
+            ));
+        }
+    }
+
     #[test]
     fn test_parse_library() {
-        if env::var("CI").is_ok() {
-            // Skip this test in CI environments
-            return;
-        }
-
+        dotenv().ok();
         let items = parse_library(Some(0), Some(5));
 
         assert!(items.is_ok());
