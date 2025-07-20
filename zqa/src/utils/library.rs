@@ -341,7 +341,7 @@ mod tests {
     #[test]
     fn test_parse_library() {
         dotenv().ok();
-        Ftail::new().console(log::LevelFilter::Info).init().unwrap();
+        let _ = Ftail::new().console(log::LevelFilter::Info).init();
         let items = parse_library(Some(0), Some(5));
 
         assert!(items.is_ok());

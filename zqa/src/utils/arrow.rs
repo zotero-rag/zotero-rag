@@ -144,7 +144,7 @@ mod tests {
     #[test]
     fn test_library_to_arrow_works() {
         dotenv().ok();
-        Ftail::new().console(log::LevelFilter::Info).init().unwrap();
+        let _ = Ftail::new().console(log::LevelFilter::Info).init();
 
         let record_batch = library_to_arrow(Some(0), Some(5));
         assert!(
