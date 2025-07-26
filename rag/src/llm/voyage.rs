@@ -74,7 +74,7 @@ where
             // 1. Build a mask of "real" vs "empty" slots
             let mask: Vec<bool> = batch
                 .iter()
-                .map(|opt| opt.as_ref().map_or(false, |s| !s.trim().is_empty()))
+                .map(|opt| opt.as_ref().is_some_and(|s| !s.trim().is_empty()))
                 .collect();
 
             // 2. Extract only the non-empty strings to send
@@ -86,7 +86,7 @@ where
             // 3. If none are real, just push zeros for whole batch
             if cur_texts.is_empty() {
                 all_embeddings.extend(
-                    std::iter::repeat(vec![0.0; VOYAGE_EMBEDDING_DIM as usize]).take(batch.len()),
+                    std::iter::repeat_n(vec![0.0; VOYAGE_EMBEDDING_DIM as usize], batch.len()),
                 );
             } else {
                 let request = VoyageAIRequest::from_texts(cur_texts);
@@ -110,8 +110,14 @@ where
                         // 4. Weave the real embeddings back into the right spots, zero‐padding empties
                         let mut batch_embs = Vec::with_capacity(batch.len());
                         for &is_real in &mask {
+                            // TODO: Refactor to use `let` in the condition when this is not an
+                            // unstable feature anymore.
                             if is_real {
-                                batch_embs.push(it.next().unwrap());
+                                if let Some(embedding) = it.next() {
+                                    batch_embs.push(embedding);
+                                } else {
+                                    batch_embs.push(vec![0.0_f32; VOYAGE_EMBEDDING_DIM as usize]);
+                                }
                             } else {
                                 batch_embs.push(vec![0.0_f32; VOYAGE_EMBEDDING_DIM as usize]);
                             }
@@ -125,8 +131,7 @@ where
                         eprintln!("We tried sending the request: {request:#?}\n");
 
                         fail_count += batch.len();
-                        failed_texts
-                            .extend(batch.iter().map(|text| text.as_ref().unwrap()).cloned());
+                        failed_texts.extend(batch.iter().filter_map(|text| text.as_ref()).cloned());
 
                         let zeros: Vec<Vec<f32>> = std::iter::repeat_n(
                             Vec::from([0.0; VOYAGE_EMBEDDING_DIM as usize]),
@@ -159,9 +164,10 @@ where
         }
 
         let n_embeddings = all_embeddings.len();
-        let emb_shape = all_embeddings
-            .get(0)
-            .ok_or(LLMError::GenericLLMError(String::from("")))?
+        let emb_shape = all_embeddings.first()
+            .ok_or(LLMError::GenericLLMError(String::from(
+                "Could not compute embedding shape--this should not happen.",
+            )))?
             .len();
         println!("Embedding dim: ({n_embeddings}, {emb_shape})");
 
