@@ -41,9 +41,9 @@ where
         source: Arc<dyn arrow_array::Array>,
     ) -> Result<Arc<dyn arrow_array::Array>, LLMError> {
         let source_array = arrow_array::cast::as_string_array(&source);
-        let texts: Vec<String> = source_array
+        let texts: Vec<Option<String>> = source_array
             .iter()
-            .filter_map(|s| Some(s?.to_owned()))
+            .map(|s| s.map(|s| s.to_owned()))
             .collect();
 
         println!("Processing {} input texts.", texts.len());
@@ -65,53 +65,76 @@ where
 
         // Gather failed texts
         let mut fail_count = 0;
+        let mut total_masked = 0;
         let mut failed_texts: Vec<String> = Vec::new();
 
         for batch in texts.chunks(BATCH_SIZE) {
+            // For every batch, we need to handle the case of empty/whitespace strings, since Voyage AI
+            // does not like handling them.
+            // 1. Build a mask of "real" vs "empty" slots
+            let mask: Vec<bool> = batch
+                .iter()
+                .map(|opt| opt.as_ref().map_or(false, |s| !s.trim().is_empty()))
+                .collect();
+
+            // 2. Extract only the non-empty strings to send
             let cur_texts: Vec<String> = batch
                 .iter()
-                .filter(|s| !s.trim().is_empty())
-                .cloned()
+                .filter_map(|opt| opt.clone().filter(|s| !s.trim().is_empty()))
                 .collect();
 
+            // 3. If none are real, just push zeros for whole batch
             if cur_texts.is_empty() {
-                // Push zero-vectors out so the sizes are consistent.
-                let zeros: Vec<Vec<f32>> = std::iter::repeat_n(
-                    Vec::from([0.0_f32; VOYAGE_EMBEDDING_DIM as usize]),
-                    batch.len(),
-                )
-                .collect();
-                all_embeddings.extend(zeros);
+                all_embeddings.extend(
+                    std::iter::repeat(vec![0.0; VOYAGE_EMBEDDING_DIM as usize]).take(batch.len()),
+                );
+            } else {
+                let request = VoyageAIRequest::from_texts(cur_texts);
 
-                continue;
-            }
+                let mut headers = HeaderMap::new();
+                headers.insert("Authorization", format!("Bearer {api_key}").parse()?);
+                headers.insert("Content-Type", "application/json".parse()?);
 
-            let request = VoyageAIRequest::from_texts(cur_texts);
+                let response = self
+                    .client
+                    .post_json("https://api.voyageai.com/v1/embeddings", headers, &request)
+                    .await?;
 
-            let mut headers = HeaderMap::new();
-            headers.insert("Authorization", format!("Bearer {api_key}").parse()?);
-            headers.insert("Content-Type", "application/json".parse()?);
+                let body = response.text().await?;
+                let voyage_response: VoyageAIResponse = serde_json::from_str(&body)?;
 
-            let response = self
-                .client
-                .post_json("https://api.voyageai.com/v1/embeddings", headers, &request)
-                .await?;
+                match voyage_response {
+                    VoyageAIResponse::Success(success) => {
+                        let mut it = success.data.into_iter().map(|d| d.embedding);
 
-            let body = response.text().await?;
-            let voyage_response: VoyageAIResponse = serde_json::from_str(&body)?;
+                        // 4. Weave the real embeddings back into the right spots, zero‐padding empties
+                        let mut batch_embs = Vec::with_capacity(batch.len());
+                        for &is_real in &mask {
+                            if is_real {
+                                batch_embs.push(it.next().unwrap());
+                            } else {
+                                batch_embs.push(vec![0.0_f32; VOYAGE_EMBEDDING_DIM as usize]);
+                            }
+                        }
+                        all_embeddings.extend(batch_embs);
 
-            match voyage_response {
-                VoyageAIResponse::Success(success) => {
-                    for embedding_data in success.data {
-                        all_embeddings.push(embedding_data.embedding);
+                        total_masked += mask.iter().filter(|mask| !**mask).count();
                     }
-                }
-                VoyageAIResponse::Error(err) => {
-                    eprintln!("Got a 400 response from Voyage AI: {}\n", err.detail);
-                    eprintln!("We tried sending the request: {request:#?}\n");
+                    VoyageAIResponse::Error(err) => {
+                        eprintln!("Got a 400 response from Voyage AI: {}\n", err.detail);
+                        eprintln!("We tried sending the request: {request:#?}\n");
 
-                    fail_count += BATCH_SIZE;
-                    failed_texts.extend(batch.iter().cloned());
+                        fail_count += batch.len();
+                        failed_texts
+                            .extend(batch.iter().map(|text| text.as_ref().unwrap()).cloned());
+
+                        let zeros: Vec<Vec<f32>> = std::iter::repeat_n(
+                            Vec::from([0.0; VOYAGE_EMBEDDING_DIM as usize]),
+                            batch.len(),
+                        )
+                        .collect();
+                        all_embeddings.extend(zeros);
+                    }
                 }
             }
 
@@ -119,7 +142,7 @@ where
             tokio::time::sleep(Duration::from_secs(WAIT_AFTER_REQUEST_S)).await;
         }
 
-        println!("Processing finished. {fail_count} items failed.");
+        println!("Processing finished. Statistics:\n{fail_count} items failed.\n{total_masked} items were empty.");
 
         if fail_count > 0 {
             let failed = FailedTexts {
@@ -134,6 +157,13 @@ where
                 println!("We have written the failed texts to 'failed.json'. Consider using /repair to fix this.");
             }
         }
+
+        let n_embeddings = all_embeddings.len();
+        let emb_shape = all_embeddings
+            .get(0)
+            .ok_or(LLMError::GenericLLMError(String::from("")))?
+            .len();
+        println!("Embedding dim: ({n_embeddings}, {emb_shape})");
 
         // Convert to Arrow FixedSizeListArray
         let flattened: Vec<f32> = all_embeddings.iter().flatten().copied().collect();
