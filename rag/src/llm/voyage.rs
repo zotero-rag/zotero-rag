@@ -85,9 +85,10 @@ where
 
             // 3. If none are real, just push zeros for whole batch
             if cur_texts.is_empty() {
-                all_embeddings.extend(
-                    std::iter::repeat_n(vec![0.0; VOYAGE_EMBEDDING_DIM as usize], batch.len()),
-                );
+                all_embeddings.extend(std::iter::repeat_n(
+                    vec![0.0; VOYAGE_EMBEDDING_DIM as usize],
+                    batch.len(),
+                ));
             } else {
                 let request = VoyageAIRequest::from_texts(cur_texts);
 
@@ -164,7 +165,8 @@ where
         }
 
         let n_embeddings = all_embeddings.len();
-        let emb_shape = all_embeddings.first()
+        let emb_shape = all_embeddings
+            .first()
             .ok_or(LLMError::GenericLLMError(String::from(
                 "Could not compute embedding shape--this should not happen.",
             )))?
