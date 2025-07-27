@@ -110,11 +110,9 @@ where
         &self,
         source: Arc<dyn arrow_array::Array>,
     ) -> Result<Arc<dyn arrow_array::Array>, LLMError> {
-        // Convert to a synchronous operation because the trait expects a Result, not a Future
-        let rt = tokio::runtime::Runtime::new()
-            .map_err(|_| LLMError::GenericLLMError("Could not create tokio runtime".to_string()))?;
-
-        rt.block_on(self.compute_embeddings_async(source))
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(self.compute_embeddings_async(source))
+        })
     }
 }
 

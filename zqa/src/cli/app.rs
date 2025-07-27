@@ -1,6 +1,6 @@
 use arrow_array::{self, RecordBatch, RecordBatchIterator};
 use lancedb::embeddings::EmbeddingDefinition;
-use rag::vector::lance::{create_initial_table, db_statistics};
+use rag::vector::lance::{create_initial_table, db_statistics, vector_search};
 
 use crate::cli::errors::CLIError;
 use crate::common::Args;
@@ -142,6 +142,10 @@ async fn process(args: &Args) -> Result<(), CLIError> {
     Ok(())
 }
 
+async fn run_query(query: String, embedding_name: String) {
+    vector_search(query, embedding_name).await.unwrap();
+}
+
 /// Prints out table statistics from the created DB. Fails if the database does not exist, could
 /// not be read, or the statistics could not be computed.
 async fn stats() {
@@ -192,8 +196,13 @@ pub async fn cli(args: Args) {
             "/quit" | "/exit" | "quit" | "exit" => {
                 break;
             }
-            invalid => {
-                println!("Invalid command: {invalid}");
+            query => {
+                // Check for a threshold to ensure this isn't an accidental Enter-hit.
+                if query.len() < 10 {
+                    println!("Invalid command: {query}");
+                } else {
+                    run_query(query.into(), args.embedding.clone()).await;
+                }
             }
         }
     }
