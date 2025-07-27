@@ -49,12 +49,14 @@ cargo run --bin zqa
 - Factory pattern for LLM clients (`rag/src/llm/factory.rs`)
 - Trait-based design for extensibility (base traits in `rag/src/llm/base.rs`)
 - In general, functions should have documentation above them. This does not need to be done for trait implementations, if the trait is standard in Rust (e.g., `From<...>`, `Copy`, etc.).
+- In general, the library crates `pdftools` and `rag` should not have side-effects such as printing to `stdout`, _unless_ that side-effect provides useful information to the user (e.g., warnings, specific error messages, etc.).
 - Although `cargo clippy` is automatically run and will block PR merging, you should also perform checks for idiomatic Rust, especially for code that reimplements functions that are built-in. However, if the user notes, or you believe, that Clippy marked that instance as okay, this is fine, and Clippy's ruling should be followed.
 
 ## PR Review
 
-- Assess that the PR code follows idiomatic Rust.
+- Assess that the PR code follows idiomatic Rust and the coding standards set above.
 - In general, bias for efficiency. However, there may be cases where some efficiency is traded off for readability or better UX; but this should be limited.
+- PRs should, generally speaking, contain tests for the code they add. This should be exempted in very limited situations where there is a good reason.
 - Minimize the use of emojis unless you need to strongly emphasize something; use standard Markdown instead.
 
 ## Architecture Notes
@@ -83,6 +85,5 @@ cargo run --bin zqa
 
 ## Testing Notes
 
-- Some tests require Zotero library and are disabled in CI
 - Integration tests in `zqa/tests/`--currently disabled since we need a Zotero mocker.
 - Use `cargo test` to run available tests. If you are debugging, use `RUST_BACKTRACE=1`.
