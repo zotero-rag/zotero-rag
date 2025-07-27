@@ -108,8 +108,7 @@ pub async fn db_statistics() -> Result<TableStatistics, LanceError> {
 async fn get_db_with_embeddings(embedding_name: &str) -> Result<Connection, LanceError> {
     if !(EmbeddingProviders::contains(embedding_name)) {
         return Err(LanceError::ParameterError(format!(
-            "{} is not a valid embedding.",
-            embedding_name
+            "{embedding_name} is not a valid embedding."
         )));
     }
 
