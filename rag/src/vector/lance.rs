@@ -12,6 +12,7 @@ use lancedb::{
 use std::{error::Error, fmt::Display, sync::Arc, vec::IntoIter};
 
 const DB_URI: &str = "data/lancedb-table";
+const TABLE_NAME: &str = "data";
 
 /// Errors that can occur when working with LanceDB
 #[derive(Debug)]
@@ -78,7 +79,7 @@ pub async fn db_statistics() -> Result<TableStatistics, LanceError> {
         .await
         .map_err(|e| LanceError::ConnectionError(e.to_string()))?;
 
-    let tbl = db.open_table("data").execute().await?;
+    let tbl = db.open_table(TABLE_NAME).execute().await?;
     let table_version = tbl.version().await?;
     let num_rows = tbl.count_rows(None).await?;
 
@@ -90,7 +91,7 @@ pub async fn db_statistics() -> Result<TableStatistics, LanceError> {
 
 /// Creates and initializes a LanceDB table for vector storage
 ///
-/// Connects to LanceDB at the default location, creates a table named "data",
+/// Connects to LanceDB at the default location, creates a table named `TABLE_NAME`,
 /// and registers embedding functions for both Anthropic and OpenAI.
 ///
 /// # Arguments
@@ -149,7 +150,7 @@ pub async fn create_initial_table(
 
     // Create the table
     let _tbl = db
-        .create_table("data", data)
+        .create_table(TABLE_NAME, data)
         .mode(CreateTableMode::Overwrite)
         .add_embedding(embedding_params)?
         .execute()
@@ -197,9 +198,9 @@ mod tests {
 
         let tbl_names = db.table_names().execute().await;
         assert!(tbl_names.is_ok());
-        assert_eq!(tbl_names.unwrap(), vec!["data"]);
+        assert_eq!(tbl_names.unwrap(), vec![TABLE_NAME]);
 
-        let tbl = db.open_table("data").execute().await;
+        let tbl = db.open_table(TABLE_NAME).execute().await;
         assert!(tbl.is_ok());
 
         let tbl = tbl.unwrap();
@@ -246,9 +247,9 @@ mod tests {
 
         let tbl_names = db.table_names().execute().await;
         assert!(tbl_names.is_ok());
-        assert_eq!(tbl_names.unwrap(), vec!["data"]);
+        assert_eq!(tbl_names.unwrap(), vec![TABLE_NAME]);
 
-        let tbl = db.open_table("data").execute().await;
+        let tbl = db.open_table(TABLE_NAME).execute().await;
         assert!(tbl.is_ok());
 
         let tbl = tbl.unwrap();
@@ -295,9 +296,9 @@ mod tests {
 
         let tbl_names = db.table_names().execute().await;
         assert!(tbl_names.is_ok());
-        assert_eq!(tbl_names.unwrap(), vec!["data"]);
+        assert_eq!(tbl_names.unwrap(), vec![TABLE_NAME]);
 
-        let tbl = db.open_table("data").execute().await;
+        let tbl = db.open_table(TABLE_NAME).execute().await;
         assert!(tbl.is_ok());
 
         let tbl = tbl.unwrap();
