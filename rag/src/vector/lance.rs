@@ -11,6 +11,8 @@ use lancedb::{
 };
 use std::{error::Error, sync::Arc, vec::IntoIter};
 
+const DB_URI: &str = "data/lancedb-table";
+
 /// Errors that can occur when working with LanceDB
 #[derive(Debug)]
 pub enum LanceError {
@@ -44,6 +46,31 @@ impl From<LanceDbError> for LanceError {
     }
 }
 
+/// Connects to the database and prints out simple statistics.
+///
+/// # Errors
+/// Returns a `LanceError` if
+/// - the DB cannot be found
+/// - the DB could not be connected to
+/// - the table could not be opened
+/// - the table statistics could not be computed
+pub async fn db_statistics() -> Result<(), LanceError> {
+    let db = connect(DB_URI)
+        .execute()
+        .await
+        .map_err(|e| LanceError::ConnectionError(e.to_string()))?;
+
+    let tbl = db.open_table("data").execute().await?;
+    let tbl_version = tbl.version().await?;
+    let n_rows = tbl.count_rows(None).await?;
+
+    println!("Table statistics:");
+    println!("\tTable version: {tbl_version}");
+    println!("\tNumber of rows: {n_rows}\n");
+
+    Ok(())
+}
+
 /// Creates and initializes a LanceDB table for vector storage
 ///
 /// Connects to LanceDB at the default location, creates a table named "data",
@@ -65,8 +92,6 @@ pub async fn create_initial_table(
     data: RecordBatchIterator<IntoIter<Result<RecordBatch, ArrowError>>>,
     embedding_params: EmbeddingDefinition,
 ) -> Result<Connection, LanceError> {
-    let uri = "data/lancedb-table";
-
     if !(EmbeddingProviders::contains(&embedding_params.embedding_name)) {
         return Err(LanceError::ParameterError(format!(
             "{} is not a valid embedding.",
@@ -75,7 +100,7 @@ pub async fn create_initial_table(
     }
 
     // Connect to LanceDB
-    let db = connect(uri)
+    let db = connect(DB_URI)
         .execute()
         .await
         .map_err(|e| LanceError::ConnectionError(e.to_string()))?;

@@ -1,6 +1,6 @@
 use arrow_array::{self, RecordBatch, RecordBatchIterator};
 use lancedb::embeddings::EmbeddingDefinition;
-use rag::vector::lance::create_initial_table;
+use rag::vector::lance::{create_initial_table, db_statistics};
 
 use crate::cli::errors::CLIError;
 use crate::common::Args;
@@ -80,7 +80,7 @@ async fn embed(args: &Args) -> Result<(), CLIError> {
 /// in `BATCH_ITER_FILE`.
 async fn process(args: &Args) -> Result<(), CLIError> {
     const WARNING_THRESHOLD: usize = 100;
-    let item_metadata = parse_library_metadata(None, Some(50));
+    let item_metadata = parse_library_metadata(None, None);
 
     if let Err(parse_err) = item_metadata {
         println!("Could not parse library metadata: {parse_err}");
@@ -103,7 +103,7 @@ async fn process(args: &Args) -> Result<(), CLIError> {
         }
     }
 
-    let record_batch = library_to_arrow(None, Some(50))?;
+    let record_batch = library_to_arrow(None, None)?;
     let schema = record_batch.schema();
     let batches = vec![Ok(record_batch.clone())];
     let batch_iter = RecordBatchIterator::new(batches.into_iter(), schema.clone());
@@ -142,6 +142,12 @@ async fn process(args: &Args) -> Result<(), CLIError> {
     Ok(())
 }
 
+async fn stats() {
+    if let Err(e) = db_statistics().await {
+        eprintln!("Could not get database statistics: {e}");
+    }
+}
+
 pub async fn cli(args: Args) {
     loop {
         print!(">>> ");
@@ -161,6 +167,7 @@ pub async fn cli(args: Args) {
                 println!("/help\t\tShow this help message");
                 println!("/process\tPre-process Zotero library. Use to update the database.");
                 println!("/embed\t\tRepair failed DB creation by re-adding embeddings.");
+                println!("/stats\t\tShow table statistics.");
                 println!("/quit\t\tExit the program");
                 println!();
             }
@@ -178,6 +185,7 @@ pub async fn cli(args: Args) {
                     );
                 }
             }
+            "/stats" => stats().await,
             "/quit" | "/exit" | "quit" | "exit" => {
                 break;
             }
