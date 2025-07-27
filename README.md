@@ -7,12 +7,20 @@ A Rust-based system for answering questions from your Zotero library using Retri
 
 ## Overview
 
-This project provides a command-line interface for querying your Zotero library with natural language questions. It uses RAG to search and retrieve relevant information from your academic papers, then generates answers grounded in your library content--at least, that's the end goal, anyway. A lot of the functionality doesn't quite yet: 
+This project provides a command-line interface for querying your Zotero library with natural language questions. It uses RAG to search and retrieve relevant information from your academic papers, then generates answers grounded in your library content--at least, that's the end goal, anyway. A lot of the functionality doesn't quite exist yet: 
+
+### Features
 
 * We can currently extract text from PDFs and ignore tables/figures (they're unlikely to have useful context for LLMs)
 * We can call LLMs (currently OpenAI and Anthropic) for embedding text and generating text.
 * We can embed text using LanceDB.
-* These parts are not strung together yet--the `zqa` crate is currently a Hello World app.
+* We can embed queries and perform vector search.
+
+### Limitations
+
+* The actual generation part has not been implemented yet.
+* The `zqa` CLI is limited--it can create embeddings for your library and perform vector search, but that's pretty much it.
+* We only support OpenAI and Anthropic for LLMs, and only OpenAI and Voyage AI for embeddings. Future plans include Gemini, Vertex AI, ollama, and possibly OpenRouter and Groq.
 
 ## Project Structure
 
