@@ -142,9 +142,12 @@ async fn process(args: &Args) -> Result<(), CLIError> {
     Ok(())
 }
 
+/// Prints out table statistics from the created DB. Fails if the database does not exist, could
+/// not be read, or the statistics could not be computed.
 async fn stats() {
-    if let Err(e) = db_statistics().await {
-        eprintln!("Could not get database statistics: {e}");
+    match db_statistics().await {
+        Ok(stats) => println!("{stats}"),
+        Err(e) => eprintln!("Could not get database statistics: {e}"),
     }
 }
 
