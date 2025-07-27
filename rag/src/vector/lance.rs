@@ -9,7 +9,7 @@ use lancedb::{
     arrow::arrow_schema::ArrowError, connect, connection::CreateTableMode,
     embeddings::EmbeddingDefinition, Connection, Error as LanceDbError,
 };
-use std::{error::Error, sync::Arc, vec::IntoIter};
+use std::{error::Error, fmt::Display, sync::Arc, vec::IntoIter};
 
 const DB_URI: &str = "data/lancedb-table";
 
@@ -46,6 +46,24 @@ impl From<LanceDbError> for LanceError {
     }
 }
 
+/// Table statistics, to be shown when the user calls the `/stats` command.
+pub struct TableStatistics {
+    /// The table version. Each update to a table creates a new version.
+    table_version: u64,
+    /// Number of rows in the table
+    num_rows: usize,
+}
+
+impl Display for TableStatistics {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Table statistics:\n")?;
+        f.write_str(&format!("\tTable version: {}", self.table_version))?;
+        f.write_str(&format!("\tNumber of rows: {}", self.num_rows))?;
+
+        Ok(())
+    }
+}
+
 /// Connects to the database and prints out simple statistics.
 ///
 /// # Errors
@@ -54,21 +72,20 @@ impl From<LanceDbError> for LanceError {
 /// - the DB could not be connected to
 /// - the table could not be opened
 /// - the table statistics could not be computed
-pub async fn db_statistics() -> Result<(), LanceError> {
+pub async fn db_statistics() -> Result<TableStatistics, LanceError> {
     let db = connect(DB_URI)
         .execute()
         .await
         .map_err(|e| LanceError::ConnectionError(e.to_string()))?;
 
     let tbl = db.open_table("data").execute().await?;
-    let tbl_version = tbl.version().await?;
-    let n_rows = tbl.count_rows(None).await?;
+    let table_version = tbl.version().await?;
+    let num_rows = tbl.count_rows(None).await?;
 
-    println!("Table statistics:");
-    println!("\tTable version: {tbl_version}");
-    println!("\tNumber of rows: {n_rows}\n");
-
-    Ok(())
+    Ok(TableStatistics {
+        table_version,
+        num_rows,
+    })
 }
 
 /// Creates and initializes a LanceDB table for vector storage
