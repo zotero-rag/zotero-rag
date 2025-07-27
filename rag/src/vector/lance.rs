@@ -3,14 +3,11 @@ use crate::llm::{
     openai::OpenAIClient, voyage::VoyageAIClient,
 };
 
-use arrow_array::{
-    cast::AsArray, types::Float32Type, RecordBatch, RecordBatchIterator, StringArray,
-};
+use arrow_array::{RecordBatch, RecordBatchIterator};
 use core::fmt;
-use futures::TryStreamExt;
 use lancedb::{
     arrow::arrow_schema::ArrowError, connect, connection::CreateTableMode,
-    embeddings::EmbeddingDefinition, query::ExecutableQuery, Connection, Error as LanceDbError,
+    embeddings::EmbeddingDefinition, Connection, Error as LanceDbError,
 };
 use std::{error::Error, fmt::Display, sync::Arc, vec::IntoIter};
 
@@ -26,8 +23,6 @@ pub enum LanceError {
     TableCreationError(String),
     /// Invalid params
     ParameterError(String),
-    /// The database is in an invalid state
-    InvalidStateError(String),
     /// Other LanceDB-related errors
     Other(String),
 }
@@ -38,7 +33,6 @@ impl fmt::Display for LanceError {
             Self::ConnectionError(msg) => write!(f, "LanceDB connection error: {msg}"),
             Self::TableCreationError(msg) => write!(f, "LanceDB table creation error: {msg}"),
             Self::ParameterError(msg) => write!(f, "Invalid parameter: {msg}"),
-            Self::InvalidStateError(msg) => write!(f, "The DB is in an invalid state: {msg}"),
             Self::Other(msg) => write!(f, "LanceDB error: {msg}"),
         }
     }
@@ -95,104 +89,6 @@ pub async fn db_statistics() -> Result<TableStatistics, LanceError> {
     })
 }
 
-/// Connect to the Lance database and add the embedding `embedding_name` to the database's
-/// embedding registry. Note that if we are opening a database that had one defined, we should use
-/// the same one here. Since that isn't stored (at least, not that I know of), this onus is on the
-/// user.
-///
-/// # Args
-/// - `embedding_name`: The embedding method to use. Must be in `EmbeddingProviders`.
-///
-/// # Returns
-/// - `db`: A `Connection` object to the Lance database.
-async fn get_db_with_embeddings(embedding_name: &str) -> Result<Connection, LanceError> {
-    if !(EmbeddingProviders::contains(embedding_name)) {
-        return Err(LanceError::ParameterError(format!(
-            "{} is not a valid embedding.",
-            embedding_name
-        )));
-    }
-
-    let db = connect(DB_URI)
-        .execute()
-        .await
-        .map_err(|e| LanceError::ConnectionError(e.to_string()))?;
-
-    match embedding_name {
-        "anthropic" => {
-            db.embedding_registry().register(
-                EmbeddingProviders::Anthropic.as_str(),
-                Arc::new(AnthropicClient::<ReqwestClient>::default()),
-            )?;
-        }
-        "openai" => {
-            db.embedding_registry().register(
-                EmbeddingProviders::OpenAI.as_str(),
-                Arc::new(OpenAIClient::default()),
-            )?;
-        }
-        "voyageai" => {
-            db.embedding_registry().register(
-                EmbeddingProviders::VoyageAI.as_str(),
-                Arc::new(VoyageAIClient::<ReqwestClient>::default()),
-            )?;
-        }
-        _ => unreachable!("Unknown embedding provider {}", embedding_name),
-    }
-
-    Ok(db)
-}
-
-/// Perform a vector search on the database using the `query` and the `embedding_name` embedding
-/// method. Currently, this simply prints out the titles of the papers found, but this will need to
-/// be made into a nicer structure that can be iterated over.
-pub async fn vector_search(query: String, embedding_name: String) -> Result<(), LanceError> {
-    let db = get_db_with_embeddings(&embedding_name).await?;
-
-    let tbl = db.open_table(TABLE_NAME).execute().await.map_err(|_| {
-        LanceError::InvalidStateError("The table {TABLE_NAME} does not exist".into())
-    })?;
-    let embedding =
-        db.embedding_registry()
-            .get(&embedding_name)
-            .ok_or(LanceError::InvalidStateError(
-                "{embedding_name} is not in the database embedding registry".into(),
-            ))?;
-
-    let query_vec = embedding.compute_query_embeddings(Arc::new(StringArray::from(vec![query])))?;
-
-    // Convert FixedSizeListArray to Vec<f64>
-    // The embedding functions return `FixedSizeListArray` with Float32 elements
-    // See https://github.com/apache/arrow-rs/discussions/6087#discussioncomment-10851422 for
-    // converting an Arrow Array to a `Vec`.
-    let query_vec: Vec<f32> = {
-        let list_array = arrow_array::cast::as_fixed_size_list_array(&query_vec);
-        let values = list_array.values().as_primitive::<Float32Type>();
-        values.iter().map(|v| v.unwrap_or(0.0)).collect()
-    };
-
-    let stream = tbl.query().nearest_to(query_vec)?.execute().await?;
-    let batches: Vec<RecordBatch> = stream.try_collect().await?;
-
-    println!("Relevant papers found:");
-    for batch in batches {
-        // Column 1 contains the titles, see `arrow.rs`. This should be made a parameter.
-        let values = batch.column(1).as_string::<i32>().clone();
-        let values: Vec<String> = values
-            .iter()
-            .filter(|s| s.is_some())
-            .map(|s| s.unwrap().to_string())
-            .collect();
-
-        for value in values {
-            println!("{value}");
-        }
-    }
-    println!();
-
-    Ok(())
-}
-
 /// Creates and initializes a LanceDB table for vector storage
 ///
 /// Connects to LanceDB at the default location, creates a table named `TABLE_NAME`,
@@ -214,7 +110,43 @@ pub async fn create_initial_table(
     data: RecordBatchIterator<IntoIter<Result<RecordBatch, ArrowError>>>,
     embedding_params: EmbeddingDefinition,
 ) -> Result<Connection, LanceError> {
-    let db = get_db_with_embeddings(&embedding_params.embedding_name).await?;
+    if !(EmbeddingProviders::contains(&embedding_params.embedding_name)) {
+        return Err(LanceError::ParameterError(format!(
+            "{} is not a valid embedding.",
+            embedding_params.embedding_name
+        )));
+    }
+
+    // Connect to LanceDB
+    let db = connect(DB_URI)
+        .execute()
+        .await
+        .map_err(|e| LanceError::ConnectionError(e.to_string()))?;
+
+    match embedding_params.embedding_name.as_str() {
+        "anthropic" => {
+            db.embedding_registry().register(
+                EmbeddingProviders::Anthropic.as_str(),
+                Arc::new(AnthropicClient::<ReqwestClient>::default()),
+            )?;
+        }
+        "openai" => {
+            db.embedding_registry().register(
+                EmbeddingProviders::OpenAI.as_str(),
+                Arc::new(OpenAIClient::default()),
+            )?;
+        }
+        "voyageai" => {
+            db.embedding_registry().register(
+                EmbeddingProviders::VoyageAI.as_str(),
+                Arc::new(VoyageAIClient::<ReqwestClient>::default()),
+            )?;
+        }
+        _ => unreachable!(
+            "Unknown embedding provider {}",
+            embedding_params.embedding_name
+        ),
+    }
 
     // Create the table
     let _tbl = db

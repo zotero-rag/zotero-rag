@@ -171,7 +171,7 @@ where
                 "Could not compute embedding shape--this should not happen.",
             )))?
             .len();
-        println!("Embedding dim: ({n_embeddings}, {emb_shape})\n");
+        println!("Embedding dim: ({n_embeddings}, {emb_shape})");
 
         // Convert to Arrow FixedSizeListArray
         let flattened: Vec<f32> = all_embeddings.iter().flatten().copied().collect();
@@ -195,9 +195,11 @@ where
         &self,
         source: Arc<dyn arrow_array::Array>,
     ) -> Result<Arc<dyn arrow_array::Array>, LLMError> {
-        tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(self.compute_embeddings_async(source))
-        })
+        let rt = tokio::runtime::Runtime::new().map_err(|e| {
+            LLMError::GenericLLMError(format!("Could not create tokio runtime: {e}"))
+        })?;
+
+        rt.block_on(self.compute_embeddings_async(source))
     }
 }
 
