@@ -198,7 +198,7 @@ pub async fn vector_search(
 
     let items: Vec<ZoteroItem> = batches
         .iter()
-        .map(|batch| {
+        .flat_map(|batch| {
             let lib_keys = get_column_from_batch(batch, 0);
             let titles = get_column_from_batch(batch, 1);
             let file_paths = get_column_from_batch(batch, 2);
@@ -218,7 +218,6 @@ pub async fn vector_search(
 
             items_batch
         })
-        .flatten()
         .collect();
 
     Ok(items)
