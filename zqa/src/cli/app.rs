@@ -1,6 +1,12 @@
+use crate::cli::prompts::{get_extraction_prompt, get_summarize_prompt};
+use crate::utils::arrow::vector_search;
 use arrow_array::{self, RecordBatch, RecordBatchIterator};
 use lancedb::embeddings::EmbeddingDefinition;
-use rag::vector::lance::{create_initial_table, db_statistics, vector_search};
+use rag::llm::base::{ApiClient, ApiResponse, ModelProviders, UserMessage};
+use rag::llm::errors::LLMError;
+use rag::llm::factory::get_client_by_provider;
+use rag::vector::lance::{create_initial_table, db_statistics};
+use tokio::task::JoinSet;
 
 use crate::cli::errors::CLIError;
 use crate::common::Args;
@@ -74,7 +80,7 @@ async fn embed(args: &Args) -> Result<(), CLIError> {
     Ok(())
 }
 
-/// Process a user's Zotero library. This acts as the main function provided by the CLI.
+/// Process a user's Zotero library. This acts as one of the main functions provided by the CLI.
 /// This parses the library, extracts the text from each file, stores them in a LanceDB
 /// table, and adds their embeddings. If the last step fails, the parsed texts are stored
 /// in `BATCH_ITER_FILE`.
@@ -142,8 +148,90 @@ async fn process(args: &Args) -> Result<(), CLIError> {
     Ok(())
 }
 
-async fn run_query(query: String, embedding_name: String) {
-    vector_search(query, embedding_name).await.unwrap();
+async fn run_query(
+    query: String,
+    embedding_name: String,
+    model_provider: String,
+) -> Result<Vec<Result<ApiResponse, LLMError>>, CLIError> {
+    let search_results = vector_search(query.clone(), embedding_name).await?;
+
+    if !ModelProviders::contains(&model_provider) {
+        return Err(CLIError::LLMError(format!(
+            "Model provider {model_provider} is not valid."
+        )));
+    }
+
+    let mut set = JoinSet::new();
+
+    search_results.iter().for_each(|item| {
+        let provider = model_provider.clone();
+        let text = item.text.clone();
+        let query_clone = query.clone();
+
+        set.spawn(async move {
+            let client = get_client_by_provider(&provider).unwrap();
+            let message = UserMessage {
+                chat_history: Vec::new(),
+                message: get_extraction_prompt(&query_clone, &text),
+            };
+
+            client.send_message(&message).await
+        });
+    });
+
+    let results: Vec<Result<ApiResponse, LLMError>> = set.join_all().await;
+
+    let mut err_results = results.iter().filter(|res| res.is_err());
+    if let Some(first_error) = err_results.next() {
+        eprintln!(
+            "{}/{} LLM requests failed:",
+            err_results.count(),
+            search_results.len()
+        );
+        eprintln!("Here is why the first one failed (the others may be similar):");
+        eprintln!("\t{}", first_error.clone()?.content);
+    }
+
+    let ok_results = results
+        .iter()
+        .filter_map(|res| Some(res.clone().ok()?.content))
+        .collect::<Vec<_>>();
+
+    let client = get_client_by_provider(&model_provider).unwrap();
+    let message = UserMessage {
+        chat_history: Vec::new(),
+        message: get_summarize_prompt(&query, ok_results),
+    };
+
+    let mut total_input_tokens = results
+        .iter()
+        .filter_map(|f| Some(f.clone().ok()?.input_tokens))
+        .sum::<u32>();
+    let mut total_output_tokens = results
+        .iter()
+        .filter_map(|f| Some(f.clone().ok()?.output_tokens))
+        .sum::<u32>();
+
+    match client.send_message(&message).await {
+        Ok(response) => {
+            println!("{}", response.content);
+
+            total_input_tokens += response.input_tokens;
+            total_output_tokens += response.output_tokens;
+        }
+        Err(e) => {
+            eprintln!(
+                "Failed to call the LLM endpoint for the final response: {}",
+                e.to_string()
+            );
+        }
+    }
+
+    println!("\nTotal token usage:");
+    println!("\tInput tokens: {total_input_tokens}");
+    println!("\tOutput tokens: {total_output_tokens}");
+
+    Ok(results)
 }
 
 /// Prints out table statistics from the created DB. Fails if the database does not exist, could
@@ -200,8 +288,20 @@ pub async fn cli(args: Args) {
                 // Check for a threshold to ensure this isn't an accidental Enter-hit.
                 if query.len() < 10 {
                     println!("Invalid command: {query}");
-                } else {
-                    run_query(query.into(), args.embedding.clone()).await;
+                    continue;
+                }
+
+                if run_query(
+                    query.into(),
+                    args.embedding.clone(),
+                    args.model_provider.clone(),
+                )
+                .await
+                .is_err()
+                {
+                    eprintln!(
+                        "Failed to answer the question. You may find relevant error messages above."
+                    );
                 }
             }
         }

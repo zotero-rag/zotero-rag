@@ -143,9 +143,18 @@ async fn get_db_with_embeddings(embedding_name: &str) -> Result<Connection, Lanc
 }
 
 /// Perform a vector search on the database using the `query` and the `embedding_name` embedding
-/// method. Currently, this simply prints out the titles of the papers found, but this will need to
-/// be made into a nicer structure that can be iterated over.
-pub async fn vector_search(query: String, embedding_name: String) -> Result<(), LanceError> {
+/// method. Returns a vector of Arrow `RecordBatch` objects containing the results.
+///
+/// # Args
+/// - query: The query string to search for
+/// - embedding_name: The embedding method to use. Must be one of `EmbeddingProviders`.
+///
+/// # Returns
+/// - batches: A vector of Arrow `RecordBatch` objects containing the results.
+pub async fn vector_search(
+    query: String,
+    embedding_name: String,
+) -> Result<Vec<RecordBatch>, LanceError> {
     let db = get_db_with_embeddings(&embedding_name).await?;
 
     let tbl = db.open_table(TABLE_NAME).execute().await.map_err(|_| {
@@ -173,23 +182,7 @@ pub async fn vector_search(query: String, embedding_name: String) -> Result<(), 
     let stream = tbl.query().nearest_to(query_vec)?.execute().await?;
     let batches: Vec<RecordBatch> = stream.try_collect().await?;
 
-    println!("Relevant papers found:");
-    for batch in batches {
-        // Column 1 contains the titles, see `arrow.rs`. This should be made a parameter.
-        let values = batch.column(1).as_string::<i32>().clone();
-        let values: Vec<String> = values
-            .iter()
-            .filter(|s| s.is_some())
-            .map(|s| s.unwrap().to_string())
-            .collect();
-
-        for value in values {
-            println!("{value}");
-        }
-    }
-    println!();
-
-    Ok(())
+    Ok(batches)
 }
 
 /// Creates and initializes a LanceDB table for vector storage
