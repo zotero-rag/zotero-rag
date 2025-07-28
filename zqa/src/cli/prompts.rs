@@ -49,7 +49,8 @@ pub fn get_extraction_prompt(query: &str, pdf_text: &str) -> String {
 /// * `prompt` - The prompt for answering the user query
 pub fn get_summarize_prompt(query: &str, excerpts: Vec<String>) -> String {
     let search_results = excerpts
-        .iter().cloned()
+        .iter()
+        .cloned()
         .reduce(|acc: String, res: String| format!("{acc}\n<search_result>{res}</search_result>"))
         .unwrap();
 

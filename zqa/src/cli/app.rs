@@ -220,9 +220,7 @@ async fn run_query(
             total_output_tokens += response.output_tokens;
         }
         Err(e) => {
-            eprintln!(
-                "Failed to call the LLM endpoint for the final response: {e}"
-            );
+            eprintln!("Failed to call the LLM endpoint for the final response: {e}");
         }
     }
 
