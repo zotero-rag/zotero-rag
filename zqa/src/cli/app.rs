@@ -192,25 +192,15 @@ async fn run_query(
         eprintln!("\t{}", first_error.clone()?.content);
     }
 
-    let ok_results = results
+    let (ok_contents, mut total_input_tokens, mut total_output_tokens) = results
         .iter()
-        .filter_map(|res| Some(res.clone().ok()?.content))
-        .collect::<Vec<_>>();
-
-    let client = get_client_by_provider(&model_provider).unwrap();
-    let message = UserMessage {
-        chat_history: Vec::new(),
-        message: get_summarize_prompt(&query, ok_results),
-    };
-
-    let mut total_input_tokens = results
-        .iter()
-        .filter_map(|f| Some(f.clone().ok()?.input_tokens))
-        .sum::<u32>();
-    let mut total_output_tokens = results
-        .iter()
-        .filter_map(|f| Some(f.clone().ok()?.output_tokens))
-        .sum::<u32>();
+        .filter_map(|res| res.as_ref().ok())
+        .fold((Vec::new(), 0, 0), |mut acc, res| {
+            acc.0.push(res.content.clone());
+            acc.1 += res.input_tokens;
+            acc.2 += res.output_tokens;
+            acc
+        });
 
     match client.send_message(&message).await {
         Ok(response) => {
@@ -283,7 +273,9 @@ pub async fn cli(args: Args) {
             }
             query => {
                 // Check for a threshold to ensure this isn't an accidental Enter-hit.
-                if query.len() < 10 {
+const MIN_QUERY_LENGTH: usize = 10;
+
+                if query.len() < MIN_QUERY_LENGTH {
                     println!("Invalid command: {query}");
                     continue;
                 }

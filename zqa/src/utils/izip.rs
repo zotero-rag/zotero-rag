@@ -20,8 +20,7 @@
 /// of using the standard library `.zip()`.
 ///
 /// ```
-/// # use itertools::izip;
-/// #
+/// # // The `izip!` macro is defined locally in this module.
 /// # fn main() {
 ///
 /// // iterate over three sequences side-by-side
