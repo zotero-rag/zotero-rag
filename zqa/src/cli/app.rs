@@ -221,8 +221,7 @@ async fn run_query(
         }
         Err(e) => {
             eprintln!(
-                "Failed to call the LLM endpoint for the final response: {}",
-                e.to_string()
+                "Failed to call the LLM endpoint for the final response: {e}"
             );
         }
     }
