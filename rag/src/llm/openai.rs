@@ -344,8 +344,8 @@ mod tests {
         assert_eq!(res.output_tokens, 10);
     }
 
-    #[test]
-    fn test_compute_embeddings() {
+    #[tokio::test]
+    async fn test_compute_embeddings() {
         dotenv().ok();
 
         let array = arrow_array::StringArray::from(vec![
@@ -358,7 +358,7 @@ mod tests {
         ]);
 
         let client = OpenAIClient::<ReqwestClient>::default();
-        let embeddings = client.compute_embeddings_internal(Arc::new(array));
+        let embeddings = client.compute_embeddings_async(Arc::new(array)).await;
 
         // Debug the error if there is one
         if embeddings.is_err() {
