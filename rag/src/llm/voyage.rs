@@ -149,7 +149,9 @@ where
             tokio::time::sleep(Duration::from_secs(WAIT_AFTER_REQUEST_S)).await;
         }
 
-        log::info!("Processing finished. Statistics:\n{fail_count} items failed.\n{total_masked} items were empty.");
+        log::info!(
+            "Processing finished. Statistics:\n{fail_count} items failed.\n{total_masked} items were empty."
+        );
 
         if fail_count > 0 {
             let failed = FailedTexts {
@@ -162,7 +164,9 @@ where
                 eprintln!("We could not write out the failed texts to 'failed.json': {e}");
             } else {
                 // TODO: Implement /repair
-                println!("We have written the failed texts to 'failed.json'. Consider using /repair to fix this.");
+                println!(
+                    "We have written the failed texts to 'failed.json'. Consider using /repair to fix this."
+                );
             }
         }
 
@@ -318,7 +322,7 @@ impl<T: HttpClient + Default + std::fmt::Debug> EmbeddingFunction for VoyageAICl
 #[cfg(test)]
 mod tests {
     use crate::llm::http_client::ReqwestClient;
-    use crate::llm::voyage::{VoyageAIClient, VOYAGE_EMBEDDING_DIM};
+    use crate::llm::voyage::{VOYAGE_EMBEDDING_DIM, VoyageAIClient};
     use arrow_array::Array;
     use dotenv::dotenv;
     use std::sync::Arc;

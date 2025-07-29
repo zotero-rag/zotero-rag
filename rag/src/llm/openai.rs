@@ -2,8 +2,8 @@ use std::borrow::Cow;
 use std::env;
 use std::sync::Arc;
 
-use futures::stream;
 use futures::StreamExt;
+use futures::stream;
 use http::HeaderMap;
 use lancedb::arrow::arrow_schema::{DataType, Field};
 use lancedb::embeddings::EmbeddingFunction;

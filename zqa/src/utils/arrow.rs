@@ -1,4 +1,4 @@
-use arrow_array::{cast::AsArray, ArrayRef, RecordBatch, StringArray};
+use arrow_array::{ArrayRef, RecordBatch, StringArray, cast::AsArray};
 use arrow_schema;
 use core::fmt;
 use std::error::Error;
@@ -9,9 +9,9 @@ use crate::{
     izip,
     utils::library::{ZoteroItem, ZoteroItemMetadata},
 };
-use rag::vector::lance::{vector_search as rag_vector_search, LanceError};
+use rag::vector::lance::{LanceError, vector_search as rag_vector_search};
 
-use super::library::{parse_library, LibraryParsingError};
+use super::library::{LibraryParsingError, parse_library};
 
 #[derive(Debug, Clone)]
 pub enum ArrowError {

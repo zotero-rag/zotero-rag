@@ -4,13 +4,13 @@ use crate::llm::{
 };
 
 use arrow_array::{
-    cast::AsArray, types::Float32Type, RecordBatch, RecordBatchIterator, StringArray,
+    RecordBatch, RecordBatchIterator, StringArray, cast::AsArray, types::Float32Type,
 };
 use core::fmt;
 use futures::TryStreamExt;
 use lancedb::{
-    arrow::arrow_schema::ArrowError, connect, connection::CreateTableMode,
-    embeddings::EmbeddingDefinition, query::ExecutableQuery, Connection, Error as LanceDbError,
+    Connection, Error as LanceDbError, arrow::arrow_schema::ArrowError, connect,
+    connection::CreateTableMode, embeddings::EmbeddingDefinition, query::ExecutableQuery,
 };
 use std::{error::Error, fmt::Display, sync::Arc, vec::IntoIter};
 
