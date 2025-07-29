@@ -27,6 +27,11 @@ const BATCH_ITER_FILE: &str = "batch_iter.bin";
 /// Embed text from PDFs parsed, in case this step previously failed. This function reads
 /// the `BATCH_ITER_FILE` and uses the data in there to compute embeddings and write out
 /// the LanceDB table.
+///
+/// # Arguments
+///
+/// * `ctx` - A `Context` object that contains CLI args and an object that implements
+///   `std::io::Write`.
 async fn embed<W: Write>(ctx: &mut Context<W>) -> Result<(), CLIError> {
     let file = File::open(BATCH_ITER_FILE)?;
     let reader = FileReader::try_new(file, None)?;
@@ -54,7 +59,7 @@ async fn embed<W: Write>(ctx: &mut Context<W>) -> Result<(), CLIError> {
     write!(ctx.out, "Successfully loaded {n_batches} batch")?;
 
     if n_batches > 1 {
-        print!("es");
+        write!(&mut ctx.out, "es")?;
     }
     writeln!(ctx.out, ".")?;
 
@@ -87,6 +92,11 @@ async fn embed<W: Write>(ctx: &mut Context<W>) -> Result<(), CLIError> {
 /// This parses the library, extracts the text from each file, stores them in a LanceDB
 /// table, and adds their embeddings. If the last step fails, the parsed texts are stored
 /// in `BATCH_ITER_FILE`.
+///
+/// # Arguments
+///
+/// * `ctx` - A `Context` object that contains CLI args and an object that implements
+///   `std::io::Write`.
 async fn process<W: Write>(ctx: &mut Context<W>) -> Result<(), CLIError> {
     const WARNING_THRESHOLD: usize = 100;
     let item_metadata = parse_library_metadata(None, None);
@@ -107,7 +117,7 @@ async fn process<W: Write>(ctx: &mut Context<W>) -> Result<(), CLIError> {
             "Your library has {metadata_length} items. Parsing may take a while. Continue?"
         )?;
         write!(&mut ctx.out, "(/process) >>> ")?;
-        let _ = io::stdout().flush();
+        ctx.out.flush()?;
 
         let mut option = String::new();
         io::stdin().read_line(&mut option)?;
@@ -158,10 +168,14 @@ async fn process<W: Write>(ctx: &mut Context<W>) -> Result<(), CLIError> {
     Ok(())
 }
 
-async fn run_query<W: Write>(
-    query: String,
-    ctx: &mut Context<W>,
-) -> Result<Vec<Result<ApiResponse, LLMError>>, CLIError> {
+/// Given a user query and the runtime context (CLI args + a `io::Write` implementation), perform a
+/// vector search and generate an answer based on the user's Zotero library.
+///
+/// # Arguments
+///
+/// * `ctx` - A `Context` object that contains CLI args and an object that implements
+///   `std::io::Write`.
+async fn run_query<W: Write>(query: String, ctx: &mut Context<W>) -> Result<(), CLIError> {
     let embedding_name = ctx.args.embedding.clone();
     let model_provider = ctx.args.model_provider.clone();
 
@@ -241,7 +255,7 @@ async fn run_query<W: Write>(
     writeln!(&mut ctx.out, "\tInput tokens: {total_input_tokens}")?;
     writeln!(&mut ctx.out, "\tOutput tokens: {total_output_tokens}")?;
 
-    Ok(results)
+    Ok(())
 }
 
 /// Prints out table statistics from the created DB. Fails if the database does not exist, could
@@ -253,9 +267,15 @@ async fn stats() {
     }
 }
 
+/// The core CLI implementation that implements a REPL for user commands.
+///
+/// # Arguments
+///
+/// * `ctx` - A `Context` object that contains CLI args and an object that implements
+///   `std::io::Write`.
 pub async fn cli<W: Write>(mut ctx: Context<W>) -> Result<(), CLIError> {
     loop {
-        write!(&mut ctx.out, ">>>")?;
+        write!(&mut ctx.out, ">>> ")?;
         ctx.out.flush()?;
 
         let mut command = String::new();
@@ -323,7 +343,6 @@ pub async fn cli<W: Write>(mut ctx: Context<W>) -> Result<(), CLIError> {
 
 #[cfg(test)]
 mod tests {
-    use serial_test::serial;
     use std::io::Cursor;
 
     use crate::{
@@ -331,11 +350,7 @@ mod tests {
         common::{Args, Context},
     };
 
-    #[tokio::test(flavor = "multi_thread")]
-    #[serial]
-    async fn test_process() {
-        dotenv::dotenv().ok();
-
+    fn create_test_context() -> Context<Cursor<Vec<u8>>> {
         let args = Args {
             tui: false,
             log_level: "none".into(),
@@ -343,43 +358,42 @@ mod tests {
             model_provider: "anthropic".into(),
         };
         let buf: Vec<u8> = Vec::new();
-        let mut out = Cursor::new(buf);
-        let mut ctx = Context {
-            args,
-            out: &mut out,
-        };
+        let out = Cursor::new(buf);
+        let ctx = Context { args, out };
 
-        let result = process(&mut ctx).await;
-        dbg!(&result);
-
-        assert!(result.is_ok());
+        ctx
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    #[serial]
+    async fn test_process() {
+        dotenv::dotenv().ok();
+        let mut ctx = create_test_context();
+
+        let result = process(&mut ctx).await;
+
+        assert!(result.is_ok());
+
+        let output = String::from_utf8(ctx.out.into_inner()).unwrap();
+        assert!(output.contains("Successfully parsed library!"));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_run_query() {
         dotenv::dotenv().ok();
 
-        let args = Args {
-            tui: false,
-            log_level: "none".into(),
-            embedding: "voyageai".into(),
-            model_provider: "anthropic".into(),
-        };
-        let buf: Vec<u8> = Vec::new();
-        let mut out = Cursor::new(buf);
-        let mut ctx = Context {
-            args,
-            out: &mut out,
-        };
+        let mut ctx = create_test_context();
 
+        // `process` needs to be run before `run_query`
+        let _ = process(&mut ctx).await;
         let result = run_query(
             "How should I oversample in defect prediction?".into(),
             &mut ctx,
         )
         .await;
-        dbg!(&result);
 
         assert!(result.is_ok());
+
+        let output = String::from_utf8(ctx.out.into_inner()).unwrap();
+        assert!(output.contains("Total token usage:"));
     }
 }

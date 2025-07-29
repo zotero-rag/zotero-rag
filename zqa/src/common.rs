@@ -25,8 +25,7 @@ pub struct Args {
     pub model_provider: String,
 }
 
-/// A structure that wraps the CLI arguments as well as generics over the UNIX standard IO streams
-/// (currently, only `stdout` exists).
+/// A structure that holds the application context, including CLI arguments and an output writer.
 pub struct Context<W: Write> {
     // CLI arguments passed
     pub args: Args,

@@ -24,7 +24,6 @@ lancedb = "0.15.0"
 ratatui = "0.29.0"
 crossterm = "0.29.0"
 clap = { version = "4.5.40", features = ["derive"] }
-serial_test = "3.2.0"
 
 [[bin]]
 name = "zqa"
