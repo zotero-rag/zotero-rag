@@ -28,3 +28,6 @@ clap = { version = "4.5.40", features = ["derive"] }
 [[bin]]
 name = "zqa"
 path = "src/main.rs"
+
+[dev-dependencies]
+serial_test = "3.2.0"

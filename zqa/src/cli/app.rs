@@ -343,6 +343,7 @@ pub async fn cli<W: Write>(mut ctx: Context<W>) -> Result<(), CLIError> {
 
 #[cfg(test)]
 mod tests {
+    use serial_test::serial;
     use std::io::Cursor;
 
     use crate::{
@@ -364,6 +365,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    #[serial]
     async fn test_process() {
         dotenv::dotenv().ok();
         let mut ctx = create_test_context();
@@ -377,13 +379,15 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    #[serial]
     async fn test_run_query() {
         dotenv::dotenv().ok();
 
-        let mut ctx = create_test_context();
-
         // `process` needs to be run before `run_query`
-        let _ = process(&mut ctx).await;
+        let mut setup_ctx = create_test_context();
+        let _ = process(&mut setup_ctx).await;
+
+        let mut ctx = create_test_context();
         let result = run_query(
             "How should I oversample in defect prediction?".into(),
             &mut ctx,
