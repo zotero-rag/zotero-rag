@@ -200,18 +200,10 @@ pub async fn vector_search(
         .iter()
         .flat_map(|batch| {
             let schema = batch.schema();
-            let key_idx = schema
-                .index_of("library_key")
-                .map_err(|_| ArrowError::SchemaError("Missing column: library_key".to_string()))?;
-            let title_idx = schema
-                .index_of("title")
-                .map_err(|_| ArrowError::SchemaError("Missing column: title".to_string()))?;
-            let file_path_idx = schema
-                .index_of("file_path")
-                .map_err(|_| ArrowError::SchemaError("Missing column: file_path".to_string()))?;
-            let text_idx = schema
-                .index_of("pdf_text")
-                .map_err(|_| ArrowError::SchemaError("Missing column: pdf_text".to_string()))?;
+            let key_idx = schema.index_of("library_key").unwrap();
+            let title_idx = schema.index_of("title").unwrap();
+            let file_path_idx = schema.index_of("file_path").unwrap();
+            let text_idx = schema.index_of("pdf_text").unwrap();
 
             let lib_keys = get_column_from_batch(batch, key_idx);
             let titles = get_column_from_batch(batch, title_idx);

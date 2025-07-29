@@ -11,28 +11,28 @@
 /// * `prompt` - The prompt for extracting the relevant parts of the query.
 pub fn get_extraction_prompt(query: &str, pdf_text: &str) -> String {
     format!("Given a question from a user and the full text from a research paper, extract the relevant 
-        parts that are suitable for answering the question. Wrap each relevant excerpt from the paper in
-        <excerpt></excerpt> tags. Here are some guidelines:
+parts that are suitable for answering the question. Wrap each relevant excerpt from the paper in
+<excerpt></excerpt> tags. Here are some guidelines:
 
-        1. It is best to quote excerpts verbatim. You may correct spelling errors, but do not modify other
-        parts of the text.
-        2. Some parts of the text, especially equations, may appear as hard to understand text. This is a
-        currently-known limitation: for now, repeat these verbatim. You may add a best-guess of what the
-        equation was supposed to be, in LaTeX form and wrapped in double-dollar signs ($$...$$), inside
-        parentheses after such malformed text. Inside the parentheses, indicate that this is a \"possible fix\". 
-        Aside from this, do not modify the source text.
-        3. You are encouraged to also cite excerpts from the paper that cite other papers, *if these excerpts
-        are relevant*. In such cases, if the citation uses numbers, change the numbering to be an author-year
-        format, preferably in the APA style. Write all your references at the end of your response, after a 
-        \"References:\" header.
-        4. Begin your response with an APA-style citation to the current paper.
-        5. Some text from the paper's Appendix or Supplementary Material may be in this text. Do not use
-        excerpts from this material.
+1. It is best to quote excerpts verbatim. You may correct spelling errors, but do not modify other
+parts of the text.
+2. Some parts of the text, especially equations, may appear as hard to understand text. This is a
+currently-known limitation: for now, repeat these verbatim. You may add a best-guess of what the
+equation was supposed to be, in LaTeX form and wrapped in double-dollar signs ($$...$$), inside
+parentheses after such malformed text. Inside the parentheses, indicate that this is a \"possible fix\". 
+Aside from this, do not modify the source text.
+3. You are encouraged to also cite excerpts from the paper that cite other papers, *if these excerpts
+are relevant*. In such cases, if the citation uses numbers, change the numbering to be an author-year
+format, preferably in the APA style. Write all your references at the end of your response, after a 
+\"References:\" header.
+4. Begin your response with an APA-style citation to the current paper.
+5. Some text from the paper's Appendix or Supplementary Material may be in this text. Do not use
+excerpts from this material.
 
-        Here is the user query: {query}.
-        Below is the full text of the paper:
+Here is the user query: {query}.
+Below is the full text of the paper:
 
-        {pdf_text}
+{pdf_text}
         ")
 }
 
