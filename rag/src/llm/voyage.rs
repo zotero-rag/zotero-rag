@@ -1,4 +1,5 @@
 use indicatif::ProgressBar;
+use log;
 use std::{borrow::Cow, env, fs, sync::Arc, time::Duration};
 
 use arrow_schema::{DataType, Field};
@@ -46,7 +47,7 @@ where
             .map(|s| s.map(|s| s.to_owned()))
             .collect();
 
-        println!("Processing {} input texts.", texts.len());
+        log::info!("Processing {} input texts.", texts.len());
         let bar = ProgressBar::new(texts.len().try_into().unwrap());
 
         let api_key = env::var("VOYAGE_AI_API_KEY")?;
@@ -148,7 +149,7 @@ where
             tokio::time::sleep(Duration::from_secs(WAIT_AFTER_REQUEST_S)).await;
         }
 
-        println!("Processing finished. Statistics:\n{fail_count} items failed.\n{total_masked} items were empty.");
+        log::info!("Processing finished. Statistics:\n{fail_count} items failed.\n{total_masked} items were empty.");
 
         if fail_count > 0 {
             let failed = FailedTexts {
@@ -160,6 +161,7 @@ where
             if let Err(e) = fs::write("failed.json", encoded) {
                 eprintln!("We could not write out the failed texts to 'failed.json': {e}");
             } else {
+                // TODO: Implement /repair
                 println!("We have written the failed texts to 'failed.json'. Consider using /repair to fix this.");
             }
         }
@@ -171,7 +173,7 @@ where
                 "Could not compute embedding shape--this should not happen.",
             )))?
             .len();
-        println!("Embedding dim: ({n_embeddings}, {emb_shape})\n");
+        log::debug!("Embedding dim: ({n_embeddings}, {emb_shape})\n");
 
         // Convert to Arrow FixedSizeListArray
         let flattened: Vec<f32> = all_embeddings.iter().flatten().copied().collect();
