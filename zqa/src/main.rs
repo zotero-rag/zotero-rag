@@ -1,8 +1,10 @@
+use std::io::stdout;
+
 use clap::Parser;
 use dotenv::dotenv;
 use ftail::Ftail;
 use zqa::cli::app::cli;
-use zqa::common::Args;
+use zqa::common::{Args, Context};
 use zqa::ui::app::App;
 
 #[tokio::main]
@@ -30,5 +32,12 @@ pub async fn main() {
         return;
     }
 
-    cli(args).await;
+    let context = Context {
+        args,
+        out: stdout(),
+    };
+
+    if let Err(e) = cli(context).await {
+        eprintln!("Error: {e}");
+    }
 }

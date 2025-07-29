@@ -9,7 +9,7 @@ use rag::vector::lance::{create_initial_table, db_statistics};
 use tokio::task::JoinSet;
 
 use crate::cli::errors::CLIError;
-use crate::common::Args;
+use crate::common::Context;
 use crate::{library_to_arrow, utils::library::parse_library_metadata};
 use arrow_ipc::reader::FileReader;
 use arrow_ipc::writer::FileWriter;
@@ -27,7 +27,7 @@ const BATCH_ITER_FILE: &str = "batch_iter.bin";
 /// Embed text from PDFs parsed, in case this step previously failed. This function reads
 /// the `BATCH_ITER_FILE` and uses the data in there to compute embeddings and write out
 /// the LanceDB table.
-async fn embed(args: &Args) -> Result<(), CLIError> {
+async fn embed<W: Write>(ctx: &mut Context<W>) -> Result<(), CLIError> {
     let file = File::open(BATCH_ITER_FILE)?;
     let reader = FileReader::try_new(file, None)?;
 
@@ -51,14 +51,14 @@ async fn embed(args: &Args) -> Result<(), CLIError> {
     let schema = first_batch.schema();
     let batch_iter = RecordBatchIterator::new(batches.into_iter(), schema);
 
-    print!("Successfully loaded {n_batches} batch");
+    write!(ctx.out, "Successfully loaded {n_batches} batch")?;
 
     if n_batches > 1 {
         print!("es");
     }
-    println!(".");
+    writeln!(ctx.out, ".")?;
 
-    let embedding_provider = args.embedding.as_str();
+    let embedding_provider = ctx.args.embedding.as_str();
     let db = create_initial_table(
         batch_iter,
         EmbeddingDefinition::new(
@@ -70,11 +70,14 @@ async fn embed(args: &Args) -> Result<(), CLIError> {
     .await;
 
     if db.is_ok() {
-        println!("Successfully parsed library!");
+        writeln!(ctx.out, "Successfully parsed library!")?;
         std::fs::remove_file(BATCH_ITER_FILE)?;
     } else if let Err(e) = db {
-        println!("Parsing library failed: {e}");
-        println!("Your {BATCH_ITER_FILE} file has been left untouched.");
+        writeln!(ctx.out, "Parsing library failed: {e}")?;
+        writeln!(
+            ctx.out,
+            "Your {BATCH_ITER_FILE} file has been left untouched."
+        )?;
     }
 
     Ok(())
@@ -84,20 +87,26 @@ async fn embed(args: &Args) -> Result<(), CLIError> {
 /// This parses the library, extracts the text from each file, stores them in a LanceDB
 /// table, and adds their embeddings. If the last step fails, the parsed texts are stored
 /// in `BATCH_ITER_FILE`.
-async fn process(args: &Args) -> Result<(), CLIError> {
+async fn process<W: Write>(ctx: &mut Context<W>) -> Result<(), CLIError> {
     const WARNING_THRESHOLD: usize = 100;
     let item_metadata = parse_library_metadata(None, None);
 
     if let Err(parse_err) = item_metadata {
-        println!("Could not parse library metadata: {parse_err}");
+        writeln!(
+            &mut ctx.out,
+            "Could not parse library metadata: {parse_err}"
+        )?;
         return Ok(());
     }
 
     let item_metadata = item_metadata.unwrap();
     let metadata_length = item_metadata.len();
     if metadata_length >= WARNING_THRESHOLD {
-        println!("Your library has {metadata_length} items. Parsing may take a while. Continue?");
-        print!("(/process) >>> ");
+        writeln!(
+            &mut ctx.out,
+            "Your library has {metadata_length} items. Parsing may take a while. Continue?"
+        )?;
+        write!(&mut ctx.out, "(/process) >>> ")?;
         let _ = io::stdout().flush();
 
         let mut option = String::new();
@@ -121,7 +130,7 @@ async fn process(args: &Args) -> Result<(), CLIError> {
     writer.write(&record_batch)?;
     writer.finish()?;
 
-    let embedding_provider = args.embedding.as_str();
+    let embedding_provider = ctx.args.embedding.as_str();
     let result = create_initial_table(
         batch_iter,
         EmbeddingDefinition::new(
@@ -134,25 +143,28 @@ async fn process(args: &Args) -> Result<(), CLIError> {
 
     match result {
         Ok(_) => {
-            println!("Successfully parsed library!");
+            writeln!(&mut ctx.out, "Successfully parsed library!")?;
             std::fs::remove_file("batch_iter.bin")?;
         }
         Err(e) => {
-            println!("Parsing library failed: {e}");
-            println!(
+            writeln!(&mut ctx.out, "Parsing library failed: {e}")?;
+            writeln!(
+                &mut ctx.out,
                 "The parsed PDFs have been saved in 'batch_iter.bin'. Run '/embed' to retry embedding."
-            );
+            )?;
         }
     }
 
     Ok(())
 }
 
-async fn run_query(
+async fn run_query<W: Write>(
     query: String,
-    embedding_name: String,
-    model_provider: String,
+    ctx: &mut Context<W>,
 ) -> Result<Vec<Result<ApiResponse, LLMError>>, CLIError> {
+    let embedding_name = ctx.args.embedding.clone();
+    let model_provider = ctx.args.model_provider.clone();
+
     let search_results = vector_search(query.clone(), embedding_name).await?;
 
     if !ModelProviders::contains(&model_provider) {
@@ -215,7 +227,7 @@ async fn run_query(
     };
     match client.send_message(&message).await {
         Ok(response) => {
-            println!("{}", response.content);
+            writeln!(&mut ctx.out, "{}", response.content)?;
 
             total_input_tokens += response.input_tokens;
             total_output_tokens += response.output_tokens;
@@ -225,9 +237,9 @@ async fn run_query(
         }
     }
 
-    println!("\nTotal token usage:");
-    println!("\tInput tokens: {total_input_tokens}");
-    println!("\tOutput tokens: {total_output_tokens}");
+    writeln!(&mut ctx.out, "\nTotal token usage:")?;
+    writeln!(&mut ctx.out, "\tInput tokens: {total_input_tokens}")?;
+    writeln!(&mut ctx.out, "\tOutput tokens: {total_output_tokens}")?;
 
     Ok(results)
 }
@@ -241,10 +253,10 @@ async fn stats() {
     }
 }
 
-pub async fn cli(args: Args) {
+pub async fn cli<W: Write>(mut ctx: Context<W>) -> Result<(), CLIError> {
     loop {
-        print!(">>> ");
-        let _ = io::stdout().flush();
+        write!(&mut ctx.out, ">>>")?;
+        ctx.out.flush()?;
 
         let mut command = String::new();
         io::stdin()
@@ -256,23 +268,29 @@ pub async fn cli(args: Args) {
         match command {
             "" => {}
             "/help" => {
-                println!("Available commands:\n");
-                println!("/help\t\tShow this help message");
-                println!("/process\tPre-process Zotero library. Use to update the database.");
-                println!("/embed\t\tRepair failed DB creation by re-adding embeddings.");
-                println!("/stats\t\tShow table statistics.");
-                println!("/quit\t\tExit the program");
-                println!();
+                writeln!(&mut ctx.out, "Available commands:\n")?;
+                writeln!(&mut ctx.out, "/help\t\tShow this help message")?;
+                writeln!(
+                    &mut ctx.out,
+                    "/process\tPre-process Zotero library. Use to update the database."
+                )?;
+                writeln!(
+                    &mut ctx.out,
+                    "/embed\t\tRepair failed DB creation by re-adding embeddings."
+                )?;
+                writeln!(&mut ctx.out, "/stats\t\tShow table statistics.")?;
+                writeln!(&mut ctx.out, "/quit\t\tExit the program")?;
+                writeln!(&mut ctx.out)?;
             }
             "/embed" => {
-                if embed(&args).await.is_err() {
+                if embed(&mut ctx).await.is_err() {
                     eprintln!(
                         "Failed to create embeddings. You may find relevant error messages above."
                     );
                 }
             }
             "/process" => {
-                if process(&args).await.is_err() {
+                if process(&mut ctx).await.is_err() {
                     eprintln!(
                         "Failed to create embeddings. You may find relevant error messages above."
                     );
@@ -287,23 +305,81 @@ pub async fn cli(args: Args) {
                 const MIN_QUERY_LENGTH: usize = 10;
 
                 if query.len() < MIN_QUERY_LENGTH {
-                    println!("Invalid command: {query}");
+                    writeln!(&mut ctx.out, "Invalid command: {query}")?;
                     continue;
                 }
 
-                if run_query(
-                    query.into(),
-                    args.embedding.clone(),
-                    args.model_provider.clone(),
-                )
-                .await
-                .is_err()
-                {
+                if run_query(query.into(), &mut ctx).await.is_err() {
                     eprintln!(
                         "Failed to answer the question. You may find relevant error messages above."
                     );
                 }
             }
         }
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use serial_test::serial;
+    use std::io::Cursor;
+
+    use crate::{
+        cli::app::{process, run_query},
+        common::{Args, Context},
+    };
+
+    #[tokio::test(flavor = "multi_thread")]
+    #[serial]
+    async fn test_process() {
+        dotenv::dotenv().ok();
+
+        let args = Args {
+            tui: false,
+            log_level: "none".into(),
+            embedding: "voyageai".into(),
+            model_provider: "anthropic".into(),
+        };
+        let buf: Vec<u8> = Vec::new();
+        let mut out = Cursor::new(buf);
+        let mut ctx = Context {
+            args,
+            out: &mut out,
+        };
+
+        let result = process(&mut ctx).await;
+        dbg!(&result);
+
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    #[serial]
+    async fn test_run_query() {
+        dotenv::dotenv().ok();
+
+        let args = Args {
+            tui: false,
+            log_level: "none".into(),
+            embedding: "voyageai".into(),
+            model_provider: "anthropic".into(),
+        };
+        let buf: Vec<u8> = Vec::new();
+        let mut out = Cursor::new(buf);
+        let mut ctx = Context {
+            args,
+            out: &mut out,
+        };
+
+        let result = run_query(
+            "How should I oversample in defect prediction?".into(),
+            &mut ctx,
+        )
+        .await;
+        dbg!(&result);
+
+        assert!(result.is_ok());
     }
 }
