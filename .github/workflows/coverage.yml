@@ -9,7 +9,7 @@ on:
 jobs:
   coverage:
     runs-on:
-      group: all-repos
+      group: runners-xl
     env:
       CARGO_TERM_COLOR: always
     steps:

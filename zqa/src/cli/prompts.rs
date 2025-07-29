@@ -56,25 +56,25 @@ pub fn get_summarize_prompt(query: &str, excerpts: Vec<String>) -> String {
 
     format!(
         "You are given a user question and excerpts from papers that are relevant in answering the question.
-        Each paper that was used as a reference may have multiple excerpts that potentially answer the user's
-        question. Use these search results to draft an answer to the user query. Here are some guidelines:
+Each paper that was used as a reference may have multiple excerpts that potentially answer the user's
+question. Use these search results to draft an answer to the user query. Here are some guidelines:
 
-        1. Your answer must maintain a scholarly, formal tone. Write your answer as though it were part of a research
-        paper discussing relevant work.
-        2. In the (rare) event that the user query asks an unsolved problem, summarize the relevant work from
-        the search results, but preface your answer by politely explaining that the problem is known to be
-        unsolved.
-        3. Each set of excerpts from a paper is wrapped in <search_result>...</search_result>. Each such search
-        result will start with an APA-style citation to the paper from which relevant excerpts are taken. Within
-        each <search_result>, you will then find excerpts, possibly including references to other papers. The end
-        of each <search_result> will have references to papers that have been cited.
-        4. It is important that your answer ends with a \"References:\" section. You should list all cited references
-        here.
-        5. When using the excerpts to write your answer, ignore numbering in citations; use APA-style citations 
-        throughout. You should change numbered citations to be in APA format instead.
+1. Your answer must maintain a scholarly, formal tone. Write your answer as though it were part of a research
+paper discussing relevant work.
+2. In the (rare) event that the user query asks an unsolved problem, summarize the relevant work from
+the search results, but preface your answer by politely explaining that the problem is known to be
+unsolved.
+3. Each set of excerpts from a paper is wrapped in <search_result>...</search_result>. Each such search
+result will start with an APA-style citation to the paper from which relevant excerpts are taken. Within
+each <search_result>, you will then find excerpts, possibly including references to other papers. The end
+of each <search_result> will have references to papers that have been cited.
+4. It is important that your answer ends with a \"References:\" section. You should list all cited references
+here.
+5. When using the excerpts to write your answer, ignore numbering in citations; use APA-style citations 
+throughout. You should change numbered citations to be in APA format instead.
 
-        Here is the user query: {query}.
-        Here are the search results: {search_results}
+Here is the user query: {query}.
+Here are the search results: {search_results}
     "
     )
 }
