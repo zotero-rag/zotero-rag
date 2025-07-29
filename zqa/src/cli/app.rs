@@ -181,15 +181,21 @@ async fn run_query(
 
     let results: Vec<Result<ApiResponse, LLMError>> = set.join_all().await;
 
-    let mut err_results = results.iter().filter(|res| res.is_err());
-    if let Some(first_error) = err_results.next() {
+    let err_results = results
+        .iter()
+        .filter_map(|res| res.as_ref().err())
+        .collect::<Vec<_>>();
+
+    if !err_results.is_empty() {
         eprintln!(
             "{}/{} LLM requests failed:",
-            err_results.count(),
+            err_results.len(),
             search_results.len()
         );
         eprintln!("Here is why the first one failed (the others may be similar):");
-        eprintln!("\t{}", first_error.as_ref().unwrap().content);
+        if let Some(first_error) = err_results.first() {
+            eprintln!("\t{}", first_error);
+        }
     }
 
     let (ok_contents, mut total_input_tokens, mut total_output_tokens) = results
