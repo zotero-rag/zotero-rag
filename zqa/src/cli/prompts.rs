@@ -50,7 +50,7 @@ pub fn get_extraction_prompt(query: &str, pdf_text: &str) -> String {
 pub fn get_summarize_prompt(query: &str, excerpts: Vec<String>) -> String {
     let search_results = excerpts
         .iter()
-        .map(|res| format!("<search_result>{}</search_result>", res))
+        .map(|res| format!("<search_result>{res}</search_result>"))
         .collect::<Vec<_>>()
         .join("\n");
 

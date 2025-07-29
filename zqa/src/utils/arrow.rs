@@ -157,7 +157,7 @@ pub fn library_to_arrow(
 /// * `column`: The index of the column to use.
 ///
 /// # Returns
-/// 
+///
 /// A `Vec<String>` containing all the items in the specified column of the `RecordBatch`.
 fn get_column_from_batch(batch: &RecordBatch, column: usize) -> Vec<String> {
     let results = batch.column(column).as_string::<i32>().clone();

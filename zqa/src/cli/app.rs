@@ -202,6 +202,11 @@ async fn run_query(
             acc
         });
 
+    let client = get_client_by_provider(&model_provider).unwrap();
+    let message = UserMessage {
+        chat_history: Vec::new(),
+        message: get_summarize_prompt(&query, ok_contents),
+    };
     match client.send_message(&message).await {
         Ok(response) => {
             println!("{}", response.content);
@@ -273,7 +278,7 @@ pub async fn cli(args: Args) {
             }
             query => {
                 // Check for a threshold to ensure this isn't an accidental Enter-hit.
-const MIN_QUERY_LENGTH: usize = 10;
+                const MIN_QUERY_LENGTH: usize = 10;
 
                 if query.len() < MIN_QUERY_LENGTH {
                     println!("Invalid command: {query}");
