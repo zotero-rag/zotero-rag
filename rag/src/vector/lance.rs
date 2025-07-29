@@ -169,7 +169,7 @@ pub async fn vector_search(
 
     let query_vec = embedding.compute_query_embeddings(Arc::new(StringArray::from(vec![query])))?;
 
-    // Convert FixedSizeListArray to Vec<f64>
+    // Convert FixedSizeListArray to Vec<f32>
     // The embedding functions return `FixedSizeListArray` with Float32 elements
     // See https://github.com/apache/arrow-rs/discussions/6087#discussioncomment-10851422 for
     // converting an Arrow Array to a `Vec`.
