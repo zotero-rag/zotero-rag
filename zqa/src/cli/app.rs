@@ -194,7 +194,7 @@ async fn run_query(
         );
         eprintln!("Here is why the first one failed (the others may be similar):");
         if let Some(first_error) = err_results.first() {
-            eprintln!("\t{}", first_error);
+            eprintln!("\t{first_error}");
         }
     }
 
