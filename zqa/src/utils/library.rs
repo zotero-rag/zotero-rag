@@ -200,7 +200,9 @@ pub fn parse_library(
             let chunk = chunk.to_vec();
             let cur_chunk_size = chunk.len();
 
-            let handle = thread::spawn(move || {
+            
+
+            thread::spawn(move || {
                 let result = chunk
                     .iter()
                     .filter_map(|m| {
@@ -250,9 +252,7 @@ pub fn parse_library(
                 pbar.inc(cur_chunk_size as u64);
 
                 result
-            });
-
-            handle
+            })
         })
         .collect::<Vec<_>>();
 

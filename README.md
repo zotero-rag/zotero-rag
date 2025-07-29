@@ -32,9 +32,9 @@ The project is organized into three Rust crates:
 
 ## Requirements
 
-- Rust (2021 edition or higher)
+- Rust (2024 edition or higher)
 - Zotero with a local library
-- API key for OpenAI and Anthropic (for LLM capabilities)
+- API key for OpenAI and Anthropic (for LLM capabilities), and Voyage AI (for embeddings)
 
 ## Installation
 
