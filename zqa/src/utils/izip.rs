@@ -21,6 +21,7 @@
 ///
 /// ```
 /// # // The `izip!` macro is defined locally in this module.
+/// use zqa::izip;
 /// # fn main() {
 ///
 /// // iterate over three sequences side-by-side

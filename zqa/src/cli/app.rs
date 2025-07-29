@@ -189,7 +189,7 @@ async fn run_query(
             search_results.len()
         );
         eprintln!("Here is why the first one failed (the others may be similar):");
-        eprintln!("\t{}", first_error.clone()?.content);
+        eprintln!("\t{}", first_error.as_ref().unwrap().content);
     }
 
     let (ok_contents, mut total_input_tokens, mut total_output_tokens) = results

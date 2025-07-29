@@ -199,10 +199,16 @@ pub async fn vector_search(
     let items: Vec<ZoteroItem> = batches
         .iter()
         .flat_map(|batch| {
-            let lib_keys = get_column_from_batch(batch, 0);
-            let titles = get_column_from_batch(batch, 1);
-            let file_paths = get_column_from_batch(batch, 2);
-            let texts = get_column_from_batch(batch, 3);
+            let schema = batch.schema();
+            let key_idx = schema.index_of("library_key").unwrap();
+            let title_idx = schema.index_of("title").unwrap();
+            let file_path_idx = schema.index_of("file_path").unwrap();
+            let text_idx = schema.index_of("pdf_text").unwrap();
+
+            let lib_keys = get_column_from_batch(batch, key_idx);
+            let titles = get_column_from_batch(batch, title_idx);
+            let file_paths = get_column_from_batch(batch, file_path_idx);
+            let texts = get_column_from_batch(batch, text_idx);
 
             let zipped = izip!(lib_keys, titles, file_paths, texts);
             let items_batch: Vec<ZoteroItem> = zipped
