@@ -4,3 +4,4 @@
 .gemini/
 .claude/
 data/
+.DS_Store
