@@ -158,14 +158,14 @@ pub async fn vector_search(
     let db = get_db_with_embeddings(&embedding_name).await?;
 
     let tbl = db.open_table(TABLE_NAME).execute().await.map_err(|_| {
-        LanceError::InvalidStateError(format!("The table {} does not exist", TABLE_NAME))
+        LanceError::InvalidStateError(format!("The table {TABLE_NAME} does not exist"))
     })?;
     let embedding =
         db.embedding_registry()
             .get(&embedding_name)
-            .ok_or(LanceError::InvalidStateError(
-                format!("{embedding_name} is not in the database embedding registry").into(),
-            ))?;
+            .ok_or(LanceError::InvalidStateError(format!(
+                "{embedding_name} is not in the database embedding registry"
+            )))?;
 
     let query_vec = embedding.compute_query_embeddings(Arc::new(StringArray::from(vec![query])))?;
 
