@@ -18,7 +18,7 @@ This project provides a command-line interface for querying your Zotero library 
 
 ### Limitations
 
-* The actual generation part has not been implemented yet.
+* The generation functionality, including question-answering with extraction and summarization prompts, has been implemented. However, further improvements and refinements are ongoing.
 * The `zqa` CLI is limited--it can create embeddings for your library and perform vector search, but that's pretty much it.
 * We only support OpenAI and Anthropic for LLMs, and only OpenAI and Voyage AI for embeddings. Future plans include Gemini, Vertex AI, ollama, and possibly OpenRouter and Groq.
 
