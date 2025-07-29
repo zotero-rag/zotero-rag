@@ -1,4 +1,5 @@
 use clap::Parser;
+use std::io::Write;
 
 #[derive(Parser, Clone, Debug)]
 #[command(version, about, long_about = None)]
@@ -22,4 +23,13 @@ pub struct Args {
     /// or `OPENAI_API_KEY` to be set accordingly.
     #[arg(short, long, default_value_t = String::from("anthropic"))]
     pub model_provider: String,
+}
+
+/// A structure that wraps the CLI arguments as well as generics over the UNIX standard IO streams
+/// (currently, only `stdout` exists).
+pub struct Context<W: Write> {
+    // CLI arguments passed
+    pub args: Args,
+    // Abstraction that can write stuff
+    pub out: W,
 }
