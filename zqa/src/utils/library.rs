@@ -200,8 +200,6 @@ pub fn parse_library(
             let chunk = chunk.to_vec();
             let cur_chunk_size = chunk.len();
 
-            
-
             thread::spawn(move || {
                 let result = chunk
                     .iter()
