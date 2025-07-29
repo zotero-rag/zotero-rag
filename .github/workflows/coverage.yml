@@ -23,7 +23,7 @@ jobs:
         run: cargo install cargo-tarpaulin
 
       - name: Generate code coverage
-        run: cargo tarpaulin --out lcov --output-dir .
+        run: cargo tarpaulin --out lcov --output-dir . --timeout 300
         env:
           ANTHROPIC_KEY: ${{ secrets.ANTHROPIC_KEY }}
           VOYAGE_AI_API_KEY: ${{ secrets.VOYAGE_AI_API_KEY }}
