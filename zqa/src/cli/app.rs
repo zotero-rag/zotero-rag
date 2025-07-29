@@ -359,9 +359,8 @@ mod tests {
         };
         let buf: Vec<u8> = Vec::new();
         let out = Cursor::new(buf);
-        let ctx = Context { args, out };
 
-        ctx
+        Context { args, out }
     }
 
     #[tokio::test(flavor = "multi_thread")]
