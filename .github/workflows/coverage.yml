@@ -36,6 +36,6 @@ jobs:
         uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
-          slug: yrahul3910/zotero-rag
+          slug: zotero-rag/zotero-rag
           files: lcov.info
           fail_ci_if_error: true

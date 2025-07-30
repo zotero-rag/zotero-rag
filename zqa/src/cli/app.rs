@@ -30,8 +30,8 @@ const BATCH_ITER_FILE: &str = "batch_iter.bin";
 ///
 /// # Arguments
 ///
-/// * `ctx` - A `Context` object that contains CLI args and an object that implements
-///   `std::io::Write`.
+/// * `ctx` - A `Context` object that contains CLI args and objects that implement
+///   `std::io::Write` for `stdout` and `stderr`.
 async fn embed<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Result<(), CLIError> {
     let file = File::open(BATCH_ITER_FILE)?;
     let reader = FileReader::try_new(file, None)?;
@@ -98,8 +98,8 @@ async fn embed<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Result<(), CLIErr
 ///
 /// # Arguments
 ///
-/// * `ctx` - A `Context` object that contains CLI args and an object that implements
-///   `std::io::Write`.
+/// * `ctx` - A `Context` object that contains CLI args and objects that implement
+///   `std::io::Write` for `stdout` and `stderr`.
 async fn process<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Result<(), CLIError> {
     const WARNING_THRESHOLD: usize = 100;
     let item_metadata = parse_library_metadata(None, None);
@@ -176,8 +176,8 @@ async fn process<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Result<(), CLIE
 ///
 /// # Arguments
 ///
-/// * `ctx` - A `Context` object that contains CLI args and an object that implements
-///   `std::io::Write`.
+/// * `ctx` - A `Context` object that contains CLI args and objects that implement
+///   `std::io::Write` for `stdout` and `stderr`.
 async fn run_query<O: Write, E: Write>(
     query: String,
     ctx: &mut Context<O, E>,
@@ -275,6 +275,11 @@ async fn run_query<O: Write, E: Write>(
 
 /// Prints out table statistics from the created DB. Fails if the database does not exist, could
 /// not be read, or the statistics could not be computed.
+///
+/// # Arguments
+///
+/// * `ctx` - A `Context` object that contains CLI args and objects that implement
+///   `std::io::Write` for `stdout` and `stderr`.
 async fn stats<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Result<(), CLIError> {
     match db_statistics().await {
         Ok(stats) => writeln!(&mut ctx.out, "{stats}")?,
@@ -288,8 +293,8 @@ async fn stats<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Result<(), CLIErr
 ///
 /// # Arguments
 ///
-/// * `ctx` - A `Context` object that contains CLI args and an object that implements
-///   `std::io::Write`.
+/// * `ctx` - A `Context` object that contains CLI args and objects that implement
+///   `std::io::Write` for `stdout` and `stderr`.
 pub async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<(), CLIError> {
     loop {
         write!(&mut ctx.out, ">>> ")?;
@@ -335,7 +340,7 @@ pub async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<(), CLIEr
             }
             "/stats" => {
                 if stats(&mut ctx).await.is_err() {
-                    // This is the only way we would get an error here.
+                    // This only errors on an I/O failure
                     eprintln!("Failed to write statistics to buffer.");
                 }
             }
@@ -395,6 +400,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_embed() {
         dotenv::dotenv().ok();
         let mut ctx = create_test_context();
@@ -419,6 +425,12 @@ mod tests {
         // Actually call `embed`
         let result = embed(&mut ctx).await;
         assert!(result.is_ok());
+
+        let output = String::from_utf8(ctx.out.into_inner()).unwrap();
+        assert!(output.contains("Successfully parsed library!"));
+
+        let err = String::from_utf8(ctx.err.into_inner()).unwrap();
+        assert!(err.is_empty());
     }
 
     #[tokio::test(flavor = "multi_thread")]
