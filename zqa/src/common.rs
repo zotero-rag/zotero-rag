@@ -25,12 +25,13 @@ pub struct Args {
     pub model_provider: String,
 }
 
-/// A structure that holds the application context, including CLI arguments and an output writer.
-pub struct Context<O: Write, E: Write> {
+/// A structure that holds the application context, including CLI arguments and an writers
+/// for `stdout` and `stderr`.
+pub struct Context<OutStream: Write, ErrStream: Write> {
     // CLI arguments passed
     pub args: Args,
     // Abstraction for stdout()
-    pub out: O,
+    pub out: OutStream,
     // Abstraction for stderr()
-    pub err: E,
+    pub err: ErrStream,
 }
