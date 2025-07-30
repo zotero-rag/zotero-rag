@@ -26,9 +26,11 @@ pub struct Args {
 }
 
 /// A structure that holds the application context, including CLI arguments and an output writer.
-pub struct Context<W: Write> {
+pub struct Context<O: Write, E: Write> {
     // CLI arguments passed
     pub args: Args,
-    // Abstraction that can write stuff
-    pub out: W,
+    // Abstraction for stdout()
+    pub out: O,
+    // Abstraction for stderr()
+    pub err: E,
 }
