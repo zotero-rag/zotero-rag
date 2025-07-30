@@ -32,7 +32,7 @@ const BATCH_ITER_FILE: &str = "batch_iter.bin";
 ///
 /// * `ctx` - A `Context` object that contains CLI args and an object that implements
 ///   `std::io::Write`.
-async fn embed<W: Write>(ctx: &mut Context<W>) -> Result<(), CLIError> {
+async fn embed<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Result<(), CLIError> {
     let file = File::open(BATCH_ITER_FILE)?;
     let reader = FileReader::try_new(file, None)?;
 
@@ -42,7 +42,10 @@ async fn embed<W: Write>(ctx: &mut Context<W>) -> Result<(), CLIError> {
     }
 
     if batches.is_empty() {
-        eprintln!("(/embed) It seems {BATCH_ITER_FILE} contains no batches. Exiting early.");
+        writeln!(
+            &mut ctx.err,
+            "(/embed) It seems {BATCH_ITER_FILE} contains no batches. Exiting early."
+        )?;
         return Ok(());
     }
 
@@ -97,7 +100,7 @@ async fn embed<W: Write>(ctx: &mut Context<W>) -> Result<(), CLIError> {
 ///
 /// * `ctx` - A `Context` object that contains CLI args and an object that implements
 ///   `std::io::Write`.
-async fn process<W: Write>(ctx: &mut Context<W>) -> Result<(), CLIError> {
+async fn process<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Result<(), CLIError> {
     const WARNING_THRESHOLD: usize = 100;
     let item_metadata = parse_library_metadata(None, None);
 
@@ -134,7 +137,7 @@ async fn process<W: Write>(ctx: &mut Context<W>) -> Result<(), CLIError> {
     let batch_iter = RecordBatchIterator::new(batches.into_iter(), schema.clone());
 
     // Write to binary file using Arrow IPC format
-    let file = File::create("batch_iter.bin")?;
+    let file = File::create(BATCH_ITER_FILE)?;
     let mut writer = FileWriter::try_new(file, &schema)?;
 
     writer.write(&record_batch)?;
@@ -175,7 +178,10 @@ async fn process<W: Write>(ctx: &mut Context<W>) -> Result<(), CLIError> {
 ///
 /// * `ctx` - A `Context` object that contains CLI args and an object that implements
 ///   `std::io::Write`.
-async fn run_query<W: Write>(query: String, ctx: &mut Context<W>) -> Result<(), CLIError> {
+async fn run_query<O: Write, E: Write>(
+    query: String,
+    ctx: &mut Context<O, E>,
+) -> Result<(), CLIError> {
     let embedding_name = ctx.args.embedding.clone();
     let model_provider = ctx.args.model_provider.clone();
 
@@ -214,14 +220,18 @@ async fn run_query<W: Write>(query: String, ctx: &mut Context<W>) -> Result<(), 
         .collect::<Vec<_>>();
 
     if !err_results.is_empty() {
-        eprintln!(
+        writeln!(
+            &mut ctx.err,
             "{}/{} LLM requests failed:",
             err_results.len(),
             search_results.len()
-        );
-        eprintln!("Here is why the first one failed (the others may be similar):");
+        )?;
+        writeln!(
+            &mut ctx.err,
+            "Here is why the first one failed (the others may be similar):"
+        )?;
         if let Some(first_error) = err_results.first() {
-            eprintln!("\t{first_error}");
+            writeln!(&mut ctx.err, "\t{first_error}")?;
         }
     }
 
@@ -249,7 +259,10 @@ async fn run_query<W: Write>(query: String, ctx: &mut Context<W>) -> Result<(), 
             total_output_tokens += response.output_tokens;
         }
         Err(e) => {
-            eprintln!("Failed to call the LLM endpoint for the final response: {e}");
+            writeln!(
+                &mut ctx.err,
+                "Failed to call the LLM endpoint for the final response: {e}"
+            )?;
         }
     }
 
@@ -262,11 +275,13 @@ async fn run_query<W: Write>(query: String, ctx: &mut Context<W>) -> Result<(), 
 
 /// Prints out table statistics from the created DB. Fails if the database does not exist, could
 /// not be read, or the statistics could not be computed.
-async fn stats() {
+async fn stats<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Result<(), CLIError> {
     match db_statistics().await {
-        Ok(stats) => println!("{stats}"),
-        Err(e) => eprintln!("Could not get database statistics: {e}"),
+        Ok(stats) => writeln!(&mut ctx.out, "{stats}")?,
+        Err(e) => writeln!(&mut ctx.err, "Could not get database statistics: {e}")?,
     }
+
+    Ok(())
 }
 
 /// The core CLI implementation that implements a REPL for user commands.
@@ -275,7 +290,7 @@ async fn stats() {
 ///
 /// * `ctx` - A `Context` object that contains CLI args and an object that implements
 ///   `std::io::Write`.
-pub async fn cli<W: Write>(mut ctx: Context<W>) -> Result<(), CLIError> {
+pub async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<(), CLIError> {
     loop {
         write!(&mut ctx.out, ">>> ")?;
         ctx.out.flush()?;
@@ -318,7 +333,12 @@ pub async fn cli<W: Write>(mut ctx: Context<W>) -> Result<(), CLIError> {
                     );
                 }
             }
-            "/stats" => stats().await,
+            "/stats" => {
+                if stats(&mut ctx).await.is_err() {
+                    // This is the only way we would get an error here.
+                    eprintln!("Failed to write statistics to buffer.");
+                }
+            }
             "/quit" | "/exit" | "quit" | "exit" => {
                 break;
             }
@@ -345,25 +365,60 @@ pub async fn cli<W: Write>(mut ctx: Context<W>) -> Result<(), CLIError> {
 
 #[cfg(test)]
 mod tests {
+    use crate::cli::app::{BATCH_ITER_FILE, embed};
+    use arrow_array::{RecordBatch, StringArray};
+    use arrow_ipc::writer::FileWriter;
     use serial_test::serial;
+    use std::fs::File;
     use std::io::Cursor;
+    use std::sync::Arc;
 
     use crate::{
         cli::app::{process, run_query},
         common::{Args, Context},
     };
 
-    fn create_test_context() -> Context<Cursor<Vec<u8>>> {
+    fn create_test_context() -> Context<Cursor<Vec<u8>>, Cursor<Vec<u8>>> {
         let args = Args {
             tui: false,
             log_level: "none".into(),
             embedding: "voyageai".into(),
             model_provider: "anthropic".into(),
         };
-        let buf: Vec<u8> = Vec::new();
-        let out = Cursor::new(buf);
+        let out_buf: Vec<u8> = Vec::new();
+        let out = Cursor::new(out_buf);
 
-        Context { args, out }
+        let err_buf: Vec<u8> = Vec::new();
+        let err = Cursor::new(err_buf);
+
+        Context { args, out, err }
+    }
+
+    #[tokio::test]
+    async fn test_embed() {
+        dotenv::dotenv().ok();
+        let mut ctx = create_test_context();
+
+        // Create `RecordBatch` object to write out
+        let schema = arrow_schema::Schema::new(vec![arrow_schema::Field::new(
+            "pdf_text",
+            arrow_schema::DataType::Utf8,
+            false,
+        )]);
+        let data = StringArray::from(vec!["Hello", "World"]);
+        let record_batch =
+            RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(data)]).unwrap();
+
+        // Write out the object to `BATCH_ITER_FILE`
+        let file = File::create(BATCH_ITER_FILE).unwrap();
+        let mut writer = FileWriter::try_new(file, &schema).unwrap();
+
+        writer.write(&record_batch).unwrap();
+        writer.finish().unwrap();
+
+        // Actually call `embed`
+        let result = embed(&mut ctx).await;
+        assert!(result.is_ok());
     }
 
     #[tokio::test(flavor = "multi_thread")]

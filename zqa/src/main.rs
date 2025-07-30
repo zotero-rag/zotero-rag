@@ -1,4 +1,4 @@
-use std::io::stdout;
+use std::io::{stderr, stdout};
 
 use clap::Parser;
 use dotenv::dotenv;
@@ -35,6 +35,7 @@ pub async fn main() {
     let context = Context {
         args,
         out: stdout(),
+        err: stderr(),
     };
 
     if let Err(e) = cli(context).await {
