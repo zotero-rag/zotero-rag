@@ -283,6 +283,7 @@ mod tests {
         let client = OpenAIClient::<ReqwestClient>::default();
         let message = UserMessage {
             chat_history: Vec::new(),
+            max_tokens: Some(1024),
             message: "Hello!".to_owned(),
         };
         let res = client.send_message(&message).await;
@@ -328,6 +329,7 @@ mod tests {
 
         let message = UserMessage {
             chat_history: Vec::new(),
+            max_tokens: Some(1024),
             message: "Hello!".to_owned(),
         };
         let res = mock_client.send_message(&message).await;

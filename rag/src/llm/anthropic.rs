@@ -142,7 +142,7 @@ impl From<UserMessage> for AnthropicRequest {
 
         AnthropicRequest {
             model: env::var("ANTHROPIC_MODEL").unwrap_or_else(|_| DEFAULT_CLAUDE_MODEL.to_string()),
-            max_tokens: 8192,
+            max_tokens: msg.max_tokens.unwrap_or(8192),
             messages,
         }
     }
@@ -211,7 +211,11 @@ impl<T: HttpClient> ApiClient for AnthropicClient<T> {
         let body = res.text().await?;
 
         let json: serde_json::Value = serde_json::from_str(&body)?;
-        let response: AnthropicResponse = serde_json::from_value(json)?;
+        let response: AnthropicResponse = serde_json::from_value(json.clone()).map_err(|err| {
+            eprintln!("Failed to deserialize Anthropic response: we got the response {json}");
+
+            LLMError::DeserializationError(err.to_string())
+        })?;
 
         Ok(ApiResponse {
             content: response.content[0].text.clone(),
@@ -296,6 +300,7 @@ mod tests {
         let client = AnthropicClient::<ReqwestClient>::default();
         let message = UserMessage {
             chat_history: Vec::new(),
+            max_tokens: Some(1024),
             message: "Hello!".to_owned(),
         };
 
@@ -339,6 +344,7 @@ mod tests {
 
         let message = UserMessage {
             chat_history: Vec::new(),
+            max_tokens: None,
             message: "Hello!".to_owned(),
         };
 

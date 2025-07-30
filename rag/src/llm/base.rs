@@ -12,6 +12,7 @@ pub struct ChatHistoryItem {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct UserMessage {
     pub chat_history: Vec<ChatHistoryItem>,
+    pub max_tokens: Option<u32>,
     pub message: String,
 }
 
