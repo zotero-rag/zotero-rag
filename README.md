@@ -47,6 +47,10 @@ cd zotero-rag
 cargo build --release
 ```
 
+### Note for building on Linux
+
+On Linux, the project is configured to use the `mold` linker for faster linking. You can either install `mold` by following the [repo's instructions](https://github.com/rui314/mold) or by simply removing the `rustflags` line from `.cargo/config.toml`.
+
 ## Usage
 
 ### Set up environment variables
