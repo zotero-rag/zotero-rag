@@ -370,11 +370,12 @@ pub async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<(), CLIEr
 
 #[cfg(test)]
 mod tests {
-    use crate::cli::app::{BATCH_ITER_FILE, embed};
+    use crate::cli::app::{BATCH_ITER_FILE, embed, stats};
     use arrow_array::{RecordBatch, StringArray};
     use arrow_ipc::writer::FileWriter;
+    use rag::vector::lance::TABLE_NAME;
     use serial_test::serial;
-    use std::fs::File;
+    use std::fs::{self, File};
     use std::io::Cursor;
     use std::sync::Arc;
 
@@ -431,6 +432,10 @@ mod tests {
 
         let err = String::from_utf8(ctx.err.into_inner()).unwrap();
         assert!(err.is_empty());
+
+        // Clean up
+        let _ = fs::remove_file(BATCH_ITER_FILE);
+        let _ = fs::remove_dir_all(TABLE_NAME);
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -443,8 +448,14 @@ mod tests {
 
         assert!(result.is_ok());
 
-        let output = String::from_utf8(ctx.out.into_inner()).unwrap();
+        let output = String::from_utf8(ctx.out.clone().into_inner()).unwrap();
         assert!(output.contains("Successfully parsed library!"));
+
+        let stats = stats(&mut ctx).await;
+        let output = String::from_utf8(ctx.out.into_inner()).unwrap();
+        assert!(stats.is_ok());
+        assert!(output.contains("Table statistics:"));
+        assert!(output.contains("Number of rows: 8"));
     }
 
     #[tokio::test(flavor = "multi_thread")]
