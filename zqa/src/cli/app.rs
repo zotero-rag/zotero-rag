@@ -198,6 +198,7 @@ async fn run_query<W: Write>(query: String, ctx: &mut Context<W>) -> Result<(), 
             let client = get_client_by_provider(&provider).unwrap();
             let message = UserMessage {
                 chat_history: Vec::new(),
+                max_tokens: None,
                 message: get_extraction_prompt(&query_clone, &text),
             };
 
@@ -237,6 +238,7 @@ async fn run_query<W: Write>(query: String, ctx: &mut Context<W>) -> Result<(), 
     let client = get_client_by_provider(&model_provider).unwrap();
     let message = UserMessage {
         chat_history: Vec::new(),
+        max_tokens: None,
         message: get_summarize_prompt(&query, ok_contents),
     };
     match client.send_message(&message).await {
