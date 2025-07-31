@@ -44,14 +44,11 @@ impl Hinter for PlaceholderText {
 /// [Wikipedia](https://en.wikipedia.org/wiki/ANSI_escape_code#Control_Sequence_Introducer_commands).
 /// Alternatively, see `man 4 console_codes`, and search for "ECMA-48 CSI Sequences".
 impl Highlighter for PlaceholderText {
-    fn highlight<'l>(&self, line: &'l str, pos: usize) -> std::borrow::Cow<'l, str> {
+    fn highlight_hint<'h>(&self, hint: &'h str) -> std::borrow::Cow<'h, str> {
         const DIM_BACKGROUND: &str = "\x1b[2m";
         const RESET: &str = "\x1b[0m";
 
-        match pos {
-            0 => format!("{DIM_BACKGROUND}{line}").into(),
-            _ => format!("{RESET}{line}").into(),
-        }
+        format!("{DIM_BACKGROUND}{hint}{RESET}").into()
     }
 }
 
