@@ -434,14 +434,23 @@ mod tests {
         assert!(err.is_empty());
 
         // Clean up
-        let _ = fs::remove_file(BATCH_ITER_FILE);
-        let _ = fs::remove_dir_all(TABLE_NAME);
+        if fs::metadata(BATCH_ITER_FILE).is_ok() {
+            fs::remove_file(BATCH_ITER_FILE).expect("Failed to clean up BATCH_ITER_FILE");
+        }
+        if fs::metadata(TABLE_NAME).is_ok() {
+            fs::remove_dir_all(TABLE_NAME).expect("Failed to clean up test database");
+        }
     }
 
     #[tokio::test(flavor = "multi_thread")]
     #[serial]
     async fn test_process() {
         dotenv::dotenv().ok();
+
+        // This test needs the CI variable to be set. Some other tests rely on it, so we don't need
+        // to worry about unsetting it.
+        unsafe { std::env::set_var("CI", "true") };
+
         let mut ctx = create_test_context();
 
         let result = process(&mut ctx).await;
@@ -456,6 +465,11 @@ mod tests {
         assert!(stats.is_ok());
         assert!(output.contains("Table statistics:"));
         assert!(output.contains("Number of rows: 8"));
+
+        // `TABLE_NAME` is also used as the DB directory
+        if fs::metadata(TABLE_NAME).is_ok() {
+            fs::remove_dir_all(TABLE_NAME).expect("Failed to clean up test database");
+        }
     }
 
     #[tokio::test(flavor = "multi_thread")]
