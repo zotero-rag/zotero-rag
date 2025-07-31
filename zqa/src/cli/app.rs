@@ -466,6 +466,11 @@ mod tests {
         assert!(output.contains("Table statistics:"));
         assert!(output.contains("Number of rows: 8"));
 
+        // Cleanup
+        if fs::metadata(BATCH_ITER_FILE).is_ok() {
+            fs::remove_file(BATCH_ITER_FILE).expect("Failed to clean up BATCH_ITER_FILE");
+        }
+
         // `TABLE_NAME` is also used as the DB directory
         if fs::metadata(TABLE_NAME).is_ok() {
             fs::remove_dir_all(TABLE_NAME).expect("Failed to clean up test database");
