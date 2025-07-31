@@ -7,6 +7,7 @@ use rag::llm::base::{ApiClient, ApiResponse, ModelProviders, UserMessage};
 use rag::llm::errors::LLMError;
 use rag::llm::factory::get_client_by_provider;
 use rag::vector::lance::{create_initial_table, db_statistics};
+use rustyline::error::ReadlineError;
 use tokio::task::JoinSet;
 
 use crate::cli::errors::CLIError;
@@ -319,14 +320,16 @@ pub async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<(), CLIEr
 
         match readline {
             Ok(command) => {
-                if let Err(e) = rl.add_history_entry(command.as_str()) {
-                    log::debug!("Failed to write history entry: {e}");
+                if !command.trim().is_empty() {
+                    if let Err(e) = rl.add_history_entry(command.as_str()) {
+                        log::debug!("Failed to write history entry: {e}");
+                    }
                 }
 
                 match command.as_str() {
                     "" => {}
                     "/help" => {
-                        writeln!(&mut ctx.out, "")?;
+                        writeln!(&mut ctx.out)?;
                         writeln!(&mut ctx.out, "Available commands:\n")?;
                         writeln!(&mut ctx.out, "/help\t\tShow this help message")?;
                         writeln!(
@@ -365,7 +368,7 @@ pub async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<(), CLIEr
                         break;
                     }
                     query => {
-                        writeln!(&mut ctx.out, "")?;
+                        writeln!(&mut ctx.out)?;
 
                         // Check for a threshold to ensure this isn't an accidental Enter-hit.
                         const MIN_QUERY_LENGTH: usize = 10;
@@ -382,6 +385,10 @@ pub async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<(), CLIEr
                         }
                     }
                 }
+            }
+            Err(ReadlineError::Signal(rustyline::error::Signal::Resize)) => {
+                // Handle SIGWINCH; we should just rewrite the prompt and continue
+                continue;
             }
             _ => break,
         }
