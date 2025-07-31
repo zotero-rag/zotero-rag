@@ -1,6 +1,7 @@
 use std::io;
 
 use rag::llm::errors::LLMError;
+use rustyline::error::ReadlineError;
 
 use crate::utils;
 
@@ -10,6 +11,7 @@ pub enum CLIError {
     IOError(String),
     LLMError(String),
     MalformedBatchError,
+    ReadlineError(String),
 }
 
 impl std::error::Error for CLIError {}
@@ -20,6 +22,7 @@ impl std::fmt::Display for CLIError {
             Self::IOError(msg) => write!(f, "IO Error: {msg}"),
             Self::LLMError(msg) => write!(f, "Error communicating with the LLM: {msg}"),
             Self::MalformedBatchError => write!(f, "Malformed batch in batch_iter.bin"),
+            Self::ReadlineError(msg) => write!(f, "Error from the readline implementation: {msg}"),
         }
     }
 }
@@ -51,5 +54,11 @@ impl From<&arrow_schema::ArrowError> for CLIError {
 impl From<LLMError> for CLIError {
     fn from(value: LLMError) -> Self {
         Self::LLMError(value.to_string())
+    }
+}
+
+impl From<ReadlineError> for CLIError {
+    fn from(value: ReadlineError) -> Self {
+        Self::ReadlineError(value.to_string())
     }
 }

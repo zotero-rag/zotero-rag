@@ -1,3 +1,4 @@
+use crate::cli::placeholder::PlaceholderText;
 use crate::cli::prompts::{get_extraction_prompt, get_summarize_prompt};
 use crate::utils::arrow::vector_search;
 use arrow_array::{self, RecordBatch, RecordBatchIterator};
@@ -296,74 +297,97 @@ async fn stats<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Result<(), CLIErr
 /// * `ctx` - A `Context` object that contains CLI args and objects that implement
 ///   `std::io::Write` for `stdout` and `stderr`.
 pub async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<(), CLIError> {
+    // First, get the path to the history file used by the `readline` implementation.
+    let user_dirs = directories::UserDirs::new().ok_or(CLIError::ReadlineError(
+        "Could not get user directories".into(),
+    ))?;
+    let home_dir = user_dirs.home_dir();
+    let history_path = home_dir.join(".zqa_history");
+
+    // Create the `readline` "editor" with our `PlaceholderText` helper
+    let mut rl = rustyline::Editor::<PlaceholderText, rustyline::history::DefaultHistory>::new()?;
+    if rl.load_history(&history_path).is_err() {
+        // TODO: Synchronize `log` and the `Context` out/err streams
+        log::debug!("No previous history.");
+    }
+
     loop {
-        write!(&mut ctx.out, ">>> ")?;
-        ctx.out.flush()?;
+        rl.set_helper(Some(PlaceholderText {
+            placeholder_text: "Type in a question or /help for options".to_string(),
+        }));
+        let readline = rl.readline(">>> ");
 
-        let mut command = String::new();
-        io::stdin()
-            .read_line(&mut command)
-            .expect("Failed to read command.");
-
-        let command = command.trim();
-
-        match command {
-            "" => {}
-            "/help" => {
-                writeln!(&mut ctx.out, "Available commands:\n")?;
-                writeln!(&mut ctx.out, "/help\t\tShow this help message")?;
-                writeln!(
-                    &mut ctx.out,
-                    "/process\tPre-process Zotero library. Use to update the database."
-                )?;
-                writeln!(
-                    &mut ctx.out,
-                    "/embed\t\tRepair failed DB creation by re-adding embeddings."
-                )?;
-                writeln!(&mut ctx.out, "/stats\t\tShow table statistics.")?;
-                writeln!(&mut ctx.out, "/quit\t\tExit the program")?;
-                writeln!(&mut ctx.out)?;
-            }
-            "/embed" => {
-                if embed(&mut ctx).await.is_err() {
-                    eprintln!(
-                        "Failed to create embeddings. You may find relevant error messages above."
-                    );
-                }
-            }
-            "/process" => {
-                if process(&mut ctx).await.is_err() {
-                    eprintln!(
-                        "Failed to create embeddings. You may find relevant error messages above."
-                    );
-                }
-            }
-            "/stats" => {
-                if stats(&mut ctx).await.is_err() {
-                    // This only errors on an I/O failure
-                    eprintln!("Failed to write statistics to buffer.");
-                }
-            }
-            "/quit" | "/exit" | "quit" | "exit" => {
-                break;
-            }
-            query => {
-                // Check for a threshold to ensure this isn't an accidental Enter-hit.
-                const MIN_QUERY_LENGTH: usize = 10;
-
-                if query.len() < MIN_QUERY_LENGTH {
-                    writeln!(&mut ctx.out, "Invalid command: {query}")?;
-                    continue;
+        match readline {
+            Ok(command) => {
+                if let Err(e) = rl.add_history_entry(command.as_str()) {
+                    log::debug!("Failed to write history entry: {e}");
                 }
 
-                if run_query(query.into(), &mut ctx).await.is_err() {
-                    eprintln!(
-                        "Failed to answer the question. You may find relevant error messages above."
-                    );
+                match command.as_str() {
+                    "" => {}
+                    "/help" => {
+                        writeln!(&mut ctx.out, "")?;
+                        writeln!(&mut ctx.out, "Available commands:\n")?;
+                        writeln!(&mut ctx.out, "/help\t\tShow this help message")?;
+                        writeln!(
+                            &mut ctx.out,
+                            "/process\tPre-process Zotero library. Use to update the database."
+                        )?;
+                        writeln!(
+                            &mut ctx.out,
+                            "/embed\t\tRepair failed DB creation by re-adding embeddings."
+                        )?;
+                        writeln!(&mut ctx.out, "/stats\t\tShow table statistics.")?;
+                        writeln!(&mut ctx.out, "/quit\t\tExit the program")?;
+                        writeln!(&mut ctx.out)?;
+                    }
+                    "/embed" => {
+                        if embed(&mut ctx).await.is_err() {
+                            eprintln!(
+                                "Failed to create embeddings. You may find relevant error messages above."
+                            );
+                        }
+                    }
+                    "/process" => {
+                        if process(&mut ctx).await.is_err() {
+                            eprintln!(
+                                "Failed to create embeddings. You may find relevant error messages above."
+                            );
+                        }
+                    }
+                    "/stats" => {
+                        if stats(&mut ctx).await.is_err() {
+                            // This only errors on an I/O failure
+                            eprintln!("Failed to write statistics to buffer.");
+                        }
+                    }
+                    "/quit" | "/exit" | "quit" | "exit" => {
+                        break;
+                    }
+                    query => {
+                        writeln!(&mut ctx.out, "")?;
+
+                        // Check for a threshold to ensure this isn't an accidental Enter-hit.
+                        const MIN_QUERY_LENGTH: usize = 10;
+
+                        if query.len() < MIN_QUERY_LENGTH {
+                            writeln!(&mut ctx.out, "Invalid command: {query}")?;
+                            continue;
+                        }
+
+                        if run_query(query.into(), &mut ctx).await.is_err() {
+                            eprintln!(
+                                "Failed to answer the question. You may find relevant error messages above."
+                            );
+                        }
+                    }
                 }
             }
+            _ => break,
         }
     }
+
+    rl.save_history(&history_path)?;
 
     Ok(())
 }
