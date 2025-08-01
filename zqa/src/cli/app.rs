@@ -8,8 +8,6 @@ use rag::llm::base::{ApiClient, ApiResponse, ModelProviders, UserMessage};
 use rag::llm::errors::LLMError;
 use rag::llm::factory::get_client_by_provider;
 use rag::vector::lance::{create_initial_table, db_statistics};
-use rustyline::EditMode;
-use rustyline::config::Configurer;
 use rustyline::error::ReadlineError;
 use tokio::task::JoinSet;
 
@@ -319,10 +317,11 @@ pub async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<(), CLIEr
         log::debug!("No previous history.");
     }
 
+    rl.set_helper(Some(PlaceholderText {
+        placeholder_text: "Type in a question or /help for options".to_string(),
+    }));
+
     loop {
-        rl.set_helper(Some(PlaceholderText {
-            placeholder_text: "Type in a question or /help for options".to_string(),
-        }));
         let readline = rl.readline(">>> ");
 
         match readline {

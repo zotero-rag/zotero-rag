@@ -55,16 +55,14 @@ fn find_editrc() -> Option<PathBuf> {
 ///   unset)
 /// * Otherwise, `None`
 fn get_editrc_edit_mode() -> Option<EditMode> {
-    if let Ok(mode) = env::var("EDITRC") {
-        if mode.trim() == "vi" {
-            return Some(EditMode::Vi);
-        }
+    let path = env::var("EDITRC")
+        .map(PathBuf::from)
+        .ok()
+        .or_else(find_editrc);
 
-        return Some(EditMode::Emacs);
-    }
-
-    if let Some(editrc_path) = find_editrc() {
-        return match fs::read_to_string(editrc_path) {
+    match path {
+        None => None,
+        Some(editrc_path) => match fs::read_to_string(editrc_path) {
             Ok(contents) => {
                 let has_vi = contents
                     .lines()
@@ -80,10 +78,8 @@ fn get_editrc_edit_mode() -> Option<EditMode> {
                 Some(EditMode::Emacs)
             }
             _ => None,
-        };
+        },
     }
-
-    None
 }
 
 /// Attempt to find an readline config by priority order.
@@ -93,6 +89,10 @@ fn get_editrc_edit_mode() -> Option<EditMode> {
 /// * If a config file can be found, a path to it
 /// * Otherwise, `None`
 fn find_inputrc() -> Option<PathBuf> {
+    if let Ok(mode) = env::var("EDITRC") {
+        return Some(PathBuf::from(mode));
+    }
+
     let home_dir = env::home_dir()?;
     if home_dir.join(".inputrc").exists() {
         return Some(home_dir.join(".inputrc"));
@@ -118,16 +118,14 @@ fn find_inputrc() -> Option<PathBuf> {
 ///   unset)
 /// * Otherwise, `None`
 fn get_inputrc_edit_mode() -> EditMode {
-    if let Ok(mode) = env::var("INPUTRC") {
-        if mode.trim() == "vi" {
-            return EditMode::Vi;
-        }
+    let path = env::var("INPUTRC")
+        .map(PathBuf::from)
+        .ok()
+        .or_else(find_inputrc);
 
-        return EditMode::Emacs;
-    }
-
-    if let Some(inputrc_path) = find_inputrc() {
-        return match fs::read_to_string(inputrc_path) {
+    match path {
+        None => EditMode::Emacs,
+        Some(inputrc_path) => match fs::read_to_string(inputrc_path) {
             Ok(contents) => {
                 let has_vi = contents
                     .lines()
@@ -143,8 +141,6 @@ fn get_inputrc_edit_mode() -> EditMode {
                 EditMode::Emacs
             }
             _ => EditMode::Emacs,
-        };
+        },
     }
-
-    EditMode::Emacs
 }
