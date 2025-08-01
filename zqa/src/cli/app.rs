@@ -1,5 +1,6 @@
 use crate::cli::placeholder::PlaceholderText;
 use crate::cli::prompts::{get_extraction_prompt, get_summarize_prompt};
+use crate::cli::readline::get_readline_config;
 use crate::utils::arrow::vector_search;
 use arrow_array::{self, RecordBatch, RecordBatchIterator};
 use lancedb::embeddings::EmbeddingDefinition;
@@ -7,6 +8,8 @@ use rag::llm::base::{ApiClient, ApiResponse, ModelProviders, UserMessage};
 use rag::llm::errors::LLMError;
 use rag::llm::factory::get_client_by_provider;
 use rag::vector::lance::{create_initial_table, db_statistics};
+use rustyline::EditMode;
+use rustyline::config::Configurer;
 use rustyline::error::ReadlineError;
 use tokio::task::JoinSet;
 
@@ -306,7 +309,11 @@ pub async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<(), CLIEr
     let history_path = home_dir.join(".zqa_history");
 
     // Create the `readline` "editor" with our `PlaceholderText` helper
-    let mut rl = rustyline::Editor::<PlaceholderText, rustyline::history::DefaultHistory>::new()?;
+    let mut rl =
+        rustyline::Editor::<PlaceholderText, rustyline::history::DefaultHistory>::with_config(
+            get_readline_config(),
+        )?;
+
     if rl.load_history(&history_path).is_err() {
         // TODO: Synchronize `log` and the `Context` out/err streams
         log::debug!("No previous history.");
