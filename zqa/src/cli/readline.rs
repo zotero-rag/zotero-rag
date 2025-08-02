@@ -281,16 +281,16 @@ mod tests {
     #[serial]
     fn test_get_inputrc_edit_mode() {
         let no_config = get_inputrc_edit_mode();
-        assert!(no_config.is_none());
+        assert_eq!(no_config, EditMode::Emacs);
 
         fs::write(".inputrc", "foo\nset editing-mode vi").unwrap();
         let with_vi_config = get_inputrc_edit_mode();
-        assert!(with_vi_config.is_some_and(|m| m == EditMode::Vi));
+        assert_eq!(with_vi_config, EditMode::Vi);
         fs::remove_file(".editrc").unwrap();
 
         fs::write(".inputrc", "foo").unwrap();
         let with_emacs_config = get_inputrc_edit_mode();
-        assert!(with_emacs_config.is_some_and(|m| m == EditMode::Emacs));
+        assert_eq!(with_emacs_config, EditMode::Emacs);
         fs::remove_file(".inputrc").unwrap();
     }
 }
