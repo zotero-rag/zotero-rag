@@ -149,6 +149,7 @@ mod tests {
 
     use rustyline::EditMode;
     use serial_test::serial;
+    use temp_env;
 
     use crate::cli::readline::{
         find_editrc, find_inputrc, get_editrc_edit_mode, get_inputrc_edit_mode,
@@ -284,9 +285,9 @@ mod tests {
         assert_eq!(no_config, EditMode::Emacs);
 
         fs::write(".inputrc", "foo\nset editing-mode vi").unwrap();
-        let with_vi_config = get_inputrc_edit_mode();
+        let with_vi_config = temp_env::with_var("INPUTRC", Some(".inputrc"), get_inputrc_edit_mode);
         assert_eq!(with_vi_config, EditMode::Vi);
-        fs::remove_file(".editrc").unwrap();
+        fs::remove_file(".inputrc").unwrap();
 
         fs::write(".inputrc", "foo").unwrap();
         let with_emacs_config = get_inputrc_edit_mode();
