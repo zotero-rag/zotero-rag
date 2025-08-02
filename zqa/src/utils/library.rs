@@ -312,10 +312,7 @@ mod tests {
         dotenv().ok();
 
         if env::var("FAKE_CI").is_ok() {
-            // TODO: Audit that the environment access only happens in single-threaded code.
-            unsafe { std::env::set_var("CI", "true") };
-
-            let lib_path = get_lib_path();
+            let lib_path = temp_env::with_vars([("CI", Some("true"))], get_lib_path);
 
             assert!(lib_path.is_some());
             let lib_path = lib_path.unwrap();
@@ -327,9 +324,6 @@ mod tests {
             let items = library_items.unwrap();
             assert!(!items.is_empty());
             assert_eq!(items.len(), 10);
-
-            // TODO: Audit that the environment access only happens in single-threaded code.
-            unsafe { std::env::remove_var("CI") };
         } else {
             panic!(concat!(
                 "You have enabled `test_toy_library_loaded_in_ci`, but ",
