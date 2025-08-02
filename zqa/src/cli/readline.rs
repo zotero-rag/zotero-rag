@@ -34,7 +34,7 @@ fn get_edit_mode() -> EditMode {
 /// * If a config file can be found, a path to it
 /// * Otherwise, `None`
 fn find_editrc() -> Option<PathBuf> {
-    if let Some(path) = env::var("EDITRC").map(PathBuf::from).ok() {
+    if let Ok(path) = env::var("EDITRC").map(PathBuf::from) {
         return Some(path);
     }
 
@@ -90,7 +90,7 @@ fn get_editrc_edit_mode() -> Option<EditMode> {
 /// * If a config file can be found, a path to it
 /// * Otherwise, `None`
 fn find_inputrc() -> Option<PathBuf> {
-    if let Some(path) = env::var("INPUTRC").map(PathBuf::from).ok() {
+    if let Ok(path) = env::var("INPUTRC").map(PathBuf::from) {
         return Some(path);
     }
 
