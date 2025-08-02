@@ -25,6 +25,7 @@ ratatui = "0.29.0"
 crossterm = "0.29.0"
 clap = { version = "4.5.40", features = ["derive"] }
 rustyline = "16.0.0"
+temp-env = { version = "0.3.6", features = ["async_closure"] }
 
 [[bin]]
 name = "zqa"

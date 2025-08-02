@@ -183,13 +183,6 @@ async fn process<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Result<(), CLIE
 /// # Returns
 ///
 /// The thousands-separated string
-///
-/// ```
-/// let example1 = 323000;
-/// let formatted: String = format_number(example1);
-///
-/// assert_eq!(format_number(example1), String::from("323,000"));
-/// ```
 fn format_number(num: u32) -> String {
     num.to_string()
         .as_bytes()
@@ -451,6 +444,7 @@ mod tests {
     use std::fs::{self, File};
     use std::io::Cursor;
     use std::sync::Arc;
+    use temp_env;
 
     use crate::{
         cli::app::{process, run_query},
@@ -519,14 +513,9 @@ mod tests {
     #[serial]
     async fn test_process() {
         dotenv::dotenv().ok();
-
-        // This test needs the CI variable to be set. Some other tests rely on it, so we don't need
-        // to worry about unsetting it.
-        unsafe { std::env::set_var("CI", "true") };
-
         let mut ctx = create_test_context();
 
-        let result = process(&mut ctx).await;
+        let result = temp_env::async_with_vars([("CI", Some("true"))], process(&mut ctx)).await;
 
         assert!(result.is_ok());
 
@@ -554,15 +543,18 @@ mod tests {
     #[serial]
     async fn test_run_query() {
         dotenv::dotenv().ok();
+        let mut setup_ctx = create_test_context();
 
         // `process` needs to be run before `run_query`
-        let mut setup_ctx = create_test_context();
-        let _ = process(&mut setup_ctx).await;
+        let _ = temp_env::async_with_vars([("CI", Some("true"))], process(&mut setup_ctx)).await;
 
         let mut ctx = create_test_context();
-        let result = run_query(
-            "How should I oversample in defect prediction?".into(),
-            &mut ctx,
+        let result = temp_env::async_with_vars(
+            [("CI", Some("true"))],
+            run_query(
+                "How should I oversample in defect prediction?".into(),
+                &mut ctx,
+            ),
         )
         .await;
 

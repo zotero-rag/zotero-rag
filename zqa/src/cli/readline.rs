@@ -34,6 +34,10 @@ fn get_edit_mode() -> EditMode {
 /// * If a config file can be found, a path to it
 /// * Otherwise, `None`
 fn find_editrc() -> Option<PathBuf> {
+    if let Some(path) = env::var("EDITRC").map(PathBuf::from).ok() {
+        return Some(path);
+    }
+
     let cwd = env::current_dir().ok()?;
     if cwd.join(".editrc").exists() {
         return Some(cwd.join(".editrc"));
@@ -55,10 +59,7 @@ fn find_editrc() -> Option<PathBuf> {
 ///   unset)
 /// * Otherwise, `None`
 fn get_editrc_edit_mode() -> Option<EditMode> {
-    let path = env::var("EDITRC")
-        .map(PathBuf::from)
-        .ok()
-        .or_else(find_editrc);
+    let path = find_editrc();
 
     match path {
         None => None,
@@ -89,8 +90,8 @@ fn get_editrc_edit_mode() -> Option<EditMode> {
 /// * If a config file can be found, a path to it
 /// * Otherwise, `None`
 fn find_inputrc() -> Option<PathBuf> {
-    if let Ok(mode) = env::var("EDITRC") {
-        return Some(PathBuf::from(mode));
+    if let Some(path) = env::var("INPUTRC").map(PathBuf::from).ok() {
+        return Some(path);
     }
 
     let home_dir = env::home_dir()?;
@@ -118,10 +119,7 @@ fn find_inputrc() -> Option<PathBuf> {
 ///   unset)
 /// * Otherwise, `None`
 fn get_inputrc_edit_mode() -> EditMode {
-    let path = env::var("INPUTRC")
-        .map(PathBuf::from)
-        .ok()
-        .or_else(find_inputrc);
+    let path = find_inputrc();
 
     match path {
         None => EditMode::Emacs,
@@ -142,5 +140,157 @@ fn get_inputrc_edit_mode() -> EditMode {
             }
             _ => EditMode::Emacs,
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs::{self, File};
+
+    use rustyline::EditMode;
+    use serial_test::serial;
+
+    use crate::cli::readline::{
+        find_editrc, find_inputrc, get_editrc_edit_mode, get_inputrc_edit_mode,
+    };
+
+    #[test]
+    #[serial]
+    fn test_find_editrc() {
+        File::create(".editrc").unwrap();
+
+        let path = find_editrc();
+        assert!(path.is_some());
+
+        let path = path.unwrap();
+        let filename = path.file_name();
+        assert!(filename.is_some());
+
+        let filename = filename.unwrap();
+        assert_eq!(filename.to_str().unwrap(), ".editrc");
+
+        fs::remove_file(".editrc").unwrap();
+    }
+
+    #[test]
+    #[serial]
+    fn test_find_editrc_in_home() {
+        let home_dir = std::env::home_dir();
+        assert!(home_dir.is_some());
+
+        let home_dir = home_dir.unwrap();
+        File::create(home_dir.join(".editrc")).unwrap();
+
+        let path = find_editrc();
+        assert!(path.is_some());
+
+        let path = path.unwrap();
+        let filename = path.file_name();
+        assert!(filename.is_some());
+
+        let filename = filename.unwrap();
+        assert_eq!(filename.to_str().unwrap(), ".editrc");
+
+        fs::remove_file(home_dir.join(".editrc")).unwrap();
+    }
+
+    #[test]
+    #[serial]
+    fn test_find_editrc_prioritizes_env() {
+        let home_dir = std::env::home_dir();
+        assert!(home_dir.is_some());
+
+        let home_dir = home_dir.unwrap();
+        File::create(home_dir.join(".editrc")).unwrap();
+
+        let path = temp_env::with_var("EDITRC", Some("foo"), find_editrc);
+        assert!(path.is_some());
+
+        let path = path.unwrap();
+        let filename = path.file_name();
+        assert!(filename.is_some());
+
+        let filename = filename.unwrap();
+        assert_eq!(filename.to_str().unwrap(), "foo");
+
+        fs::remove_file(home_dir.join(".editrc")).unwrap();
+    }
+
+    #[test]
+    #[serial]
+    fn test_find_inputrc_in_home() {
+        let home_dir = std::env::home_dir();
+        assert!(home_dir.is_some());
+
+        let home_dir = home_dir.unwrap();
+        File::create(home_dir.join(".inputrc")).unwrap();
+
+        let path = find_inputrc();
+        assert!(path.is_some());
+
+        let path = path.unwrap();
+        let filename = path.file_name();
+        assert!(filename.is_some());
+
+        let filename = filename.unwrap();
+        assert_eq!(filename.to_str().unwrap(), ".inputrc");
+
+        fs::remove_file(home_dir.join(".inputrc")).unwrap();
+    }
+
+    #[test]
+    #[serial]
+    fn test_find_inputrc_prioritizes_env() {
+        let home_dir = std::env::home_dir();
+        assert!(home_dir.is_some());
+
+        let home_dir = home_dir.unwrap();
+        File::create(home_dir.join(".inputrc")).unwrap();
+
+        let path = temp_env::with_var("INPUTRC", Some("foo"), find_inputrc);
+        assert!(path.is_some());
+
+        let path = path.unwrap();
+        let filename = path.file_name();
+        assert!(filename.is_some());
+
+        let filename = filename.unwrap();
+        assert_eq!(filename.to_str().unwrap(), "foo");
+
+        fs::remove_file(home_dir.join(".inputrc")).unwrap();
+    }
+
+    #[test]
+    #[serial]
+    fn test_get_editrc_edit_mode() {
+        let no_config = get_editrc_edit_mode();
+        assert!(no_config.is_none());
+
+        fs::write(".editrc", "bind -v").unwrap();
+        let with_vi_config = get_editrc_edit_mode();
+        assert!(with_vi_config.is_some_and(|m| m == EditMode::Vi));
+        fs::remove_file(".editrc").unwrap();
+
+        fs::write(".editrc", "foo").unwrap();
+        let with_emacs_config = get_editrc_edit_mode();
+        assert!(with_emacs_config.is_some_and(|m| m == EditMode::Emacs));
+        fs::remove_file(".editrc").unwrap();
+    }
+
+    #[test]
+    #[serial]
+    fn test_get_inputrc_edit_mode() {
+        let no_config = get_inputrc_edit_mode();
+        assert!(no_config.is_none());
+
+        fs::write(".inputrc", "foo\nset editing-mode vi").unwrap();
+        let with_vi_config = get_inputrc_edit_mode();
+        assert!(with_vi_config.is_some_and(|m| m == EditMode::Vi));
+        fs::remove_file(".editrc").unwrap();
+
+        fs::write(".inputrc", "foo").unwrap();
+        let with_emacs_config = get_inputrc_edit_mode();
+        assert!(with_emacs_config.is_some_and(|m| m == EditMode::Emacs));
+        fs::remove_file(".inputrc").unwrap();
     }
 }
