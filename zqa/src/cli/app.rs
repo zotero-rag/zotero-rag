@@ -174,6 +174,33 @@ async fn process<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Result<(), CLIE
     Ok(())
 }
 
+/// Given a positive number, returns a thousands separator-formatted string representation
+///
+/// # Arguments
+///
+/// * `num` - The number to format
+///
+/// # Returns
+///
+/// The thousands-separated string
+///
+/// ```
+/// let example1 = 323000;
+/// let formatted: String = format_number(example1);
+///
+/// assert_eq!(format_number(example1), String::from("323,000"));
+/// ```
+fn format_number(num: u32) -> String {
+    num.to_string()
+        .as_bytes()
+        .rchunks(3)
+        .rev()
+        .map(std::str::from_utf8)
+        .collect::<Result<Vec<&str>, _>>()
+        .unwrap()
+        .join(",")
+}
+
 /// Given a user query and the runtime context (CLI args + a `io::Write` implementation), perform a
 /// vector search and generate an answer based on the user's Zotero library.
 ///
@@ -269,9 +296,18 @@ async fn run_query<O: Write, E: Write>(
         }
     }
 
-    writeln!(&mut ctx.out, "\nTotal token usage:")?;
-    writeln!(&mut ctx.out, "\tInput tokens: {total_input_tokens}")?;
-    writeln!(&mut ctx.out, "\tOutput tokens: {total_output_tokens}")?;
+    writeln!(&mut ctx.out, "\n-----")?;
+    writeln!(&mut ctx.out, "Total token usage:")?;
+    writeln!(
+        &mut ctx.out,
+        "\tInput tokens: {}",
+        format_number(total_input_tokens)
+    )?;
+    writeln!(
+        &mut ctx.out,
+        "\tOutput tokens: {}",
+        format_number(total_output_tokens)
+    )?;
 
     Ok(())
 }
