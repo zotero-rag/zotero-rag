@@ -327,12 +327,12 @@ async fn run_query<O: Write, E: Write>(
     writeln!(&mut ctx.out, "{DIM_TEXT}Total token usage:{RESET}")?;
     writeln!(
         &mut ctx.out,
-        "\t{DIM_TEXT}Input tokens: {}{RESET}",
+        "\t{DIM_TEXT}Input tokens: {}{RESET}\n",
         format_number(total_input_tokens)
     )?;
     writeln!(
         &mut ctx.out,
-        "\t{DIM_TEXT}Output tokens: {}{RESET}",
+        "\t{DIM_TEXT}Output tokens: {}{RESET}\n",
         format_number(total_output_tokens)
     )?;
 

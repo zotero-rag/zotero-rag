@@ -61,13 +61,14 @@ ANTHROPIC_API_KEY=
 ANTHROPIC_MODEL=claude-sonnet-4-20250514
 OPENAI_API_KEY=
 OPENAI_EMBEDDING_MODEL=text-embedding-3-small
+OPENAI_MODEL=o4-mini-2025-04-16
 VOYAGE_AI_API_KEY=
 GEMINI_API_KEY=
 
 MAX_CONCURRENT_REQUESTS=5
 ```
 
-The model choices and the maximum concurrent requests above are defaults, and you can omit them. By default, the app uses Anthropic for generation and Voyage AI for embedding. This is currently the recommended settings (and so you won't need an OpenAI API key set up). Note that Voyage AI embeddings are the only ones that are known to work in a real setting; it is quite unlikely for the OpenAI embeddings to work at this moment, because we do not perform any chunking.
+The model choices and the maximum concurrent requests above are defaults, and you can omit them. By default, the app uses Anthropic for generation and Voyage AI for embedding. This is currently the recommended settings (and so you won't need an OpenAI API key set up). Note that Voyage AI embeddings are the only ones that are known to work in a real setting; it is quite unlikely for the OpenAI embeddings to work at this moment, because we do not perform any chunking. For `OPENAI_MODEL`, o4-mini is recommended, unless you have a Usage Tier 3 account--in which case you may prefer gpt-4.1.
 
 ### Running the program
 
