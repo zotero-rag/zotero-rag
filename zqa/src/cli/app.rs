@@ -29,7 +29,7 @@ use std::{
 const BATCH_ITER_FILE: &str = "batch_iter.bin";
 
 /// ANSI escape code for dimming text
-const DIM_BACKGROUND: &str = "\x1b[2m";
+const DIM_TEXT: &str = "\x1b[2m";
 
 /// ANSI escape code for resetting text formatting
 const RESET: &str = "\x1b[0m";
@@ -218,7 +218,10 @@ async fn run_query<O: Write, E: Write>(
     let vector_search_start = Instant::now();
     let search_results = vector_search(query.clone(), embedding_name).await?;
     let vector_search_duration = vector_search_start.elapsed();
-    writeln!(&mut ctx.err, "{DIM_BACKGROUND}Vector search completed in {:.2?}{RESET}", vector_search_duration)?;
+    writeln!(
+        &mut ctx.err,
+        "{DIM_TEXT}Vector search completed in {vector_search_duration:.2?}{RESET}"
+    )?;
 
     if !ModelProviders::contains(&model_provider) {
         return Err(CLIError::LLMError(format!(
@@ -248,7 +251,10 @@ async fn run_query<O: Write, E: Write>(
 
     let results: Vec<Result<ApiResponse, LLMError>> = set.join_all().await;
     let summarization_duration = summarization_start.elapsed();
-    writeln!(&mut ctx.err, "{DIM_BACKGROUND}Summarization completed in {:.2?}{RESET}", summarization_duration)?;
+    writeln!(
+        &mut ctx.err,
+        "{DIM_TEXT}Summarization completed in {summarization_duration:.2?}{RESET}"
+    )?;
 
     let err_results = results
         .iter()
@@ -287,13 +293,17 @@ async fn run_query<O: Write, E: Write>(
         max_tokens: None,
         message: get_summarize_prompt(&query, ok_contents),
     };
-    
+
     let final_draft_start = Instant::now();
-    match client.send_message(&message).await {
+    let result = client.send_message(&message).await;
+    let final_draft_duration = final_draft_start.elapsed();
+    match result {
         Ok(response) => {
-            let final_draft_duration = final_draft_start.elapsed();
-            writeln!(&mut ctx.err, "{DIM_BACKGROUND}Final draft completed in {:.2?}{RESET}", final_draft_duration)?;
-            
+            writeln!(
+                &mut ctx.err,
+                "{DIM_TEXT}Final draft completed in {final_draft_duration:.2?}{RESET}"
+            )?;
+
             writeln!(&mut ctx.out, "\n-----")?;
             writeln!(&mut ctx.out, "{}", response.content)?;
 
@@ -301,9 +311,11 @@ async fn run_query<O: Write, E: Write>(
             total_output_tokens += response.output_tokens;
         }
         Err(e) => {
-            let final_draft_duration = final_draft_start.elapsed();
-            writeln!(&mut ctx.err, "{DIM_BACKGROUND}Final draft failed in {:.2?}{RESET}", final_draft_duration)?;
-            
+            writeln!(
+                &mut ctx.err,
+                "{DIM_TEXT}Final draft failed in {final_draft_duration:.2?}{RESET}"
+            )?;
+
             writeln!(
                 &mut ctx.err,
                 "Failed to call the LLM endpoint for the final response: {e}"
@@ -312,15 +324,15 @@ async fn run_query<O: Write, E: Write>(
     }
 
     writeln!(&mut ctx.out, "\n-----")?;
-    writeln!(&mut ctx.out, "{DIM_BACKGROUND}Total token usage:{RESET}")?;
+    writeln!(&mut ctx.out, "{DIM_TEXT}Total token usage:{RESET}")?;
     writeln!(
         &mut ctx.out,
-        "\t{DIM_BACKGROUND}Input tokens: {}{RESET}",
+        "\t{DIM_TEXT}Input tokens: {}{RESET}",
         format_number(total_input_tokens)
     )?;
     writeln!(
         &mut ctx.out,
-        "\t{DIM_BACKGROUND}Output tokens: {}{RESET}",
+        "\t{DIM_TEXT}Output tokens: {}{RESET}",
         format_number(total_output_tokens)
     )?;
 
