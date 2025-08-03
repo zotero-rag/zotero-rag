@@ -45,10 +45,10 @@ impl Hinter for PlaceholderText {
 /// Alternatively, see `man 4 console_codes`, and search for "ECMA-48 CSI Sequences".
 impl Highlighter for PlaceholderText {
     fn highlight_hint<'h>(&self, hint: &'h str) -> std::borrow::Cow<'h, str> {
-        const DIM_BACKGROUND: &str = "\x1b[2m";
+        const DIM_TEXT: &str = "\x1b[2m";
         const RESET: &str = "\x1b[0m";
 
-        format!("{DIM_BACKGROUND}{hint}{RESET}").into()
+        format!("{DIM_TEXT}{hint}{RESET}").into()
     }
 }
 
