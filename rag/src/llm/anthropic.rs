@@ -194,7 +194,7 @@ struct AnthropicResponse {
 /// locality-of-behavior is worth the loss in pointless generality.
 impl<T: HttpClient> ApiClient for AnthropicClient<T> {
     async fn send_message(&self, message: &UserMessage) -> Result<ApiResponse, LLMError> {
-        let key = env::var("ANTHROPIC_KEY")?;
+        let key = env::var("ANTHROPIC_API_KEY")?;
 
         let mut headers = HeaderMap::new();
         headers.insert("x-api-key", key.parse()?);

@@ -57,7 +57,7 @@ On Linux, the project is configured to use the `mold` linker for faster linking.
 
 Create a `.env` in the root of the project with the following structure:
 ```
-ANTHROPIC_KEY=
+ANTHROPIC_API_KEY=
 ANTHROPIC_MODEL=claude-sonnet-4-20250514
 OPENAI_API_KEY=
 OPENAI_EMBEDDING_MODEL=text-embedding-3-small
