@@ -19,6 +19,7 @@ use arrow_ipc::writer::FileWriter;
 use std::{
     fs::File,
     io::{self, Write},
+    time::Instant,
 };
 
 /// A file that contains parsed PDF texts from the user's Zotero library. In case the
@@ -26,6 +27,12 @@ use std::{
 /// and can simply retry the embedding. Note that this is *not* supposed to be user-facing
 /// and all interaction with it is meant for use by the CLI.
 const BATCH_ITER_FILE: &str = "batch_iter.bin";
+
+/// ANSI escape code for dimming text
+const DIM_BACKGROUND: &str = "\x1b[2m";
+
+/// ANSI escape code for resetting text formatting
+const RESET: &str = "\x1b[0m";
 
 /// Embed text from PDFs parsed, in case this step previously failed. This function reads
 /// the `BATCH_ITER_FILE` and uses the data in there to compute embeddings and write out
@@ -208,7 +215,10 @@ async fn run_query<O: Write, E: Write>(
     let embedding_name = ctx.args.embedding.clone();
     let model_provider = ctx.args.model_provider.clone();
 
+    let vector_search_start = Instant::now();
     let search_results = vector_search(query.clone(), embedding_name).await?;
+    let vector_search_duration = vector_search_start.elapsed();
+    writeln!(&mut ctx.err, "{DIM_BACKGROUND}Vector search completed in {:.2?}{RESET}", vector_search_duration)?;
 
     if !ModelProviders::contains(&model_provider) {
         return Err(CLIError::LLMError(format!(
@@ -218,6 +228,7 @@ async fn run_query<O: Write, E: Write>(
 
     let mut set = JoinSet::new();
 
+    let summarization_start = Instant::now();
     search_results.iter().for_each(|item| {
         let provider = model_provider.clone();
         let text = item.text.clone();
@@ -236,6 +247,8 @@ async fn run_query<O: Write, E: Write>(
     });
 
     let results: Vec<Result<ApiResponse, LLMError>> = set.join_all().await;
+    let summarization_duration = summarization_start.elapsed();
+    writeln!(&mut ctx.err, "{DIM_BACKGROUND}Summarization completed in {:.2?}{RESET}", summarization_duration)?;
 
     let err_results = results
         .iter()
@@ -274,14 +287,23 @@ async fn run_query<O: Write, E: Write>(
         max_tokens: None,
         message: get_summarize_prompt(&query, ok_contents),
     };
+    
+    let final_draft_start = Instant::now();
     match client.send_message(&message).await {
         Ok(response) => {
+            let final_draft_duration = final_draft_start.elapsed();
+            writeln!(&mut ctx.err, "{DIM_BACKGROUND}Final draft completed in {:.2?}{RESET}", final_draft_duration)?;
+            
+            writeln!(&mut ctx.out, "\n-----")?;
             writeln!(&mut ctx.out, "{}", response.content)?;
 
             total_input_tokens += response.input_tokens;
             total_output_tokens += response.output_tokens;
         }
         Err(e) => {
+            let final_draft_duration = final_draft_start.elapsed();
+            writeln!(&mut ctx.err, "{DIM_BACKGROUND}Final draft failed in {:.2?}{RESET}", final_draft_duration)?;
+            
             writeln!(
                 &mut ctx.err,
                 "Failed to call the LLM endpoint for the final response: {e}"
@@ -290,15 +312,15 @@ async fn run_query<O: Write, E: Write>(
     }
 
     writeln!(&mut ctx.out, "\n-----")?;
-    writeln!(&mut ctx.out, "Total token usage:")?;
+    writeln!(&mut ctx.out, "{DIM_BACKGROUND}Total token usage:{RESET}")?;
     writeln!(
         &mut ctx.out,
-        "\tInput tokens: {}",
+        "\t{DIM_BACKGROUND}Input tokens: {}{RESET}",
         format_number(total_input_tokens)
     )?;
     writeln!(
         &mut ctx.out,
-        "\tOutput tokens: {}",
+        "\t{DIM_BACKGROUND}Output tokens: {}{RESET}",
         format_number(total_output_tokens)
     )?;
 
