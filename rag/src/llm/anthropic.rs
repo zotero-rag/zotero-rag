@@ -1,4 +1,5 @@
 use crate::common;
+use crate::common::request_with_backoff;
 use std::borrow::Cow;
 use std::env;
 
@@ -202,10 +203,14 @@ impl<T: HttpClient> ApiClient for AnthropicClient<T> {
         headers.insert("content-type", "application/json".parse()?);
 
         let req_body: AnthropicRequest = message.clone().into();
-        let res = self
-            .client
-            .post_json("https://api.anthropic.com/v1/messages", headers, &req_body)
-            .await?;
+        let res = request_with_backoff(
+            &self.client,
+            "https://api.anthropic.com/v1/messages",
+            &headers,
+            req_body,
+            3,
+        )
+        .await?;
 
         // Get the response body as text first for debugging
         let body = res.text().await?;

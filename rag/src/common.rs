@@ -1,7 +1,9 @@
+use http::{HeaderMap, StatusCode};
+use reqwest::Response;
 use serde::{Deserialize, Serialize};
-use std::env;
+use std::{env, time::Duration};
 
-use crate::llm::errors::LLMError;
+use crate::llm::{errors::LLMError, http_client::HttpClient};
 
 pub async fn get_openai_embedding(text: String) -> Result<Vec<f32>, LLMError> {
     #[derive(Serialize)]
@@ -67,4 +69,51 @@ pub async fn get_openai_embedding(text: String) -> Result<Vec<f32>, LLMError> {
     })?;
 
     Ok(response.data[0].embedding.clone())
+}
+
+fn calculate_backoff_delay(attempt: usize, response: &Response) -> Duration {
+    if let Some(retry_after) = response.headers().get("retry-after") {
+        if let Ok(wait_time_str) = retry_after.to_str() {
+            if let Ok(wait_time) = wait_time_str.parse::<u64>() {
+                return Duration::from_secs(wait_time);
+            } else {
+                log::warn!("Retry-After value {wait_time_str} could not be parsed as a u64");
+            }
+        } else {
+            log::warn!("Retry-After value {retry_after:?} could not be converted to a string");
+        }
+    }
+
+    // Adding a jitter helps mitigate the thundering herd problem
+    let jittered_exp = 2_f64 * (1.0 + rand::random::<f64>());
+    let delay = 1000.0 * jittered_exp.powi(attempt as i32);
+
+    Duration::from_millis(delay.round() as u64)
+}
+
+pub async fn request_with_backoff<T: HttpClient>(
+    client: &T,
+    url: &str,
+    headers: &HeaderMap,
+    request: impl Serialize + Sync + Send,
+    max_retries: usize,
+) -> Result<Response, LLMError> {
+    let mut attempt = 0;
+
+    loop {
+        let response = client.post_json(url, headers.clone(), &request).await?;
+
+        if response.status().is_success() {
+            return Ok(response);
+        }
+
+        if response.status() == StatusCode::TOO_MANY_REQUESTS && attempt < max_retries {
+            let delay = calculate_backoff_delay(attempt, &response);
+            let _ = tokio::time::sleep(delay).await;
+            attempt += 1;
+            continue;
+        }
+
+        return Ok(response);
+    }
 }

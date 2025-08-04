@@ -227,10 +227,12 @@ mod tests {
     use dotenv::dotenv;
     use futures::StreamExt;
     use lancedb::query::ExecutableQuery;
+    use serial_test::serial;
 
     use super::*;
 
     #[tokio::test]
+    #[serial]
     async fn test_create_initial_table_with_openai() {
         dotenv().ok();
 
@@ -283,11 +285,8 @@ mod tests {
         }
     }
 
-    // Having three tests with just different providers can sometimes interfere with the tests in
-    // the `zqa` crate. Temporarily, this is disabled.
-    // TODO: Re-enable later.
-    #[ignore]
     #[tokio::test]
+    #[serial]
     async fn test_create_initial_table_with_anthropic() {
         dotenv().ok();
 
@@ -337,6 +336,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_create_initial_table_with_voyage() {
         dotenv().ok();
 
@@ -386,6 +386,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_invalid_embedding_provider_rejected() {
         dotenv().ok();
 
