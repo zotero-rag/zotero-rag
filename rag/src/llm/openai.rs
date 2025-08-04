@@ -13,6 +13,7 @@ use super::base::{ApiClient, ApiResponse, ChatHistoryItem, UserMessage};
 use super::errors::LLMError;
 use super::http_client::{HttpClient, ReqwestClient};
 use crate::common;
+use crate::common::request_with_backoff;
 
 const OPENAI_EMBEDDING_DIM: u32 = 1536;
 
@@ -181,14 +182,14 @@ impl<T: HttpClient> ApiClient for OpenAIClient<T> {
         headers.insert("content-type", "application/json".parse()?);
 
         let req_body: OpenAIRequest = message.clone().into();
-        let res = self
-            .client
-            .post_json(
-                "https://api.openai.com/v1/chat/completions",
-                headers,
-                &req_body,
-            )
-            .await?;
+        let res = request_with_backoff(
+            &self.client,
+            "https://api.openai.com/v1/chat/completions",
+            &headers,
+            req_body,
+            3,
+        )
+        .await?;
 
         let body = res.text().await?;
 
