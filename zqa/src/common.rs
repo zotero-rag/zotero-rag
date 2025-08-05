@@ -19,8 +19,8 @@ pub struct Args {
     #[arg(short, long, default_value_t = String::from("voyageai"))]
     pub embedding: String,
 
-    /// Choice of model provider, must be one of "anthropic" or "openai". Requires `ANTHROPIC_API_KEY`
-    /// or `OPENAI_API_KEY` to be set accordingly.
+    /// Choice of model provider, must be one of "anthropic", "openai", or "openrouter". Requires 
+    /// `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, or `OPENROUTER_API_KEY` to be set accordingly.
     #[arg(short, long, default_value_t = String::from("anthropic"))]
     pub model_provider: String,
 }

@@ -4,4 +4,5 @@ pub mod errors;
 pub mod factory;
 pub mod http_client;
 pub mod openai;
+pub mod openrouter;
 pub mod voyage;

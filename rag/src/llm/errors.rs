@@ -4,7 +4,7 @@ use http::header::InvalidHeaderValue;
 /// Has implementations of From<...> and Display
 #[derive(Clone, Debug)]
 pub enum LLMError {
-    CredentialError,
+    CredentialError(String),
     DeserializationError(String),
     EnvError(String),
     GenericLLMError(String),
@@ -20,7 +20,9 @@ impl std::error::Error for LLMError {}
 impl std::fmt::Display for LLMError {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
-            LLMError::CredentialError => write!(f, "Got 4xx response, possible credentials error"),
+            LLMError::CredentialError(msg) => {
+                write!(f, "Got 4xx response, possible credentials error: {msg}")
+            }
             LLMError::DeserializationError(body) => {
                 write!(f, "Failed to deserialize response: {body}")
             }
@@ -53,7 +55,7 @@ impl From<reqwest::Error> for LLMError {
             if status == reqwest::StatusCode::UNAUTHORIZED
                 || status == reqwest::StatusCode::FORBIDDEN
             {
-                return LLMError::CredentialError;
+                return LLMError::CredentialError(error.to_string());
             }
 
             return LLMError::HttpStatusError;
