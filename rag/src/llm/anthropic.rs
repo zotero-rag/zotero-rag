@@ -118,28 +118,23 @@ where
 }
 
 /// Represents a request to the Anthropic API
-///
-/// * `model` - The model to use for the request (e.g., "claude-3-5-sonnet-20241022")
-/// * `max_tokens` - The maximum number of tokens that can be generated in the response
-/// * `messages` - The conversation history and current message
 #[derive(Serialize, Deserialize)]
 struct AnthropicRequest {
+    /// The model to use for the request (e.g., "claude-3-5-sonnet-20241022")
     model: String,
+    /// The maximum number of tokens that can be generated in the response
     max_tokens: u32,
+    /// The conversation history and current message
     messages: Vec<ChatHistoryItem>,
 }
 
 impl From<UserMessage> for AnthropicRequest {
     fn from(msg: UserMessage) -> AnthropicRequest {
-        let n_messages = msg.chat_history.len();
-        let mut messages = msg.chat_history.clone();
-        messages.insert(
-            n_messages,
-            ChatHistoryItem {
-                role: "user".to_owned(),
-                content: msg.message.clone(),
-            },
-        );
+        let mut messages = msg.chat_history;
+        messages.push(ChatHistoryItem {
+            role: "user".to_owned(),
+            content: msg.message,
+        });
 
         AnthropicRequest {
             model: env::var("ANTHROPIC_MODEL").unwrap_or_else(|_| DEFAULT_CLAUDE_MODEL.to_string()),
@@ -150,44 +145,41 @@ impl From<UserMessage> for AnthropicRequest {
 }
 
 /// Token usage statistics returned by the Anthropic API
-///
-/// * `input_tokens` - Number of tokens in the input prompt
-/// * `output_tokens` - Number of tokens in the generated response
 #[derive(Clone, Serialize, Deserialize)]
 struct AnthropicUsageStats {
+    /// Number of tokens in the input prompt
     input_tokens: u32,
+    /// Number of tokens in the generated response
     output_tokens: u32,
 }
 
 /// Content block in an Anthropic API response
-///
-/// * `text` - The text content from the model's response
-/// * `r#type` - The type of content (usually "text")
 #[derive(Clone, Serialize, Deserialize)]
 struct AnthropicResponseContent {
+    /// The text content from the model's response
     text: String,
+    /// The type of content (usually "text")
     r#type: String,
 }
 
 /// Response from the Anthropic API
-///
-/// * `id` - Unique identifier for the response
-/// * `model` - The model that generated the response
-/// * `role` - The role of the message (usually "assistant")
-/// * `stop_reason` - Why the model stopped generating (e.g., "end_turn")
-/// * `stop_sequence` - The stop sequence that caused generation to end, if any
-/// * `usage` - Token usage statistics
-/// * `r#type` - The type of the response (usually "message")
-/// * `content` - The content blocks in the response
 #[derive(Clone, Serialize, Deserialize)]
 struct AnthropicResponse {
+    /// Unique identifier for the response
     id: String,
+    /// The model that generated the response
     model: String,
+    /// The role of the message (usually "assistant")
     role: String,
+    /// Why the model stopped generating (e.g., "end_turn")
     stop_reason: String,
+    /// The stop sequence that caused generation to end, if any
     stop_sequence: Option<String>,
+    /// Token usage statistics
     usage: AnthropicUsageStats,
+    /// The type of the response (usually "message")
     r#type: String,
+    /// The content blocks in the response
     content: Vec<AnthropicResponseContent>,
 }
 
@@ -237,7 +229,7 @@ impl<T: HttpClient> ApiClient for AnthropicClient<T> {
 /// Anthropic's docs recommend Voyage AI--but users are more likely to have an OpenAI key than
 /// a Voyage AI key.
 ///
-/// Maintainers should note that any updates here should also be reflected in AnthropicClient.
+/// Maintainers should note that any updates here should also be reflected in OpenAIClient.
 impl<T: HttpClient + Default + std::fmt::Debug> EmbeddingFunction for AnthropicClient<T> {
     fn name(&self) -> &str {
         "Anthropic"
