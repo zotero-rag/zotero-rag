@@ -126,7 +126,8 @@ impl From<UserMessage> for OpenAIRequest {
         let max_tokens = env::var("OPENAI_MAX_TOKENS")
             .ok()
             .and_then(|s| s.parse().ok());
-        let mut messages = msg.chat_history.clone();
+
+        let mut messages = msg.chat_history;
         messages.push(ChatHistoryItem {
             role: "user".to_owned(),
             content: msg.message.clone(),

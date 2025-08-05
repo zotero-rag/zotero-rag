@@ -47,15 +47,11 @@ struct OpenRouterRequest {
 
 impl From<UserMessage> for OpenRouterRequest {
     fn from(msg: UserMessage) -> OpenRouterRequest {
-        let n_messages = msg.chat_history.len();
-        let mut messages = msg.chat_history.clone();
-        messages.insert(
-            n_messages,
-            ChatHistoryItem {
-                role: "user".to_owned(),
-                content: msg.message.clone(),
-            },
-        );
+        let mut messages = msg.chat_history;
+        messages.push(ChatHistoryItem {
+            role: "user".to_owned(),
+            content: msg.message,
+        });
 
         OpenRouterRequest {
             model: env::var("OPENROUTER_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.to_string()),
@@ -119,8 +115,6 @@ struct OpenRouterResponse {
     choices: Vec<OpenRouterResponseChoices>,
 }
 
-/// We can use hard-coded strings here; I think the resulting
-/// locality-of-behavior is worth the loss in pointless generality.
 impl<T: HttpClient> ApiClient for OpenRouterClient<T> {
     async fn send_message(&self, message: &UserMessage) -> Result<ApiResponse, LLMError> {
         let key = env::var("OPENROUTER_API_KEY")?;
@@ -144,15 +138,18 @@ impl<T: HttpClient> ApiClient for OpenRouterClient<T> {
         // Get the response body as text first for debugging
         let body = res.text().await?;
 
-        let json: serde_json::Value = serde_json::from_str(&body)?;
-        let response: OpenRouterResponse = serde_json::from_value(json.clone()).map_err(|err| {
-            eprintln!("Failed to deserialize OpenRouter response: we got the response {json}");
+        let response: OpenRouterResponse = serde_json::from_str(&body).map_err(|err| {
+            eprintln!("Failed to deserialize OpenRouter response: we got the response {body}");
 
             LLMError::DeserializationError(err.to_string())
         })?;
 
+        let choice = response.choices.into_iter().next().ok_or_else(|| {
+            LLMError::DeserializationError("OpenRouter response contained no choices".to_string())
+        })?;
+
         Ok(ApiResponse {
-            content: response.choices.clone()[0].message.content.clone(),
+            content: choice.message.content,
             input_tokens: response.usage.prompt_tokens,
             output_tokens: response.usage.completion_tokens,
         })
