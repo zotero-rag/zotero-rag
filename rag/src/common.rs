@@ -85,10 +85,10 @@ fn calculate_backoff_delay(attempt: usize, response: &Response) -> Duration {
     }
 
     // Adding a jitter helps mitigate the thundering herd problem
-    let jittered_exp = 2_f64 * (1.0 + rand::random::<f64>());
-    let delay = 1000.0 * jittered_exp.powi(attempt as i32);
+    let base_delay = 1000.0 * 2.0_f64.powi(attempt as i32);
+    let jitter = base_delay * rand::random::<f64>();
 
-    Duration::from_millis(delay.round() as u64)
+    Duration::from_millis((base_delay + jitter).round() as u64)
 }
 
 pub async fn request_with_backoff<T: HttpClient>(
@@ -114,6 +114,139 @@ pub async fn request_with_backoff<T: HttpClient>(
             continue;
         }
 
-        return Ok(response);
+        return Err(response.error_for_status().unwrap_err().into());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{
+        common::{calculate_backoff_delay, request_with_backoff},
+        llm::http_client::HttpClient,
+    };
+    use http::HeaderMap;
+    use reqwest::Response;
+    use serde::Serialize;
+    use serde_json::json;
+    use std::{
+        sync::{Arc, Mutex},
+        time::Duration,
+    };
+
+    struct MockRateLimitClient {
+        call_count: Arc<Mutex<usize>>,
+        max_failures: usize,
+    }
+
+    impl MockRateLimitClient {
+        fn new(max_failures: usize) -> Self {
+            Self {
+                call_count: Arc::new(Mutex::new(0)),
+                max_failures,
+            }
+        }
+    }
+
+    impl HttpClient for MockRateLimitClient {
+        async fn post_json<T: Serialize + Send + Sync>(
+            &self,
+            _url: &str,
+            _headers: HeaderMap,
+            _body: &T,
+        ) -> Result<Response, reqwest::Error> {
+            let mut count = { self.call_count.lock().unwrap() };
+            *count += 1;
+
+            if *count <= self.max_failures {
+                // Return 429 response with retry-after header
+                let json = json!({"error": "Rate limit exceeded"});
+                let bytes = bytes::Bytes::from(json.to_string());
+
+                let http_response = http::Response::builder()
+                    .status(429)
+                    .header("content-type", "application/json")
+                    .header("retry-after", "2")
+                    .body(bytes)
+                    .unwrap();
+
+                Ok(Response::from(http_response))
+            } else {
+                // Return successful response
+                let json = json!({"success": true});
+                let bytes = bytes::Bytes::from(json.to_string());
+
+                let http_response = http::Response::builder()
+                    .status(200)
+                    .header("content-type", "application/json")
+                    .body(bytes)
+                    .unwrap();
+
+                Ok(Response::from(http_response))
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_request_with_backoff_handles_429() {
+        let client = MockRateLimitClient::new(2); // Fail twice, then succeed
+        let headers = HeaderMap::new();
+        let request = json!({"test": "data"});
+
+        let result = request_with_backoff(&client, "http://test.com", &headers, request, 3).await;
+
+        assert!(result.is_ok());
+        let response = result.unwrap();
+        assert!(response.status().is_success());
+
+        // Verify we made 3 calls (2 failures + 1 success)
+        let call_count = *client.call_count.lock().unwrap();
+        assert_eq!(call_count, 3);
+    }
+
+    #[tokio::test]
+    async fn test_request_with_backoff_exceeds_max_retries() {
+        let client = MockRateLimitClient::new(5); // Always fail
+        let headers = HeaderMap::new();
+        let request = json!({"test": "data"});
+
+        let result = request_with_backoff(&client, "http://test.com", &headers, request, 2).await;
+
+        assert!(result.is_err());
+
+        // Verify we made max_retries + 1 calls (3 total: initial + 2 retries)
+        let call_count = *client.call_count.lock().unwrap();
+        assert_eq!(call_count, 3);
+    }
+
+    #[tokio::test]
+    async fn test_calculate_backoff_delay_with_retry_after() {
+        let json = json!({"error": "Rate limit exceeded"});
+        let bytes = bytes::Bytes::from(json.to_string());
+
+        let http_response = http::Response::builder()
+            .status(429)
+            .header("retry-after", "5")
+            .body(bytes)
+            .unwrap();
+
+        let response = Response::from(http_response);
+        let delay = calculate_backoff_delay(0, &response);
+
+        assert_eq!(delay, Duration::from_secs(5));
+    }
+
+    #[tokio::test]
+    async fn test_calculate_backoff_delay_exponential() {
+        let json = json!({"error": "Rate limit exceeded"});
+        let bytes = bytes::Bytes::from(json.to_string());
+
+        let http_response = http::Response::builder().status(429).body(bytes).unwrap();
+
+        let response = Response::from(http_response);
+        let delay = calculate_backoff_delay(1, &response);
+
+        // Should be between 2000ms and 4000ms (base 2000ms + jitter)
+        assert!(delay >= Duration::from_millis(2000));
+        assert!(delay <= Duration::from_millis(4000));
     }
 }

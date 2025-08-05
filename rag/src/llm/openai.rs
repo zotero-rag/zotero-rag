@@ -182,12 +182,13 @@ impl<T: HttpClient> ApiClient for OpenAIClient<T> {
         headers.insert("content-type", "application/json".parse()?);
 
         let req_body: OpenAIRequest = message.clone().into();
+        const MAX_RETRIES: usize = 3;
         let res = request_with_backoff(
             &self.client,
             "https://api.openai.com/v1/chat/completions",
             &headers,
             req_body,
-            3,
+            MAX_RETRIES,
         )
         .await?;
 
