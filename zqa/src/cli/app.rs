@@ -202,6 +202,37 @@ fn format_number(num: u32) -> String {
 }
 
 /// Given a user query and the runtime context (CLI args + a `io::Write` implementation), perform a
+/// vector search.
+///
+/// # Arguments
+///
+/// * `ctx` - A `Context` object that contains CLI args and objects that implement
+///   `std::io::Write` for `stdout` and `stderr`.
+async fn search_for_papers<O: Write, E: Write>(
+    query: String,
+    ctx: &mut Context<O, E>,
+) -> Result<(), CLIError> {
+    let embedding_name = ctx.args.embedding.clone();
+
+    let vector_search_start = Instant::now();
+    let search_results = vector_search(query.clone(), embedding_name).await?;
+    let vector_search_duration = vector_search_start.elapsed();
+    writeln!(
+        &mut ctx.err,
+        "{DIM_TEXT}Vector search completed in {vector_search_duration:.2?}{RESET}"
+    )?;
+
+    search_results.iter().for_each(|item| {
+        writeln!(&mut ctx.out, "{}", item.metadata.title).unwrap_or_else(|_| {
+            eprintln!("Could not write out search results.");
+        });
+    });
+    writeln!(&mut ctx.out)?;
+
+    Ok(())
+}
+
+/// Given a user query and the runtime context (CLI args + a `io::Write` implementation), perform a
 /// vector search and generate an answer based on the user's Zotero library.
 ///
 /// # Arguments
@@ -447,9 +478,32 @@ pub async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<(), CLIEr
                             continue;
                         }
 
-                        if run_query(query.into(), &mut ctx).await.is_err() {
+                        if query.starts_with("/search") {
+                            let split_idx = query.find(' ').unwrap_or_else(|| {
+                                eprintln!("Please add a space after /search.");
+                                0
+                            });
+
+                            // Error condition above
+                            if split_idx == 0 {
+                                continue;
+                            }
+
+                            let search_term = query.split_at(split_idx).1;
+                            if let Err(e) = search_for_papers(search_term.into(), &mut ctx).await {
+                                eprintln!(
+                                    "Failed to perform a vector search. You may find relevant error messages below: {}",
+                                    e
+                                );
+                            }
+
+                            continue;
+                        }
+
+                        if let Err(e) = run_query(query.into(), &mut ctx).await {
                             eprintln!(
-                                "Failed to answer the question. You may find relevant error messages above."
+                                "Failed to answer the question. You may find relevant error messages below: {}",
+                                e
                             );
                         }
                     }
