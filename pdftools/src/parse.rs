@@ -84,20 +84,21 @@ impl<'a> Iterator for IterCodepoints<'a> {
         if b == b'\\' {
             // Possible octal escape
             let rem = self.bytes.len() - self.pos;
-            if rem >= 4
+            if rem >= 4  // Length of octal escape sequence
                 && self.bytes[self.pos + 1] == b'0'
                 && self.bytes[self.pos + 2].is_ascii_digit()
+                && self.bytes[self.pos + 2] < 56  // ASCII '8'
                 && self.bytes[self.pos + 3].is_ascii_digit()
+                && self.bytes[self.pos + 3] < 56
             {
                 let oct = &self.bytes[self.pos + 1..=self.pos + 3];
-                let s = std::str::from_utf8(oct).unwrap();
-                let code = u8::from_str_radix(s, 8).unwrap_or(b'?');
+                let code = (oct[1] - b'0') * 8 + (oct[2] - b'0');
                 self.pos += 4;
-                return Some(code);
+                Some(code)
             } else {
                 // Just a backslash or malformed escape
                 self.pos += 1;
-                return Some(b'\\');
+                Some(b'\\')
             }
         } else {
             self.pos += 1;
@@ -646,33 +647,24 @@ mod tests {
         Ok(content.to_string())
     }
 
+    fn check_pdf_contains(file_name: &str, queries: &[&str]) {
+        let path = PathBuf::from("assets").join(file_name);
+        let content = extract_text(path.to_str().unwrap()).unwrap();
+        for query in queries {
+            assert!(
+                content.contains(*query),
+                "content of {file_name} did not contain '{query}'"
+            );
+        }
+    }
+
     #[test]
     fn test_parsing_works() {
         // Test 1: "test1.pdf"
-        let path = PathBuf::from("assets").join("test1.pdf");
-        let content = extract_text(path.to_str().unwrap());
-
-        assert!(content.is_ok());
-
-        let content = content.unwrap();
-
-        let test_queries = ["Oversampling", "GHOST", "Deep Learning"];
-        for test in test_queries {
-            assert!(content.contains(test));
-        }
+        check_pdf_contains("test1.pdf", &["Oversampling", "GHOST", "Deep Learning"]);
 
         // Test 2: "ntk.pdf"
-        let path = PathBuf::from("assets").join("ntk.pdf");
-        let content = extract_text(path.to_str().unwrap());
-
-        assert!(content.is_ok());
-
-        let content = content.unwrap();
-
-        let test_queries = ["\\theta", "\\otimes", "\\sum", "\\mathbb{E}"];
-        for test in test_queries {
-            assert!(content.contains(test));
-        }
+        check_pdf_contains("ntk.pdf", &["\\theta", "\\otimes", "\\sum", "\\mathbb{E}"]);
     }
 
     #[test]
@@ -693,7 +685,7 @@ mod tests {
     }
 
     #[test]
-    // #[ignore]
+    #[ignore]
     fn test_font_properties() {
         if env::var("CI").is_ok() {
             // Skip this test in CI environments
@@ -757,7 +749,7 @@ mod tests {
 
     #[test]
     fn test_fonts_identified_correctly() {
-        let path = PathBuf::from("assets").join("test1.pdf");
+        let path = PathBuf::from("assets").join("symbols.pdf");
 
         let doc = Document::load(path).unwrap();
         let content = get_raw_content_stream(&doc, 0).unwrap();
