@@ -445,23 +445,25 @@ pub async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<(), CLIEr
                         writeln!(&mut ctx.out)?;
                     }
                     "/embed" => {
-                        if embed(&mut ctx).await.is_err() {
-                            eprintln!(
-                                "Failed to create embeddings. You may find relevant error messages above."
-                            );
+                        if let Err(e) = embed(&mut ctx).await {
+                            writeln!(
+                                &mut ctx.err,
+                                "Failed to create embeddings. You may find relevant error messages below: {e}"
+                            )?;
                         }
                     }
                     "/process" => {
-                        if process(&mut ctx).await.is_err() {
-                            eprintln!(
-                                "Failed to create embeddings. You may find relevant error messages above."
-                            );
+                        if let Err(e) = process(&mut ctx).await {
+                            writeln!(
+                                &mut ctx.err,
+                                "Failed to create embeddings. You may find relevant error messages below: {e}"
+                            )?;
                         }
                     }
                     "/stats" => {
-                        if stats(&mut ctx).await.is_err() {
+                        if let Err(e) = stats(&mut ctx).await {
                             // This only errors on an I/O failure
-                            eprintln!("Failed to write statistics to buffer.");
+                            writeln!(&mut ctx.err, "Failed to write statistics to buffer. {e}")?;
                         }
                     }
                     "/quit" | "/exit" | "quit" | "exit" => {
@@ -478,33 +480,33 @@ pub async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<(), CLIEr
                             continue;
                         }
 
+                        // Search queries have priority
                         if query.starts_with("/search") {
-                            let split_idx = query.find(' ').unwrap_or_else(|| {
-                                eprintln!("Please add a space after /search.");
-                                0
-                            });
-
-                            // Error condition above
-                            if split_idx == 0 {
+                            let search_term = query.strip_prefix("/search").unwrap().trim();
+                            if search_term.is_empty() {
+                                writeln!(
+                                    &mut ctx.err,
+                                    "Please provide a search term after /search."
+                                )?;
                                 continue;
                             }
 
-                            let search_term = query.split_at(split_idx).1;
                             if let Err(e) = search_for_papers(search_term.into(), &mut ctx).await {
-                                eprintln!(
+                                writeln!(
+                                    &mut ctx.err,
                                     "Failed to perform a vector search. You may find relevant error messages below: {}",
                                     e
-                                );
+                                )?;
                             }
 
                             continue;
                         }
 
                         if let Err(e) = run_query(query.into(), &mut ctx).await {
-                            eprintln!(
-                                "Failed to answer the question. You may find relevant error messages below: {}",
-                                e
-                            );
+                            writeln!(
+                                &mut ctx.err,
+                                "Failed to answer the question. You may find relevant error messages below: {e}",
+                            )?;
                         }
                     }
                 }
@@ -524,7 +526,7 @@ pub async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<(), CLIEr
 
 #[cfg(test)]
 mod tests {
-    use crate::cli::app::{BATCH_ITER_FILE, embed, stats};
+    use crate::cli::app::{BATCH_ITER_FILE, embed, search_for_papers, stats};
     use arrow_array::{RecordBatch, StringArray};
     use arrow_ipc::writer::FileWriter;
     use rag::vector::lance::TABLE_NAME;
@@ -625,6 +627,31 @@ mod tests {
         if fs::metadata(TABLE_NAME).is_ok() {
             fs::remove_dir_all(TABLE_NAME).expect("Failed to clean up test database");
         }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    #[serial]
+    async fn test_search_only() {
+        dotenv::dotenv().ok();
+        let mut setup_ctx = create_test_context();
+
+        // `process` needs to be run before `search_for_papers`
+        let _ = temp_env::async_with_vars([("CI", Some("true"))], process(&mut setup_ctx)).await;
+
+        let mut ctx = create_test_context();
+        let result = temp_env::async_with_vars(
+            [("CI", Some("true"))],
+            search_for_papers(
+                "How should I oversample in defect prediction?".into(),
+                &mut ctx,
+            ),
+        )
+        .await;
+
+        assert!(result.is_ok());
+
+        let output = String::from_utf8(ctx.out.into_inner()).unwrap();
+        assert!(output.len() > 20);
     }
 
     #[tokio::test(flavor = "multi_thread")]
