@@ -65,8 +65,54 @@ impl Default for PdfParserConfig {
 /// A type to convert from bytes in math fonts to LaTeX code
 type ByteTransformFn = fn(&u8) -> String;
 
+/// A zero-allocation iterator for octal escape sequences and raw bytes. This is useful for parsing
+/// octal escape codes that are used in math fonts when non-printable characters are used to
+/// represent symbols.
+pub struct IterCodepoints<'a> {
+    bytes: &'a [u8],
+    pos: usize,
+}
+
+impl<'a> Iterator for IterCodepoints<'a> {
+    type Item = u8;
+
+    fn next(&mut self) -> Option<u8> {
+        if self.pos >= self.bytes.len() {
+            return None;
+        }
+        let b = self.bytes[self.pos];
+        if b == b'\\' {
+            // Possible octal escape
+            let rem = self.bytes.len() - self.pos;
+            if rem >= 4
+                && self.bytes[self.pos + 1] == b'0'
+                && self.bytes[self.pos + 2].is_ascii_digit()
+                && self.bytes[self.pos + 3].is_ascii_digit()
+            {
+                let oct = &self.bytes[self.pos + 1..=self.pos + 3];
+                let s = std::str::from_utf8(oct).unwrap();
+                let code = u8::from_str_radix(s, 8).unwrap_or(b'?');
+                self.pos += 4;
+                return Some(code);
+            } else {
+                // Just a backslash or malformed escape
+                self.pos += 1;
+                return Some(b'\\');
+            }
+        } else {
+            self.pos += 1;
+            Some(b)
+        }
+    }
+}
+
 fn font_transform(input: String, transform: ByteTransformFn) -> String {
-    input.as_bytes().iter().map(transform).collect::<String>()
+    IterCodepoints {
+        bytes: input.as_bytes(),
+        pos: 0,
+    }
+    .map(|b| transform(&b))
+    .collect::<String>()
 }
 
 /// A lazy-loaded hashmap storing conversions from math fonts to LaTeX code
@@ -602,6 +648,7 @@ mod tests {
 
     #[test]
     fn test_parsing_works() {
+        // Test 1: "test1.pdf"
         let path = PathBuf::from("assets").join("test1.pdf");
         let content = extract_text(path.to_str().unwrap());
 
@@ -609,8 +656,21 @@ mod tests {
 
         let content = content.unwrap();
 
-        const TEST_QUERIES: [&str; 3] = ["Oversampling", "GHOST", "Deep Learning"];
-        for test in TEST_QUERIES {
+        let test_queries = ["Oversampling", "GHOST", "Deep Learning"];
+        for test in test_queries {
+            assert!(content.contains(test));
+        }
+
+        // Test 2: "ntk.pdf"
+        let path = PathBuf::from("assets").join("ntk.pdf");
+        let content = extract_text(path.to_str().unwrap());
+
+        assert!(content.is_ok());
+
+        let content = content.unwrap();
+
+        let test_queries = ["\\theta", "\\otimes", "\\sum", "\\mathbb{E}"];
+        for test in test_queries {
             assert!(content.contains(test));
         }
     }
@@ -624,7 +684,7 @@ mod tests {
         }
 
         // NOTE: Maintainers: use this as a way to quickly get the UTF-8 content of raw PDF commands.
-        let path = PathBuf::from("assets").join("hyperlinks.pdf");
+        let path = PathBuf::from("assets").join("ntk.pdf");
 
         let doc = Document::load(path).unwrap();
         let content = get_raw_content_stream(&doc, 0).unwrap();
@@ -633,7 +693,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
+    // #[ignore]
     fn test_font_properties() {
         if env::var("CI").is_ok() {
             // Skip this test in CI environments
@@ -651,8 +711,8 @@ mod tests {
          * the 10 in CMR10 only gives the *design size* of the font in points--the size for which it was
          * designed and optimized. You still need to look at Tf for the font sizes.
          */
-        let font_key = "F21";
-        let path = PathBuf::from("assets").join("symbols.pdf");
+        let font_key = "F11";
+        let path = PathBuf::from("assets").join("ntk.pdf");
 
         let doc = Document::load(path).unwrap();
         let page_id = doc.page_iter().next().unwrap();
@@ -697,7 +757,7 @@ mod tests {
 
     #[test]
     fn test_fonts_identified_correctly() {
-        let path = PathBuf::from("assets").join("symbols.pdf");
+        let path = PathBuf::from("assets").join("test1.pdf");
 
         let doc = Document::load(path).unwrap();
         let content = get_raw_content_stream(&doc, 0).unwrap();
