@@ -1,5 +1,5 @@
-use std::sync::Arc;
 use std::env;
+use std::sync::Arc;
 
 use arrow_array;
 use futures::StreamExt;
@@ -8,7 +8,7 @@ use lancedb::arrow::arrow_schema::{DataType, Field};
 
 use super::errors::LLMError;
 use crate::common;
-use crate::constants::{OPENAI_EMBEDDING_DIM, DEFAULT_MAX_CONCURRENT_REQUESTS};
+use crate::constants::{DEFAULT_MAX_CONCURRENT_REQUESTS, OPENAI_EMBEDDING_DIM};
 
 /// Shared embedding computation logic for OpenAI embeddings
 /// This eliminates code duplication between OpenAI and Anthropic clients
@@ -63,9 +63,7 @@ pub async fn compute_openai_embeddings_async(
         Arc::new(values),
         None,
     )
-    .map_err(|e| {
-        LLMError::GenericLLMError(format!("Failed to create FixedSizeListArray: {e}"))
-    })?;
+    .map_err(|e| LLMError::GenericLLMError(format!("Failed to create FixedSizeListArray: {e}")))?;
 
     Ok(Arc::new(list_array) as Arc<dyn arrow_array::Array>)
 }
@@ -83,3 +81,4 @@ pub fn compute_openai_embeddings_sync(
 pub const fn get_openai_embedding_dim() -> u32 {
     OPENAI_EMBEDDING_DIM
 }
+
