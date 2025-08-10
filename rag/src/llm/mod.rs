@@ -1,5 +1,6 @@
 pub mod anthropic;
 pub mod base;
+pub mod embeddings;
 pub mod errors;
 pub mod factory;
 pub mod http_client;

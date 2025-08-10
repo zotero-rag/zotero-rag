@@ -3,6 +3,7 @@ use reqwest::Response;
 use serde::{Deserialize, Serialize};
 use std::{env, time::Duration};
 
+use crate::constants::DEFAULT_OPENAI_EMBEDDING_MODEL;
 use crate::llm::{errors::LLMError, http_client::HttpClient};
 
 pub async fn get_openai_embedding(text: String) -> Result<Vec<f32>, LLMError> {
@@ -40,7 +41,7 @@ pub async fn get_openai_embedding(text: String) -> Result<Vec<f32>, LLMError> {
     }
 
     let key = env::var("OPENAI_API_KEY")?;
-    let model = env::var("OPENAI_EMBEDDING_MODEL").unwrap_or("text-embedding-3-small".to_string());
+    let model = env::var("OPENAI_EMBEDDING_MODEL").unwrap_or(DEFAULT_OPENAI_EMBEDDING_MODEL.to_string());
 
     let client = reqwest::Client::new();
     let request_body = EmbeddingRequest {
