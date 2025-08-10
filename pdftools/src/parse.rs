@@ -87,9 +87,9 @@ impl<'a> Iterator for IterCodepoints<'a> {
             if rem >= 4  // Length of octal escape sequence
                 && self.bytes[self.pos + 1] == b'0'
                 && self.bytes[self.pos + 2].is_ascii_digit()
-                && self.bytes[self.pos + 2] < 56  // ASCII '8'
+                && self.bytes[self.pos + 2] < b'8'
                 && self.bytes[self.pos + 3].is_ascii_digit()
-                && self.bytes[self.pos + 3] < 56
+                && self.bytes[self.pos + 3] < b'8'
             {
                 let oct = &self.bytes[self.pos + 1..=self.pos + 3];
                 let code = (oct[1] - b'0') * 8 + (oct[2] - b'0');
