@@ -1,0 +1,85 @@
+use std::sync::Arc;
+use std::env;
+
+use arrow_array;
+use futures::StreamExt;
+use futures::stream;
+use lancedb::arrow::arrow_schema::{DataType, Field};
+
+use super::errors::LLMError;
+use crate::common;
+use crate::constants::{OPENAI_EMBEDDING_DIM, DEFAULT_MAX_CONCURRENT_REQUESTS};
+
+/// Shared embedding computation logic for OpenAI embeddings
+/// This eliminates code duplication between OpenAI and Anthropic clients
+pub async fn compute_openai_embeddings_async(
+    source: Arc<dyn arrow_array::Array>,
+) -> Result<Arc<dyn arrow_array::Array>, LLMError> {
+    let source_array = arrow_array::cast::as_string_array(&source);
+    let texts: Vec<String> = source_array
+        .iter()
+        .filter_map(|s| Some(s?.to_owned()))
+        .collect();
+
+    // Create a stream of futures
+    let futures = texts
+        .iter()
+        .map(|text| common::get_openai_embedding(text.clone()));
+
+    // Convert to a stream and process with buffer_unordered to limit concurrency
+    let max_concurrent = env::var("MAX_CONCURRENT_REQUESTS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(DEFAULT_MAX_CONCURRENT_REQUESTS);
+
+    // Process futures with limited concurrency
+    let results = stream::iter(futures)
+        .buffer_unordered(max_concurrent)
+        .collect::<Vec<_>>()
+        .await;
+
+    // Process results and construct Arrow array
+    let mut embeddings: Vec<Vec<f32>> = Vec::with_capacity(texts.len());
+    for result in results {
+        match result {
+            Ok(embedding) => embeddings.push(embedding),
+            Err(e) => return Err(e),
+        }
+    }
+
+    // Convert to Arrow FixedSizeListArray
+    let embedding_dim = if embeddings.is_empty() {
+        OPENAI_EMBEDDING_DIM as usize // default for text-embedding-3-small
+    } else {
+        embeddings[0].len()
+    };
+
+    let flattened: Vec<f32> = embeddings.iter().flatten().copied().collect();
+    let values = arrow_array::Float32Array::from(flattened);
+
+    let list_array = arrow_array::FixedSizeListArray::try_new(
+        Arc::new(Field::new("item", DataType::Float32, false)),
+        embedding_dim as i32,
+        Arc::new(values),
+        None,
+    )
+    .map_err(|e| {
+        LLMError::GenericLLMError(format!("Failed to create FixedSizeListArray: {e}"))
+    })?;
+
+    Ok(Arc::new(list_array) as Arc<dyn arrow_array::Array>)
+}
+
+/// Synchronous wrapper for embedding computation
+pub fn compute_openai_embeddings_sync(
+    source: Arc<dyn arrow_array::Array>,
+) -> Result<Arc<dyn arrow_array::Array>, LLMError> {
+    tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current().block_on(compute_openai_embeddings_async(source))
+    })
+}
+
+/// Get the OpenAI embedding dimension constant
+pub const fn get_openai_embedding_dim() -> u32 {
+    OPENAI_EMBEDDING_DIM
+}

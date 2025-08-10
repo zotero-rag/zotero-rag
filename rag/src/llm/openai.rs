@@ -2,20 +2,17 @@ use std::borrow::Cow;
 use std::env;
 use std::sync::Arc;
 
-use futures::StreamExt;
-use futures::stream;
 use http::HeaderMap;
-use lancedb::arrow::arrow_schema::{DataType, Field};
+use lancedb::arrow::arrow_schema::DataType;
 use lancedb::embeddings::EmbeddingFunction;
 use serde::{Deserialize, Serialize};
 
 use super::base::{ApiClient, ApiResponse, ChatHistoryItem, UserMessage};
+use super::embeddings::{compute_openai_embeddings_sync, get_openai_embedding_dim};
 use super::errors::LLMError;
 use super::http_client::{HttpClient, ReqwestClient};
-use crate::common;
 use crate::common::request_with_backoff;
-
-const OPENAI_EMBEDDING_DIM: u32 = 1536;
+use crate::constants::{DEFAULT_OPENAI_MODEL, DEFAULT_MAX_RETRIES};
 
 /// A client for OpenAI's chat completions API
 #[derive(Debug, Clone)]
@@ -40,75 +37,12 @@ where
         }
     }
 
-    // Async version to handle the embedding computation
-    async fn compute_embeddings_async(
-        &self,
-        source: Arc<dyn arrow_array::Array>,
-    ) -> Result<Arc<dyn arrow_array::Array>, LLMError> {
-        let source_array = arrow_array::cast::as_string_array(&source);
-        let texts: Vec<String> = source_array
-            .iter()
-            .filter_map(|s| Some(s?.to_owned()))
-            .collect();
-
-        // Create a stream of futures
-        let futures = texts
-            .iter()
-            .map(|text| common::get_openai_embedding(text.clone()));
-
-        // Convert to a stream and process with buffer_unordered to limit concurrency
-        let max_concurrent = std::env::var("MAX_CONCURRENT_REQUESTS")
-            .unwrap_or_else(|_| "5".to_string())
-            .parse::<usize>()
-            .unwrap_or(5);
-
-        // Process futures with limited concurrency
-        let results = stream::iter(futures)
-            .buffer_unordered(max_concurrent)
-            .collect::<Vec<_>>()
-            .await;
-
-        // Process results and construct Arrow array
-        let mut embeddings: Vec<Vec<f32>> = Vec::with_capacity(texts.len());
-        for result in results {
-            match result {
-                Ok(embedding) => embeddings.push(embedding),
-                Err(e) => return Err(e),
-            }
-        }
-
-        // Convert to Arrow FixedSizeListArray
-        let embedding_dim = if embeddings.is_empty() {
-            OPENAI_EMBEDDING_DIM as usize // default for text-embedding-3-small
-        } else {
-            embeddings[0].len()
-        };
-
-        let flattened: Vec<f32> = embeddings.iter().flatten().copied().collect();
-        let values = arrow_array::Float32Array::from(flattened);
-
-        let list_array = arrow_array::FixedSizeListArray::try_new(
-            Arc::new(Field::new("item", DataType::Float32, false)),
-            embedding_dim as i32,
-            Arc::new(values),
-            None,
-        )
-        .map_err(|e| {
-            LLMError::GenericLLMError(format!("Failed to create FixedSizeListArray: {e}"))
-        })?;
-
-        Ok(Arc::new(list_array) as Arc<dyn arrow_array::Array>)
-    }
-
-    // This is our internal implementation that works with LLMError
-    // Note that this is also copied in AnthropicClient.
+    /// Internal implementation for computing embeddings using shared logic
     pub fn compute_embeddings_internal(
         &self,
         source: Arc<dyn arrow_array::Array>,
     ) -> Result<Arc<dyn arrow_array::Array>, LLMError> {
-        tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(self.compute_embeddings_async(source))
-        })
+        compute_openai_embeddings_sync(source)
     }
 }
 
@@ -122,12 +56,33 @@ struct OpenAIRequest {
 
 impl From<UserMessage> for OpenAIRequest {
     fn from(msg: UserMessage) -> OpenAIRequest {
-        let model = env::var("OPENAI_MODEL").unwrap_or_else(|_| "gpt-4.1-2025-04-14".to_string());
+        let model = env::var("OPENAI_MODEL").unwrap_or_else(|_| DEFAULT_OPENAI_MODEL.to_string());
         let max_tokens = env::var("OPENAI_MAX_TOKENS")
             .ok()
             .and_then(|s| s.parse().ok());
 
         let mut messages = msg.chat_history;
+        messages.push(ChatHistoryItem {
+            role: "user".to_owned(),
+            content: msg.message,
+        });
+
+        OpenAIRequest {
+            model,
+            messages,
+            max_tokens,
+        }
+    }
+}
+
+impl From<&UserMessage> for OpenAIRequest {
+    fn from(msg: &UserMessage) -> OpenAIRequest {
+        let model = env::var("OPENAI_MODEL").unwrap_or_else(|_| DEFAULT_OPENAI_MODEL.to_string());
+        let max_tokens = env::var("OPENAI_MAX_TOKENS")
+            .ok()
+            .and_then(|s| s.parse().ok());
+
+        let mut messages = msg.chat_history.clone();
         messages.push(ChatHistoryItem {
             role: "user".to_owned(),
             content: msg.message.clone(),
@@ -182,8 +137,8 @@ impl<T: HttpClient> ApiClient for OpenAIClient<T> {
         headers.insert("Authorization", format!("Bearer {key}").parse()?);
         headers.insert("content-type", "application/json".parse()?);
 
-        let req_body: OpenAIRequest = message.clone().into();
-        const MAX_RETRIES: usize = 3;
+        let req_body: OpenAIRequest = message.into();
+        const MAX_RETRIES: usize = DEFAULT_MAX_RETRIES;
         let res = request_with_backoff(
             &self.client,
             "https://api.openai.com/v1/chat/completions",
@@ -235,7 +190,7 @@ impl EmbeddingFunction for OpenAIClient {
                 DataType::Float32,
                 false,
             )),
-            OPENAI_EMBEDDING_DIM as i32, // text-embedding-3-small size
+            get_openai_embedding_dim() as i32, // text-embedding-3-small size
         )))
     }
 
@@ -273,8 +228,8 @@ impl EmbeddingFunction for OpenAIClient {
 mod tests {
     use super::{OpenAIChoice, OpenAIChoiceMessage, OpenAIClient, OpenAIResponse, OpenAIUsage};
     use crate::llm::base::{ApiClient, UserMessage};
+    use crate::llm::embeddings::get_openai_embedding_dim;
     use crate::llm::http_client::{MockHttpClient, ReqwestClient};
-    use crate::llm::openai::OPENAI_EMBEDDING_DIM;
     use arrow_array::Array;
     use dotenv::dotenv;
     use std::sync::Arc;
@@ -362,8 +317,8 @@ mod tests {
             "A sixth string",
         ]);
 
-        let client = OpenAIClient::<ReqwestClient>::default();
-        let embeddings = client.compute_embeddings_async(Arc::new(array)).await;
+        let _client = OpenAIClient::<ReqwestClient>::default();
+        let embeddings = crate::llm::embeddings::compute_openai_embeddings_async(Arc::new(array)).await;
 
         // Debug the error if there is one
         if embeddings.is_err() {
@@ -376,6 +331,6 @@ mod tests {
         let vector = arrow_array::cast::as_fixed_size_list_array(&embeddings);
 
         assert_eq!(vector.len(), 6);
-        assert_eq!(vector.value_length(), OPENAI_EMBEDDING_DIM as i32);
+        assert_eq!(vector.value_length(), get_openai_embedding_dim() as i32);
     }
 }
