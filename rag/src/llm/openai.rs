@@ -12,7 +12,7 @@ use super::embeddings::{compute_openai_embeddings_sync, get_openai_embedding_dim
 use super::errors::LLMError;
 use super::http_client::{HttpClient, ReqwestClient};
 use crate::common::request_with_backoff;
-use crate::constants::{DEFAULT_OPENAI_MODEL, DEFAULT_MAX_RETRIES};
+use crate::constants::{DEFAULT_MAX_RETRIES, DEFAULT_OPENAI_MODEL};
 
 /// A client for OpenAI's chat completions API
 #[derive(Debug, Clone)]
@@ -318,7 +318,8 @@ mod tests {
         ]);
 
         let _client = OpenAIClient::<ReqwestClient>::default();
-        let embeddings = crate::llm::embeddings::compute_openai_embeddings_async(Arc::new(array)).await;
+        let embeddings =
+            crate::llm::embeddings::compute_openai_embeddings_async(Arc::new(array)).await;
 
         // Debug the error if there is one
         if embeddings.is_err() {

@@ -13,7 +13,9 @@ use super::embeddings::{compute_openai_embeddings_sync, get_openai_embedding_dim
 use super::errors::LLMError;
 use super::http_client::{HttpClient, ReqwestClient};
 use crate::common::request_with_backoff;
-use crate::constants::{DEFAULT_ANTHROPIC_MODEL, DEFAULT_ANTHROPIC_MAX_TOKENS, DEFAULT_MAX_RETRIES};
+use crate::constants::{
+    DEFAULT_ANTHROPIC_MAX_TOKENS, DEFAULT_ANTHROPIC_MODEL, DEFAULT_MAX_RETRIES,
+};
 const DEFAULT_CLAUDE_MODEL: &str = DEFAULT_ANTHROPIC_MODEL;
 
 /// A generic client class for now. We can add stuff here later if needed, for
@@ -215,7 +217,7 @@ mod tests {
     use arrow_array::Array;
     use dotenv::dotenv;
 
-    use crate::llm::anthropic::{DEFAULT_CLAUDE_MODEL};
+    use crate::llm::anthropic::DEFAULT_CLAUDE_MODEL;
     use crate::llm::base::{ApiClient, UserMessage};
     use crate::llm::embeddings::get_openai_embedding_dim;
     use crate::llm::http_client::{MockHttpClient, ReqwestClient};
@@ -308,7 +310,8 @@ mod tests {
         ]);
 
         let _client = AnthropicClient::<ReqwestClient>::default();
-        let embeddings = crate::llm::embeddings::compute_openai_embeddings_async(Arc::new(array)).await;
+        let embeddings =
+            crate::llm::embeddings::compute_openai_embeddings_async(Arc::new(array)).await;
 
         // Debug the error if there is one
         if embeddings.is_err() {
