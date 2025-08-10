@@ -411,14 +411,15 @@ impl PdfParser {
                 // Handle tables
                 if let Some((tbl_begin_idx, tbl_end_idx)) =
                     self.get_table_bounds(&content, cur_parse_idx + et_idx)
-                    && tbl_begin_idx < cur_parse_idx + tj_idx {
-                        // Skip over the table
-                        cur_parse_idx = tbl_end_idx;
+                    && tbl_begin_idx < cur_parse_idx + tj_idx
+                {
+                    // Skip over the table
+                    cur_parse_idx = tbl_end_idx;
 
-                        // We've invalidated some indexes in the conditions above, so we
-                        // actually can't just proceed.
-                        continue;
-                    }
+                    // We've invalidated some indexes in the conditions above, so we
+                    // actually can't just proceed.
+                    continue;
+                }
 
                 // Handle images. The TJ has to be after the next ET--otherwise, it's
                 // unlikely to be a caption. We assume here that figure captions occur after
@@ -426,10 +427,10 @@ impl PdfParser {
                 if tj_idx > et_idx
                     && let Some(im_end_idx) =
                         self.get_image_bounds(&content, cur_parse_idx + et_idx)
-                    {
-                        cur_parse_idx = im_end_idx;
-                        continue;
-                    }
+                {
+                    cur_parse_idx = im_end_idx;
+                    continue;
+                }
             }
 
             // Get the current font size, if it's set.
