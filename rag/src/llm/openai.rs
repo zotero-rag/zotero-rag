@@ -224,11 +224,11 @@ impl EmbeddingFunction for OpenAIClient {
         "OpenAI"
     }
 
-    fn source_type(&self) -> Result<Cow<DataType>, lancedb::Error> {
+    fn source_type(&self) -> Result<Cow<'_, DataType>, lancedb::Error> {
         Ok(Cow::Owned(DataType::Utf8))
     }
 
-    fn dest_type(&self) -> Result<Cow<DataType>, lancedb::Error> {
+    fn dest_type(&self) -> Result<Cow<'_, DataType>, lancedb::Error> {
         Ok(Cow::Owned(DataType::FixedSizeList(
             Arc::new(lancedb::arrow::arrow_schema::Field::new(
                 "item",

@@ -278,11 +278,11 @@ impl<T: HttpClient + Default + std::fmt::Debug> EmbeddingFunction for VoyageAICl
         "Voyage AI"
     }
 
-    fn source_type(&self) -> Result<Cow<DataType>, lancedb::Error> {
+    fn source_type(&self) -> Result<Cow<'_, DataType>, lancedb::Error> {
         Ok(Cow::Owned(DataType::Utf8))
     }
 
-    fn dest_type(&self) -> Result<Cow<DataType>, lancedb::Error> {
+    fn dest_type(&self) -> Result<Cow<'_, DataType>, lancedb::Error> {
         Ok(Cow::Owned(DataType::FixedSizeList(
             Arc::new(Field::new("item", DataType::Float32, false)),
             VOYAGE_EMBEDDING_DIM as i32,
