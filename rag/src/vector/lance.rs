@@ -11,6 +11,7 @@ use futures::TryStreamExt;
 use lancedb::{
     Connection, Error as LanceDbError, arrow::arrow_schema::ArrowError, connect,
     connection::CreateTableMode, embeddings::EmbeddingDefinition, query::ExecutableQuery,
+    query::QueryBase,
 };
 use std::{error::Error, fmt::Display, sync::Arc, vec::IntoIter};
 
@@ -180,7 +181,12 @@ pub async fn vector_search(
         values.iter().map(|v| v.unwrap_or(0.0)).collect()
     };
 
-    let stream = tbl.query().nearest_to(query_vec)?.execute().await?;
+    let stream = tbl
+        .query()
+        .limit(10)
+        .nearest_to(query_vec)?
+        .execute()
+        .await?;
     let batches: Vec<RecordBatch> = stream.try_collect().await?;
 
     Ok(batches)
