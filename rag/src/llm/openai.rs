@@ -57,9 +57,11 @@ struct OpenAIRequest {
 impl From<UserMessage> for OpenAIRequest {
     fn from(msg: UserMessage) -> OpenAIRequest {
         let model = env::var("OPENAI_MODEL").unwrap_or_else(|_| DEFAULT_OPENAI_MODEL.to_string());
-        let max_tokens = env::var("OPENAI_MAX_TOKENS")
-            .ok()
-            .and_then(|s| s.parse().ok());
+        let max_tokens = msg.max_tokens.or_else(|| {
+            env::var("OPENAI_MAX_TOKENS")
+                .ok()
+                .and_then(|s| s.parse().ok())
+        });
 
         let mut messages = msg.chat_history;
         messages.push(ChatHistoryItem {
@@ -232,6 +234,7 @@ mod tests {
     use crate::llm::http_client::{MockHttpClient, ReqwestClient};
     use arrow_array::Array;
     use dotenv::dotenv;
+    use lancedb::embeddings::EmbeddingFunction;
     use std::sync::Arc;
 
     #[tokio::test]
@@ -317,9 +320,8 @@ mod tests {
             "A sixth string",
         ]);
 
-        let _client = OpenAIClient::<ReqwestClient>::default();
-        let embeddings =
-            crate::llm::embeddings::compute_openai_embeddings_async(Arc::new(array)).await;
+        let client = OpenAIClient::<ReqwestClient>::default();
+        let embeddings = client.compute_source_embeddings(Arc::new(array));
 
         // Debug the error if there is one
         if embeddings.is_err() {

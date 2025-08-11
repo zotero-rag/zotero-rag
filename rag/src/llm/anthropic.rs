@@ -216,6 +216,7 @@ mod tests {
 
     use arrow_array::Array;
     use dotenv::dotenv;
+    use lancedb::embeddings::EmbeddingFunction;
 
     use crate::llm::anthropic::DEFAULT_CLAUDE_MODEL;
     use crate::llm::base::{ApiClient, UserMessage};
@@ -309,9 +310,8 @@ mod tests {
             "A sixth string",
         ]);
 
-        let _client = AnthropicClient::<ReqwestClient>::default();
-        let embeddings =
-            crate::llm::embeddings::compute_openai_embeddings_async(Arc::new(array)).await;
+        let client = AnthropicClient::<ReqwestClient>::default();
+        let embeddings = client.compute_source_embeddings(Arc::new(array));
 
         // Debug the error if there is one
         if embeddings.is_err() {
