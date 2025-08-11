@@ -307,7 +307,7 @@ mod tests {
         assert_eq!(res.output_tokens, 10);
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
     async fn test_compute_embeddings() {
         dotenv().ok();
 

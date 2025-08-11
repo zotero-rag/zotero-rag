@@ -81,4 +81,3 @@ pub fn compute_openai_embeddings_sync(
 pub const fn get_openai_embedding_dim() -> u32 {
     OPENAI_EMBEDDING_DIM
 }
-

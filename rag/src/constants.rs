@@ -20,3 +20,4 @@ pub const OPENAI_EMBEDDING_DIM: u32 = 1536;
 
 /// Default OpenAI embedding model
 pub const DEFAULT_OPENAI_EMBEDDING_MODEL: &str = "text-embedding-3-small";
+

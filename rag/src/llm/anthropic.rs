@@ -297,7 +297,7 @@ mod tests {
         assert_eq!(res.content, "Hi there! How can I help you today?");
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
     async fn test_compute_embeddings() {
         dotenv().ok();
 
