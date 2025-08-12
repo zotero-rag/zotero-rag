@@ -11,9 +11,6 @@ env:
 
 jobs:
   build:
-    runs-on:
-      group: all-repos
-
     steps:
     - name: Dependencies
       run: sudo apt install protobuf-compiler
