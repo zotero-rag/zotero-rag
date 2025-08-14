@@ -102,7 +102,7 @@ pub async fn db_statistics() -> Result<TableStatistics, LanceError> {
 /// the same one here. Since that isn't stored (at least, not that I know of), this onus is on the
 /// user.
 ///
-/// # Args
+/// # Arguments
 /// - `embedding_name`: The embedding method to use. Must be in `EmbeddingProviders`.
 ///
 /// # Returns
@@ -144,15 +144,47 @@ async fn get_db_with_embeddings(embedding_name: &str) -> Result<Connection, Lanc
     Ok(db)
 }
 
+/// Return all the rows in the LanceDB table, selecting only the columns specified. This is useful
+/// for computing what rows do *not* exist in the table, such as in cases where the data source has
+/// new items.
+///
+/// # Arguments
+/// * embedding_name: The embedding method to use. Must be one of `EmbeddingProviders`.
+/// * columns: The set of columns to return. Typically, you do not want to include the full-text
+///   column here.
+///
+/// # Returns
+/// * batches: A vector of Arrow `RecordBatch` objects containing the results.
+pub async fn get_lancedb_items(
+    embedding_name: String,
+    columns: Vec<String>,
+) -> Result<Vec<RecordBatch>, LanceError> {
+    let db = get_db_with_embeddings(&embedding_name).await?;
+
+    let tbl = db.open_table(TABLE_NAME).execute().await.map_err(|_| {
+        LanceError::InvalidStateError(format!("The table {TABLE_NAME} does not exist"))
+    })?;
+
+    let rows: Vec<RecordBatch> = tbl
+        .query()
+        .select(lancedb::query::Select::Columns(columns))
+        .execute()
+        .await?
+        .try_collect()
+        .await?;
+
+    Ok(rows)
+}
+
 /// Perform a vector search on the database using the `query` and the `embedding_name` embedding
 /// method. Returns a vector of Arrow `RecordBatch` objects containing the results.
 ///
-/// # Args
-/// - query: The query string to search for
-/// - embedding_name: The embedding method to use. Must be one of `EmbeddingProviders`.
+/// # Arguments
+/// * query: The query string to search for
+/// * embedding_name: The embedding method to use. Must be one of `EmbeddingProviders`.
 ///
 /// # Returns
-/// - batches: A vector of Arrow `RecordBatch` objects containing the results.
+/// * batches: A vector of Arrow `RecordBatch` objects containing the results.
 pub async fn vector_search(
     query: String,
     embedding_name: String,
@@ -198,7 +230,6 @@ pub async fn vector_search(
 /// and registers embedding functions for both Anthropic and OpenAI.
 ///
 /// # Arguments
-///
 /// * `data`: An Arrow `RecordBatchIterator` containing data. See
 ///   https://docs.rs/lancedb/latest/lancedb/index.html for an example of creating this.
 /// * `embedding_params`: An `EmbeddingDefinition` object that contains the source column that has
