@@ -440,6 +440,10 @@ pub async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<(), CLIEr
                             &mut ctx.out,
                             "/embed\t\tRepair failed DB creation by re-adding embeddings."
                         )?;
+                        writeln!(
+                            &mut ctx.out,
+                            "/search\t\tSearch for papers without summarizing them. Usage: /search <query>"
+                        )?;
                         writeln!(&mut ctx.out, "/stats\t\tShow table statistics.")?;
                         writeln!(&mut ctx.out, "/quit\t\tExit the program")?;
                         writeln!(&mut ctx.out)?;
