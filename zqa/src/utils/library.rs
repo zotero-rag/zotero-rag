@@ -159,30 +159,19 @@ pub fn parse_library_metadata(
     if let Some(path) = get_lib_path() {
         let conn = Connection::open(path.join("zotero.sqlite"))?;
 
-        let mut query = "WITH itemTitles AS (
-                SELECT DISTINCT itemDataValues.value AS title,
-                    items.itemID AS itemID
-                FROM items
-                INNER JOIN itemData ON items.itemID = itemData.itemID
-                INNER JOIN itemTypes ON items.itemTypeID = itemTypes.itemTypeID
-                INNER JOIN fields ON itemData.fieldID = fields.fieldID
-                INNER JOIN itemDataValues ON itemData.valueID = itemDataValues.valueID
-                WHERE fields.fieldName = 'title'
-                AND itemTypes.typeName IN ('conferencePaper', 'journalArticle', 'preprint')
-            ),
-            itemPaths AS (
-                SELECT itemAttachments.path AS filePath,
-                       itemAttachments.parentItemID as itemID,
-                       itemAttachments.itemID AS childItemID
-                FROM items
-                LEFT JOIN itemAttachments ON items.itemID = itemAttachments.parentItemID
-            )
-            SELECT itemTitles.title AS title,
-                   itemPaths.filePath AS filePath,
-                   items.key AS libraryKey
-            FROM itemTitles
-            NATURAL JOIN itemPaths
-            JOIN items ON itemPaths.childItemID = items.itemID"
+        let mut query = "SELECT DISTINCT
+                idv.value AS title,
+                ia.path AS filePath,
+                i2.key AS libraryKey
+            FROM items i
+            JOIN itemData id ON i.itemID = id.itemID
+            JOIN fields f ON id.fieldID = f.fieldID
+            JOIN itemDataValues idv ON id.valueID = idv.valueID
+            JOIN itemTypes it ON i.itemTypeID = it.itemTypeID
+            LEFT JOIN itemAttachments ia ON i.itemID = ia.parentItemID
+            JOIN items i2 ON ia.itemID = i2.itemID
+            WHERE f.fieldName = 'title'
+          AND it.typeName IN ('conferencePaper', 'journalArticle', 'preprint') "
             .to_string();
 
         // Useful for debugging
