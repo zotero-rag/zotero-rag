@@ -1,7 +1,9 @@
 use core::fmt;
 use directories::UserDirs;
 use indicatif::ProgressBar;
+use rag::vector::lance::{LanceError, get_lancedb_items};
 use rusqlite::Connection;
+use std::collections::HashSet;
 use std::env;
 use std::error::Error;
 use std::path::PathBuf;
@@ -10,6 +12,9 @@ use std::thread;
 use std::time::Instant;
 
 use pdftools::parse::extract_text;
+
+use crate::izip;
+use crate::utils::arrow::get_column_from_batch;
 
 /// Gets the Zotero library path. Works on Linux, macOS, and Windows systems.
 /// On CI environments, returns a location to a toy library in assets/ instead.
@@ -38,7 +43,7 @@ fn get_lib_path() -> Option<PathBuf> {
 }
 
 /// Metadata for items in the Zotero library.
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub struct ZoteroItemMetadata {
     pub library_key: String,
     pub title: String,
@@ -55,12 +60,19 @@ pub struct ZoteroItem {
 #[derive(Clone, Debug)]
 pub enum LibraryParsingError {
     LibNotFoundError,
+    LanceDBError(String),
     PdfParsingError(String),
 }
 
 impl From<rusqlite::Error> for LibraryParsingError {
     fn from(_: rusqlite::Error) -> Self {
         LibraryParsingError::LibNotFoundError
+    }
+}
+
+impl From<LanceError> for LibraryParsingError {
+    fn from(value: LanceError) -> Self {
+        LibraryParsingError::LanceDBError(value.to_string())
     }
 }
 
@@ -74,6 +86,9 @@ impl fmt::Display for LibraryParsingError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             LibraryParsingError::LibNotFoundError => write!(f, "Library not found!"),
+            LibraryParsingError::LanceDBError(msg) => {
+                write!(f, "LanceDB error when parsing library: {msg}")
+            }
             LibraryParsingError::PdfParsingError(m) => write!(f, "PDF parsing error: {m}"),
         }
     }
@@ -81,9 +96,59 @@ impl fmt::Display for LibraryParsingError {
 
 impl Error for LibraryParsingError {}
 
+/// Assuming an existing LanceDB database exists, returns a list of items present in the Zotero
+/// library but not in the database. The primary use case for this is to update the DB with new
+/// items. Note that this does not take into account removed items.
+///
+/// # Arguments:
+///
+/// * `embedding_name` - The embedding used by the current DB.
+///
+/// # Returns
+///
+/// If successful, a list of `ZoteroItemMetadata` objects corresponding to new items.
+async fn get_new_library_items(
+    embedding_name: String,
+) -> Result<Vec<ZoteroItemMetadata>, LibraryParsingError> {
+    let db_items = get_lancedb_items(
+        embedding_name,
+        vec!["library_key".into(), "title".into(), "file_path".into()],
+    )
+    .await?;
+
+    let metadata_vecs = db_items
+        .iter()
+        .flat_map(|batch| {
+            let library_keys = get_column_from_batch(batch, 0);
+            let titles = get_column_from_batch(batch, 1);
+            let file_paths = get_column_from_batch(batch, 2);
+
+            let zipped = izip!(library_keys, titles, file_paths).collect::<Vec<_>>();
+            zipped
+                .iter()
+                .map(|(key, title, path)| ZoteroItemMetadata {
+                    library_key: key.clone(),
+                    title: title.clone(),
+                    file_path: PathBuf::from(path.clone()),
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+
+    let library_items = parse_library_metadata(None, None)?;
+
+    let db_items_set: HashSet<_> = metadata_vecs.iter().collect();
+
+    Ok(library_items
+        .into_iter()
+        .filter(|item| !db_items_set.contains(item))
+        .collect::<Vec<_>>())
+}
+
 /// Parses the Zotero library metadata. If successful, returns a list of metadata for each item.
 ///
-/// Arguments:
+/// # Arguments:
+///
 /// * `start_from` - An optional offset for the SQL query. Useful for debugging, pagination,
 ///   multi-threading, etc.
 /// * `limit` - Optional limit, meant to be used in conjunction with `start_from`.

@@ -38,6 +38,7 @@ impl From<LibraryParsingError> for ArrowError {
     fn from(value: LibraryParsingError) -> Self {
         match value {
             LibraryParsingError::LibNotFoundError => Self::LibNotFoundError,
+            LibraryParsingError::LanceDBError(msg) => Self::LanceError(msg),
             LibraryParsingError::PdfParsingError(msg) => Self::PdfParsingError(msg),
         }
     }
@@ -159,7 +160,7 @@ pub fn library_to_arrow(
 /// # Returns
 ///
 /// A `Vec<String>` containing all the items in the specified column of the `RecordBatch`.
-fn get_column_from_batch(batch: &RecordBatch, column: usize) -> Vec<String> {
+pub fn get_column_from_batch(batch: &RecordBatch, column: usize) -> Vec<String> {
     let results = batch.column(column).as_string::<i32>();
 
     results
