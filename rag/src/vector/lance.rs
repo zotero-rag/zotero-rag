@@ -146,7 +146,8 @@ async fn get_db_with_embeddings(embedding_name: &str) -> Result<Connection, Lanc
 
 /// Return all the rows in the LanceDB table, selecting only the columns specified. This is useful
 /// for computing what rows do *not* exist in the table, such as in cases where the data source has
-/// new items.
+/// new items. Note that LanceDB by default seems to chunk by 1024 items, so if you're certain you
+/// will receive fewer than 1024 rows, it is safe to assume only one element exists.
 ///
 /// # Arguments
 /// * embedding_name: The embedding method to use. Must be one of `EmbeddingProviders`.
@@ -165,15 +166,16 @@ pub async fn get_lancedb_items(
         LanceError::InvalidStateError(format!("The table {TABLE_NAME} does not exist"))
     })?;
 
-    let rows: Vec<RecordBatch> = tbl
+    let results: Vec<RecordBatch> = tbl
         .query()
         .select(lancedb::query::Select::Columns(columns))
+        .limit(tbl.count_rows(None).await?)
         .execute()
         .await?
         .try_collect()
         .await?;
 
-    Ok(rows)
+    Ok(results)
 }
 
 /// Perform a vector search on the database using the `query` and the `embedding_name` embedding
