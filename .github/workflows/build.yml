@@ -31,9 +31,6 @@ jobs:
           target/
         key: ${{ runner.os }}-cargo-build-${{ hashFiles('**/Cargo.lock') }}
 
-    - name: Build
-      run: cargo build --verbose
-
     - name: Run tests
       run: RUST_BACKTRACE=1 cargo test -p rag -p pdftools --verbose -- --nocapture
       env:
