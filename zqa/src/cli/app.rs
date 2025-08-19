@@ -2,12 +2,13 @@ use crate::cli::placeholder::PlaceholderText;
 use crate::cli::prompts::{get_extraction_prompt, get_summarize_prompt};
 use crate::cli::readline::get_readline_config;
 use crate::utils::arrow::vector_search;
+use crate::utils::library::get_new_library_items;
 use arrow_array::{self, RecordBatch, RecordBatchIterator};
 use lancedb::embeddings::EmbeddingDefinition;
 use rag::llm::base::{ApiClient, ApiResponse, ModelProviders, UserMessage};
 use rag::llm::errors::LLMError;
 use rag::llm::factory::get_client_by_provider;
-use rag::vector::lance::{create_initial_table, db_statistics};
+use rag::vector::lance::{DB_URI, create_initial_table, db_statistics};
 use rustyline::error::ReadlineError;
 use tokio::task::JoinSet;
 
@@ -16,6 +17,7 @@ use crate::common::Context;
 use crate::{library_to_arrow, utils::library::parse_library_metadata};
 use arrow_ipc::reader::FileReader;
 use arrow_ipc::writer::FileWriter;
+use std::path::PathBuf;
 use std::{
     fs::File,
     io::{self, Write},
@@ -112,7 +114,13 @@ async fn embed<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Result<(), CLIErr
 ///   `std::io::Write` for `stdout` and `stderr`.
 async fn process<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Result<(), CLIError> {
     const WARNING_THRESHOLD: usize = 100;
-    let item_metadata = parse_library_metadata(None, None);
+
+    let embedding_name = ctx.args.embedding.clone();
+
+    let item_metadata = match PathBuf::from(DB_URI).exists() {
+        true => get_new_library_items(&embedding_name).await,
+        false => parse_library_metadata(None, None),
+    };
 
     if let Err(parse_err) = item_metadata {
         writeln!(
@@ -127,7 +135,7 @@ async fn process<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Result<(), CLIE
     if metadata_length >= WARNING_THRESHOLD {
         writeln!(
             &mut ctx.out,
-            "Your library has {metadata_length} items. Parsing may take a while. Continue?"
+            "Your library has {metadata_length} new items. Parsing may take a while. Continue?"
         )?;
         write!(&mut ctx.out, "(/process) >>> ")?;
         ctx.out.flush()?;
@@ -141,7 +149,7 @@ async fn process<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Result<(), CLIE
         }
     }
 
-    let record_batch = library_to_arrow(None, None)?;
+    let record_batch = library_to_arrow(&embedding_name, None, None).await?;
     let schema = record_batch.schema();
     let batches = vec![Ok(record_batch.clone())];
     let batch_iter = RecordBatchIterator::new(batches.into_iter(), schema.clone());

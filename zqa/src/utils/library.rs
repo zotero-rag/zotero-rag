@@ -1,7 +1,7 @@
 use core::fmt;
 use directories::UserDirs;
 use indicatif::ProgressBar;
-use rag::vector::lance::{LanceError, get_lancedb_items};
+use rag::vector::lance::{DB_URI, LanceError, get_lancedb_items};
 use rusqlite::Connection;
 use std::collections::HashSet;
 use std::env;
@@ -107,9 +107,14 @@ impl Error for LibraryParsingError {}
 /// # Returns
 ///
 /// If successful, a list of `ZoteroItemMetadata` objects corresponding to new items.
-async fn get_new_library_items(
-    embedding_name: String,
+pub async fn get_new_library_items(
+    embedding_name: &str,
 ) -> Result<Vec<ZoteroItemMetadata>, LibraryParsingError> {
+    // If the DB does not exist, every item is new.
+    if !PathBuf::from(DB_URI).exists() {
+        return parse_library_metadata(None, None);
+    }
+
     let db_items = get_lancedb_items(
         embedding_name,
         vec!["library_key".into(), "title".into(), "file_path".into()],
@@ -212,15 +217,21 @@ pub fn parse_library_metadata(
 ///
 /// # Arguments:
 ///
+/// * `embedding_name` - The embedding used by the current DB.
 /// * `start_from` - An optional offset for the SQL query. Useful for debugging, pagination,
 ///   multi-threading, etc.
 /// * `limit` - Optional limit, meant to be used in conjunction with `start_from`.
-pub fn parse_library(
+pub async fn parse_library(
+    embedding_name: &str,
     start_from: Option<usize>,
     limit: Option<usize>,
 ) -> Result<Vec<ZoteroItem>, LibraryParsingError> {
     let start_time = Instant::now();
-    let metadata = parse_library_metadata(start_from, limit)?;
+
+    let metadata = match PathBuf::from(DB_URI).exists() {
+        true => get_new_library_items(embedding_name).await?,
+        false => parse_library_metadata(start_from, limit)?,
+    };
 
     if metadata.is_empty() {
         log::warn!("The library seems to be empty.");
@@ -228,7 +239,7 @@ pub fn parse_library(
         return Ok(Vec::new());
     }
 
-    log::info!("Found library with {} items.", metadata.len());
+    log::info!("Found library with {} new items.", metadata.len());
 
     let n_threads = thread::available_parallelism()
         .unwrap_or(std::num::NonZero::<usize>::MIN)
@@ -386,11 +397,11 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_parse_library() {
+    #[tokio::test]
+    async fn test_parse_library() {
         dotenv().ok();
         let _ = Ftail::new().console(log::LevelFilter::Info).init();
-        let items = parse_library(Some(0), Some(5));
+        let items = parse_library("voyageai", Some(0), Some(5)).await;
 
         assert!(items.is_ok());
 

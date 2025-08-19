@@ -20,7 +20,7 @@ async fn test_integration_works() {
         return;
     }
 
-    let record_batch = library_to_arrow(None, None);
+    let record_batch = library_to_arrow("voyageai", None, None).await;
     assert!(record_batch.is_ok());
 
     let record_batch = record_batch.unwrap();

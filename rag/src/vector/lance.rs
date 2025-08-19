@@ -16,7 +16,7 @@ use lancedb::{
 use std::{error::Error, fmt::Display, sync::Arc, vec::IntoIter};
 
 // Maintainers: ensure that `DB_URI` begins with `TABLE_NAME`
-const DB_URI: &str = "data/lancedb-table";
+pub const DB_URI: &str = "data/lancedb-table";
 pub const TABLE_NAME: &str = "data";
 
 /// Errors that can occur when working with LanceDB
@@ -157,10 +157,10 @@ async fn get_db_with_embeddings(embedding_name: &str) -> Result<Connection, Lanc
 /// # Returns
 /// * batches: A vector of Arrow `RecordBatch` objects containing the results.
 pub async fn get_lancedb_items(
-    embedding_name: String,
+    embedding_name: &str,
     columns: Vec<String>,
 ) -> Result<Vec<RecordBatch>, LanceError> {
-    let db = get_db_with_embeddings(&embedding_name).await?;
+    let db = get_db_with_embeddings(embedding_name).await?;
 
     let tbl = db.open_table(TABLE_NAME).execute().await.map_err(|_| {
         LanceError::InvalidStateError(format!("The table {TABLE_NAME} does not exist"))

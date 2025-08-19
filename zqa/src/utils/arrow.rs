@@ -84,14 +84,16 @@ impl Error for ArrowError {}
 ///
 /// # Arguments
 ///
+/// * `embedding_name` - The embedding used by the current DB.
 /// * `start_from` - An optional offset for the SQL query. Useful for debugging, pagination,
 ///   multi-threading, etc.
 /// * `limit` - Optional limit, meant to be used in conjunction with `start_from`.
-pub fn library_to_arrow(
+pub async fn library_to_arrow(
+    embedding_name: &str,
     start_from: Option<usize>,
     limit: Option<usize>,
 ) -> Result<RecordBatch, ArrowError> {
-    let lib_items = parse_library(start_from, limit)?;
+    let lib_items = parse_library(embedding_name, start_from, limit).await?;
     log::info!("Finished parsing library items.");
 
     // Convert ZoteroItemMetadata to something that can be converted to Arrow
@@ -237,12 +239,12 @@ mod tests {
     use dotenv::dotenv;
     use ftail::Ftail;
 
-    #[test]
-    fn test_library_to_arrow_works() {
+    #[tokio::test]
+    async fn test_library_to_arrow_works() {
         dotenv().ok();
         let _ = Ftail::new().console(log::LevelFilter::Info).init();
 
-        let record_batch = library_to_arrow(Some(0), Some(5));
+        let record_batch = library_to_arrow("voyageai", Some(0), Some(5)).await;
         assert!(
             record_batch.is_ok(),
             "Failed to fetch library: {:?}",
