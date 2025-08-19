@@ -1,4 +1,4 @@
-name: Rust
+name: Build pdftools and rag crates
 
 on:
   push:
@@ -35,7 +35,7 @@ jobs:
       run: cargo build --verbose
 
     - name: Run tests
-      run: RUST_BACKTRACE=1 cargo test --verbose -- --nocapture
+      run: RUST_BACKTRACE=1 cargo test -p rag -p pdftools --verbose -- --nocapture
       env:
         ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_KEY }}
         VOYAGE_AI_API_KEY: ${{ secrets.VOYAGE_AI_API_KEY }}
