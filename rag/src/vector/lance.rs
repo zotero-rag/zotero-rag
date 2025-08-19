@@ -166,6 +166,8 @@ pub async fn get_lancedb_items(
         LanceError::InvalidStateError(format!("The table {TABLE_NAME} does not exist"))
     })?;
 
+    // The installed version of Lance has a bug where without the `.limit` call here, it only
+    // returns 10 rows; see https://github.com/lancedb/lancedb/issues/1852#issuecomment-2489837804
     let results: Vec<RecordBatch> = tbl
         .query()
         .select(lancedb::query::Select::Columns(columns))
