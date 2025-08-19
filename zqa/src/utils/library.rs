@@ -110,11 +110,6 @@ impl Error for LibraryParsingError {}
 pub async fn get_new_library_items(
     embedding_name: &str,
 ) -> Result<Vec<ZoteroItemMetadata>, LibraryParsingError> {
-    // If the DB does not exist, every item is new.
-    if !PathBuf::from(DB_URI).exists() {
-        return parse_library_metadata(None, None);
-    }
-
     let db_items = get_lancedb_items(
         embedding_name,
         vec!["library_key".into(), "title".into(), "file_path".into()],
