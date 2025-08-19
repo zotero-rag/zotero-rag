@@ -30,6 +30,7 @@ async fn test_integration_works() {
 
     let db = create_initial_table(
         batch_iter,
+        &[],
         EmbeddingDefinition::new(
             "pdf_text",         // source column
             "openai",           // embedding name, either "openai" or "anthropic"

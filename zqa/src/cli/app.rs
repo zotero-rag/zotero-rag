@@ -81,6 +81,7 @@ async fn embed<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Result<(), CLIErr
     let embedding_provider = ctx.args.embedding.as_str();
     let db = create_initial_table(
         batch_iter,
+        &["library_key"],
         EmbeddingDefinition::new(
             "pdf_text", // source column
             embedding_provider,
@@ -164,6 +165,7 @@ async fn process<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Result<(), CLIE
     let embedding_provider = ctx.args.embedding.as_str();
     let result = create_initial_table(
         batch_iter,
+        &["library_key"],
         EmbeddingDefinition::new(
             "pdf_text", // source column
             embedding_provider,

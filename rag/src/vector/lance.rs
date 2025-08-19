@@ -24,8 +24,8 @@ pub const TABLE_NAME: &str = "data";
 pub enum LanceError {
     /// Error connecting to LanceDB
     ConnectionError(String),
-    /// Error creating a table in LanceDB
-    TableCreationError(String),
+    /// Error creating or updating a table in LanceDB
+    TableUpdateError(String),
     /// Invalid params
     ParameterError(String),
     /// The database is in an invalid state
@@ -38,7 +38,7 @@ impl fmt::Display for LanceError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::ConnectionError(msg) => write!(f, "LanceDB connection error: {msg}"),
-            Self::TableCreationError(msg) => write!(f, "LanceDB table creation error: {msg}"),
+            Self::TableUpdateError(msg) => write!(f, "LanceDB table creation error: {msg}"),
             Self::ParameterError(msg) => write!(f, "Invalid parameter: {msg}"),
             Self::InvalidStateError(msg) => write!(f, "The DB is in an invalid state: {msg}"),
             Self::Other(msg) => write!(f, "LanceDB error: {msg}"),
@@ -246,18 +246,39 @@ pub async fn vector_search(
 /// Returns a `LanceError` if connection, table creation, or registering embedding functions fails
 pub async fn create_initial_table(
     data: RecordBatchIterator<IntoIter<Result<RecordBatch, ArrowError>>>,
+    merge_on: &[&str],
     embedding_params: EmbeddingDefinition,
 ) -> Result<Connection, LanceError> {
     let db = get_db_with_embeddings(&embedding_params.embedding_name).await?;
 
-    // Create the table
-    let _tbl = db
-        .create_table(TABLE_NAME, data)
-        .mode(CreateTableMode::Overwrite)
-        .add_embedding(embedding_params)?
+    if db
+        .table_names()
         .execute()
-        .await
-        .map_err(|e| LanceError::TableCreationError(e.to_string()))?;
+        .await?
+        .contains(&String::from(TABLE_NAME))
+    {
+        // Add rows if they don't already exist
+        let tbl = db
+            .open_table(TABLE_NAME)
+            .execute()
+            .await
+            .map_err(|e| LanceError::TableUpdateError(e.to_string()))?;
+
+        tbl.merge_insert(merge_on)
+            .when_not_matched_insert_all()
+            .clone()
+            .execute(Box::new(data))
+            .await
+            .map_err(|e| LanceError::TableUpdateError(e.to_string()))?;
+    } else {
+        // Create a new table and add rows
+        db.create_table(TABLE_NAME, data)
+            .mode(CreateTableMode::Overwrite)
+            .add_embedding(embedding_params)?
+            .execute()
+            .await
+            .map_err(|e| LanceError::TableUpdateError(e.to_string()))?;
+    }
 
     Ok(db)
 }
@@ -289,6 +310,7 @@ mod tests {
 
         let db = create_initial_table(
             reader,
+            &[],
             EmbeddingDefinition::new(
                 "data_openai",      // source column
                 "openai",           // embedding name, either "openai" or "anthropic"
@@ -343,6 +365,7 @@ mod tests {
 
         let db = create_initial_table(
             reader,
+            &[],
             EmbeddingDefinition::new("data_anthropic", "anthropic", Some("embeddings")),
         )
         .await;
@@ -393,6 +416,7 @@ mod tests {
 
         let db = create_initial_table(
             reader,
+            &[],
             EmbeddingDefinition::new("data_voyage", "voyageai", Some("embeddings")),
         )
         .await;
@@ -443,6 +467,7 @@ mod tests {
 
         let db = create_initial_table(
             reader,
+            &[],
             EmbeddingDefinition::new("data", "invalid", Some("embeddings")),
         )
         .await;
