@@ -78,10 +78,16 @@ pub fn compute_openai_embeddings_sync(
     })
 }
 
+/// Returns the embedding dimension given an embedding provider. Note that for Anthropic, we
+/// actually use OpenAI's embeddings.
+///
+/// # Arguments:
+///
+/// * `embedding_name` - Embedding provider name. Must be one of "openai", "anthropic", or
+/// "voyageai".
 pub fn get_embedding_dims_by_provider(embedding_name: &str) -> u32 {
     match embedding_name {
         "openai" => OPENAI_EMBEDDING_DIM,
-        // Our Anthropic impl uses OpenAI for embeddings
         "anthropic" => OPENAI_EMBEDDING_DIM,
         "voyageai" => VOYAGE_EMBEDDING_DIM,
         _ => panic!("Invalid embedding provider."),

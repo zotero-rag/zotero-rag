@@ -190,7 +190,7 @@ impl EmbeddingFunction for OpenAIClient {
             Arc::new(lancedb::arrow::arrow_schema::Field::new(
                 "item",
                 DataType::Float32,
-                false,
+                true,
             )),
             OPENAI_EMBEDDING_DIM as i32, // text-embedding-3-small size
         )))

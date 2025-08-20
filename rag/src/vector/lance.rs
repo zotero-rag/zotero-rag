@@ -38,7 +38,7 @@ impl fmt::Display for LanceError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::ConnectionError(msg) => write!(f, "LanceDB connection error: {msg}"),
-            Self::TableUpdateError(msg) => write!(f, "LanceDB table creation error: {msg}"),
+            Self::TableUpdateError(msg) => write!(f, "LanceDB table update error: {msg}"),
             Self::ParameterError(msg) => write!(f, "Invalid parameter: {msg}"),
             Self::InvalidStateError(msg) => write!(f, "The DB is in an invalid state: {msg}"),
             Self::Other(msg) => write!(f, "LanceDB error: {msg}"),
