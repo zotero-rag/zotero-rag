@@ -1,4 +1,6 @@
-use arrow_array::{ArrayRef, RecordBatch, StringArray, cast::AsArray};
+use arrow_array::{
+    ArrayRef, FixedSizeListArray, RecordBatch, StringArray, cast::AsArray, types::Float32Type,
+};
 use arrow_schema;
 use core::fmt;
 use std::error::Error;
@@ -9,7 +11,10 @@ use crate::{
     izip,
     utils::library::{ZoteroItem, ZoteroItemMetadata},
 };
-use rag::vector::lance::{LanceError, vector_search as rag_vector_search};
+use rag::{
+    llm::embeddings::get_embedding_dims_by_provider,
+    vector::lance::{LanceError, lancedb_exists, vector_search as rag_vector_search},
+};
 
 use super::library::{LibraryParsingError, parse_library};
 
@@ -98,12 +103,28 @@ pub async fn library_to_arrow(
 
     // Convert ZoteroItemMetadata to something that can be converted to Arrow
     // Need to extract fields and create appropriate Arrow arrays
-    let schema = Arc::new(arrow_schema::Schema::new(vec![
+    let mut schema_fields = vec![
         arrow_schema::Field::new("library_key", arrow_schema::DataType::Utf8, false),
         arrow_schema::Field::new("title", arrow_schema::DataType::Utf8, false),
         arrow_schema::Field::new("file_path", arrow_schema::DataType::Utf8, false),
         arrow_schema::Field::new("pdf_text", arrow_schema::DataType::Utf8, false),
-    ]));
+    ];
+
+    if lancedb_exists() {
+        schema_fields.push(arrow_schema::Field::new(
+            "embeddings",
+            arrow_schema::DataType::FixedSizeList(
+                Arc::new(arrow_schema::Field::new(
+                    "item",
+                    arrow_schema::DataType::Float32,
+                    true,
+                )),
+                get_embedding_dims_by_provider(embedding_name) as i32,
+            ),
+            true,
+        ));
+    }
+    let schema = Arc::new(arrow_schema::Schema::new(schema_fields));
 
     // Convert ZoteroItemMetadata to Arrow arrays
     let library_keys = StringArray::from(
@@ -139,15 +160,27 @@ pub async fn library_to_arrow(
         .collect();
     let file_paths = StringArray::from(file_paths_vec?);
 
-    let record_batch = RecordBatch::try_new(
-        schema.clone(),
-        vec![
-            Arc::new(library_keys) as ArrayRef,
-            Arc::new(titles) as ArrayRef,
-            Arc::new(file_paths) as ArrayRef,
-            Arc::new(pdf_texts) as ArrayRef,
-        ],
-    )?;
+    let mut record_batch_cols = vec![
+        Arc::new(library_keys) as ArrayRef,
+        Arc::new(titles) as ArrayRef,
+        Arc::new(file_paths) as ArrayRef,
+        Arc::new(pdf_texts) as ArrayRef,
+    ];
+    let embedding_dims = get_embedding_dims_by_provider(embedding_name);
+
+    if lancedb_exists() {
+        record_batch_cols.push(Arc::new(FixedSizeListArray::from_iter_primitive::<
+            Float32Type,
+            _,
+            _,
+        >(
+            (0..lib_items.len())
+                .map(|_| Some(vec![Some(0.0); embedding_dims as usize]))
+                .collect::<Vec<Option<Vec<Option<f32>>>>>(),
+            embedding_dims as i32,
+        )));
+    }
+    let record_batch = RecordBatch::try_new(schema.clone(), record_batch_cols)?;
 
     Ok(record_batch)
 }

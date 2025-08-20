@@ -1,3 +1,4 @@
+use crate::constants::{VOYAGE_EMBEDDING_DIM, VOYAGE_EMBEDDING_MODEL};
 use indicatif::ProgressBar;
 use log;
 use std::{borrow::Cow, env, fs, sync::Arc, time::Duration};
@@ -9,9 +10,6 @@ use serde::{Deserialize, Serialize};
 
 use super::errors::LLMError;
 use crate::llm::http_client::{HttpClient, ReqwestClient};
-
-const VOYAGE_EMBEDDING_DIM: u32 = 2048;
-const VOYAGE_EMBEDDING_MODEL: &str = "voyage-3-large";
 
 /// A client for Voyage AI's embedding API.
 #[derive(Debug, Clone)]

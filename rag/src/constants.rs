@@ -18,5 +18,11 @@ pub const DEFAULT_MAX_RETRIES: usize = 3;
 /// OpenAI text-embedding-3-small dimension
 pub const OPENAI_EMBEDDING_DIM: u32 = 1536;
 
+/// VoyageAI voyage-3-large dimension
+pub const VOYAGE_EMBEDDING_DIM: u32 = 2048;
+
+/// Default VoyageAI embedding model
+pub const VOYAGE_EMBEDDING_MODEL: &str = "voyage-3-large";
+
 /// Default OpenAI embedding model
 pub const DEFAULT_OPENAI_EMBEDDING_MODEL: &str = "text-embedding-3-small";

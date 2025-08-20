@@ -1,7 +1,7 @@
 use core::fmt;
 use directories::UserDirs;
 use indicatif::ProgressBar;
-use rag::vector::lance::{DB_URI, LanceError, get_lancedb_items};
+use rag::vector::lance::{LanceError, get_lancedb_items, lancedb_exists};
 use rusqlite::Connection;
 use std::collections::HashSet;
 use std::env;
@@ -223,7 +223,7 @@ pub async fn parse_library(
 ) -> Result<Vec<ZoteroItem>, LibraryParsingError> {
     let start_time = Instant::now();
 
-    let metadata = match PathBuf::from(DB_URI).exists() {
+    let metadata = match lancedb_exists() {
         true => get_new_library_items(embedding_name).await?,
         false => parse_library_metadata(start_from, limit)?,
     };
@@ -252,11 +252,21 @@ pub async fn parse_library(
         pbar.inc(1);
     } // Drop the lock
 
+    // Keep track of how many were skipped, and for what reasons. Currently, we won't track the
+    // actual items themselves.
+    enum FailReason {
+        NotPdf = 0,
+        InvalidPath = 1,
+    }
+
+    let skip_counts = Arc::new(Mutex::new([0, 0]));
+
     let handles = metadata
         .chunks(chunk_size)
         .map(|chunk| {
             // Parse each chunked subset of items
             let bar = Arc::clone(&bar);
+            let fail_map_clone = Arc::clone(&skip_counts);
             let chunk = chunk.to_vec();
             let cur_chunk_size = chunk.len();
 
@@ -276,6 +286,10 @@ pub async fn parse_library(
                                     "Skipping item with invalid UTF-8 in path: {:?}",
                                     m.library_key
                                 );
+
+                                let mut fail_map = fail_map_clone.lock().ok()?;
+                                fail_map[FailReason::InvalidPath as usize] += 1;
+
                                 return None;
                             }
                         };
@@ -283,6 +297,10 @@ pub async fn parse_library(
                         // TODO: Handle other formats
                         if !path_str.ends_with(".pdf") {
                             log::warn!("Path {path_str} is not a PDF file.");
+
+                            let mut fail_map = fail_map_clone.lock().ok()?;
+                            fail_map[FailReason::NotPdf as usize] += 1;
+
                             return None;
                         }
                         log::debug!("Processing {path_str}");
@@ -338,6 +356,29 @@ pub async fn parse_library(
         log::info!("There were no errors during parsing.");
     } else {
         log::warn!("{fail_count} items could not be parsed.");
+        println!("{fail_count} items could not be parsed:");
+
+        let fail_counts = Arc::clone(&skip_counts);
+        if let Ok(fail_counts) = fail_counts.lock() {
+            // There's probably a more elegant way to do this, but let's not prematurely optimize.
+            if fail_counts[FailReason::NotPdf as usize] > 0 {
+                println!(
+                    "\t{} failed because they were not PDFs.",
+                    fail_counts[FailReason::NotPdf as usize]
+                );
+            }
+
+            if fail_counts[FailReason::InvalidPath as usize] > 0 {
+                println!(
+                    "\t{} failed because they had invalid file paths.",
+                    fail_counts[FailReason::InvalidPath as usize]
+                );
+            }
+        } else {
+            log::warn!(
+                "We couldn't get a lock on `fail_counts`, so detailed stats are not printed."
+            );
+        }
     }
 
     Ok(results)
