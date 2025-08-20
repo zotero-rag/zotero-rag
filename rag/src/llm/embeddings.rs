@@ -8,6 +8,7 @@ use lancedb::arrow::arrow_schema::{DataType, Field};
 
 use super::errors::LLMError;
 use crate::common;
+use crate::constants::VOYAGE_EMBEDDING_DIM;
 use crate::constants::{DEFAULT_MAX_CONCURRENT_REQUESTS, OPENAI_EMBEDDING_DIM};
 
 /// Shared embedding computation logic for OpenAI embeddings
@@ -77,7 +78,12 @@ pub fn compute_openai_embeddings_sync(
     })
 }
 
-/// Get the OpenAI embedding dimension constant
-pub const fn get_openai_embedding_dim() -> u32 {
-    OPENAI_EMBEDDING_DIM
+pub fn get_embedding_dims_by_provider(embedding_name: &str) -> u32 {
+    match embedding_name {
+        "openai" => OPENAI_EMBEDDING_DIM,
+        // Our Anthropic impl uses OpenAI for embeddings
+        "anthropic" => OPENAI_EMBEDDING_DIM,
+        "voyageai" => VOYAGE_EMBEDDING_DIM,
+        _ => panic!("Invalid embedding provider."),
+    }
 }

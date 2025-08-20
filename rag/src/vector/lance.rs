@@ -10,10 +10,10 @@ use core::fmt;
 use futures::TryStreamExt;
 use lancedb::{
     Connection, Error as LanceDbError, arrow::arrow_schema::ArrowError, connect,
-    connection::CreateTableMode, embeddings::EmbeddingDefinition, query::ExecutableQuery,
+    database::CreateTableMode, embeddings::EmbeddingDefinition, query::ExecutableQuery,
     query::QueryBase,
 };
-use std::{error::Error, fmt::Display, sync::Arc, vec::IntoIter};
+use std::{error::Error, fmt::Display, path::PathBuf, sync::Arc, vec::IntoIter};
 
 // Maintainers: ensure that `DB_URI` begins with `TABLE_NAME`
 pub const DB_URI: &str = "data/lancedb-table";
@@ -71,6 +71,12 @@ impl Display for TableStatistics {
 
         Ok(())
     }
+}
+
+/// Checks if an existing LanceDB exists
+#[inline]
+pub fn lancedb_exists() -> bool {
+    PathBuf::from(DB_URI).exists()
 }
 
 /// Connects to the database and prints out simple statistics.

@@ -8,7 +8,7 @@ use lancedb::embeddings::EmbeddingDefinition;
 use rag::llm::base::{ApiClient, ApiResponse, ModelProviders, UserMessage};
 use rag::llm::errors::LLMError;
 use rag::llm::factory::get_client_by_provider;
-use rag::vector::lance::{DB_URI, create_initial_table, db_statistics};
+use rag::vector::lance::{create_initial_table, db_statistics, lancedb_exists};
 use rustyline::error::ReadlineError;
 use tokio::task::JoinSet;
 
@@ -17,7 +17,6 @@ use crate::common::Context;
 use crate::{library_to_arrow, utils::library::parse_library_metadata};
 use arrow_ipc::reader::FileReader;
 use arrow_ipc::writer::FileWriter;
-use std::path::PathBuf;
 use std::{
     fs::File,
     io::{self, Write},
@@ -118,7 +117,7 @@ async fn process<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Result<(), CLIE
 
     let embedding_name = ctx.args.embedding.clone();
 
-    let item_metadata = match PathBuf::from(DB_URI).exists() {
+    let item_metadata = match lancedb_exists() {
         true => get_new_library_items(&embedding_name).await,
         false => parse_library_metadata(None, None),
     };
@@ -462,7 +461,7 @@ pub async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<(), CLIEr
                         if let Err(e) = embed(&mut ctx).await {
                             writeln!(
                                 &mut ctx.err,
-                                "Failed to create embeddings. You may find relevant error messages below: {e}"
+                                "Failed to create embeddings. You may find relevant error messages below:\n\t{e}"
                             )?;
                         }
                     }
@@ -470,7 +469,7 @@ pub async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<(), CLIEr
                         if let Err(e) = process(&mut ctx).await {
                             writeln!(
                                 &mut ctx.err,
-                                "Failed to create embeddings. You may find relevant error messages below: {e}"
+                                "Failed to create embeddings. You may find relevant error messages below:\n\t{e}"
                             )?;
                         }
                     }
@@ -508,7 +507,7 @@ pub async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<(), CLIEr
                             if let Err(e) = search_for_papers(search_term.into(), &mut ctx).await {
                                 writeln!(
                                     &mut ctx.err,
-                                    "Failed to perform a vector search. You may find relevant error messages below: {}",
+                                    "Failed to perform a vector search. You may find relevant error messages below:\n\t{}",
                                     e
                                 )?;
                             }
@@ -519,7 +518,7 @@ pub async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<(), CLIEr
                         if let Err(e) = run_query(query.into(), &mut ctx).await {
                             writeln!(
                                 &mut ctx.err,
-                                "Failed to answer the question. You may find relevant error messages below: {e}",
+                                "Failed to answer the question. You may find relevant error messages below:\n\t{e}",
                             )?;
                         }
                     }

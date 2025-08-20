@@ -36,8 +36,8 @@ impl HttpClient for ReqwestClient {
     ) -> Result<reqwest::Response, reqwest::Error> {
         self.client
             .post(url)
-            .headers(headers)
             .json(&body)
+            .headers(headers)
             .send()
             .await
     }

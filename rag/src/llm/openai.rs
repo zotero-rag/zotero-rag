@@ -8,11 +8,11 @@ use lancedb::embeddings::EmbeddingFunction;
 use serde::{Deserialize, Serialize};
 
 use super::base::{ApiClient, ApiResponse, ChatHistoryItem, UserMessage};
-use super::embeddings::{compute_openai_embeddings_sync, get_openai_embedding_dim};
+use super::embeddings::compute_openai_embeddings_sync;
 use super::errors::LLMError;
 use super::http_client::{HttpClient, ReqwestClient};
 use crate::common::request_with_backoff;
-use crate::constants::{DEFAULT_MAX_RETRIES, DEFAULT_OPENAI_MODEL};
+use crate::constants::{DEFAULT_MAX_RETRIES, DEFAULT_OPENAI_MODEL, OPENAI_EMBEDDING_DIM};
 
 /// A client for OpenAI's chat completions API
 #[derive(Debug, Clone)]
@@ -192,7 +192,7 @@ impl EmbeddingFunction for OpenAIClient {
                 DataType::Float32,
                 false,
             )),
-            get_openai_embedding_dim() as i32, // text-embedding-3-small size
+            OPENAI_EMBEDDING_DIM as i32, // text-embedding-3-small size
         )))
     }
 
@@ -229,8 +229,8 @@ impl EmbeddingFunction for OpenAIClient {
 #[cfg(test)]
 mod tests {
     use super::{OpenAIChoice, OpenAIChoiceMessage, OpenAIClient, OpenAIResponse, OpenAIUsage};
+    use crate::constants::OPENAI_EMBEDDING_DIM;
     use crate::llm::base::{ApiClient, UserMessage};
-    use crate::llm::embeddings::get_openai_embedding_dim;
     use crate::llm::http_client::{MockHttpClient, ReqwestClient};
     use arrow_array::Array;
     use dotenv::dotenv;
@@ -334,6 +334,6 @@ mod tests {
         let vector = arrow_array::cast::as_fixed_size_list_array(&embeddings);
 
         assert_eq!(vector.len(), 6);
-        assert_eq!(vector.value_length(), get_openai_embedding_dim() as i32);
+        assert_eq!(vector.value_length(), OPENAI_EMBEDDING_DIM as i32);
     }
 }
