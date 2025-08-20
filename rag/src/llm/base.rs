@@ -34,6 +34,7 @@ pub trait ApiClient {
 pub enum ModelProviders {
     OpenAI,
     Anthropic,
+    OpenRouter
 }
 
 impl ModelProviders {
@@ -41,6 +42,7 @@ impl ModelProviders {
         match self {
             ModelProviders::OpenAI => "openai",
             ModelProviders::Anthropic => "anthropic",
+            ModelProviders::OpenRouter => "openrouter",
         }
     }
 
@@ -48,6 +50,7 @@ impl ModelProviders {
         [
             ModelProviders::OpenAI.as_str(),
             ModelProviders::Anthropic.as_str(),
+            ModelProviders::OpenRouter.as_str(),
         ]
         .contains(&provider)
     }
