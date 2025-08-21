@@ -267,16 +267,22 @@ pub async fn vector_search(
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use crate::common::setup_logger;
 
     use super::*;
     use arrow_array::RecordBatchIterator;
     use dotenv::dotenv;
+    use rag::vector::lance::TABLE_NAME;
 
     #[tokio::test]
     async fn test_library_to_arrow_works() {
         dotenv().ok();
         let _ = setup_logger(log::LevelFilter::Info);
+        let _ = fs::remove_dir_all(TABLE_NAME);
+        let _ = fs::remove_dir_all(format!("zqa/{}", TABLE_NAME));
+        let _ = fs::remove_dir_all(format!("rag/{}", TABLE_NAME));
 
         let record_batch = library_to_arrow("voyageai", Some(0), Some(5)).await;
         assert!(

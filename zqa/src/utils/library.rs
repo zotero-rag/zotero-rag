@@ -386,10 +386,13 @@ pub async fn parse_library(
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use crate::common::setup_logger;
 
     use super::*;
     use dotenv::dotenv;
+    use rag::vector::lance::TABLE_NAME;
 
     #[test]
     fn test_library_fetching_works() {
@@ -439,6 +442,9 @@ mod tests {
         dotenv().ok();
         let _ = setup_logger(log::LevelFilter::Info);
         let items = parse_library("voyageai", Some(0), Some(5)).await;
+        let _ = fs::remove_dir_all(TABLE_NAME);
+        let _ = fs::remove_dir_all(format!("zqa/{}", TABLE_NAME));
+        let _ = fs::remove_dir_all(format!("rag/{}", TABLE_NAME));
 
         assert!(items.is_ok());
 
