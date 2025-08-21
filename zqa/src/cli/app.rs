@@ -80,7 +80,7 @@ async fn embed<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Result<(), CLIErr
     let embedding_provider = ctx.args.embedding.as_str();
     let db = create_initial_table(
         batch_iter,
-        &["library_key"],
+        Some(&["library_key"]),
         EmbeddingDefinition::new(
             "pdf_text", // source column
             embedding_provider,
@@ -164,7 +164,7 @@ async fn process<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Result<(), CLIE
     let embedding_provider = ctx.args.embedding.as_str();
     let result = create_initial_table(
         batch_iter,
-        &["library_key"],
+        Some(&["library_key"]),
         EmbeddingDefinition::new(
             "pdf_text", // source column
             embedding_provider,
@@ -548,7 +548,6 @@ mod tests {
     use crate::cli::app::{BATCH_ITER_FILE, embed, search_for_papers, stats};
     use arrow_array::{RecordBatch, StringArray};
     use arrow_ipc::writer::FileWriter;
-    use rag::vector::lance::TABLE_NAME;
     use serial_test::serial;
     use std::fs::{self, File};
     use std::io::Cursor;
