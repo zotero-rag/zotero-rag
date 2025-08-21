@@ -546,9 +546,9 @@ pub async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<(), CLIEr
 #[cfg(test)]
 mod tests {
     use crate::cli::app::{BATCH_ITER_FILE, embed, search_for_papers, stats};
-    use rag::vector::lance::DB_URI;
     use arrow_array::{RecordBatch, StringArray};
     use arrow_ipc::writer::FileWriter;
+    use rag::vector::lance::DB_URI;
     use serial_test::serial;
     use std::fs::{self, File};
     use std::io::Cursor;
@@ -580,11 +580,11 @@ mod tests {
     #[serial]
     async fn test_embed() {
         dotenv::dotenv().ok();
-        
+
         // Clean up any existing data directories
         let _ = std::fs::remove_dir_all(format!("rag/{}", DB_URI));
         let _ = std::fs::remove_dir_all(DB_URI);
-        
+
         let mut ctx = create_test_context();
 
         // Create `RecordBatch` object to write out
@@ -624,11 +624,11 @@ mod tests {
     #[serial]
     async fn test_process() {
         dotenv::dotenv().ok();
-        
+
         // Clean up any existing data directories
         let _ = std::fs::remove_dir_all(format!("rag/{}", DB_URI));
         let _ = std::fs::remove_dir_all(DB_URI);
-        
+
         let mut ctx = create_test_context();
 
         let result = temp_env::async_with_vars([("CI", Some("true"))], process(&mut ctx)).await;
