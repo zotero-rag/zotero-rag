@@ -84,7 +84,7 @@ pub fn compute_openai_embeddings_sync(
 /// # Arguments:
 ///
 /// * `embedding_name` - Embedding provider name. Must be one of "openai", "anthropic", or
-/// "voyageai".
+///   "voyageai".
 pub fn get_embedding_dims_by_provider(embedding_name: &str) -> u32 {
     match embedding_name {
         "openai" => OPENAI_EMBEDDING_DIM,

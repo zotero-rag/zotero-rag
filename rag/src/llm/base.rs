@@ -34,7 +34,7 @@ pub trait ApiClient {
 pub enum ModelProviders {
     OpenAI,
     Anthropic,
-    OpenRouter
+    OpenRouter,
 }
 
 impl ModelProviders {
