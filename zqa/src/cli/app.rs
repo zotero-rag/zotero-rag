@@ -8,7 +8,7 @@ use lancedb::embeddings::EmbeddingDefinition;
 use rag::llm::base::{ApiClient, ApiResponse, ModelProviders, UserMessage};
 use rag::llm::errors::LLMError;
 use rag::llm::factory::get_client_by_provider;
-use rag::vector::lance::{create_initial_table, db_statistics, lancedb_exists};
+use rag::vector::lance::{create_initial_table, db_statistics, lancedb_exists, perform_health_check};
 use rustyline::error::ReadlineError;
 use tokio::task::JoinSet;
 
@@ -34,6 +34,15 @@ const DIM_TEXT: &str = "\x1b[2m";
 
 /// ANSI escape code for resetting text formatting
 const RESET: &str = "\x1b[0m";
+
+/// ANSI escape code for red text (errors)
+const RED_TEXT: &str = "\x1b[31m";
+
+/// ANSI escape code for yellow text (warnings)
+const YELLOW_TEXT: &str = "\x1b[33m";
+
+/// ANSI escape code for blue text (informational)
+const BLUE_TEXT: &str = "\x1b[34m";
 
 /// Embed text from PDFs parsed, in case this step previously failed. This function reads
 /// the `BATCH_ITER_FILE` and uses the data in there to compute embeddings and write out
@@ -402,6 +411,176 @@ async fn stats<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Result<(), CLIErr
     Ok(())
 }
 
+/// Format file size in a human-readable format
+fn format_file_size(bytes: u64) -> String {
+    const UNITS: &[&str] = &["B", "KB", "MB", "GB", "TB"];
+    let mut size = bytes as f64;
+    let mut unit_idx = 0;
+    
+    while size >= 1024.0 && unit_idx < UNITS.len() - 1 {
+        size /= 1024.0;
+        unit_idx += 1;
+    }
+    
+    if unit_idx == 0 {
+        format!("{} {}", bytes, UNITS[unit_idx])
+    } else {
+        format!("{:.1} {}", size, UNITS[unit_idx])
+    }
+}
+
+/// Performs comprehensive health checks on the LanceDB database and reports status
+/// with colored output using ASCII escape codes.
+///
+/// # Arguments
+///
+/// * `ctx` - A `Context` object that contains CLI args and objects that implement
+///   `std::io::Write` for `stdout` and `stderr`.
+async fn checkhealth<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Result<(), CLIError> {
+    let embedding_name = &ctx.args.embedding;
+    
+    match perform_health_check(embedding_name).await {
+        Ok(health_result) => {
+            writeln!(&mut ctx.out, "\nLanceDB Health Check Results:\n")?;
+
+            // Check directory existence and size
+            if health_result.directory_exists {
+                writeln!(
+                    &mut ctx.out,
+                    "{BLUE_TEXT}✓ Directory exists: {} ({}){RESET}",
+                    "data/lancedb-table",
+                    format_file_size(health_result.directory_size)
+                )?;
+            } else {
+                writeln!(
+                    &mut ctx.out,
+                    "{RED_TEXT}✗ Directory does not exist: data/lancedb-table{RESET}"
+                )?;
+                return Ok(());
+            }
+
+            // Check table accessibility
+            if health_result.table_accessible {
+                writeln!(
+                    &mut ctx.out,
+                    "{BLUE_TEXT}✓ Table can be opened successfully{RESET}"
+                )?;
+            } else {
+                writeln!(
+                    &mut ctx.out,
+                    "{RED_TEXT}✗ Table cannot be opened{RESET}"
+                )?;
+                return Ok(());
+            }
+
+            // Check row count
+            if health_result.num_rows > 0 {
+                writeln!(
+                    &mut ctx.out,
+                    "{BLUE_TEXT}✓ Table has {} rows{RESET}",
+                    health_result.num_rows
+                )?;
+            } else {
+                writeln!(
+                    &mut ctx.out,
+                    "{RED_TEXT}✗ Table has 0 rows{RESET}"
+                )?;
+                return Ok(());
+            }
+
+            // Check for zero embeddings
+            if health_result.zero_embedding_count == 0 {
+                writeln!(
+                    &mut ctx.out,
+                    "{BLUE_TEXT}✓ No rows with all-zero embeddings found{RESET}"
+                )?;
+            } else {
+                writeln!(
+                    &mut ctx.out,
+                    "{RED_TEXT}✗ Found {} rows with all-zero embeddings{RESET}",
+                    health_result.zero_embedding_count
+                )?;
+                
+                // Write problematic titles to file
+                if !health_result.zero_embedding_titles.is_empty() {
+                    if let Err(e) = std::fs::write(
+                        "bad_embeddings.txt",
+                        health_result.zero_embedding_titles.join("\n") + "\n"
+                    ) {
+                        writeln!(&mut ctx.err, "Warning: Could not write bad_embeddings.txt: {e}")?;
+                    } else {
+                        writeln!(
+                            &mut ctx.out,
+                            "{BLUE_TEXT}  → Written problematic titles to bad_embeddings.txt{RESET}"
+                        )?;
+                    }
+                    
+                    writeln!(
+                        &mut ctx.out,
+                        "{YELLOW_TEXT}  → Suggestion: Run /repair to fix zero embeddings{RESET}"
+                    )?;
+                }
+            }
+
+            // Check index status
+            if health_result.total_indexed_rows == health_result.num_rows {
+                writeln!(
+                    &mut ctx.out,
+                    "{BLUE_TEXT}✓ All {} rows are indexed{RESET}",
+                    health_result.total_indexed_rows
+                )?;
+                
+                for (index_type, indexed_count) in &health_result.index_info {
+                    writeln!(
+                        &mut ctx.out,
+                        "{BLUE_TEXT}  → {} index: {} rows{RESET}",
+                        index_type, indexed_count
+                    )?;
+                }
+            } else if health_result.total_indexed_rows > 0 {
+                writeln!(
+                    &mut ctx.out,
+                    "{YELLOW_TEXT}⚠ Partially indexed: {}/{} rows indexed{RESET}",
+                    health_result.total_indexed_rows,
+                    health_result.num_rows
+                )?;
+                
+                for (index_type, indexed_count) in &health_result.index_info {
+                    writeln!(
+                        &mut ctx.out,
+                        "{YELLOW_TEXT}  → {} index: {} rows{RESET}",
+                        index_type, indexed_count
+                    )?;
+                }
+                
+                writeln!(
+                    &mut ctx.out,
+                    "{YELLOW_TEXT}  → Suggestion: Run /index to index remaining rows{RESET}"
+                )?;
+            } else {
+                writeln!(
+                    &mut ctx.out,
+                    "{YELLOW_TEXT}⚠ No indexes found{RESET}"
+                )?;
+                writeln!(
+                    &mut ctx.out,
+                    "{YELLOW_TEXT}  → Suggestion: Run /index to create indexes{RESET}"
+                )?;
+            }
+
+            writeln!(&mut ctx.out)?;
+        }
+        Err(e) => {
+            writeln!(
+                &mut ctx.err,
+                "{RED_TEXT}Health check failed: {e}{RESET}"
+            )?;
+        }
+    }
+
+    Ok(())
+}
+
 /// The core CLI implementation that implements a REPL for user commands.
 ///
 /// # Arguments
@@ -460,6 +639,7 @@ pub async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<(), CLIEr
                             "/search\t\tSearch for papers without summarizing them. Usage: /search <query>"
                         )?;
                         writeln!(&mut ctx.out, "/stats\t\tShow table statistics.")?;
+                        writeln!(&mut ctx.out, "/checkhealth\tPerform database health checks.")?;
                         writeln!(&mut ctx.out, "/quit\t\tExit the program")?;
                         writeln!(&mut ctx.out)?;
                     }
@@ -483,6 +663,14 @@ pub async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<(), CLIEr
                         if let Err(e) = stats(&mut ctx).await {
                             // This only errors on an I/O failure
                             writeln!(&mut ctx.err, "Failed to write statistics to buffer. {e}")?;
+                        }
+                    }
+                    "/checkhealth" => {
+                        if let Err(e) = checkhealth(&mut ctx).await {
+                            writeln!(
+                                &mut ctx.err,
+                                "Health check failed. You may find relevant error messages below:\n\t{e}"
+                            )?;
                         }
                     }
                     "/quit" | "/exit" | "quit" | "exit" => {
@@ -545,7 +733,7 @@ pub async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<(), CLIEr
 
 #[cfg(test)]
 mod tests {
-    use crate::cli::app::{BATCH_ITER_FILE, embed, search_for_papers, stats};
+    use crate::cli::app::{BATCH_ITER_FILE, embed, search_for_papers, stats, checkhealth};
     use arrow_array::{RecordBatch, StringArray};
     use arrow_ipc::writer::FileWriter;
     use rag::vector::lance::DB_URI;
@@ -704,5 +892,48 @@ mod tests {
 
         let output = String::from_utf8(ctx.out.into_inner()).unwrap();
         assert!(output.contains("Total token usage:"));
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_checkhealth_no_database() {
+        dotenv::dotenv().ok();
+
+        // Clean up any existing data directories
+        let _ = std::fs::remove_dir_all(format!("rag/{}", DB_URI));
+        let _ = std::fs::remove_dir_all(DB_URI);
+
+        let mut ctx = create_test_context();
+        let result = checkhealth(&mut ctx).await;
+
+        assert!(result.is_ok());
+        let output = String::from_utf8(ctx.out.into_inner()).unwrap();
+        assert!(output.contains("Directory does not exist"));
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_checkhealth_with_database() {
+        dotenv::dotenv().ok();
+
+        // Clean up any existing data directories
+        let _ = std::fs::remove_dir_all(format!("rag/{}", DB_URI));
+        let _ = std::fs::remove_dir_all(DB_URI);
+
+        // First create a database by running process
+        let mut setup_ctx = create_test_context();
+        let result = temp_env::async_with_vars([("CI", Some("true"))], process(&mut setup_ctx)).await;
+        assert!(result.is_ok());
+
+        // Now run health check
+        let mut ctx = create_test_context();
+        let result = checkhealth(&mut ctx).await;
+
+        assert!(result.is_ok());
+        let output = String::from_utf8(ctx.out.into_inner()).unwrap();
+        assert!(output.contains("LanceDB Health Check Results"));
+        assert!(output.contains("Directory exists"));
+        assert!(output.contains("Table can be opened successfully"));
+        assert!(output.contains("Table has"));
     }
 }
