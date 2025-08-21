@@ -46,7 +46,7 @@ pub fn setup_logger(log_level: LevelFilter) -> Result<(), log::SetLoggerError> {
         .format(|out, message, record| {
             out.finish(format_args!(
                 "[{} {} {}] {}",
-                humantime::format_rfc3339(std::time::SystemTime::now()),
+                humantime::format_rfc3339_millis(std::time::SystemTime::now()),
                 record.level(),
                 record.target(),
                 message

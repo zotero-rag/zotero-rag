@@ -73,10 +73,19 @@ impl Display for TableStatistics {
     }
 }
 
-/// Checks if an existing LanceDB exists
-#[inline]
-pub fn lancedb_exists() -> bool {
-    PathBuf::from(DB_URI).exists()
+/// Checks if an existing LanceDB exists and has a valid table
+pub async fn lancedb_exists() -> bool {
+    if !PathBuf::from(DB_URI).exists() {
+        return false;
+    }
+
+    // Check if we can actually connect and open the table
+    let db_result = connect(DB_URI).execute().await;
+    if let Ok(db) = db_result {
+        db.open_table(TABLE_NAME).execute().await.is_ok()
+    } else {
+        false
+    }
 }
 
 /// Connects to the database and prints out simple statistics.
@@ -259,7 +268,7 @@ pub async fn create_initial_table(
 ) -> Result<Connection, LanceError> {
     let db = get_db_with_embeddings(&embedding_params.embedding_name).await?;
 
-    if lancedb_exists() && merge_on.is_some() {
+    if lancedb_exists().await && merge_on.is_some() {
         // Add rows if they don't already exist
         let tbl = db
             .open_table(TABLE_NAME)

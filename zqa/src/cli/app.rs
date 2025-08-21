@@ -117,7 +117,7 @@ async fn process<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Result<(), CLIE
 
     let embedding_name = ctx.args.embedding.clone();
 
-    let item_metadata = match lancedb_exists() {
+    let item_metadata = match lancedb_exists().await {
         true => get_new_library_items(&embedding_name).await,
         false => parse_library_metadata(None, None),
     };
@@ -546,6 +546,7 @@ pub async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<(), CLIEr
 #[cfg(test)]
 mod tests {
     use crate::cli::app::{BATCH_ITER_FILE, embed, search_for_papers, stats};
+    use rag::vector::lance::DB_URI;
     use arrow_array::{RecordBatch, StringArray};
     use arrow_ipc::writer::FileWriter;
     use serial_test::serial;
@@ -579,6 +580,11 @@ mod tests {
     #[serial]
     async fn test_embed() {
         dotenv::dotenv().ok();
+        
+        // Clean up any existing data directories
+        let _ = std::fs::remove_dir_all(format!("rag/{}", DB_URI));
+        let _ = std::fs::remove_dir_all(DB_URI);
+        
         let mut ctx = create_test_context();
 
         // Create `RecordBatch` object to write out
@@ -618,6 +624,11 @@ mod tests {
     #[serial]
     async fn test_process() {
         dotenv::dotenv().ok();
+        
+        // Clean up any existing data directories
+        let _ = std::fs::remove_dir_all(format!("rag/{}", DB_URI));
+        let _ = std::fs::remove_dir_all(DB_URI);
+        
         let mut ctx = create_test_context();
 
         let result = temp_env::async_with_vars([("CI", Some("true"))], process(&mut ctx)).await;
@@ -646,7 +657,9 @@ mod tests {
         let mut setup_ctx = create_test_context();
 
         // `process` needs to be run before `search_for_papers`
-        let _ = temp_env::async_with_vars([("CI", Some("true"))], process(&mut setup_ctx)).await;
+        let result =
+            temp_env::async_with_vars([("CI", Some("true"))], process(&mut setup_ctx)).await;
+        assert!(result.is_ok());
 
         let mut ctx = create_test_context();
         let result = temp_env::async_with_vars(
@@ -657,6 +670,10 @@ mod tests {
             ),
         )
         .await;
+
+        if let Err(e) = &result {
+            dbg!(e);
+        }
 
         assert!(result.is_ok());
 

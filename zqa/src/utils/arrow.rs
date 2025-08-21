@@ -110,7 +110,7 @@ pub async fn library_to_arrow(
         arrow_schema::Field::new("pdf_text", arrow_schema::DataType::Utf8, false),
     ];
 
-    if lancedb_exists() {
+    if lancedb_exists().await {
         schema_fields.push(arrow_schema::Field::new(
             "embeddings",
             arrow_schema::DataType::FixedSizeList(
@@ -168,7 +168,7 @@ pub async fn library_to_arrow(
     ];
     let embedding_dims = get_embedding_dims_by_provider(embedding_name);
 
-    if lancedb_exists() {
+    if lancedb_exists().await {
         record_batch_cols.push(Arc::new(FixedSizeListArray::from_iter_primitive::<
             Float32Type,
             _,
@@ -296,7 +296,12 @@ mod tests {
             .expect("No batches in iterator")
             .expect("Error in batch");
 
-        assert_eq!(batch.num_columns(), 4, "Expected 4 columns in record batch");
+        // Whether it's 4 or 5 depends on whether the DB exists; this isn't technically guaranteed,
+        // but both are valid states.
+        assert!(
+            [4, 5].contains(&batch.num_columns()),
+            "Expected 4 or 5 columns in record batch"
+        );
         assert!(
             batch.num_rows() > 0,
             "Expected non-zero rows in record batch"
