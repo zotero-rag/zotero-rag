@@ -2,9 +2,8 @@ use std::io::{stderr, stdout};
 
 use clap::Parser;
 use dotenv::dotenv;
-use ftail::Ftail;
 use zqa::cli::app::cli;
-use zqa::common::{Args, Context};
+use zqa::common::{Args, Context, setup_logger};
 use zqa::ui::app::App;
 
 #[tokio::main]
@@ -21,8 +20,14 @@ pub async fn main() {
             "error" => log::LevelFilter::Error,
             _ => log::LevelFilter::Off,
         };
-        Ftail::new().console(log_level).init().unwrap();
+        setup_logger(log_level).expect("Failed to set up logger.");
     }
+
+    log::debug!(
+        "You are running {} version {}.",
+        env!("CARGO_CRATE_NAME"),
+        env!("CARGO_PKG_VERSION")
+    );
 
     if args.tui {
         let mut terminal = ratatui::init();

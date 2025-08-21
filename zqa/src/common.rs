@@ -1,4 +1,7 @@
 use clap::Parser;
+use fern;
+use humantime;
+use log::LevelFilter;
 use std::io::Write;
 
 #[derive(Parser, Clone, Debug)]
@@ -34,4 +37,23 @@ pub struct Context<OutStream: Write, ErrStream: Write> {
     pub out: OutStream,
     // Abstraction for stderr()
     pub err: ErrStream,
+}
+
+pub fn setup_logger(log_level: LevelFilter) -> Result<(), log::SetLoggerError> {
+    // Set up logging via fern
+    fern::Dispatch::new()
+        // Perform allocation-free log formatting
+        .format(|out, message, record| {
+            out.finish(format_args!(
+                "[{} {} {}] {}",
+                humantime::format_rfc3339(std::time::SystemTime::now()),
+                record.level(),
+                record.target(),
+                message
+            ))
+        })
+        .level(log_level)
+        .level_for("rustyline", log::LevelFilter::Off)
+        .chain(std::io::stdout())
+        .apply()
 }

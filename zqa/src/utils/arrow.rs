@@ -267,15 +267,16 @@ pub async fn vector_search(
 
 #[cfg(test)]
 mod tests {
+    use crate::common::setup_logger;
+
     use super::*;
     use arrow_array::RecordBatchIterator;
     use dotenv::dotenv;
-    use ftail::Ftail;
 
     #[tokio::test]
     async fn test_library_to_arrow_works() {
         dotenv().ok();
-        let _ = Ftail::new().console(log::LevelFilter::Info).init();
+        let _ = setup_logger(log::LevelFilter::Info);
 
         let record_batch = library_to_arrow("voyageai", Some(0), Some(5)).await;
         assert!(

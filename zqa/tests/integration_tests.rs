@@ -1,7 +1,8 @@
 use arrow_array::RecordBatchIterator;
 use dotenv::dotenv;
-use ftail::Ftail;
 use lancedb::embeddings::EmbeddingDefinition;
+use log::LevelFilter;
+use zqa::common::setup_logger;
 
 use std::env;
 
@@ -12,8 +13,7 @@ use zqa::library_to_arrow;
 #[tokio::test]
 async fn test_integration_works() {
     dotenv().ok();
-
-    Ftail::new().console(log::LevelFilter::Info).init().unwrap();
+    setup_logger(LevelFilter::Info).unwrap();
 
     if env::var("CI").is_ok() {
         // Skip this test in CI environments

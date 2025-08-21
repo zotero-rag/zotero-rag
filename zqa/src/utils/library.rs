@@ -386,9 +386,10 @@ pub async fn parse_library(
 
 #[cfg(test)]
 mod tests {
+    use crate::common::setup_logger;
+
     use super::*;
     use dotenv::dotenv;
-    use ftail::Ftail;
 
     #[test]
     fn test_library_fetching_works() {
@@ -436,7 +437,7 @@ mod tests {
     #[tokio::test]
     async fn test_parse_library() {
         dotenv().ok();
-        let _ = Ftail::new().console(log::LevelFilter::Info).init();
+        let _ = setup_logger(log::LevelFilter::Info);
         let items = parse_library("voyageai", Some(0), Some(5)).await;
 
         assert!(items.is_ok());

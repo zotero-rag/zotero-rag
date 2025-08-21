@@ -2367,6 +2367,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "fern"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4316185f709b23713e41e3195f90edef7fb00c3ed4adc79769cf09cc762a3b29"
+dependencies = [
+ "log",
+]
+
+[[package]]
 name = "fixedbitset"
 version = "0.5.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2461,16 +2470,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7ab85b9b05e3978cc9a9cf8fea7f01b494e1a09ed3037e16ba39edc7a29eb61a"
 dependencies = [
  "utf8-ranges",
-]
-
-[[package]]
-name = "ftail"
-version = "0.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fdfb03d554599f140807fcf79f0363cfa7024a328e3030da47145b4350a130b0"
-dependencies = [
- "chrono",
- "log",
 ]
 
 [[package]]
@@ -7154,7 +7153,8 @@ dependencies = [
  "crossterm 0.29.0",
  "directories",
  "dotenv",
- "ftail",
+ "fern",
+ "humantime",
  "indicatif 0.17.11",
  "lancedb",
  "libsqlite3-sys",
