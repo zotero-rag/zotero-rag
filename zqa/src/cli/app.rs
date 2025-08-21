@@ -327,6 +327,13 @@ async fn run_query<O: Write, E: Write>(
             acc
         });
 
+    let search_results = ok_contents
+        .iter()
+        .map(|res| format!("<search_result>{res}</search_result>"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    log::debug!("Search results:\n{search_results}\n");
+
     let client = get_client_by_provider(&model_provider).unwrap();
     let message = UserMessage {
         chat_history: Vec::new(),
@@ -416,7 +423,6 @@ pub async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<(), CLIEr
         )?;
 
     if rl.load_history(&history_path).is_err() {
-        // TODO: Synchronize `log` and the `Context` out/err streams
         log::debug!("No previous history.");
     }
 
@@ -607,9 +613,6 @@ mod tests {
         if fs::metadata(BATCH_ITER_FILE).is_ok() {
             fs::remove_file(BATCH_ITER_FILE).expect("Failed to clean up BATCH_ITER_FILE");
         }
-        if fs::metadata(TABLE_NAME).is_ok() {
-            fs::remove_dir_all(TABLE_NAME).expect("Failed to clean up test database");
-        }
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -634,11 +637,6 @@ mod tests {
         // Cleanup
         if fs::metadata(BATCH_ITER_FILE).is_ok() {
             fs::remove_file(BATCH_ITER_FILE).expect("Failed to clean up BATCH_ITER_FILE");
-        }
-
-        // `TABLE_NAME` is also used as the DB directory
-        if fs::metadata(TABLE_NAME).is_ok() {
-            fs::remove_dir_all(TABLE_NAME).expect("Failed to clean up test database");
         }
     }
 
