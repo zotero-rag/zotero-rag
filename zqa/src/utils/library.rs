@@ -223,7 +223,7 @@ pub async fn parse_library(
 ) -> Result<Vec<ZoteroItem>, LibraryParsingError> {
     let start_time = Instant::now();
 
-    let metadata = match lancedb_exists() {
+    let metadata = match lancedb_exists().await {
         true => get_new_library_items(embedding_name).await?,
         false => parse_library_metadata(start_from, limit)?,
     };
@@ -446,6 +446,6 @@ mod tests {
         // expect those to fail.
         let items = items.unwrap();
         assert!(!items.is_empty());
-        assert!(items.len() <= 5);
+        assert!((0..=5).contains(&items.len()));
     }
 }
