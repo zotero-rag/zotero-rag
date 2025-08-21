@@ -8,7 +8,7 @@ use lancedb::embeddings::EmbeddingDefinition;
 use rag::llm::base::{ApiClient, ApiResponse, ModelProviders, UserMessage};
 use rag::llm::errors::LLMError;
 use rag::llm::factory::get_client_by_provider;
-use rag::vector::lance::{create_initial_table, db_statistics, lancedb_exists};
+use rag::vector::lance::{create_initial_table, db_statistics, lancedb_exists, lancedb_health_check};
 use rustyline::error::ReadlineError;
 use tokio::task::JoinSet;
 
@@ -402,6 +402,29 @@ async fn stats<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Result<(), CLIErr
     Ok(())
 }
 
+/// Performs a comprehensive health check on the LanceDB database and reports issues.
+///
+/// # Arguments
+///
+/// * `ctx` - A `Context` object that contains CLI args and objects that implement
+///   `std::io::Write` for `stdout` and `stderr`.
+async fn check<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Result<(), CLIError> {
+    match lancedb_health_check().await {
+        Ok(result) => {
+            if result.has_errors {
+                writeln!(&mut ctx.err, "Health check completed with errors")?;
+            } else if result.has_warnings {
+                writeln!(&mut ctx.out, "Health check completed with warnings")?;
+            } else {
+                writeln!(&mut ctx.out, "Health check completed successfully")?;
+            }
+        }
+        Err(e) => writeln!(&mut ctx.err, "Health check failed: {e}")?,
+    }
+
+    Ok(())
+}
+
 /// The core CLI implementation that implements a REPL for user commands.
 ///
 /// # Arguments
@@ -460,6 +483,7 @@ pub async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<(), CLIEr
                             "/search\t\tSearch for papers without summarizing them. Usage: /search <query>"
                         )?;
                         writeln!(&mut ctx.out, "/stats\t\tShow table statistics.")?;
+                        writeln!(&mut ctx.out, "/check\t\tPerform health check on the database.")?;
                         writeln!(&mut ctx.out, "/quit\t\tExit the program")?;
                         writeln!(&mut ctx.out)?;
                     }
@@ -483,6 +507,12 @@ pub async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<(), CLIEr
                         if let Err(e) = stats(&mut ctx).await {
                             // This only errors on an I/O failure
                             writeln!(&mut ctx.err, "Failed to write statistics to buffer. {e}")?;
+                        }
+                    }
+                    "/check" => {
+                        if let Err(e) = check(&mut ctx).await {
+                            // This only errors on an I/O failure
+                            writeln!(&mut ctx.err, "Failed to perform health check. {e}")?;
                         }
                     }
                     "/quit" | "/exit" | "quit" | "exit" => {
@@ -545,7 +575,7 @@ pub async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<(), CLIEr
 
 #[cfg(test)]
 mod tests {
-    use crate::cli::app::{BATCH_ITER_FILE, embed, search_for_papers, stats};
+    use crate::cli::app::{BATCH_ITER_FILE, embed, search_for_papers, stats, check};
     use arrow_array::{RecordBatch, StringArray};
     use arrow_ipc::writer::FileWriter;
     use rag::vector::lance::DB_URI;
@@ -704,5 +734,24 @@ mod tests {
 
         let output = String::from_utf8(ctx.out.into_inner()).unwrap();
         assert!(output.contains("Total token usage:"));
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_check_command() {
+        dotenv::dotenv().ok();
+        
+        // Clean up any existing data directories
+        let _ = std::fs::remove_dir_all(format!("rag/{}", DB_URI));
+        let _ = std::fs::remove_dir_all(DB_URI);
+
+        let mut ctx = create_test_context();
+        
+        // Check with no database should report errors
+        let result = check(&mut ctx).await;
+        assert!(result.is_ok());
+        
+        let err_output = String::from_utf8(ctx.err.into_inner()).unwrap();
+        assert!(err_output.contains("Health check completed with errors"));
     }
 }

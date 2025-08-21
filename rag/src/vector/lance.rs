@@ -13,7 +13,7 @@ use lancedb::{
     database::CreateTableMode, embeddings::EmbeddingDefinition, query::ExecutableQuery,
     query::QueryBase,
 };
-use std::{error::Error, fmt::Display, path::PathBuf, sync::Arc, vec::IntoIter};
+use std::{error::Error, fmt::Display, fs, io::Write, path::PathBuf, sync::Arc, vec::IntoIter};
 
 // Maintainers: ensure that `DB_URI` begins with `TABLE_NAME`
 pub const DB_URI: &str = "data/lancedb-table";
@@ -110,6 +110,255 @@ pub async fn db_statistics() -> Result<TableStatistics, LanceError> {
         table_version,
         num_rows,
     })
+}
+
+/// ANSI color codes for console output
+const RED: &str = "\x1b[31m";
+const YELLOW: &str = "\x1b[33m"; 
+const BLUE: &str = "\x1b[34m";
+const RESET: &str = "\x1b[0m";
+
+/// Health check result structure
+pub struct HealthCheckResult {
+    pub has_errors: bool,
+    pub has_warnings: bool,
+}
+
+/// Performs a comprehensive health check on the LanceDB database
+/// 
+/// This function checks for:
+/// - Directory existence and reports size
+/// - Table accessibility
+/// - Row count (errors if zero rows)
+/// - All-zero embeddings (errors if found, writes titles to bad_embeddings.txt)
+/// - Index information (warns if missing or incomplete)
+///
+/// # Returns
+/// 
+/// A `Result<HealthCheckResult, LanceError>` indicating success and whether issues were found
+pub async fn lancedb_health_check() -> Result<HealthCheckResult, LanceError> {
+    let mut has_errors = false;
+    let mut has_warnings = false;
+    
+    eprintln!("{}[INFO]{} Starting LanceDB health check...", BLUE, RESET);
+    
+    // Check 1: Directory existence and size
+    let db_path = PathBuf::from(DB_URI);
+    if !db_path.exists() {
+        eprintln!("{}[ERROR]{} Database directory does not exist: {}", RED, RESET, DB_URI);
+        has_errors = true;
+        return Ok(HealthCheckResult { has_errors, has_warnings });
+    }
+    
+    // Calculate directory size
+    let dir_size = calculate_directory_size(&db_path)?;
+    eprintln!("{}[INFO]{} Database directory exists: {} (size: {} bytes)", BLUE, RESET, DB_URI, dir_size);
+    
+    // Check 2: Table connectivity
+    let db = match connect(DB_URI).execute().await {
+        Ok(db) => {
+            eprintln!("{}[INFO]{} Successfully connected to database", BLUE, RESET);
+            db
+        }
+        Err(e) => {
+            eprintln!("{}[ERROR]{} Failed to connect to database: {}", RED, RESET, e);
+            has_errors = true;
+            return Ok(HealthCheckResult { has_errors, has_warnings });
+        }
+    };
+    
+    // Check 3: Table opening
+    let tbl = match db.open_table(TABLE_NAME).execute().await {
+        Ok(tbl) => {
+            eprintln!("{}[INFO]{} Successfully opened table '{}'", BLUE, RESET, TABLE_NAME);
+            tbl
+        }
+        Err(e) => {
+            eprintln!("{}[ERROR]{} Failed to open table '{}': {}", RED, RESET, TABLE_NAME, e);
+            has_errors = true;
+            return Ok(HealthCheckResult { has_errors, has_warnings });
+        }
+    };
+    
+    // Check 4: Row count
+    let row_count = match tbl.count_rows(None).await {
+        Ok(count) => {
+            if count == 0 {
+                eprintln!("{}[ERROR]{} Table has zero rows", RED, RESET);
+                has_errors = true;
+            } else {
+                eprintln!("{}[INFO]{} Table has {} rows", BLUE, RESET, count);
+            }
+            count
+        }
+        Err(e) => {
+            eprintln!("{}[ERROR]{} Failed to count table rows: {}", RED, RESET, e);
+            has_errors = true;
+            return Ok(HealthCheckResult { has_errors, has_warnings });
+        }
+    };
+    
+    // Check 5: All-zero embeddings (only if we have rows)
+    if row_count > 0 {
+        match check_zero_embeddings(&tbl).await {
+            Ok(zero_count) => {
+                if zero_count > 0 {
+                    eprintln!("{}[ERROR]{} Found {} rows with all-zero embeddings", RED, RESET, zero_count);
+                    eprintln!("{}[ERROR]{} Problematic titles written to 'bad_embeddings.txt'", RED, RESET);
+                    eprintln!("{}[ERROR]{} Consider running '/repair' to fix this issue", RED, RESET);
+                    has_errors = true;
+                } else {
+                    eprintln!("{}[INFO]{} All embeddings are non-zero", BLUE, RESET);
+                }
+            }
+            Err(e) => {
+                eprintln!("{}[ERROR]{} Failed to check embeddings: {}", RED, RESET, e);
+                has_errors = true;
+            }
+        }
+    }
+    
+    // Check 6: Index information
+    match check_indexes(&tbl, row_count).await {
+        Ok(index_warning) => {
+            if index_warning {
+                has_warnings = true;
+            }
+        }
+        Err(e) => {
+            eprintln!("{}[WARNING]{} Failed to check indexes: {}", YELLOW, RESET, e);
+            has_warnings = true;
+        }
+    }
+    
+    // Summary
+    eprintln!("{}[INFO]{} Health check complete", BLUE, RESET);
+    if has_errors {
+        eprintln!("{}[ERROR]{} Issues found that require attention", RED, RESET);
+    } else if has_warnings {
+        eprintln!("{}[WARNING]{} Minor issues found", YELLOW, RESET);
+    } else {
+        eprintln!("{}[INFO]{} Database is healthy", BLUE, RESET);
+    }
+    
+    Ok(HealthCheckResult { has_errors, has_warnings })
+}
+
+/// Calculate the total size of a directory recursively
+fn calculate_directory_size(dir_path: &PathBuf) -> Result<u64, LanceError> {
+    let mut total_size = 0;
+    
+    fn visit_dir(dir: &PathBuf, total: &mut u64) -> Result<(), std::io::Error> {
+        if dir.is_dir() {
+            for entry in fs::read_dir(dir)? {
+                let entry = entry?;
+                let path = entry.path();
+                if path.is_dir() {
+                    visit_dir(&path, total)?;
+                } else {
+                    *total += entry.metadata()?.len();
+                }
+            }
+        }
+        Ok(())
+    }
+    
+    visit_dir(dir_path, &mut total_size)
+        .map_err(|e| LanceError::Other(format!("Failed to calculate directory size: {}", e)))?;
+    
+    Ok(total_size)
+}
+
+/// Check for rows with all-zero embeddings and write problematic titles to file
+async fn check_zero_embeddings(tbl: &lancedb::table::Table) -> Result<usize, LanceError> {
+    // Query all rows with embeddings and title columns
+    let batches: Vec<RecordBatch> = tbl
+        .query()
+        .select(lancedb::query::Select::Columns(vec!["title".to_string(), "embeddings".to_string()]))
+        .limit(tbl.count_rows(None).await?)
+        .execute()
+        .await?
+        .try_collect()
+        .await?;
+    
+    let mut zero_embedding_titles = Vec::new();
+    
+    for batch in batches {
+        let schema = batch.schema();
+        let title_idx = schema.index_of("title")
+            .map_err(|_| LanceError::InvalidStateError("Title column not found".to_string()))?;
+        let embedding_idx = schema.index_of("embeddings")
+            .map_err(|_| LanceError::InvalidStateError("Embeddings column not found".to_string()))?;
+        
+        let titles = batch.column(title_idx).as_string::<i32>();
+        let embeddings = batch.column(embedding_idx).as_fixed_size_list();
+        
+        for i in 0..batch.num_rows() {
+            let title = titles.value(i);
+            let embedding_list = embeddings.value(i);
+            let float_array = embedding_list.as_primitive::<Float32Type>();
+            
+            // Check if all values in the embedding are zero
+            let all_zeros = float_array.iter().all(|v| v.unwrap_or(0.0) == 0.0);
+            
+            if all_zeros {
+                zero_embedding_titles.push(title.to_string());
+            }
+        }
+    }
+    
+    let zero_count = zero_embedding_titles.len();
+    
+    // Write problematic titles to file if any found
+    if zero_count > 0 {
+        let mut file = fs::File::create("bad_embeddings.txt")
+            .map_err(|e| LanceError::Other(format!("Failed to create bad_embeddings.txt: {}", e)))?;
+        
+        for title in &zero_embedding_titles {
+            writeln!(file, "{}", title)
+                .map_err(|e| LanceError::Other(format!("Failed to write to bad_embeddings.txt: {}", e)))?;
+        }
+    }
+    
+    Ok(zero_count)
+}
+
+/// Check index information and warn if missing or incomplete
+async fn check_indexes(tbl: &lancedb::table::Table, total_rows: usize) -> Result<bool, LanceError> {
+    let mut has_warnings = false;
+    
+    // Try to get index statistics
+    // Note: LanceDB's Rust API may not expose all index information directly,
+    // so we'll use what's available and make reasonable assumptions
+    
+    match tbl.list_indices().await {
+        Ok(indices) => {
+            if indices.is_empty() {
+                eprintln!("{}[WARNING]{} No indexes found on table", YELLOW, RESET);
+                eprintln!("{}[WARNING]{} Consider running '/index' to create indexes for better performance", YELLOW, RESET);
+                has_warnings = true;
+            } else {
+                for index in &indices {
+                    eprintln!("{}[INFO]{} Found index: {:?}", BLUE, RESET, index);
+                }
+                
+                // Basic heuristic: if we have a lot of rows but few indexes, suggest indexing
+                if total_rows > 1000 && indices.len() < 2 {
+                    eprintln!("{}[WARNING]{} Large table ({} rows) with few indexes ({} indexes)", 
+                             YELLOW, RESET, total_rows, indices.len());
+                    eprintln!("{}[WARNING]{} Consider running '/index' to improve query performance", 
+                             YELLOW, RESET);
+                    has_warnings = true;
+                }
+            }
+        }
+        Err(e) => {
+            eprintln!("{}[WARNING]{} Unable to check index information: {}", YELLOW, RESET, e);
+            has_warnings = true;
+        }
+    }
+    
+    Ok(has_warnings)
 }
 
 /// Connect to the Lance database and add the embedding `embedding_name` to the database's
@@ -485,5 +734,88 @@ mod tests {
         .await;
 
         assert!(db.is_err());
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_lancedb_health_check_no_directory() {
+        // Clean up any existing directory
+        let _ = std::fs::remove_dir_all(DB_URI);
+
+        let result = lancedb_health_check().await;
+        assert!(result.is_ok());
+        let health = result.unwrap();
+        assert!(health.has_errors);
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_lancedb_health_check_with_valid_db() {
+        dotenv().ok();
+        
+        // Clean up any existing data
+        let _ = std::fs::remove_dir_all(DB_URI);
+
+        // Create a test database first
+        let schema = arrow_schema::Schema::new(vec![
+            arrow_schema::Field::new("library_key", arrow_schema::DataType::Utf8, false),
+            arrow_schema::Field::new("title", arrow_schema::DataType::Utf8, false),
+            arrow_schema::Field::new("file_path", arrow_schema::DataType::Utf8, false),
+            arrow_schema::Field::new("pdf_text", arrow_schema::DataType::Utf8, false),
+        ]);
+        
+        let library_keys = StringArray::from(vec!["key1", "key2"]);
+        let titles = StringArray::from(vec!["Test Title 1", "Test Title 2"]);
+        let file_paths = StringArray::from(vec!["path1.pdf", "path2.pdf"]);
+        let pdf_texts = StringArray::from(vec!["Some text content", "More text content"]);
+        
+        let record_batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![
+                Arc::new(library_keys),
+                Arc::new(titles),
+                Arc::new(file_paths),
+                Arc::new(pdf_texts),
+            ],
+        ).unwrap();
+        
+        let batches = vec![Ok(record_batch.clone())];
+        let reader = RecordBatchIterator::new(batches.into_iter(), Arc::new(schema));
+
+        let db_result = create_initial_table(
+            reader,
+            None,
+            EmbeddingDefinition::new("pdf_text", "openai", Some("embeddings")),
+        ).await;
+
+        if db_result.is_ok() {
+            // Now run health check
+            let result = lancedb_health_check().await;
+            assert!(result.is_ok());
+            let health = result.unwrap();
+            // Should have no critical errors but might have warnings about indexes
+            assert!(!health.has_errors);
+        }
+        
+        // Clean up
+        let _ = std::fs::remove_dir_all(DB_URI);
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_calculate_directory_size() {
+        // Create a temporary directory with some files
+        let test_dir = PathBuf::from("test_dir_size");
+        let _ = std::fs::create_dir(&test_dir);
+        
+        // Create a test file
+        std::fs::write(test_dir.join("test.txt"), "Hello, World!").unwrap();
+        
+        let size = calculate_directory_size(&test_dir);
+        assert!(size.is_ok());
+        assert!(size.unwrap() > 0);
+        
+        // Clean up
+        let _ = std::fs::remove_dir_all(&test_dir);
     }
 }
