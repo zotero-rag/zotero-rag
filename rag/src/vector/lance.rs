@@ -242,6 +242,8 @@ pub async fn vector_search(
 /// # Arguments
 /// * `data`: An Arrow `RecordBatchIterator` containing data. See
 ///   https://docs.rs/lancedb/latest/lancedb/index.html for an example of creating this.
+/// * `merge_on`: `None` if you want to create or overwrite the current database; otherwise, a
+///   reference to an array of keys to merge on.
 /// * `embedding_params`: An `EmbeddingDefinition` object that contains the source column that has
 ///   the text data, the destination column name, and the embedding function to use.
 ///
@@ -252,17 +254,12 @@ pub async fn vector_search(
 /// Returns a `LanceError` if connection, table creation, or registering embedding functions fails
 pub async fn create_initial_table(
     data: RecordBatchIterator<IntoIter<Result<RecordBatch, ArrowError>>>,
-    merge_on: &[&str],
+    merge_on: Option<&[&str]>,
     embedding_params: EmbeddingDefinition,
 ) -> Result<Connection, LanceError> {
     let db = get_db_with_embeddings(&embedding_params.embedding_name).await?;
 
-    if db
-        .table_names()
-        .execute()
-        .await?
-        .contains(&String::from(TABLE_NAME))
-    {
+    if lancedb_exists() && merge_on.is_some() {
         // Add rows if they don't already exist
         let tbl = db
             .open_table(TABLE_NAME)
@@ -270,7 +267,7 @@ pub async fn create_initial_table(
             .await
             .map_err(|e| LanceError::TableUpdateError(e.to_string()))?;
 
-        tbl.merge_insert(merge_on)
+        tbl.merge_insert(merge_on.unwrap())
             .when_not_matched_insert_all()
             .clone()
             .execute(Box::new(data))
@@ -316,7 +313,7 @@ mod tests {
 
         let db = create_initial_table(
             reader,
-            &[],
+            None,
             EmbeddingDefinition::new(
                 "data_openai",      // source column
                 "openai",           // embedding name, either "openai" or "anthropic"
@@ -371,7 +368,7 @@ mod tests {
 
         let db = create_initial_table(
             reader,
-            &[],
+            None,
             EmbeddingDefinition::new("data_anthropic", "anthropic", Some("embeddings")),
         )
         .await;
@@ -422,7 +419,7 @@ mod tests {
 
         let db = create_initial_table(
             reader,
-            &[],
+            None,
             EmbeddingDefinition::new("data_voyage", "voyageai", Some("embeddings")),
         )
         .await;
@@ -473,7 +470,7 @@ mod tests {
 
         let db = create_initial_table(
             reader,
-            &[],
+            None,
             EmbeddingDefinition::new("data", "invalid", Some("embeddings")),
         )
         .await;
