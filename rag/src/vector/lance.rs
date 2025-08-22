@@ -24,6 +24,8 @@ pub const TABLE_NAME: &str = "data";
 pub enum LanceError {
     /// Error connecting to LanceDB
     ConnectionError(String),
+    /// Error running some query
+    QueryError(String),
     /// Error creating or updating a table in LanceDB
     TableUpdateError(String),
     /// Invalid params
@@ -38,6 +40,7 @@ impl fmt::Display for LanceError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::ConnectionError(msg) => write!(f, "LanceDB connection error: {msg}"),
+            Self::QueryError(msg) => write!(f, "Failed to execute query: {msg}"),
             Self::TableUpdateError(msg) => write!(f, "LanceDB table update error: {msg}"),
             Self::ParameterError(msg) => write!(f, "Invalid parameter: {msg}"),
             Self::InvalidStateError(msg) => write!(f, "The DB is in an invalid state: {msg}"),
