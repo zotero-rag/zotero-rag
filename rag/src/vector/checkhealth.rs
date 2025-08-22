@@ -7,10 +7,17 @@ use arrow_schema::Schema;
 use futures::TryStreamExt;
 use lancedb::query::{ExecutableQuery, QueryBase};
 use lancedb::{Table, connect};
+use std::fmt;
 use std::fs;
 use std::io;
 use std::path::PathBuf;
 use std::sync::Arc;
+
+/// ANSI color codes for console output
+const RED: &str = "\x1b[31m";
+const YELLOW: &str = "\x1b[33m";
+const BLUE: &str = "\x1b[34m";
+const RESET: &str = "\x1b[0m";
 
 /// Health check result for LanceDB
 #[derive(Debug)]
@@ -36,6 +43,169 @@ pub struct HealthCheckResult {
     /// `Some(Ok(index_info))` if we successfully got the index information, and `Some(Err(...))`
     /// when there was an error connecting to the DB or opening the table.
     pub index_info: Option<Result<Vec<(String, String)>, LanceError>>,
+}
+
+/// Format file size in a human-readable format
+///
+/// # Arguments:
+/// * `bytes` - Size in bytes
+///
+/// # Returns:
+/// A string with a human-readable file size.
+fn format_file_size(bytes: u64) -> String {
+    const UNITS: &[&str] = &["B", "KB", "MB", "GB", "TB"];
+    let mut size = bytes as f64;
+    let mut unit_idx = 0;
+
+    while size >= 1024.0 && unit_idx < UNITS.len() - 1 {
+        size /= 1024.0;
+        unit_idx += 1;
+    }
+
+    if unit_idx == 0 {
+        format!("{} {}", bytes, UNITS[unit_idx])
+    } else {
+        format!("{:.1} {}", size, UNITS[unit_idx])
+    }
+}
+
+impl fmt::Display for HealthCheckResult {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "LanceDB Health Check Results")?;
+        writeln!(f, "===============================")?;
+
+        // Check 1: Directory existence and size
+        if self.directory_exists {
+            writeln!(f, "{}✓ Database directory exists{}", BLUE, RESET)?;
+            match &self.directory_size {
+                Some(Ok(size)) => {
+                    writeln!(f, "\tSize: {}", format_file_size(*size))?;
+                }
+                Some(Err(e)) => {
+                    writeln!(
+                        f,
+                        "\t{}Error: Failed to calculate size: {}]{}",
+                        RED, e, RESET
+                    )?;
+                }
+                None => writeln!(f)?,
+            }
+        } else {
+            writeln!(f, "{}✗ Database directory does not exist{}", RED, RESET)?;
+            writeln!(
+                f,
+                "{}  → Subsequent checks will be skipped{}",
+                YELLOW, RESET
+            )?;
+            return Ok(());
+        }
+        writeln!(f)?;
+
+        // Check 2: Table accessibility
+        match &self.table_accessible {
+            Some(Ok(())) => {
+                writeln!(f, "{}✓ Table is accessible{}", BLUE, RESET)?;
+            }
+            Some(Err(e)) => {
+                writeln!(f, "{}✗ Table is not accessible: {}{}", RED, e, RESET)?;
+                writeln!(
+                    f,
+                    "{}  → Subsequent checks will be skipped{}",
+                    YELLOW, RESET
+                )?;
+                return Ok(());
+            }
+            None => {
+                writeln!(
+                    f,
+                    "{}⚠ Table accessibility check was skipped{}",
+                    YELLOW, RESET
+                )?;
+                return Ok(());
+            }
+        }
+        writeln!(f)?;
+
+        // Check 3: Row count
+        match &self.num_rows {
+            Some(Ok(count)) => {
+                if *count == 0 {
+                    writeln!(f, "{}⚠ Table has no rows{}", YELLOW, RESET)?;
+                } else {
+                    writeln!(f, "{}✓ Table has {} rows{}", BLUE, count, RESET)?;
+                }
+            }
+            Some(Err(e)) => {
+                writeln!(f, "{}✗ Failed to get row count: {}{}", RED, e, RESET)?;
+            }
+            None => {
+                writeln!(f, "{}⚠ Row count check was skipped{}", YELLOW, RESET)?;
+            }
+        }
+        writeln!(f)?;
+
+        // Check 4: Zero embeddings
+        match &self.zero_embedding_items {
+            Some(Ok(zero_items)) => {
+                if zero_items.is_empty() {
+                    writeln!(f, "{}✓ No zero embeddings found{}", BLUE, RESET)?;
+                } else {
+                    writeln!(
+                        f,
+                        "{}⚠ Found {} rows with zero embeddings{}",
+                        YELLOW,
+                        zero_items.len(),
+                        RESET
+                    )?;
+                }
+            }
+            Some(Err(e)) => {
+                writeln!(
+                    f,
+                    "{}✗ Failed to check zero embeddings: {}{}",
+                    RED, e, RESET
+                )?;
+            }
+            None => {
+                writeln!(f, "{}⚠ Zero embeddings check was skipped{}", YELLOW, RESET)?;
+            }
+        }
+        writeln!(f)?;
+
+        // Check 5: Index information
+        match &self.index_info {
+            Some(Ok(indices)) => {
+                if indices.is_empty() {
+                    writeln!(
+                        f,
+                        "{}⚠ No indices found (may impact query performance){}",
+                        YELLOW, RESET
+                    )?;
+                } else {
+                    writeln!(f, "{}✓ Found {} index(es):{}", BLUE, indices.len(), RESET)?;
+                    for (name, index_type) in indices {
+                        writeln!(f, "\t- {} ({})", name, index_type)?;
+                    }
+                }
+            }
+            Some(Err(e)) => {
+                writeln!(
+                    f,
+                    "{}✗ Failed to get index information: {}{}",
+                    RED, e, RESET
+                )?;
+            }
+            None => {
+                writeln!(
+                    f,
+                    "{}⚠ Index information check was skipped{}",
+                    YELLOW, RESET
+                )?;
+            }
+        }
+
+        Ok(())
+    }
 }
 
 /// Calculate the size of a directory recursively.
