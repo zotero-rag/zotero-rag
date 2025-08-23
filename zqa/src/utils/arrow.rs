@@ -63,6 +63,41 @@ impl From<LanceError> for ArrowError {
 
 impl Error for ArrowError {}
 
+/// Get the schema for our LanceDB table. This is required for both getting library items and
+/// checkhealth.
+///
+/// # Arguments:
+/// * `embedding_name` - The embedding used by the current DB.
+///
+/// # Returns:
+/// The schema in Arrow format.
+pub async fn get_schema(embedding_name: &str) -> arrow_schema::Schema {
+    // Convert ZoteroItemMetadata to something that can be converted to Arrow
+    // Need to extract fields and create appropriate Arrow arrays
+    let mut schema_fields = vec![
+        arrow_schema::Field::new("library_key", arrow_schema::DataType::Utf8, false),
+        arrow_schema::Field::new("title", arrow_schema::DataType::Utf8, false),
+        arrow_schema::Field::new("file_path", arrow_schema::DataType::Utf8, false),
+        arrow_schema::Field::new("pdf_text", arrow_schema::DataType::Utf8, false),
+    ];
+
+    if lancedb_exists().await {
+        schema_fields.push(arrow_schema::Field::new(
+            "embeddings",
+            arrow_schema::DataType::FixedSizeList(
+                Arc::new(arrow_schema::Field::new(
+                    "item",
+                    arrow_schema::DataType::Float32,
+                    true,
+                )),
+                get_embedding_dims_by_provider(embedding_name) as i32,
+            ),
+            true,
+        ));
+    }
+    arrow_schema::Schema::new(schema_fields)
+}
+
 /// Converts Zotero library items to an Arrow RecordBatch.
 ///
 /// This function parses the Zotero library using `parse_library()` and converts
@@ -101,30 +136,7 @@ pub async fn library_to_arrow(
     let lib_items = parse_library(embedding_name, start_from, limit).await?;
     log::info!("Finished parsing library items.");
 
-    // Convert ZoteroItemMetadata to something that can be converted to Arrow
-    // Need to extract fields and create appropriate Arrow arrays
-    let mut schema_fields = vec![
-        arrow_schema::Field::new("library_key", arrow_schema::DataType::Utf8, false),
-        arrow_schema::Field::new("title", arrow_schema::DataType::Utf8, false),
-        arrow_schema::Field::new("file_path", arrow_schema::DataType::Utf8, false),
-        arrow_schema::Field::new("pdf_text", arrow_schema::DataType::Utf8, false),
-    ];
-
-    if lancedb_exists().await {
-        schema_fields.push(arrow_schema::Field::new(
-            "embeddings",
-            arrow_schema::DataType::FixedSizeList(
-                Arc::new(arrow_schema::Field::new(
-                    "item",
-                    arrow_schema::DataType::Float32,
-                    true,
-                )),
-                get_embedding_dims_by_provider(embedding_name) as i32,
-            ),
-            true,
-        ));
-    }
-    let schema = Arc::new(arrow_schema::Schema::new(schema_fields));
+    let schema = Arc::new(get_schema(embedding_name).await);
 
     // Convert ZoteroItemMetadata to Arrow arrays
     let library_keys = StringArray::from(
