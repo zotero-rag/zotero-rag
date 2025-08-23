@@ -85,7 +85,7 @@ impl fmt::Display for HealthCheckResult {
                 Some(Err(e)) => {
                     writeln!(
                         f,
-                        "\t{}Error: Failed to calculate size: {}]{}",
+                        "\t{}Error: Failed to calculate size: {}{}",
                         RED, e, RESET
                     )?;
                 }
@@ -251,20 +251,17 @@ async fn get_zero_vectors(
     embeddings_col: &str,
     query_limit: usize,
 ) -> Result<Vec<Arc<dyn Array>>, LanceError> {
-    // Until we get to individual rows, we avoid using match to reduce nesting.
-    let rows_query = tbl.query().limit(query_limit).execute().await;
-    if let Err(e) = rows_query {
-        return Err(LanceError::QueryError(e.to_string()));
-    }
+    let stream = tbl
+        .query()
+        .limit(query_limit)
+        .execute()
+        .await
+        .map_err(|e| LanceError::QueryError(e.to_string()))?;
 
-    let stream = rows_query.unwrap();
-    let batches = stream.try_collect::<Vec<_>>().await;
-
-    if let Err(e) = batches {
-        return Err(LanceError::QueryError(e.to_string()));
-    }
-
-    let batches = batches.unwrap();
+    let batches = stream
+        .try_collect::<Vec<_>>()
+        .await
+        .map_err(|e| LanceError::QueryError(e.to_string()))?;
 
     let mut zero_rows = Vec::<Arc<dyn arrow_array::Array>>::new();
     let mut error: Option<LanceError> = None;

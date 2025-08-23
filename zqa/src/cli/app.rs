@@ -738,7 +738,7 @@ mod tests {
         checkhealth(&mut ctx).await;
 
         let output = String::from_utf8(ctx.out.into_inner()).unwrap();
-        assert!(output.contains("Directory does not exist"));
+        assert!(output.contains("directory does not exist"));
     }
 
     #[tokio::test]
@@ -762,8 +762,8 @@ mod tests {
 
         let output = String::from_utf8(ctx.out.into_inner()).unwrap();
         assert!(output.contains("LanceDB Health Check Results"));
-        assert!(output.contains("Directory exists"));
-        assert!(output.contains("Table can be opened successfully"));
+        assert!(output.contains("directory exists"));
+        assert!(output.contains("Table is accessible"));
         assert!(output.contains("Table has"));
     }
 }
