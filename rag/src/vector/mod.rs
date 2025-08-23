@@ -1,2 +1,2 @@
-pub mod lance;
 pub mod checkhealth;
+pub mod lance;
