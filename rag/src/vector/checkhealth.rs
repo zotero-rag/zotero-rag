@@ -287,17 +287,17 @@ async fn get_zero_vectors(
             .collect::<HashSet<_>>();
 
         if !batch_schema_fields.is_superset(&schema_fields) {
-            error = Some(LanceError::InvalidStateError(format!(
-                "Invalid schema in LanceDB table: Schema does not match expectation."
-            )));
+            error = Some(LanceError::InvalidStateError(
+                "Invalid schema in LanceDB table: Schema does not match expectation.".to_string(),
+            ));
             break;
         }
 
         let embedding_col_index = schema.index_of(embeddings_col);
         if embedding_col_index.is_err() {
-            error = Some(LanceError::InvalidStateError(format!(
-                "Invalid schema in LanceDB table: No `embeddings` column found."
-            )));
+            error = Some(LanceError::InvalidStateError(
+                "Invalid schema in LanceDB table: No `embeddings` column found.".to_string(),
+            ));
             break;
         }
 
