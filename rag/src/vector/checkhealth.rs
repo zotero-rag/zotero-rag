@@ -7,6 +7,7 @@ use arrow_schema::Schema;
 use futures::TryStreamExt;
 use lancedb::query::{ExecutableQuery, QueryBase};
 use lancedb::{Table, connect};
+use std::collections::HashSet;
 use std::fmt;
 use std::fs;
 use std::io;
@@ -16,7 +17,7 @@ use std::sync::Arc;
 /// ANSI color codes for console output
 const RED: &str = "\x1b[31m";
 const YELLOW: &str = "\x1b[33m";
-const BLUE: &str = "\x1b[34m";
+const GREEN: &str = "\x1b[32m";
 const RESET: &str = "\x1b[0m";
 
 /// Health check result for LanceDB
@@ -76,7 +77,7 @@ impl fmt::Display for HealthCheckResult {
 
         // Check 1: Directory existence and size
         if self.directory_exists {
-            writeln!(f, "{}✓ Database directory exists{}", BLUE, RESET)?;
+            writeln!(f, "{}✓ Database directory exists{}", GREEN, RESET)?;
             match &self.directory_size {
                 Some(Ok(size)) => {
                     writeln!(f, "\tSize: {}", format_file_size(*size))?;
@@ -104,7 +105,7 @@ impl fmt::Display for HealthCheckResult {
         // Check 2: Table accessibility
         match &self.table_accessible {
             Some(Ok(())) => {
-                writeln!(f, "{}✓ Table is accessible{}", BLUE, RESET)?;
+                writeln!(f, "{}✓ Table is accessible{}", GREEN, RESET)?;
             }
             Some(Err(e)) => {
                 writeln!(f, "{}✗ Table is not accessible: {}{}", RED, e, RESET)?;
@@ -124,7 +125,6 @@ impl fmt::Display for HealthCheckResult {
                 return Ok(());
             }
         }
-        writeln!(f)?;
 
         // Check 3: Row count
         match &self.num_rows {
@@ -132,7 +132,7 @@ impl fmt::Display for HealthCheckResult {
                 if *count == 0 {
                     writeln!(f, "{}⚠ Table has no rows{}", YELLOW, RESET)?;
                 } else {
-                    writeln!(f, "{}✓ Table has {} rows{}", BLUE, count, RESET)?;
+                    writeln!(f, "\tTable has {} rows{}", count, RESET)?;
                 }
             }
             Some(Err(e)) => {
@@ -148,7 +148,7 @@ impl fmt::Display for HealthCheckResult {
         match &self.zero_embedding_items {
             Some(Ok(zero_items)) => {
                 if zero_items.is_empty() {
-                    writeln!(f, "{}✓ No zero embeddings found{}", BLUE, RESET)?;
+                    writeln!(f, "{}✓ No zero embeddings found{}", GREEN, RESET)?;
                 } else {
                     writeln!(
                         f,
@@ -182,7 +182,7 @@ impl fmt::Display for HealthCheckResult {
                         YELLOW, RESET
                     )?;
                 } else {
-                    writeln!(f, "{}✓ Found {} index(es):{}", BLUE, indices.len(), RESET)?;
+                    writeln!(f, "{}✓ Found {} index(es):{}", GREEN, indices.len(), RESET)?;
                     for (name, index_type) in indices {
                         writeln!(f, "\t- {} ({})", name, index_type)?;
                     }
@@ -275,7 +275,18 @@ async fn get_zero_vectors(
 
         // The schema in the batch should be the same or a superset of the expected
         // schema.
-        if !batch_schema.contains(schema) {
+        let batch_schema_fields = batch_schema
+            .fields
+            .iter()
+            .map(|f| f.name())
+            .collect::<HashSet<_>>();
+        let schema_fields = schema
+            .fields
+            .iter()
+            .map(|f| f.name())
+            .collect::<HashSet<_>>();
+
+        if !batch_schema_fields.is_superset(&schema_fields) {
             error = Some(LanceError::InvalidStateError(format!(
                 "Invalid schema in LanceDB table: Schema does not match expectation."
             )));
@@ -451,6 +462,7 @@ mod tests {
 
         // Clean up any existing data
         let _ = std::fs::remove_dir_all(DB_URI);
+        let _ = std::fs::remove_dir_all(format!("rag/{}", DB_URI));
 
         let result = lancedb_health_check(schema, "embeddings").await;
         assert!(result.is_ok());
@@ -458,7 +470,7 @@ mod tests {
         let health_result = result.unwrap();
         assert!(!health_result.directory_exists);
         assert!(health_result.directory_size.is_none());
-        assert!(!health_result.table_accessible.is_none());
+        assert!(health_result.table_accessible.is_none());
         assert!(health_result.num_rows.is_none());
     }
 

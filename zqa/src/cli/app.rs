@@ -1,13 +1,14 @@
 use crate::cli::placeholder::PlaceholderText;
 use crate::cli::prompts::{get_extraction_prompt, get_summarize_prompt};
 use crate::cli::readline::get_readline_config;
-use crate::utils::arrow::vector_search;
+use crate::utils::arrow::{get_schema, vector_search};
 use crate::utils::library::get_new_library_items;
 use arrow_array::{self, RecordBatch, RecordBatchIterator};
 use lancedb::embeddings::EmbeddingDefinition;
 use rag::llm::base::{ApiClient, ApiResponse, ModelProviders, UserMessage};
 use rag::llm::errors::LLMError;
 use rag::llm::factory::get_client_by_provider;
+use rag::vector::checkhealth::lancedb_health_check;
 use rag::vector::lance::{create_initial_table, db_statistics, lancedb_exists};
 use rustyline::error::ReadlineError;
 use tokio::task::JoinSet;
@@ -101,6 +102,21 @@ async fn embed<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Result<(), CLIErr
     }
 
     Ok(())
+}
+
+/// Performs comprehensive health checks on the LanceDB database and reports status
+/// with colored output using ASCII escape codes.
+///
+/// # Arguments
+/// * `ctx` - A `Context` object that contains CLI args and objects that implement
+///   `std::io::Write` for `stdout` and `stderr`.
+async fn checkhealth<O: Write, E: Write>(ctx: &mut Context<O, E>) {
+    let schema = get_schema(&ctx.args.embedding).await;
+
+    let _ = match lancedb_health_check(schema, "embeddings").await {
+        Ok(result) => writeln!(ctx.out, "{result}"),
+        Err(e) => writeln!(ctx.err, "{e}"),
+    };
 }
 
 /// Process a user's Zotero library. This acts as one of the main functions provided by the CLI.
@@ -463,6 +479,9 @@ pub async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<(), CLIEr
                         writeln!(&mut ctx.out, "/quit\t\tExit the program")?;
                         writeln!(&mut ctx.out)?;
                     }
+                    "/checkhealth" => {
+                        checkhealth(&mut ctx).await;
+                    }
                     "/embed" => {
                         if let Err(e) = embed(&mut ctx).await {
                             writeln!(
@@ -545,7 +564,7 @@ pub async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<(), CLIEr
 
 #[cfg(test)]
 mod tests {
-    use crate::cli::app::{BATCH_ITER_FILE, embed, search_for_papers, stats};
+    use crate::cli::app::{BATCH_ITER_FILE, checkhealth, embed, search_for_papers, stats};
     use arrow_array::{RecordBatch, StringArray};
     use arrow_ipc::writer::FileWriter;
     use rag::vector::lance::DB_URI;
@@ -704,5 +723,47 @@ mod tests {
 
         let output = String::from_utf8(ctx.out.into_inner()).unwrap();
         assert!(output.contains("Total token usage:"));
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_checkhealth_no_database() {
+        dotenv::dotenv().ok();
+
+        // Clean up any existing data directories
+        let _ = std::fs::remove_dir_all(format!("rag/{}", DB_URI));
+        let _ = std::fs::remove_dir_all(DB_URI);
+
+        let mut ctx = create_test_context();
+        checkhealth(&mut ctx).await;
+
+        let output = String::from_utf8(ctx.out.into_inner()).unwrap();
+        assert!(output.contains("Directory does not exist"));
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_checkhealth_with_database() {
+        dotenv::dotenv().ok();
+
+        // Clean up any existing data directories
+        let _ = std::fs::remove_dir_all(format!("rag/{}", DB_URI));
+        let _ = std::fs::remove_dir_all(DB_URI);
+
+        // First create a database by running process
+        let mut setup_ctx = create_test_context();
+        let result =
+            temp_env::async_with_vars([("CI", Some("true"))], process(&mut setup_ctx)).await;
+        assert!(result.is_ok());
+
+        // Now run health check
+        let mut ctx = create_test_context();
+        checkhealth(&mut ctx).await;
+
+        let output = String::from_utf8(ctx.out.into_inner()).unwrap();
+        assert!(output.contains("LanceDB Health Check Results"));
+        assert!(output.contains("Directory exists"));
+        assert!(output.contains("Table can be opened successfully"));
+        assert!(output.contains("Table has"));
     }
 }
