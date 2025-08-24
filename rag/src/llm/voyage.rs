@@ -73,8 +73,9 @@ where
         let mut failed_texts: Vec<String> = Vec::new();
 
         let chunks = texts.chunks(BATCH_SIZE);
+        let num_chunks = chunks.len();
 
-        for (i, batch) in chunks.clone().enumerate() {
+        for (i, batch) in chunks.enumerate() {
             // For every batch, we need to handle the case of empty/whitespace strings, since Voyage AI
             // does not like handling them.
             // 1. Build a mask of "real" vs "empty" slots
@@ -158,7 +159,7 @@ where
 
             bar.inc(BATCH_SIZE as u64);
 
-            if i < chunks.len() - 1 {
+            if i < num_chunks - 1 {
                 tokio::time::sleep(Duration::from_secs(WAIT_AFTER_REQUEST_S)).await;
             }
         }
