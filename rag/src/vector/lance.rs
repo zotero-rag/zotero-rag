@@ -247,8 +247,8 @@ pub async fn vector_search(
         .nearest_to(query_vec)?
         .execute()
         .await?;
-    log::debug!("Vector search took {:.1?}", start_time.elapsed());
     let batches: Vec<RecordBatch> = stream.try_collect().await?;
+    log::debug!("Vector search took {:.1?}", start_time.elapsed());
 
     Ok(batches)
 }
