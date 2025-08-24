@@ -459,7 +459,7 @@ pub async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<(), CLIEr
 
                 match command.as_str() {
                     "" => {}
-                    "/help" => {
+                    "/help" | "help" | "?" => {
                         writeln!(&mut ctx.out)?;
                         writeln!(&mut ctx.out, "Available commands:\n")?;
                         writeln!(&mut ctx.out, "/help\t\tShow this help message")?;
@@ -474,6 +474,10 @@ pub async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<(), CLIEr
                         writeln!(
                             &mut ctx.out,
                             "/search\t\tSearch for papers without summarizing them. Usage: /search <query>"
+                        )?;
+                        writeln!(
+                            &mut ctx.out,
+                            "/checkhealth\tRun health checks on your LanceDB."
                         )?;
                         writeln!(&mut ctx.out, "/stats\t\tShow table statistics.")?;
                         writeln!(&mut ctx.out, "/quit\t\tExit the program")?;

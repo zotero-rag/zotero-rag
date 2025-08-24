@@ -152,7 +152,7 @@ impl fmt::Display for HealthCheckResult {
                 } else {
                     writeln!(
                         f,
-                        "{}⚠ Found {} rows with zero embeddings{}",
+                        "{}⚠ Found {} rows with zero embeddings{}. Run /repair to fix.",
                         YELLOW,
                         zero_items.len(),
                         RESET
@@ -176,11 +176,21 @@ impl fmt::Display for HealthCheckResult {
         match &self.index_info {
             Some(Ok(indices)) => {
                 if indices.is_empty() {
-                    writeln!(
-                        f,
-                        "{}⚠ No indices found (may impact query performance){}",
-                        YELLOW, RESET
-                    )?;
+                    if let Some(Ok(row_count)) = self.num_rows {
+                        if row_count > 10000 {
+                            writeln!(
+                                f,
+                                "{}⚠ No indices found (may impact query performance){}",
+                                YELLOW, RESET
+                            )?;
+                        } else {
+                            writeln!(
+                                f,
+                                "{}✓ No indices found. This should not affect performance for your library size.{}",
+                                GREEN, RESET
+                            )?;
+                        }
+                    }
                 } else {
                     writeln!(f, "{}✓ Found {} index(es):{}", GREEN, indices.len(), RESET)?;
                     for (name, index_type) in indices {

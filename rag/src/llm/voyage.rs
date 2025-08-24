@@ -1,7 +1,12 @@
 use crate::constants::{VOYAGE_EMBEDDING_DIM, VOYAGE_EMBEDDING_MODEL};
 use indicatif::ProgressBar;
 use log;
-use std::{borrow::Cow, env, fs, sync::Arc, time::Duration};
+use std::{
+    borrow::Cow,
+    env, fs,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use arrow_schema::{DataType, Field};
 use lancedb::embeddings::EmbeddingFunction;
@@ -67,7 +72,9 @@ where
         let mut total_masked = 0;
         let mut failed_texts: Vec<String> = Vec::new();
 
-        for batch in texts.chunks(BATCH_SIZE) {
+        let chunks = texts.chunks(BATCH_SIZE);
+
+        for (i, batch) in chunks.clone().enumerate() {
             // For every batch, we need to handle the case of empty/whitespace strings, since Voyage AI
             // does not like handling them.
             // 1. Build a mask of "real" vs "empty" slots
@@ -95,12 +102,18 @@ where
                 headers.insert("Authorization", format!("Bearer {api_key}").parse()?);
                 headers.insert("Content-Type", "application/json".parse()?);
 
+                let start_time = Instant::now();
                 let response = self
                     .client
                     .post_json("https://api.voyageai.com/v1/embeddings", headers, &request)
                     .await?;
 
                 let body = response.text().await?;
+                log::debug!(
+                    "Voyage AI embedding request took {:.1?}",
+                    start_time.elapsed()
+                );
+
                 let voyage_response: VoyageAIResponse = serde_json::from_str(&body)?;
 
                 match voyage_response {
@@ -144,7 +157,10 @@ where
             }
 
             bar.inc(BATCH_SIZE as u64);
-            tokio::time::sleep(Duration::from_secs(WAIT_AFTER_REQUEST_S)).await;
+
+            if i < chunks.len() - 1 {
+                tokio::time::sleep(Duration::from_secs(WAIT_AFTER_REQUEST_S)).await;
+            }
         }
 
         log::info!(

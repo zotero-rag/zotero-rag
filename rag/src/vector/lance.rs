@@ -13,7 +13,7 @@ use lancedb::{
     database::CreateTableMode, embeddings::EmbeddingDefinition, query::ExecutableQuery,
     query::QueryBase,
 };
-use std::{error::Error, fmt::Display, path::PathBuf, sync::Arc, vec::IntoIter};
+use std::{error::Error, fmt::Display, path::PathBuf, sync::Arc, time::Instant, vec::IntoIter};
 
 // Maintainers: ensure that `DB_URI` begins with `TABLE_NAME`
 pub const DB_URI: &str = "data/lancedb-table";
@@ -211,11 +211,15 @@ pub async fn vector_search(
     query: String,
     embedding_name: String,
 ) -> Result<Vec<RecordBatch>, LanceError> {
+    let start_time = Instant::now();
     let db = get_db_with_embeddings(&embedding_name).await?;
 
     let tbl = db.open_table(TABLE_NAME).execute().await.map_err(|_| {
         LanceError::InvalidStateError(format!("The table {TABLE_NAME} does not exist"))
     })?;
+    log::debug!("Opening the DB and table took {:.1?}", start_time.elapsed());
+
+    let start_time = Instant::now();
     let embedding =
         db.embedding_registry()
             .get(&embedding_name)
@@ -224,6 +228,7 @@ pub async fn vector_search(
             )))?;
 
     let query_vec = embedding.compute_query_embeddings(Arc::new(StringArray::from(vec![query])))?;
+    log::debug!("Computing embeddings took {:.1?}", start_time.elapsed());
 
     // Convert FixedSizeListArray to Vec<f32>
     // The embedding functions return `FixedSizeListArray` with Float32 elements
@@ -235,12 +240,14 @@ pub async fn vector_search(
         values.iter().map(|v| v.unwrap_or(0.0)).collect()
     };
 
+    let start_time = Instant::now();
     let stream = tbl
         .query()
         .limit(10)
         .nearest_to(query_vec)?
         .execute()
         .await?;
+    log::debug!("Vector search took {:.1?}", start_time.elapsed());
     let batches: Vec<RecordBatch> = stream.try_collect().await?;
 
     Ok(batches)
