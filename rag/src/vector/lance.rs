@@ -147,7 +147,7 @@ async fn get_db_with_embeddings(embedding_name: &str) -> Result<Connection, Lanc
         "openai" => {
             db.embedding_registry().register(
                 EmbeddingProviders::OpenAI.as_str(),
-                Arc::new(OpenAIClient::default()),
+                Arc::new(OpenAIClient::<ReqwestClient>::default()),
             )?;
         }
         "voyageai" => {
@@ -253,10 +253,12 @@ pub async fn vector_search(
     Ok(batches)
 }
 
-/// Creates and initializes a LanceDB table for vector storage
+/// Creates and initializes a LanceDB table for vector storage.
 ///
 /// Connects to LanceDB at the default location, creates a table named `TABLE_NAME`,
-/// and registers embedding functions for both Anthropic and OpenAI.
+/// and registers embedding functions for both Anthropic and OpenAI. If this table already exists,
+/// it simply opens it and upserts the data; otherwise, it inserts the data into the newly created
+/// table.
 ///
 /// # Arguments
 /// * `data`: An Arrow `RecordBatchIterator` containing data. See
