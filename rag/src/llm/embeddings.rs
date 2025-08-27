@@ -113,11 +113,11 @@ pub fn get_embedding_dims_by_provider(embedding_name: &str) -> u32 {
 /// # Returns
 ///
 /// An thread-safe object that can compute query embeddings.
-pub fn get_embedding_provider(embedding_name: &str) -> Arc<dyn EmbeddingFunction> {
+pub fn get_embedding_provider(embedding_name: &str) -> Result<Arc<dyn EmbeddingFunction>, LLMError> {
     match embedding_name {
-        "openai" => Arc::new(OpenAIClient::<ReqwestClient>::default()),
-        "anthropic" => Arc::new(OpenAIClient::<ReqwestClient>::default()),
-        "voyageai" => Arc::new(VoyageAIClient::<ReqwestClient>::default()),
-        _ => panic!("Invalid embedding provider."),
+        "openai" => Ok(Arc::new(OpenAIClient::<ReqwestClient>::default())),
+        "anthropic" => Ok(Arc::new(OpenAIClient::<ReqwestClient>::default())),
+        "voyageai" => Ok(Arc::new(VoyageAIClient::<ReqwestClient>::default())),
+        _ => Err(LLMError::InvalidProviderError(embedding_name.to_string())),
     }
 }

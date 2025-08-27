@@ -10,7 +10,10 @@ use crate::{
     utils::library::{ZoteroItem, ZoteroItemMetadata},
 };
 use rag::{
-    llm::embeddings::{get_embedding_dims_by_provider, get_embedding_provider},
+    llm::{
+        embeddings::{get_embedding_dims_by_provider, get_embedding_provider},
+        errors::LLMError,
+    },
     vector::lance::{LanceError, lancedb_exists, vector_search as rag_vector_search},
 };
 
@@ -21,6 +24,7 @@ pub enum ArrowError {
     ArrowSchemaError(String),
     LanceError(String),
     LibNotFoundError,
+    LLMError(String),
     PathEncodingError,
     PdfParsingError(String),
 }
@@ -31,6 +35,7 @@ impl fmt::Display for ArrowError {
             Self::ArrowSchemaError(msg) => write!(f, "Arrow schema error: {msg}"),
             Self::LanceError(msg) => write!(f, "LanceDB error: {msg}"),
             Self::LibNotFoundError => write!(f, "Library not found"),
+            Self::LLMError(msg) => write!(f, "{msg}"),
             Self::PathEncodingError => write!(f, "Path contains invalid UTF-8 characters"),
             Self::PdfParsingError(msg) => write!(f, "{msg}"),
         }
@@ -62,6 +67,12 @@ impl From<arrow_schema::ArrowError> for ArrowError {
 impl From<LanceError> for ArrowError {
     fn from(value: LanceError) -> Self {
         Self::LanceError(value.to_string())
+    }
+}
+
+impl From<LLMError> for ArrowError {
+    fn from(value: LLMError) -> Self {
+        Self::LLMError(value.to_string())
     }
 }
 
@@ -184,9 +195,8 @@ pub async fn library_to_arrow(
     ];
 
     if lancedb_exists().await {
-        let embedding_provider = get_embedding_provider(embedding_name);
-        let query_vec =
-            embedding_provider.compute_source_embeddings(Arc::new(StringArray::from(pdf_texts)))?;
+        let embedding_provider = get_embedding_provider(embedding_name)?;
+        let query_vec = embedding_provider.compute_source_embeddings(Arc::new(pdf_texts))?;
         let query_vec = query_vec.as_fixed_size_list();
 
         record_batch_cols.push(Arc::new(query_vec.clone()));
