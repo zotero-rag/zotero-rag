@@ -14,6 +14,9 @@ jobs:
     name: Cargo Assist
     runs-on: ubuntu-latest
     steps:
+      - name: Dependencies
+        run: sudo apt install protobuf-compiler
+      - uses: rui314/setup-mold@v1
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
