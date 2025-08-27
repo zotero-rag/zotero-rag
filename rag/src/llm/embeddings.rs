@@ -113,7 +113,9 @@ pub fn get_embedding_dims_by_provider(embedding_name: &str) -> u32 {
 /// # Returns
 ///
 /// An thread-safe object that can compute query embeddings.
-pub fn get_embedding_provider(embedding_name: &str) -> Result<Arc<dyn EmbeddingFunction>, LLMError> {
+pub fn get_embedding_provider(
+    embedding_name: &str,
+) -> Result<Arc<dyn EmbeddingFunction>, LLMError> {
     match embedding_name {
         "openai" => Ok(Arc::new(OpenAIClient::<ReqwestClient>::default())),
         "anthropic" => Ok(Arc::new(OpenAIClient::<ReqwestClient>::default())),
