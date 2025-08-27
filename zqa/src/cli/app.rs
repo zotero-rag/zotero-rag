@@ -679,6 +679,11 @@ mod tests {
         dotenv::dotenv().ok();
         let mut setup_ctx = create_test_context();
 
+        // Clean up any existing data directories
+        let _ = std::fs::remove_dir_all(format!("rag/{}", DB_URI));
+        let _ = std::fs::remove_dir_all(format!("zqa/{}", DB_URI));
+        let _ = std::fs::remove_dir_all(DB_URI);
+
         // `process` needs to be run before `search_for_papers`
         let result =
             temp_env::async_with_vars([("CI", Some("true"))], process(&mut setup_ctx)).await;

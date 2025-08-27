@@ -1,6 +1,4 @@
-use arrow_array::{
-    ArrayRef, FixedSizeListArray, RecordBatch, StringArray, cast::AsArray, types::Float32Type,
-};
+use arrow_array::{ArrayRef, RecordBatch, StringArray, cast::AsArray};
 use arrow_schema;
 use core::fmt;
 use std::error::Error;
@@ -12,7 +10,7 @@ use crate::{
     utils::library::{ZoteroItem, ZoteroItemMetadata},
 };
 use rag::{
-    llm::embeddings::get_embedding_dims_by_provider,
+    llm::embeddings::{get_embedding_dims_by_provider, get_embedding_provider},
     vector::lance::{LanceError, lancedb_exists, vector_search as rag_vector_search},
 };
 
@@ -36,6 +34,12 @@ impl fmt::Display for ArrowError {
             Self::PathEncodingError => write!(f, "Path contains invalid UTF-8 characters"),
             Self::PdfParsingError(msg) => write!(f, "{msg}"),
         }
+    }
+}
+
+impl From<lancedb::Error> for ArrowError {
+    fn from(value: lancedb::Error) -> Self {
+        Self::LanceError(value.to_string())
     }
 }
 
@@ -88,11 +92,11 @@ pub async fn get_schema(embedding_name: &str) -> arrow_schema::Schema {
                 Arc::new(arrow_schema::Field::new(
                     "item",
                     arrow_schema::DataType::Float32,
-                    true,
+                    false,
                 )),
                 get_embedding_dims_by_provider(embedding_name) as i32,
             ),
-            true,
+            false,
         ));
     }
     arrow_schema::Schema::new(schema_fields)
@@ -176,21 +180,16 @@ pub async fn library_to_arrow(
         Arc::new(library_keys) as ArrayRef,
         Arc::new(titles) as ArrayRef,
         Arc::new(file_paths) as ArrayRef,
-        Arc::new(pdf_texts) as ArrayRef,
+        Arc::new(pdf_texts.clone()) as ArrayRef,
     ];
-    let embedding_dims = get_embedding_dims_by_provider(embedding_name);
 
     if lancedb_exists().await {
-        record_batch_cols.push(Arc::new(FixedSizeListArray::from_iter_primitive::<
-            Float32Type,
-            _,
-            _,
-        >(
-            (0..lib_items.len())
-                .map(|_| Some(vec![Some(0.0); embedding_dims as usize]))
-                .collect::<Vec<Option<Vec<Option<f32>>>>>(),
-            embedding_dims as i32,
-        )));
+        let embedding_provider = get_embedding_provider(embedding_name);
+        let query_vec =
+            embedding_provider.compute_source_embeddings(Arc::new(StringArray::from(pdf_texts)))?;
+        let query_vec = query_vec.as_fixed_size_list();
+
+        record_batch_cols.push(Arc::new(query_vec.clone()));
     }
     let record_batch = RecordBatch::try_new(schema.clone(), record_batch_cols)?;
 

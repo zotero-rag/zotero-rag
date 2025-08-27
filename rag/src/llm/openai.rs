@@ -1,5 +1,6 @@
 use std::borrow::Cow;
 use std::env;
+use std::fmt::Debug;
 use std::sync::Arc;
 
 use http::HeaderMap;
@@ -176,7 +177,7 @@ impl<T: HttpClient> ApiClient for OpenAIClient<T> {
 /// when we hit a place where we need a third copy, we'll refactor.
 ///
 /// Maintainers should note that any updates here should also be reflected in AnthropicClient.
-impl EmbeddingFunction for OpenAIClient {
+impl<T: HttpClient + Default + Debug> EmbeddingFunction for OpenAIClient<T> {
     fn name(&self) -> &str {
         "OpenAI"
     }

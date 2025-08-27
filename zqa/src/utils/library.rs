@@ -441,11 +441,11 @@ mod tests {
     async fn test_parse_library() {
         dotenv().ok();
         let _ = setup_logger(log::LevelFilter::Info);
-        let items = parse_library("voyageai", Some(0), Some(5)).await;
         let _ = fs::remove_dir_all(TABLE_NAME);
         let _ = fs::remove_dir_all(format!("zqa/{}", TABLE_NAME));
         let _ = fs::remove_dir_all(format!("rag/{}", TABLE_NAME));
 
+        let items = parse_library("voyageai", Some(0), Some(5)).await;
         assert!(items.is_ok());
 
         // Two of the items in the toy library are HTML files, so we actually
