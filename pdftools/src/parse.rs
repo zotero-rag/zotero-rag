@@ -62,7 +62,7 @@ impl Default for PdfParserConfig {
 }
 
 /// A type to convert from bytes in math fonts to LaTeX code
-type ByteTransformFn = fn(&u8) -> String;
+type ByteTransformFn = fn(u8) -> String;
 
 /// A zero-allocation iterator for octal escape sequences and raw bytes. This is useful for parsing
 /// octal escape codes that are used in math fonts when non-printable characters are used to
@@ -106,12 +106,12 @@ impl<'a> Iterator for IterCodepoints<'a> {
     }
 }
 
-fn font_transform(input: String, transform: ByteTransformFn) -> String {
+fn font_transform(input: &str, transform: ByteTransformFn) -> String {
     IterCodepoints {
         bytes: input.as_bytes(),
         pos: 0,
     }
-    .map(|b| transform(&b))
+    .map(transform)
     .collect::<String>()
 }
 
@@ -200,17 +200,18 @@ impl PdfParser {
     }
 
     fn contains_unescaped(&self, content: &str, ch: char) -> bool {
-        self.find_next_unescaped(content, ch)
-            .is_some_and(|pos| pos < content.len())
+        self.find_next_unescaped(content, ch).is_some()
     }
 
     fn find_next_unescaped(&self, content: &str, ch: char) -> Option<usize> {
         let mut start_idx: usize = 0;
 
         loop {
-            let idx = content[start_idx..].find(ch)?;
+            let rel = content.get(start_idx..)?.find(ch)?;
+            let idx = start_idx + rel;
 
-            // If ) is preceded by a \, then it may be escaped
+            // If the match is preceded by a backslash, it may be escaped. Count
+            // the number of consecutive backslashes immediately preceding it.
             let mut escape_count = 0;
             for c in content[..idx].chars().rev() {
                 if c == '\\' {
@@ -223,7 +224,8 @@ impl PdfParser {
             if escape_count % 2 == 0 {
                 return Some(idx);
             } else {
-                start_idx = idx;
+                // Continue searching after this escaped occurrence
+                start_idx = idx + 1;
             }
         }
     }
@@ -288,10 +290,10 @@ impl PdfParser {
                 return Some(tj_idx + 2);
             };
 
-            let (_, y) = self
+            let y = self
                 .get_params::<2>(content, tj_idx + next_td_idx)
                 .ok()
-                .and_then(|[x, y]| Some((x.parse::<f32>().ok()?, y.parse::<f32>().ok()?)))?;
+                .and_then(|[_, y]| y.parse::<f32>().ok())?;
 
             if y.abs() <= self.cur_font_size * self.cur_baselineskip {
                 // This is a line break, keep skipping.
@@ -531,7 +533,7 @@ impl PdfParser {
                 }
 
                 if let Some(transform) = FONT_TRANSFORMS.get(self.cur_font.as_str()) {
-                    parsed += &font_transform(cur_content[idx1 + 1..idx2].to_string(), *transform);
+                    parsed += &font_transform(&cur_content[idx1 + 1..idx2], *transform);
                 } else {
                     parsed += &cur_content[idx1 + 1..idx2];
                 }
@@ -583,11 +585,10 @@ fn get_font(doc: &Document, page_id: (u32, u16), font_key: String) -> Result<&st
 
     match base_font.as_name() {
         Ok(name) => {
-            let idx = name
-                .iter()
-                .position(|&byte| byte == ASCII_PLUS)
-                .unwrap_or(0)
-                + 1;
+            let idx = match name.iter().position(|&byte| byte == ASCII_PLUS) {
+                Some(i) => i + 1,
+                None => 0,
+            };
             let (_, font_name) = name.split_at(idx);
             str::from_utf8(font_name).map_err(|_| PdfError::InvalidUtf8)
         }
