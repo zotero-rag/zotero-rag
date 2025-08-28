@@ -4557,6 +4557,7 @@ dependencies = [
  "log",
  "lopdf",
  "once_cell",
+ "thiserror 1.0.69",
 ]
 
 [[package]]
@@ -4911,6 +4912,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serial_test",
+ "thiserror 1.0.69",
  "tokio",
 ]
 
@@ -7286,6 +7288,7 @@ dependencies = [
  "serde_json",
  "serial_test",
  "temp-env",
+ "thiserror 1.0.69",
  "tokio",
 ]
 
