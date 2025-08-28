@@ -6,24 +6,18 @@ use rustyline::error::ReadlineError;
 
 use crate::utils;
 
-#[derive(Clone, Debug, Error)]
+#[derive(Debug, Error)]
 pub enum CLIError {
     #[error("Error parsing library: {0}")]
     ArrowError(String),
     #[error("IO Error: {0}")]
-    IOError(String),
+    IOError(#[from] io::Error),
     #[error("Error communicating with the LLM: {0}")]
     LLMError(String),
     #[error("Malformed batch in batch_iter.bin")]
     MalformedBatchError,
-    #[error("Error from the readline implementation: {0}")]
+    #[error("Error from readline: {0}")]
     ReadlineError(String),
-}
-
-impl From<io::Error> for CLIError {
-    fn from(value: io::Error) -> Self {
-        Self::IOError(value.to_string())
-    }
 }
 
 impl From<utils::arrow::ArrowError> for CLIError {

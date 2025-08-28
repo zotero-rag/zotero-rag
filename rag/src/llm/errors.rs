@@ -3,14 +3,14 @@ use thiserror::Error;
 
 /// A wrapper for all kinds of errors to one enum that tells us what happened.
 /// Variant error messages are handled via thiserror.
-#[derive(Clone, Debug, Error)]
+#[derive(Debug, Error)]
 pub enum LLMError {
     #[error("Got 4xx response, possible credentials error: {0}")]
     CredentialError(String),
     #[error("Failed to deserialize response: {0}")]
     DeserializationError(String),
     #[error("Environment variable could not be fetched: {0}")]
-    EnvError(String),
+    EnvError(#[from] std::env::VarError),
     #[error("Unknown error occurred: {0}")]
     GenericLLMError(String),
     #[error("Other HTTP status code error")]
@@ -18,9 +18,9 @@ pub enum LLMError {
     #[error("Invalid LLM provider: {0}")]
     InvalidProviderError(String),
     #[error("Invalid request header value: {0}")]
-    InvalidHeaderError(String),
+    InvalidHeaderError(#[from] InvalidHeaderValue),
     #[error("LanceDB Error: {0}")]
-    LanceError(String),
+    LanceError(#[from] lancedb::Error),
     #[error("A network connectivity error occurred")]
     NetworkError,
     #[error("Request timed out")]
@@ -48,26 +48,8 @@ impl From<reqwest::Error> for LLMError {
     }
 }
 
-impl From<std::env::VarError> for LLMError {
-    fn from(error: std::env::VarError) -> LLMError {
-        LLMError::EnvError(error.to_string())
-    }
-}
-
 impl From<serde_json::Error> for LLMError {
     fn from(error: serde_json::Error) -> LLMError {
         LLMError::DeserializationError(error.to_string())
-    }
-}
-
-impl From<lancedb::Error> for LLMError {
-    fn from(error: lancedb::Error) -> Self {
-        LLMError::LanceError(error.to_string())
-    }
-}
-
-impl From<InvalidHeaderValue> for LLMError {
-    fn from(value: InvalidHeaderValue) -> Self {
-        LLMError::InvalidHeaderError(value.to_string())
     }
 }

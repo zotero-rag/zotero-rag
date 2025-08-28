@@ -38,15 +38,8 @@ pub enum LanceError {
     #[error("The DB is in an invalid state: {0}")]
     InvalidStateError(String),
     /// Other LanceDB-related errors
-    #[error("LanceDB error: {0}")]
-    Other(String),
-}
-
-// Convert from LanceDB's error to our LanceError
-impl From<LanceDbError> for LanceError {
-    fn from(err: LanceDbError) -> Self {
-        Self::Other(err.to_string())
-    }
+    #[error(transparent)]
+    Other(#[from] LanceDbError),
 }
 
 /// Table statistics, to be shown when the user calls the `/stats` command.

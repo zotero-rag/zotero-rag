@@ -19,16 +19,16 @@ use super::library::{LibraryParsingError, parse_library};
 
 use thiserror::Error;
 
-#[derive(Debug, Clone, Error)]
+#[derive(Debug, Error)]
 pub enum ArrowError {
     #[error("Arrow schema error: {0}")]
-    ArrowSchemaError(String),
+    ArrowSchemaError(#[from] arrow_schema::ArrowError),
     #[error("LanceDB error: {0}")]
     LanceError(String),
     #[error("Library not found")]
     LibNotFoundError,
-    #[error("{0}")]
-    LLMError(String),
+    #[error(transparent)]
+    LLMError(#[from] LLMError),
     #[error("Path contains invalid UTF-8 characters")]
     PathEncodingError,
     #[error("{0}")]
@@ -51,21 +51,9 @@ impl From<LibraryParsingError> for ArrowError {
     }
 }
 
-impl From<arrow_schema::ArrowError> for ArrowError {
-    fn from(value: arrow_schema::ArrowError) -> Self {
-        Self::ArrowSchemaError(value.to_string())
-    }
-}
-
 impl From<LanceError> for ArrowError {
     fn from(value: LanceError) -> Self {
         Self::LanceError(value.to_string())
-    }
-}
-
-impl From<LLMError> for ArrowError {
-    fn from(value: LLMError) -> Self {
-        Self::LLMError(value.to_string())
     }
 }
 
