@@ -1,30 +1,23 @@
 use std::io;
+use thiserror::Error;
 
 use rag::llm::errors::LLMError;
 use rustyline::error::ReadlineError;
 
 use crate::utils;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Error)]
 pub enum CLIError {
+    #[error("Error parsing library: {0}")]
     ArrowError(String),
+    #[error("IO Error: {0}")]
     IOError(String),
+    #[error("Error communicating with the LLM: {0}")]
     LLMError(String),
+    #[error("Malformed batch in batch_iter.bin")]
     MalformedBatchError,
+    #[error("Error from the readline implementation: {0}")]
     ReadlineError(String),
-}
-
-impl std::error::Error for CLIError {}
-impl std::fmt::Display for CLIError {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        match self {
-            Self::ArrowError(msg) => write!(f, "Error parsing library: {msg}"),
-            Self::IOError(msg) => write!(f, "IO Error: {msg}"),
-            Self::LLMError(msg) => write!(f, "Error communicating with the LLM: {msg}"),
-            Self::MalformedBatchError => write!(f, "Malformed batch in batch_iter.bin"),
-            Self::ReadlineError(msg) => write!(f, "Error from the readline implementation: {msg}"),
-        }
-    }
 }
 
 impl From<io::Error> for CLIError {

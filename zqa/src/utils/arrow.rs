@@ -1,7 +1,5 @@
 use arrow_array::{ArrayRef, RecordBatch, StringArray, cast::AsArray};
 use arrow_schema;
-use core::fmt;
-use std::error::Error;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -19,27 +17,22 @@ use rag::{
 
 use super::library::{LibraryParsingError, parse_library};
 
-#[derive(Debug, Clone)]
-pub enum ArrowError {
-    ArrowSchemaError(String),
-    LanceError(String),
-    LibNotFoundError,
-    LLMError(String),
-    PathEncodingError,
-    PdfParsingError(String),
-}
+use thiserror::Error;
 
-impl fmt::Display for ArrowError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::ArrowSchemaError(msg) => write!(f, "Arrow schema error: {msg}"),
-            Self::LanceError(msg) => write!(f, "LanceDB error: {msg}"),
-            Self::LibNotFoundError => write!(f, "Library not found"),
-            Self::LLMError(msg) => write!(f, "{msg}"),
-            Self::PathEncodingError => write!(f, "Path contains invalid UTF-8 characters"),
-            Self::PdfParsingError(msg) => write!(f, "{msg}"),
-        }
-    }
+#[derive(Debug, Clone, Error)]
+pub enum ArrowError {
+    #[error("Arrow schema error: {0}")]
+    ArrowSchemaError(String),
+    #[error("LanceDB error: {0}")]
+    LanceError(String),
+    #[error("Library not found")]
+    LibNotFoundError,
+    #[error("{0}")]
+    LLMError(String),
+    #[error("Path contains invalid UTF-8 characters")]
+    PathEncodingError,
+    #[error("{0}")]
+    PdfParsingError(String),
 }
 
 impl From<lancedb::Error> for ArrowError {
@@ -75,8 +68,6 @@ impl From<LLMError> for ArrowError {
         Self::LLMError(value.to_string())
     }
 }
-
-impl Error for ArrowError {}
 
 /// Get the schema for our LanceDB table. This is required for both getting library items and
 /// checkhealth.
