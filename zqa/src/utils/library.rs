@@ -1,4 +1,3 @@
-use core::fmt;
 use directories::UserDirs;
 use indicatif::ProgressBar;
 use rag::vector::lance::{LanceError, get_lancedb_items, lancedb_exists};
@@ -57,10 +56,15 @@ pub struct ZoteroItem {
 }
 
 /// A general error struct for Zotero library parsing.
-#[derive(Clone, Debug)]
+use thiserror::Error;
+
+#[derive(Clone, Debug, Error)]
 pub enum LibraryParsingError {
+    #[error("Library not found!")]
     LibNotFoundError,
+    #[error("LanceDB error when parsing library: {0}")]
     LanceDBError(String),
+    #[error("PDF parsing error: {0}")]
     PdfParsingError(String),
 }
 
@@ -82,19 +86,7 @@ impl From<Box<dyn Error>> for LibraryParsingError {
     }
 }
 
-impl fmt::Display for LibraryParsingError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            LibraryParsingError::LibNotFoundError => write!(f, "Library not found!"),
-            LibraryParsingError::LanceDBError(msg) => {
-                write!(f, "LanceDB error when parsing library: {msg}")
-            }
-            LibraryParsingError::PdfParsingError(m) => write!(f, "PDF parsing error: {m}"),
-        }
-    }
-}
-
-impl Error for LibraryParsingError {}
+// Display and Error are derived by thiserror
 
 /// Assuming an existing LanceDB database exists, returns a list of items present in the Zotero
 /// library but not in the database. The primary use case for this is to update the DB with new

@@ -6,50 +6,41 @@ use crate::llm::{
 use arrow_array::{
     RecordBatch, RecordBatchIterator, StringArray, cast::AsArray, types::Float32Type,
 };
-use core::fmt;
 use futures::TryStreamExt;
 use lancedb::{
     Connection, Error as LanceDbError, arrow::arrow_schema::ArrowError, connect,
     database::CreateTableMode, embeddings::EmbeddingDefinition, query::ExecutableQuery,
     query::QueryBase,
 };
-use std::{error::Error, fmt::Display, path::PathBuf, sync::Arc, time::Instant, vec::IntoIter};
+use std::{fmt::Display, path::PathBuf, sync::Arc, time::Instant, vec::IntoIter};
+use thiserror::Error;
 
 // Maintainers: ensure that `DB_URI` begins with `TABLE_NAME`
 pub const DB_URI: &str = "data/lancedb-table";
 pub const TABLE_NAME: &str = "data";
 
 /// Errors that can occur when working with LanceDB
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum LanceError {
     /// Error connecting to LanceDB
+    #[error("LanceDB connection error: {0}")]
     ConnectionError(String),
     /// Error running some query
+    #[error("Failed to execute query: {0}")]
     QueryError(String),
     /// Error creating or updating a table in LanceDB
+    #[error("LanceDB table update error: {0}")]
     TableUpdateError(String),
     /// Invalid params
+    #[error("Invalid parameter: {0}")]
     ParameterError(String),
     /// The database is in an invalid state
+    #[error("The DB is in an invalid state: {0}")]
     InvalidStateError(String),
     /// Other LanceDB-related errors
+    #[error("LanceDB error: {0}")]
     Other(String),
 }
-
-impl fmt::Display for LanceError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::ConnectionError(msg) => write!(f, "LanceDB connection error: {msg}"),
-            Self::QueryError(msg) => write!(f, "Failed to execute query: {msg}"),
-            Self::TableUpdateError(msg) => write!(f, "LanceDB table update error: {msg}"),
-            Self::ParameterError(msg) => write!(f, "Invalid parameter: {msg}"),
-            Self::InvalidStateError(msg) => write!(f, "The DB is in an invalid state: {msg}"),
-            Self::Other(msg) => write!(f, "LanceDB error: {msg}"),
-        }
-    }
-}
-
-impl Error for LanceError {}
 
 // Convert from LanceDB's error to our LanceError
 impl From<LanceDbError> for LanceError {

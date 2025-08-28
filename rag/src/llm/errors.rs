@@ -1,49 +1,30 @@
 use http::header::InvalidHeaderValue;
+use thiserror::Error;
 
 /// A wrapper for all kinds of errors to one enum that tells us what happened.
-/// Has implementations of From<...> and Display
-#[derive(Clone, Debug)]
+/// Variant error messages are handled via thiserror.
+#[derive(Clone, Debug, Error)]
 pub enum LLMError {
+    #[error("Got 4xx response, possible credentials error: {0}")]
     CredentialError(String),
+    #[error("Failed to deserialize response: {0}")]
     DeserializationError(String),
+    #[error("Environment variable could not be fetched: {0}")]
     EnvError(String),
+    #[error("Unknown error occurred: {0}")]
     GenericLLMError(String),
+    #[error("Other HTTP status code error")]
     HttpStatusError,
+    #[error("Invalid LLM provider: {0}")]
     InvalidProviderError(String),
+    #[error("Invalid request header value: {0}")]
     InvalidHeaderError(String),
+    #[error("LanceDB Error: {0}")]
     LanceError(String),
+    #[error("A network connectivity error occurred")]
     NetworkError,
+    #[error("Request timed out")]
     TimeoutError,
-}
-
-impl std::error::Error for LLMError {}
-impl std::fmt::Display for LLMError {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        match self {
-            LLMError::CredentialError(msg) => {
-                write!(f, "Got 4xx response, possible credentials error: {msg}")
-            }
-            LLMError::DeserializationError(body) => {
-                write!(f, "Failed to deserialize response: {body}")
-            }
-            LLMError::EnvError(msg) => {
-                write!(f, "Environment variable could not be fetched: {msg}")
-            }
-            LLMError::GenericLLMError(msg) => {
-                write!(f, "Unknown error occurred: {msg}")
-            }
-            LLMError::HttpStatusError => write!(f, "Other HTTP status code error"),
-            LLMError::InvalidHeaderError(msg) => {
-                write!(f, "Invalid request header value: {msg}")
-            }
-            LLMError::InvalidProviderError(provider) => {
-                write!(f, "Invalid LLM provider: {provider}")
-            }
-            LLMError::LanceError(msg) => write!(f, "LanceDB Error: {msg}"),
-            LLMError::NetworkError => write!(f, "A network connectivity error occurred"),
-            LLMError::TimeoutError => write!(f, "Request timed out"),
-        }
-    }
 }
 
 /// From<...> implementations begin here

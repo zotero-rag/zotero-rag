@@ -15,7 +15,7 @@ const DEFAULT_SUBSCRIPT_THRESHOLD: f32 = 9.0;
 const DEFAULT_TABLE_EUCLIDEAN_THRESHOLD: f32 = 20.0;
 
 /// A wrapper for all PDF parsing errors
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 enum PdfError {
     ContentError,
     FontNotFound,
@@ -26,7 +26,6 @@ enum PdfError {
     PageFontError,
 }
 
-impl Error for PdfError {}
 impl std::fmt::Display for PdfError {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
