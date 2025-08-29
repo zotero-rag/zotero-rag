@@ -155,8 +155,10 @@ mod tests {
 
     #[test]
     fn process_commands_sets_exit_on_quit() {
-        let mut app = App::default();
-        app.user_query = "/quit".into();
+        let mut app = App {
+            user_query: "/quit".into(),
+            ..Default::default()
+        };
         app.process_commands();
         assert!(app.exit);
     }
@@ -166,8 +168,10 @@ mod tests {
     fn process_command_clears_input_and_maybe_warns() {
         // Ensure we use the toy Zotero library under assets on CI
         with_vars([("CI", Some("true"))], || {
-            let mut app = App::default();
-            app.user_query = "/process".into();
+            let mut app = App {
+                user_query: "/process".into(),
+                ..Default::default()
+            };
             let before_lines = app.output_lines.len();
             let before_styles = app.line_styles.len();
 
