@@ -30,6 +30,17 @@ impl<T: HttpClient + Default> Default for GeminiClient<T> {
         Self::new()
     }
 }
+
+/// Call the Gemini embeddings API.
+///
+/// # Arguments:
+///
+/// * `client`: An `HTTPClient` implementation.
+/// * `text`: The text to embed.
+///
+/// # Returns
+///
+/// An embedding vector if the request was successful.
 async fn call_gemini_embedding_api(
     client: &impl HttpClient,
     text: String,
@@ -39,7 +50,6 @@ async fn call_gemini_embedding_api(
         .ok()
         .unwrap_or_else(|| DEFAULT_GEMINI_EMBEDDING_MODEL.to_string());
 
-    // Prepare headers once
     let mut headers = HeaderMap::new();
     headers.insert("content-type", "application/json".parse()?);
     headers.insert("x-goog-api-key", api_key.parse()?);
@@ -84,6 +94,15 @@ where
         })
     }
 
+    /// Compute embeddings asynchronously using the Gemini API.
+    ///
+    /// # Arguments:
+    ///
+    /// * `source`: An Arrow array
+    ///
+    /// # Returns
+    ///
+    /// If successful, an Arrow array containing the embeddings for each source text.
     async fn compute_embeddings_async(
         &self,
         source: Arc<dyn arrow_array::Array>,
@@ -146,6 +165,7 @@ where
     }
 }
 
+/// Get the Gemini API key from environment variables.
 fn get_gemini_api_key() -> Result<String, LLMError> {
     // Prefer GEMINI_API_KEY, fallback to GOOGLE_API_KEY if present
     match env::var("GEMINI_API_KEY") {
@@ -167,6 +187,7 @@ struct GeminiContent {
     parts: Vec<GeminiPart>,
 }
 
+/// Thinking config in case reasoning models are used
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct GeminiThinkingConfig {
@@ -176,6 +197,7 @@ struct GeminiThinkingConfig {
     thinking_budget: Option<u32>,
 }
 
+/// Optional text generation configuration
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct GeminiGenerationConfig {
@@ -191,6 +213,7 @@ struct GeminiGenerationConfig {
     thinking_config: Option<GeminiThinkingConfig>,
 }
 
+/// The request body for text generation
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct GeminiRequestBody {
@@ -242,6 +265,7 @@ impl From<&UserMessage> for GeminiRequestBody {
     }
 }
 
+/// Helper function to change "assistant" roles to "model" for Gemini's API.
 fn map_role(role: &str) -> String {
     match role {
         // Gemini uses "model" instead of "assistant"
@@ -250,6 +274,7 @@ fn map_role(role: &str) -> String {
     }
 }
 
+/// Usage metadata received from the Gemini text generation response.
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct GeminiUsageMetadata {
@@ -259,6 +284,7 @@ struct GeminiUsageMetadata {
     total_token_count: u32,
 }
 
+/// One of several response candidates.
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct GeminiResponseCandidate {
@@ -266,6 +292,7 @@ struct GeminiResponseCandidate {
     finish_reason: String,
 }
 
+/// Text generation response from the Gemini API.
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct GeminiResponseBody {
@@ -285,8 +312,8 @@ impl<T: HttpClient> ApiClient for GeminiClient<T> {
         let req_body: GeminiRequestBody = message.into();
 
         let url = format!(
-            "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={}",
-            model, key
+            "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent",
+            model
         );
 
         let res = request_with_backoff(&self.client, &url, &headers, req_body, DEFAULT_MAX_RETRIES)
@@ -324,14 +351,14 @@ impl<T: HttpClient> ApiClient for GeminiClient<T> {
     }
 }
 
-// ===== Embeddings (embedContent) =====
-
+/// Content for an embedding API request
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct GeminiEmbeddingRequestContent {
     parts: Vec<GeminiPart>,
 }
 
+/// A request to embed texts using the Gemini API
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct GeminiEmbeddingRequest {
@@ -352,12 +379,14 @@ impl GeminiEmbeddingRequest {
     }
 }
 
+/// A vector containing the embeddings, returned as a nested object by Gemini's embedding API.
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct GeminiEmbeddingVector {
     values: Vec<f32>,
 }
 
+/// The full embedding API response
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct GeminiEmbeddingResponse {
