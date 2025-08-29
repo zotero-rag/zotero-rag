@@ -6,6 +6,9 @@ pub const DEFAULT_OPENAI_MODEL: &str = "gpt-4.1-2025-04-14";
 /// Default Anthropic model for chat completions  
 pub const DEFAULT_ANTHROPIC_MODEL: &str = "claude-sonnet-4-20250514";
 
+/// Default Gemini model for chat completions
+pub const DEFAULT_GEMINI_MODEL: &str = "gemini-2.5-pro";
+
 /// Default maximum tokens for Anthropic requests
 pub const DEFAULT_ANTHROPIC_MAX_TOKENS: u32 = 8192;
 
@@ -21,8 +24,14 @@ pub const OPENAI_EMBEDDING_DIM: u32 = 1536;
 /// VoyageAI voyage-3-large dimension
 pub const VOYAGE_EMBEDDING_DIM: u32 = 2048;
 
+/// Gemini gemini-embedding-001 dimension
+pub const GEMINI_EMBEDDING_DIM: u32 = 3072;
+
 /// Default VoyageAI embedding model
 pub const VOYAGE_EMBEDDING_MODEL: &str = "voyage-3-large";
 
 /// Default OpenAI embedding model
 pub const DEFAULT_OPENAI_EMBEDDING_MODEL: &str = "text-embedding-3-small";
+
+/// Default Gemini embedding model
+pub const DEFAULT_GEMINI_EMBEDDING_MODEL: &str = "gemini-embedding-001";

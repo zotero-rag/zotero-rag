@@ -9,8 +9,9 @@ use lancedb::embeddings::EmbeddingFunction;
 
 use super::errors::LLMError;
 use crate::common;
-use crate::constants::VOYAGE_EMBEDDING_DIM;
 use crate::constants::{DEFAULT_MAX_CONCURRENT_REQUESTS, OPENAI_EMBEDDING_DIM};
+use crate::constants::{GEMINI_EMBEDDING_DIM, VOYAGE_EMBEDDING_DIM};
+use crate::llm::gemini::GeminiClient;
 use crate::llm::http_client::ReqwestClient;
 use crate::llm::openai::OpenAIClient;
 use crate::llm::voyage::VoyageAIClient;
@@ -98,6 +99,7 @@ pub fn get_embedding_dims_by_provider(embedding_name: &str) -> u32 {
         "openai" => OPENAI_EMBEDDING_DIM,
         "anthropic" => OPENAI_EMBEDDING_DIM,
         "voyageai" => VOYAGE_EMBEDDING_DIM,
+        "gemini" => GEMINI_EMBEDDING_DIM,
         _ => panic!("Invalid embedding provider."),
     }
 }
@@ -120,6 +122,7 @@ pub fn get_embedding_provider(
         "openai" => Ok(Arc::new(OpenAIClient::<ReqwestClient>::default())),
         "anthropic" => Ok(Arc::new(OpenAIClient::<ReqwestClient>::default())),
         "voyageai" => Ok(Arc::new(VoyageAIClient::<ReqwestClient>::default())),
+        "gemini" => Ok(Arc::new(GeminiClient::<ReqwestClient>::default())),
         _ => Err(LLMError::InvalidProviderError(embedding_name.to_string())),
     }
 }
