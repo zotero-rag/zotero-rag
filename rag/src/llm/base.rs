@@ -35,6 +35,7 @@ pub enum ModelProviders {
     OpenAI,
     Anthropic,
     OpenRouter,
+    Gemini,
 }
 
 impl ModelProviders {
@@ -43,6 +44,7 @@ impl ModelProviders {
             ModelProviders::OpenAI => "openai",
             ModelProviders::Anthropic => "anthropic",
             ModelProviders::OpenRouter => "openrouter",
+            ModelProviders::Gemini => "gemini",
         }
     }
 
@@ -51,6 +53,7 @@ impl ModelProviders {
             ModelProviders::OpenAI.as_str(),
             ModelProviders::Anthropic.as_str(),
             ModelProviders::OpenRouter.as_str(),
+            ModelProviders::Gemini.as_str(),
         ]
         .contains(&provider)
     }
@@ -61,6 +64,7 @@ pub enum EmbeddingProviders {
     OpenAI,
     Anthropic,
     VoyageAI,
+    Gemini,
 }
 
 impl EmbeddingProviders {
@@ -69,6 +73,7 @@ impl EmbeddingProviders {
             EmbeddingProviders::OpenAI => "openai",
             EmbeddingProviders::Anthropic => "anthropic",
             EmbeddingProviders::VoyageAI => "voyageai",
+            EmbeddingProviders::Gemini => "gemini",
         }
     }
 
@@ -77,6 +82,7 @@ impl EmbeddingProviders {
             EmbeddingProviders::OpenAI.as_str(),
             EmbeddingProviders::Anthropic.as_str(),
             EmbeddingProviders::VoyageAI.as_str(),
+            EmbeddingProviders::Gemini.as_str(),
         ]
         .contains(&provider)
     }

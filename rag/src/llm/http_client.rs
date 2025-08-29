@@ -43,6 +43,7 @@ impl HttpClient for ReqwestClient {
     }
 }
 
+#[derive(Debug)]
 pub struct MockHttpClient<T: Send + Sync + Clone> {
     pub response: T,
 }

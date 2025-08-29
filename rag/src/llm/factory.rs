@@ -1,6 +1,7 @@
 use crate::llm::anthropic::AnthropicClient;
 use crate::llm::base::ApiClient;
 use crate::llm::errors::LLMError;
+use crate::llm::gemini::GeminiClient;
 use crate::llm::openai::OpenAIClient;
 use crate::llm::openrouter::OpenRouterClient;
 
@@ -10,6 +11,7 @@ pub enum LLMClient {
     Anthropic(AnthropicClient),
     OpenAI(OpenAIClient),
     OpenRouter(OpenRouterClient),
+    Gemini(GeminiClient),
 }
 
 // Implement ApiClient for LLMClient to delegate to the inner implementations
@@ -22,6 +24,7 @@ impl ApiClient for LLMClient {
             LLMClient::Anthropic(client) => client.send_message(message).await,
             LLMClient::OpenAI(client) => client.send_message(message).await,
             LLMClient::OpenRouter(client) => client.send_message(message).await,
+            LLMClient::Gemini(client) => client.send_message(message).await,
         }
     }
 }
@@ -35,6 +38,7 @@ pub fn get_client_by_provider(provider: &str) -> Result<LLMClient, LLMError> {
         "anthropic" => Ok(LLMClient::Anthropic(AnthropicClient::new())),
         "openai" => Ok(LLMClient::OpenAI(OpenAIClient::new())),
         "openrouter" => Ok(LLMClient::OpenRouter(OpenRouterClient::new())),
+        "gemini" => Ok(LLMClient::Gemini(GeminiClient::new())),
         _ => Err(LLMError::InvalidProviderError(provider.to_string())),
     }
 }
