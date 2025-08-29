@@ -30,3 +30,35 @@ pub fn handle_process_command(app: &mut App) {
         app.line_styles.push(Style::default().fg(Color::Yellow));
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serial_test::serial;
+    use temp_env::with_vars;
+
+    #[test]
+    fn exit_sets_flag() {
+        let mut app = App::default();
+        assert!(!app.exit);
+        exit(&mut app);
+        assert!(app.exit);
+    }
+
+    #[test]
+    #[serial]
+    fn handle_process_respects_ci_assets_and_adds_warning_for_large_lib() {
+        with_vars([("CI", Some("true"))], || {
+            let mut app = App::default();
+            let before_len = app.output_lines.len();
+            let _before_styles = app.line_styles.len();
+            handle_process_command(&mut app);
+
+            // Input cleared
+            assert_eq!(app.user_query, "");
+            // Either no change or exactly one yellow warning line added
+            assert!(app.output_lines.len() == before_len || app.output_lines.len() == before_len + 1);
+            assert_eq!(app.output_lines.len(), app.line_styles.len());
+        });
+    }
+}

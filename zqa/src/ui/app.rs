@@ -136,3 +136,62 @@ impl Widget for &App {
         output_paragraph.render(layout[0], buf);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serial_test::serial;
+    use temp_env::with_vars;
+
+    #[test]
+    fn default_app_state_is_sane() {
+        let app = App::default();
+        assert_eq!(app.user_query, "");
+        assert_eq!(app.output_lines.len(), 2);
+        assert_eq!(app.line_styles.len(), 2);
+        assert!(!app.exit);
+        assert_eq!(app.scroll_idx, 0);
+    }
+
+    #[test]
+    fn process_commands_sets_exit_on_quit() {
+        let mut app = App::default();
+        app.user_query = "/quit".into();
+        app.process_commands();
+        assert!(app.exit);
+    }
+
+    #[test]
+    #[serial]
+    fn process_command_clears_input_and_maybe_warns() {
+        // Ensure we use the toy Zotero library under assets on CI
+        with_vars([("CI", Some("true"))], || {
+            let mut app = App::default();
+            app.user_query = "/process".into();
+            let before_lines = app.output_lines.len();
+            let before_styles = app.line_styles.len();
+
+            app.process_commands();
+
+            // Input should always be cleared
+            assert_eq!(app.user_query, "");
+            // Styles vector should always match lines vector length
+            assert_eq!(app.output_lines.len(), app.line_styles.len());
+            // Either we warned (grew by 1) or nothing was added
+            assert!(app.output_lines.len() == before_lines || app.output_lines.len() == before_lines + 1);
+            assert!(app.line_styles.len() == before_styles || app.line_styles.len() == before_styles + 1);
+        });
+    }
+
+    #[test]
+    fn render_does_not_panic() {
+        // Render into a small buffer to ensure the widget path works
+        let app = App::default();
+        let area = Rect::new(0, 0, 80, 24);
+        let mut buf = Buffer::empty(area);
+        // Should not panic
+        Widget::render(&app, area, &mut buf);
+        // Buffer area should remain unchanged
+        assert_eq!(buf.area(), &area);
+    }
+}
