@@ -178,8 +178,14 @@ mod tests {
             // Styles vector should always match lines vector length
             assert_eq!(app.output_lines.len(), app.line_styles.len());
             // Either we warned (grew by 1) or nothing was added
-            assert!(app.output_lines.len() == before_lines || app.output_lines.len() == before_lines + 1);
-            assert!(app.line_styles.len() == before_styles || app.line_styles.len() == before_styles + 1);
+            assert!(
+                app.output_lines.len() == before_lines
+                    || app.output_lines.len() == before_lines + 1
+            );
+            assert!(
+                app.line_styles.len() == before_styles
+                    || app.line_styles.len() == before_styles + 1
+            );
         });
     }
 

@@ -57,7 +57,9 @@ mod tests {
             // Input cleared
             assert_eq!(app.user_query, "");
             // Either no change or exactly one yellow warning line added
-            assert!(app.output_lines.len() == before_len || app.output_lines.len() == before_len + 1);
+            assert!(
+                app.output_lines.len() == before_len || app.output_lines.len() == before_len + 1
+            );
             assert_eq!(app.output_lines.len(), app.line_styles.len());
         });
     }
