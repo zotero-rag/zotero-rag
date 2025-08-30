@@ -9,11 +9,11 @@ use lancedb::embeddings::EmbeddingFunction;
 use serde::{Deserialize, Serialize};
 
 use super::base::{ApiClient, ApiResponse, ChatHistoryItem, UserMessage};
-use super::embeddings::compute_openai_embeddings_sync;
 use super::errors::LLMError;
 use super::http_client::{HttpClient, ReqwestClient};
 use crate::common::request_with_backoff;
 use crate::constants::{DEFAULT_MAX_RETRIES, DEFAULT_OPENAI_MODEL, OPENAI_EMBEDDING_DIM};
+use crate::embedding::openai::compute_openai_embeddings_sync;
 
 /// A client for OpenAI's chat completions API
 #[derive(Debug, Clone)]

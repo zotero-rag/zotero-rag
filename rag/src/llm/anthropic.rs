@@ -9,7 +9,6 @@ use lancedb::embeddings::EmbeddingFunction;
 use serde::{Deserialize, Serialize};
 
 use super::base::{ApiClient, ApiResponse, ChatHistoryItem, UserMessage};
-use super::embeddings::compute_openai_embeddings_sync;
 use super::errors::LLMError;
 use super::http_client::{HttpClient, ReqwestClient};
 use crate::common::request_with_backoff;
@@ -17,6 +16,7 @@ use crate::constants::{
     DEFAULT_ANTHROPIC_MAX_TOKENS, DEFAULT_ANTHROPIC_MODEL, DEFAULT_MAX_RETRIES,
     OPENAI_EMBEDDING_DIM,
 };
+use crate::embedding::openai::compute_openai_embeddings_sync;
 const DEFAULT_CLAUDE_MODEL: &str = DEFAULT_ANTHROPIC_MODEL;
 
 /// A generic client class for now. We can add stuff here later if needed, for

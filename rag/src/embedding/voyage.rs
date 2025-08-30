@@ -13,7 +13,7 @@ use lancedb::embeddings::EmbeddingFunction;
 use reqwest::header::HeaderMap;
 use serde::{Deserialize, Serialize};
 
-use super::errors::LLMError;
+use crate::llm::errors::LLMError;
 use crate::llm::http_client::{HttpClient, ReqwestClient};
 
 /// A client for Voyage AI's embedding API.
