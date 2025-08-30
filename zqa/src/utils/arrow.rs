@@ -8,10 +8,8 @@ use crate::{
     utils::library::{ZoteroItem, ZoteroItemMetadata},
 };
 use rag::{
-    llm::{
-        embeddings::{get_embedding_dims_by_provider, get_embedding_provider},
-        errors::LLMError,
-    },
+    embedding::common::{get_embedding_dims_by_provider, get_embedding_provider},
+    llm::errors::LLMError,
     vector::lance::{LanceError, lancedb_exists, vector_search as rag_vector_search},
 };
 

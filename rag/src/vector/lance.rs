@@ -1,7 +1,6 @@
-use crate::llm::{
-    anthropic::AnthropicClient, base::EmbeddingProviders, http_client::ReqwestClient,
-    openai::OpenAIClient, voyage::VoyageAIClient,
-};
+use crate::capabilities::EmbeddingProviders;
+use crate::embedding::voyage::VoyageAIClient;
+use crate::llm::{anthropic::AnthropicClient, http_client::ReqwestClient, openai::OpenAIClient};
 
 use arrow_array::{
     RecordBatch, RecordBatchIterator, StringArray, cast::AsArray, types::Float32Type,
