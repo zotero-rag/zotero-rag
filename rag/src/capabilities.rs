@@ -72,16 +72,22 @@ impl EmbeddingProviders {
 #[derive(Clone, Debug)]
 pub enum RerankerProviders {
     Cohere,
+    VoyageAI,
 }
 
 impl RerankerProviders {
     pub fn as_str(&self) -> &'static str {
         match self {
             RerankerProviders::Cohere => "cohere",
+            RerankerProviders::VoyageAI => "voyageai",
         }
     }
 
     pub fn contains(provider: &str) -> bool {
-        [RerankerProviders::Cohere.as_str()].contains(&provider)
+        [
+            RerankerProviders::Cohere.as_str(),
+            RerankerProviders::VoyageAI.as_str(),
+        ]
+        .contains(&provider)
     }
 }

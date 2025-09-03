@@ -452,13 +452,15 @@ pub async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<(), CLIEr
 
         match readline {
             Ok(command) => {
-                if !command.trim().is_empty()
-                    && let Err(e) = rl.add_history_entry(command.as_str())
+                let command = command.trim();
+
+                if !command.is_empty()
+                    && let Err(e) = rl.add_history_entry(command)
                 {
                     log::debug!("Failed to write history entry: {e}");
                 }
 
-                match command.as_str() {
+                match command {
                     "" => {}
                     "/help" | "help" | "?" => {
                         writeln!(&mut ctx.out)?;
