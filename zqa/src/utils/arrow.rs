@@ -213,6 +213,10 @@ pub fn get_column_from_batch(batch: &RecordBatch, column: usize) -> Vec<String> 
 /// In some sense, this function is the reverse of the `library_to_arrow` function, which creates a
 /// `RecordBatch` from vectors after calling `parse_library`.
 ///
+/// If using an embedding provider that has native rerankers, this also uses their reranker model.
+/// Currently, for other providers, we do not perform any reranking; although this will likely be
+/// added in the future, this is why users are defaulted to VoyageAI, which does have a reranker.
+///
 /// # Arguments
 ///
 /// * `query` - The query to search the LanceDB table for.

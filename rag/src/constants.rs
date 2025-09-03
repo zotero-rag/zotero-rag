@@ -30,6 +30,12 @@ pub const GEMINI_EMBEDDING_DIM: u32 = 3072;
 /// Default VoyageAI embedding model
 pub const VOYAGE_EMBEDDING_MODEL: &str = "voyage-3-large";
 
+/// Default Cohere embedding model
+pub const COHERE_EMBEDDING_MODEL: &str = "embed-v4.0";
+
+/// Default Cohere dimensions
+pub const COHERE_EMBEDDING_DIM: u32 = 1536;
+
 /// Default OpenAI embedding model
 pub const DEFAULT_OPENAI_EMBEDDING_MODEL: &str = "text-embedding-3-small";
 
