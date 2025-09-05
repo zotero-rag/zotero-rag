@@ -217,7 +217,7 @@ mod tests {
     use dotenv::dotenv;
     use std::sync::Arc;
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads=1)]
     async fn test_compute_embeddings() {
         dotenv().ok();
 
@@ -231,7 +231,7 @@ mod tests {
         ]);
 
         let client = VoyageAIClient::<ReqwestClient>::default();
-        let embeddings = client.compute_embeddings_async(Arc::new(array)).await;
+        let embeddings = client.compute_embeddings_internal(Arc::new(array));
 
         // Debug the error if there is one
         if embeddings.is_err() {
