@@ -124,14 +124,8 @@ where
                         // 4. Weave the real embeddings back into the right spots, zero‐padding empties
                         let mut batch_embs = Vec::with_capacity(batch.len());
                         for &is_real in &mask {
-                            // TODO: Refactor to use `let` in the condition when this is not an
-                            // unstable feature anymore.
-                            if is_real {
-                                if let Some(embedding) = it.next() {
-                                    batch_embs.push(embedding);
-                                } else {
-                                    batch_embs.push(vec![0.0_f32; VOYAGE_EMBEDDING_DIM as usize]);
-                                }
+                            if is_real && let Some(embedding) = it.next() {
+                                batch_embs.push(embedding);
                             } else {
                                 batch_embs.push(vec![0.0_f32; VOYAGE_EMBEDDING_DIM as usize]);
                             }
@@ -184,15 +178,6 @@ where
                 );
             }
         }
-
-        let n_embeddings = all_embeddings.len();
-        let emb_shape = all_embeddings
-            .first()
-            .ok_or(LLMError::GenericLLMError(String::from(
-                "Could not compute embedding shape--this should not happen.",
-            )))?
-            .len();
-        log::debug!("Embedding dim: ({n_embeddings}, {emb_shape})\n");
 
         // Convert to Arrow FixedSizeListArray
         let flattened: Vec<f32> = all_embeddings.iter().flatten().copied().collect();

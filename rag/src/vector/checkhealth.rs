@@ -340,8 +340,6 @@ async fn get_zero_vectors(
 /// # Returns:
 /// Index information if we were able to list indices successfully.
 async fn check_indexes(tbl: &lancedb::table::Table) -> Result<Vec<(String, String)>, LanceError> {
-    // NOTE:
-    //
     match tbl.list_indices().await {
         Ok(indices) => {
             if indices.is_empty() {
