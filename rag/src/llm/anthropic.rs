@@ -8,7 +8,7 @@ use lancedb::arrow::arrow_schema::{DataType, Field};
 use lancedb::embeddings::EmbeddingFunction;
 use serde::{Deserialize, Serialize};
 
-use super::base::{ApiClient, ApiResponse, ChatHistoryItem, UserMessage};
+use super::base::{ApiClient, ChatHistoryItem, CompletionApiResponse, UserMessage};
 use super::errors::LLMError;
 use super::http_client::{HttpClient, ReqwestClient};
 use crate::common::request_with_backoff;
@@ -121,7 +121,7 @@ struct AnthropicResponse {
 /// We can use hard-coded strings here; I think the resulting
 /// locality-of-behavior is worth the loss in pointless generality.
 impl<T: HttpClient> ApiClient for AnthropicClient<T> {
-    async fn send_message(&self, message: &UserMessage) -> Result<ApiResponse, LLMError> {
+    async fn send_message(&self, message: &UserMessage) -> Result<CompletionApiResponse, LLMError> {
         let key = env::var("ANTHROPIC_API_KEY")?;
 
         let mut headers = HeaderMap::new();
@@ -150,7 +150,7 @@ impl<T: HttpClient> ApiClient for AnthropicClient<T> {
             LLMError::DeserializationError(err.to_string())
         })?;
 
-        Ok(ApiResponse {
+        Ok(CompletionApiResponse {
             content: response.content[0].text.clone(),
             input_tokens: response.usage.input_tokens,
             output_tokens: response.usage.output_tokens,

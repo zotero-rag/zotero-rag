@@ -39,6 +39,7 @@ impl ModelProviders {
 /// model instead.
 #[derive(Clone, Debug)]
 pub enum EmbeddingProviders {
+    Cohere,
     OpenAI,
     Anthropic,
     VoyageAI,
@@ -48,6 +49,7 @@ pub enum EmbeddingProviders {
 impl EmbeddingProviders {
     pub fn as_str(&self) -> &'static str {
         match self {
+            EmbeddingProviders::Cohere => "cohere",
             EmbeddingProviders::OpenAI => "openai",
             EmbeddingProviders::Anthropic => "anthropic",
             EmbeddingProviders::VoyageAI => "voyageai",
@@ -57,6 +59,7 @@ impl EmbeddingProviders {
 
     pub fn contains(provider: &str) -> bool {
         [
+            EmbeddingProviders::Cohere.as_str(),
             EmbeddingProviders::OpenAI.as_str(),
             EmbeddingProviders::Anthropic.as_str(),
             EmbeddingProviders::VoyageAI.as_str(),

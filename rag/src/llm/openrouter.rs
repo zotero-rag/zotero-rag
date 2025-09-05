@@ -5,7 +5,7 @@ use std::env;
 use http::HeaderMap;
 use serde::{Deserialize, Serialize};
 
-use super::base::{ApiClient, ApiResponse, ChatHistoryItem, UserMessage};
+use super::base::{ApiClient, ChatHistoryItem, CompletionApiResponse, UserMessage};
 use super::errors::LLMError;
 use super::http_client::{HttpClient, ReqwestClient};
 
@@ -116,7 +116,7 @@ struct OpenRouterResponse {
 }
 
 impl<T: HttpClient> ApiClient for OpenRouterClient<T> {
-    async fn send_message(&self, message: &UserMessage) -> Result<ApiResponse, LLMError> {
+    async fn send_message(&self, message: &UserMessage) -> Result<CompletionApiResponse, LLMError> {
         let key = env::var("OPENROUTER_API_KEY")?;
 
         let mut headers = HeaderMap::new();
@@ -148,7 +148,7 @@ impl<T: HttpClient> ApiClient for OpenRouterClient<T> {
             LLMError::DeserializationError("OpenRouter response contained no choices".to_string())
         })?;
 
-        Ok(ApiResponse {
+        Ok(CompletionApiResponse {
             content: choice.message.content,
             input_tokens: response.usage.prompt_tokens,
             output_tokens: response.usage.completion_tokens,
