@@ -19,7 +19,7 @@ impl ApiClient for LLMClient {
     async fn send_message(
         &self,
         message: &crate::llm::base::UserMessage,
-    ) -> Result<crate::llm::base::ApiResponse, LLMError> {
+    ) -> Result<crate::llm::base::CompletionApiResponse, LLMError> {
         match self {
             LLMClient::Anthropic(client) => client.send_message(message).await,
             LLMClient::OpenAI(client) => client.send_message(message).await,

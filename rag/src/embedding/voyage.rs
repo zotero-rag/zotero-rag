@@ -1,16 +1,12 @@
-use crate::constants::{VOYAGE_EMBEDDING_DIM, VOYAGE_EMBEDDING_MODEL};
-use indicatif::ProgressBar;
-use log;
-use std::{
-    borrow::Cow,
-    env, fs,
-    sync::Arc,
-    time::{Duration, Instant},
+use crate::{
+    capabilities::EmbeddingProviders,
+    constants::{VOYAGE_EMBEDDING_DIM, VOYAGE_EMBEDDING_MODEL},
+    embedding::common::{EmbeddingApiRequestTexts, EmbeddingApiResponse, compute_embeddings_async},
 };
+use std::{borrow::Cow, sync::Arc};
 
 use arrow_schema::{DataType, Field};
 use lancedb::embeddings::EmbeddingFunction;
-use reqwest::header::HeaderMap;
 use serde::{Deserialize, Serialize};
 
 use crate::llm::errors::LLMError;
@@ -22,7 +18,7 @@ pub struct VoyageAIClient<T: HttpClient = ReqwestClient> {
     pub client: T,
 }
 
-impl<T: HttpClient + Default> Default for VoyageAIClient<T> {
+impl<T: HttpClient + Default + Clone> Default for VoyageAIClient<T> {
     fn default() -> Self {
         Self::new()
     }
@@ -30,7 +26,7 @@ impl<T: HttpClient + Default> Default for VoyageAIClient<T> {
 
 impl<T> VoyageAIClient<T>
 where
-    T: HttpClient + Default,
+    T: HttpClient + Default + Clone,
 {
     /// Creates a new VoyageAIClient instance
     pub fn new() -> Self {
@@ -39,24 +35,11 @@ where
         }
     }
 
-    /// Internal method to compute embeddings that can be reused by both source and query embedding functions
-    async fn compute_embeddings_async(
+    /// Internal method to compute embeddings that works with LLMError
+    pub fn compute_embeddings_internal(
         &self,
         source: Arc<dyn arrow_array::Array>,
     ) -> Result<Arc<dyn arrow_array::Array>, LLMError> {
-        let source_array = arrow_array::cast::as_string_array(&source);
-        let texts: Vec<Option<String>> = source_array
-            .iter()
-            .map(|s| s.map(|s| s.to_owned()))
-            .collect();
-
-        log::info!("Processing {} input texts.", texts.len());
-        let bar = ProgressBar::new(texts.len().try_into().unwrap());
-
-        let api_key = env::var("VOYAGE_AI_API_KEY")?;
-
-        let mut all_embeddings = Vec::new();
-
         // Wait for two seconds after each batch to avoid RPM and TPM throttling. At the base
         // tier, Voyage AI has a 3M TPM and a 2K RPM. However, although the context of their
         // models is 32k, we can't just sent 3M / 32k ~= 93 requests at a time and then wait a
@@ -67,142 +50,21 @@ where
         const BATCH_SIZE: usize = 3;
         const WAIT_AFTER_REQUEST_S: u64 = 2;
 
-        // Gather failed texts
-        let mut fail_count = 0;
-        let mut total_masked = 0;
-        let mut failed_texts: Vec<String> = Vec::new();
-
-        let chunks = texts.chunks(BATCH_SIZE);
-        let num_chunks = chunks.len();
-
-        for (i, batch) in chunks.enumerate() {
-            // For every batch, we need to handle the case of empty/whitespace strings, since Voyage AI
-            // does not like handling them.
-            // 1. Build a mask of "real" vs "empty" slots
-            let mask: Vec<bool> = batch
-                .iter()
-                .map(|opt| opt.as_ref().is_some_and(|s| !s.trim().is_empty()))
-                .collect();
-
-            // 2. Extract only the non-empty strings to send
-            let cur_texts: Vec<String> = batch
-                .iter()
-                .filter_map(|opt| opt.clone().filter(|s| !s.trim().is_empty()))
-                .collect();
-
-            // 3. If none are real, just push zeros for whole batch
-            if cur_texts.is_empty() {
-                all_embeddings.extend(std::iter::repeat_n(
-                    vec![0.0; VOYAGE_EMBEDDING_DIM as usize],
-                    batch.len(),
-                ));
-            } else {
-                let request = VoyageAIRequest::from_texts(cur_texts);
-
-                let mut headers = HeaderMap::new();
-                headers.insert("Authorization", format!("Bearer {api_key}").parse()?);
-                headers.insert("Content-Type", "application/json".parse()?);
-
-                let start_time = Instant::now();
-                let response = self
-                    .client
-                    .post_json("https://api.voyageai.com/v1/embeddings", headers, &request)
-                    .await?;
-
-                let body = response.text().await?;
-                log::debug!(
-                    "Voyage AI embedding request took {:.1?}",
-                    start_time.elapsed()
-                );
-
-                let voyage_response: VoyageAIResponse = serde_json::from_str(&body)?;
-
-                match voyage_response {
-                    VoyageAIResponse::Success(success) => {
-                        let mut it = success.data.into_iter().map(|d| d.embedding);
-
-                        // 4. Weave the real embeddings back into the right spots, zero‐padding empties
-                        let mut batch_embs = Vec::with_capacity(batch.len());
-                        for &is_real in &mask {
-                            if is_real && let Some(embedding) = it.next() {
-                                batch_embs.push(embedding);
-                            } else {
-                                batch_embs.push(vec![0.0_f32; VOYAGE_EMBEDDING_DIM as usize]);
-                            }
-                        }
-                        all_embeddings.extend(batch_embs);
-
-                        total_masked += mask.iter().filter(|mask| !**mask).count();
-                    }
-                    VoyageAIResponse::Error(err) => {
-                        eprintln!("Got a 400 response from Voyage AI: {}\n", err.detail);
-                        eprintln!("We tried sending the request: {request:#?}\n");
-
-                        fail_count += batch.len();
-                        failed_texts.extend(batch.iter().filter_map(|text| text.as_ref()).cloned());
-
-                        let zeros: Vec<Vec<f32>> = std::iter::repeat_n(
-                            Vec::from([0.0; VOYAGE_EMBEDDING_DIM as usize]),
-                            batch.len(),
-                        )
-                        .collect();
-                        all_embeddings.extend(zeros);
-                    }
-                }
-            }
-
-            bar.inc(BATCH_SIZE as u64);
-
-            if i < num_chunks - 1 {
-                tokio::time::sleep(Duration::from_secs(WAIT_AFTER_REQUEST_S)).await;
-            }
-        }
-
-        log::info!(
-            "Processing finished. Statistics:\n{fail_count} items failed.\n{total_masked} items were empty."
-        );
-
-        if fail_count > 0 {
-            let failed = FailedTexts {
-                embedding_provider: String::from("voyageai"),
-                texts: failed_texts,
-            };
-            let encoded = serde_json::to_string_pretty(&failed)?;
-
-            if let Err(e) = fs::write("failed.json", encoded) {
-                eprintln!("We could not write out the failed texts to 'failed.json': {e}");
-            } else {
-                // TODO: Implement /repair
-                println!(
-                    "We have written the failed texts to 'failed.json'. Consider using /repair to fix this."
-                );
-            }
-        }
-
-        // Convert to Arrow FixedSizeListArray
-        let flattened: Vec<f32> = all_embeddings.iter().flatten().copied().collect();
-        let values = arrow_array::Float32Array::from(flattened);
-
-        let list_array = arrow_array::FixedSizeListArray::try_new(
-            Arc::new(Field::new("item", DataType::Float32, false)),
-            VOYAGE_EMBEDDING_DIM as i32,
-            Arc::new(values),
-            None,
-        )
-        .map_err(|e| {
-            LLMError::GenericLLMError(format!("Failed to create FixedSizeListArray: {e}"))
-        })?;
-
-        Ok(Arc::new(list_array) as Arc<dyn arrow_array::Array>)
-    }
-
-    /// Internal method to compute embeddings that works with LLMError
-    pub fn compute_embeddings_internal(
-        &self,
-        source: Arc<dyn arrow_array::Array>,
-    ) -> Result<Arc<dyn arrow_array::Array>, LLMError> {
         tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(self.compute_embeddings_async(source))
+            tokio::runtime::Handle::current().block_on(compute_embeddings_async::<
+                VoyageAIResponse,
+                VoyageAIRequest,
+            >(
+                source,
+                "https://api.voyageai.com/v1/embeddings",
+                "VOYAGE_AI_API_KEY",
+                self.client.clone(),
+                VoyageAIRequest::from_texts,
+                EmbeddingProviders::VoyageAI.as_str().to_string(),
+                BATCH_SIZE,
+                WAIT_AFTER_REQUEST_S,
+                VOYAGE_EMBEDDING_DIM as usize,
+            ))
         })
     }
 }
@@ -219,8 +81,8 @@ struct VoyageAIRequest {
     output_dtype: String,
 }
 
-impl VoyageAIRequest {
-    pub fn from_texts(texts: Vec<String>) -> Self {
+impl EmbeddingApiRequestTexts<VoyageAIRequest> for VoyageAIRequest {
+    fn from_texts(texts: Vec<String>) -> Self {
         Self {
             input: texts,
             model: VOYAGE_EMBEDDING_MODEL.to_string(),
@@ -264,6 +126,34 @@ enum VoyageAIResponse {
     Error(VoyageAIError),
 }
 
+impl EmbeddingApiResponse for VoyageAIResponse {
+    type Success = VoyageAISuccess;
+    type Error = VoyageAIError;
+
+    fn is_success(&self) -> bool {
+        match self {
+            VoyageAIResponse::Success(_) => true,
+            VoyageAIResponse::Error(_) => false,
+        }
+    }
+
+    fn get_embeddings(self) -> Option<Vec<Vec<f32>>> {
+        match self {
+            VoyageAIResponse::Error(_) => None,
+            VoyageAIResponse::Success(res) => {
+                Some(res.data.iter().map(|v| v.embedding.clone()).collect())
+            }
+        }
+    }
+
+    fn get_error_message(self) -> Option<String> {
+        match self {
+            VoyageAIResponse::Error(err) => Some(err.detail),
+            VoyageAIResponse::Success(_) => None,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize)]
 pub struct FailedTexts {
     pub embedding_provider: String,
@@ -273,7 +163,7 @@ pub struct FailedTexts {
 /// Implements the LanceDB EmbeddingFunction trait for VoyageAIClient. Since VoyageAI has the
 /// highest token limit for their embedding model (32k instead of OpenAI's 8k), we prefer this
 /// instead.
-impl<T: HttpClient + Default + std::fmt::Debug> EmbeddingFunction for VoyageAIClient<T> {
+impl<T: HttpClient + Default + Clone + std::fmt::Debug> EmbeddingFunction for VoyageAIClient<T> {
     fn name(&self) -> &str {
         "Voyage AI"
     }
@@ -321,8 +211,8 @@ impl<T: HttpClient + Default + std::fmt::Debug> EmbeddingFunction for VoyageAICl
 
 #[cfg(test)]
 mod tests {
+    use crate::embedding::voyage::{VOYAGE_EMBEDDING_DIM, VoyageAIClient};
     use crate::llm::http_client::ReqwestClient;
-    use crate::llm::voyage::{VOYAGE_EMBEDDING_DIM, VoyageAIClient};
     use arrow_array::Array;
     use dotenv::dotenv;
     use std::sync::Arc;

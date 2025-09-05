@@ -15,7 +15,7 @@ use crate::constants::{
     DEFAULT_MAX_RETRIES, GEMINI_EMBEDDING_DIM,
 };
 
-use super::base::{ApiClient, ApiResponse, UserMessage};
+use super::base::{ApiClient, CompletionApiResponse, UserMessage};
 use super::errors::LLMError;
 use super::http_client::{HttpClient, ReqwestClient};
 
@@ -301,7 +301,7 @@ struct GeminiResponseBody {
 }
 
 impl<T: HttpClient> ApiClient for GeminiClient<T> {
-    async fn send_message(&self, message: &UserMessage) -> Result<ApiResponse, LLMError> {
+    async fn send_message(&self, message: &UserMessage) -> Result<CompletionApiResponse, LLMError> {
         let key = get_gemini_api_key()?;
         let model = env::var("GEMINI_MODEL").unwrap_or_else(|_| DEFAULT_GEMINI_MODEL.to_string());
 
@@ -343,7 +343,7 @@ impl<T: HttpClient> ApiClient for GeminiClient<T> {
             .collect::<Vec<_>>()
             .join("");
 
-        Ok(ApiResponse {
+        Ok(CompletionApiResponse {
             content: content_text,
             input_tokens: response.usage_metadata.prompt_token_count,
             output_tokens: response.usage_metadata.candidates_token_count,

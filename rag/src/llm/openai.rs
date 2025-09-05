@@ -8,7 +8,7 @@ use lancedb::arrow::arrow_schema::DataType;
 use lancedb::embeddings::EmbeddingFunction;
 use serde::{Deserialize, Serialize};
 
-use super::base::{ApiClient, ApiResponse, ChatHistoryItem, UserMessage};
+use super::base::{ApiClient, ChatHistoryItem, CompletionApiResponse, UserMessage};
 use super::errors::LLMError;
 use super::http_client::{HttpClient, ReqwestClient};
 use crate::common::request_with_backoff;
@@ -133,7 +133,7 @@ impl<T: HttpClient> ApiClient for OpenAIClient<T> {
     async fn send_message(
         &self,
         message: &UserMessage,
-    ) -> Result<ApiResponse, super::errors::LLMError> {
+    ) -> Result<CompletionApiResponse, super::errors::LLMError> {
         let key = env::var("OPENAI_API_KEY")?;
 
         let mut headers = HeaderMap::new();
@@ -164,7 +164,7 @@ impl<T: HttpClient> ApiClient for OpenAIClient<T> {
         };
 
         let choice = &response.choices[0];
-        Ok(ApiResponse {
+        Ok(CompletionApiResponse {
             content: choice.message.content.clone(),
             input_tokens: response.usage.prompt_tokens,
             output_tokens: response.usage.completion_tokens,

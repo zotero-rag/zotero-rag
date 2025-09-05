@@ -19,7 +19,7 @@ pub struct UserMessage {
 /// A user-facing struct representing API responses, containing only information users
 /// would be interested in.
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
-pub struct ApiResponse {
+pub struct CompletionApiResponse {
     pub content: String,
     pub input_tokens: u32,
     pub output_tokens: u32,
@@ -27,5 +27,5 @@ pub struct ApiResponse {
 
 #[allow(async_fn_in_trait)]
 pub trait ApiClient {
-    async fn send_message(&self, message: &UserMessage) -> Result<ApiResponse, LLMError>;
+    async fn send_message(&self, message: &UserMessage) -> Result<CompletionApiResponse, LLMError>;
 }

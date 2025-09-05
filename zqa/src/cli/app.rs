@@ -6,7 +6,7 @@ use crate::utils::library::get_new_library_items;
 use arrow_array::{self, RecordBatch, RecordBatchIterator};
 use lancedb::embeddings::EmbeddingDefinition;
 use rag::capabilities::ModelProviders;
-use rag::llm::base::{ApiClient, ApiResponse, UserMessage};
+use rag::llm::base::{ApiClient, CompletionApiResponse, UserMessage};
 use rag::llm::errors::LLMError;
 use rag::llm::factory::get_client_by_provider;
 use rag::vector::checkhealth::lancedb_health_check;
@@ -306,7 +306,7 @@ async fn run_query<O: Write, E: Write>(
         });
     });
 
-    let results: Vec<Result<ApiResponse, LLMError>> = set.join_all().await;
+    let results: Vec<Result<CompletionApiResponse, LLMError>> = set.join_all().await;
     let summarization_duration = summarization_start.elapsed();
     writeln!(
         &mut ctx.err,
