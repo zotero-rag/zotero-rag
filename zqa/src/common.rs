@@ -16,10 +16,11 @@ pub struct Args {
     #[arg(long, default_value_t = String::from("off"))]
     pub log_level: String,
 
-    /// Choice of embedding provider. Valid options are 'anthropic', 'openai', 'voyageai', and
-    /// 'gemini'. Note that 'anthropic' uses the OpenAI embedding model, so will require
+    /// Choice of embedding provider. Valid options are 'anthropic', 'openai', 'voyageai',
+    /// 'gemini', and 'cohere'. Note that 'anthropic' uses the OpenAI embedding model, so will require
     /// `OPENAI_API_KEY` to be set. 'voyageai' will require `VOYAGE_AI_API_KEY` to be set. 'gemini'
-    /// requires either `GEMINI_API_KEY` or `GOOGLE_API_KEY` to be set.
+    /// requires either `GEMINI_API_KEY` or `GOOGLE_API_KEY` to be set. 'cohere' requires
+    /// `COHERE_API_KEY` to be set.
     #[arg(short, long, default_value_t = String::from("voyageai"))]
     pub embedding: String,
 
