@@ -183,3 +183,42 @@ impl<T: HttpClient + Default + Clone + std::fmt::Debug> EmbeddingFunction for Co
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{COHERE_EMBEDDING_DIM, CohereClient};
+    use crate::llm::http_client::ReqwestClient;
+    use arrow_array::Array;
+    use dotenv::dotenv;
+    use std::sync::Arc;
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn test_compute_embeddings() {
+        dotenv().ok();
+
+        let array = arrow_array::StringArray::from(vec![
+            "Hello, World!",
+            "A second string",
+            "A third string",
+            "A fourth string",
+            "A fifth string",
+            "A sixth string",
+        ]);
+
+        let client = CohereClient::<ReqwestClient>::default();
+        let embeddings = client.compute_embeddings_internal(Arc::new(array));
+
+        // Debug the error if there is one
+        if embeddings.is_err() {
+            println!("Cohere embedding error: {:?}", embeddings.as_ref().err());
+        }
+
+        assert!(embeddings.is_ok());
+
+        let embeddings = embeddings.unwrap();
+        let vector = arrow_array::cast::as_fixed_size_list_array(&embeddings);
+
+        assert_eq!(vector.len(), 6);
+        assert_eq!(vector.value_length(), COHERE_EMBEDDING_DIM as i32);
+    }
+}
