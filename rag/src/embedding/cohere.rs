@@ -1,6 +1,6 @@
 use crate::constants::{COHERE_EMBEDDING_DIM, COHERE_EMBEDDING_MODEL};
 use indicatif::ProgressBar;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::{
     borrow::Cow,
     env, fs,
@@ -81,6 +81,7 @@ where
                 .filter_map(|opt| opt.clone().filter(|s| !s.trim().is_empty()))
                 .collect();
 
+            // If none are real, just push zeros for whole batch
             if cur_texts.is_empty() {
                 all_embeddings.extend(std::iter::repeat_n(
                     vec![0.0; COHERE_EMBEDDING_DIM as usize],
@@ -102,59 +103,40 @@ where
                 let body = response.text().await?;
                 log::debug!("Cohere embedding request took {:.1?}", start_time.elapsed());
 
-                let parsed: serde_json::Value = serde_json::from_str(&body)?;
+                let cohere_response: CohereAIResponse = serde_json::from_str(&body)?;
 
-                // Extract embeddings supporting both legacy and new response shapes
-                let maybe_embeddings = parsed.get("embeddings");
-                if let Some(emb_val) = maybe_embeddings {
-                    // Either an array of arrays, or an object with a "float" key
-                    let batch_embeddings: Vec<Vec<f32>> = if emb_val.is_array() {
-                        serde_json::from_value(emb_val.clone())?
-                    } else if let Some(float_val) = emb_val.get("float") {
-                        serde_json::from_value(float_val.clone())?
-                    } else {
-                        Vec::new()
-                    };
+                match cohere_response {
+                    CohereAIResponse::Success(success) => {
+                        let mut it = success.embeddings.float.into_iter();
 
-                    // Weave embeddings back with zero-padding
-                    let mut it = batch_embeddings.into_iter();
-                    let mut batch_embs = Vec::with_capacity(batch.len());
-                    for &is_real in &mask {
-                        if is_real {
-                            if let Some(embedding) = it.next() {
+                        // 4. Weave the real embeddings back into the right spots, zero‐padding empties
+                        let mut batch_embs = Vec::with_capacity(batch.len());
+                        for &is_real in &mask {
+                            if is_real && let Some(embedding) = it.next() {
                                 batch_embs.push(embedding);
                             } else {
                                 batch_embs.push(vec![0.0_f32; COHERE_EMBEDDING_DIM as usize]);
                             }
-                        } else {
-                            batch_embs.push(vec![0.0_f32; COHERE_EMBEDDING_DIM as usize]);
                         }
+                        all_embeddings.extend(batch_embs);
+
+                        total_masked += mask.iter().filter(|mask| !**mask).count();
                     }
-                    all_embeddings.extend(batch_embs);
+                    CohereAIResponse::Error(err) => {
+                        eprintln!("Got a 400 response from Cohere AI: {}\n", err.message);
+                        eprintln!("We tried sending the request: {request:#?}\n");
 
-                    total_masked += mask.iter().filter(|mask| !**mask).count();
-                } else {
-                    // Error case: log and pad with zeros
-                    let message = parsed
-                        .get("message")
-                        .and_then(|m| m.as_str())
-                        .unwrap_or("Unknown error from Cohere");
+                        fail_count += batch.len();
+                        failed_texts.extend(batch.iter().filter_map(|text| text.as_ref()).cloned());
 
-                    eprintln!("Got an error from Cohere: {}\n", message);
-                    eprintln!("We tried sending the request: {:?}\n", request);
-
-                    fail_count += batch.len();
-                    failed_texts.extend(batch.iter().filter_map(|t| t.as_ref()).cloned());
-
-                    let zeros: Vec<Vec<f32>> = std::iter::repeat_n(
-                        Vec::from([0.0; COHERE_EMBEDDING_DIM as usize]),
-                        batch.len(),
-                    )
-                    .collect();
-                    all_embeddings.extend(zeros);
+                        let zeros: Vec<Vec<f32>> = std::iter::repeat_n(
+                            Vec::from([0.0; COHERE_EMBEDDING_DIM as usize]),
+                            batch.len(),
+                        )
+                        .collect();
+                        all_embeddings.extend(zeros);
+                    }
                 }
-
-                let _ = start_time; // keep for parity/logging; not currently used
             }
 
             bar.inc(BATCH_SIZE as u64);
@@ -179,6 +161,10 @@ where
                 );
             }
         }
+
+        log::info!(
+            "Processing finished. Statistics:\n{fail_count} items failed.\n{total_masked} items were empty."
+        );
 
         // Convert to Arrow FixedSizeListArray
         let flattened: Vec<f32> = all_embeddings.iter().flatten().copied().collect();
@@ -229,6 +215,28 @@ impl CohereEmbedRequest {
             embedding_types: Some(vec!["float".into()]),
         }
     }
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct CohereAIEmbeddings {
+    float: Vec<Vec<f32>>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct CohereAISuccess {
+    embeddings: CohereAIEmbeddings,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct CohereAIError {
+    message: String,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(untagged)]
+enum CohereAIResponse {
+    Success(CohereAISuccess),
+    Error(CohereAIError),
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
