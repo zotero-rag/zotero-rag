@@ -217,7 +217,7 @@ mod tests {
     use dotenv::dotenv;
     use std::sync::Arc;
 
-    #[tokio::test(flavor = "multi_thread", worker_threads=1)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
     async fn test_compute_embeddings() {
         dotenv().ok();
 

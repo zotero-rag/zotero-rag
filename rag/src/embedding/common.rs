@@ -89,6 +89,7 @@ pub trait EmbeddingApiResponse {
     fn get_error_message(self) -> Option<String>;
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn compute_embeddings_async<
     T: EmbeddingApiResponse + for<'de> Deserialize<'de>,
     U: EmbeddingApiRequestTexts<U> + Serialize + Send + Sync + std::fmt::Debug,
