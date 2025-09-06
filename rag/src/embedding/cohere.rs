@@ -46,14 +46,13 @@ where
 
         tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(compute_embeddings_async::<
-                CohereAIResponse,
                 CohereEmbedRequest,
+                CohereAIResponse,
             >(
                 source,
                 "https://api.cohere.com/v2/embed",
                 "COHERE_API_KEY",
                 self.client.clone(),
-                CohereEmbedRequest::from_texts,
                 EmbeddingProviders::Cohere.as_str().to_string(),
                 BATCH_SIZE,
                 WAIT_AFTER_REQUEST_S,

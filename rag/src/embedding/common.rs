@@ -10,9 +10,11 @@ use std::{
 
 use lancedb::embeddings::EmbeddingFunction;
 
-use crate::constants::{GEMINI_EMBEDDING_DIM, COHERE_EMBEDDING_DIM, OPENAI_EMBEDDING_DIM, VOYAGE_EMBEDDING_DIM};
-use crate::embedding::voyage::VoyageAIClient;
+use crate::constants::{
+    COHERE_EMBEDDING_DIM, GEMINI_EMBEDDING_DIM, OPENAI_EMBEDDING_DIM, VOYAGE_EMBEDDING_DIM,
+};
 use crate::embedding::cohere::CohereClient;
+use crate::embedding::voyage::VoyageAIClient;
 use crate::llm::errors::LLMError;
 use crate::llm::gemini::GeminiClient;
 use crate::llm::http_client::{HttpClient, ReqwestClient};
@@ -79,29 +81,92 @@ pub trait Rerank<T: AsRef<str>> {
     fn rerank(items: Vec<T>, query: &str) -> Vec<T>;
 }
 
+/// A trait expected to be implemented by requests to embedding providers. Typically, you want to
+/// use this by making the struct generic over itself, like so:
+///
+/// ```rs
+/// struct ExampleEmbeddingRequest {
+///     texts: Vec<String>,
+///     model: String
+/// }
+///
+/// impl EmbeddingApiRequestTexts<ExampleEmbeddingRequest> for ExampleEmbeddingRequest {
+///     fn from_texts(texts: Vec<String>) -> Self {
+///         Self {
+///             texts,
+///             model: "example-model".into()
+///         }
+///     }
+/// }
+/// ```
+///
 pub trait EmbeddingApiRequestTexts<T> {
     fn from_texts(texts: Vec<String>) -> T;
 }
 
+/// A trait intended to be used for responses from embedding provider APIs. Typically, these APIs
+/// return different structures for successful (200) vs. non-successful (4xx or 5xx) requests. The
+/// pattern this repo uses is to have an untagged enum as the response struct that `serde`
+/// deserializes to.
 pub trait EmbeddingApiResponse {
     type Success;
     type Error;
 
+    /// Returns whether the request was successful.
     fn is_success(&self) -> bool;
+
+    /// Returns a list of embedding vectors for each text passed in the request, or `None` if the
+    /// request was unsuccessful.
     fn get_embeddings(self) -> Option<Vec<Vec<f32>>>;
+
+    /// Returns the error message from the API, or `None` if it was successful.
     fn get_error_message(self) -> Option<String>;
 }
 
+/// A generic version of a function that sends a request to an embedding provider. This allows you
+/// to simply define the types of the request and response, write the corresponding traits for
+/// those types, and then use this function to handle the details of the request batching and error
+/// handling.
+///
+/// Note that in case of failed requests, this function adds zero vectors in place of texts that
+/// failed. This is currently implemented this way because Arrow arrays are somewhat obnoxious to
+/// work with and it's not the easiest thing to remove values by index. This is, admittedly, not
+/// the best UX, and the workaround provided is the `/repair` command that retries these at a later
+/// time.
+///
+/// TODO: Consider making this more robust later.
+///
+/// # Arguments:
+///
+/// * `source` - The source Arrow array containing the texts. This is expected to be an `Arc<dyn
+///   Array>`, since that is what LanceDB gives you; as such this is the "native" type. This might
+///   be made more general via an extension trait in the future.
+/// * `api_url` - The embedding API endpoint.
+/// * `api_key_var` - The *environment variable* that contains the API key for the service. For
+///   security reasons, this function does not make it possible to directly pass in an API key.
+/// * `api_client` - The `HttpClient` trait implementation to use. For real use, you almost
+///   certainly want a `ReqwestClient`; the trait allows for easy testing.
+/// * `embedding_provider` - An owned type containing the name of the embedding provider. This does
+///   *not* have to be the same as the value in the `EmbeddingProviders` enum, though it is
+///   recommended that you use that value. This is mainly for logging purposes.
+/// * `batch_size` - To account for RPM and TPM limits imposed by APIs, you should calculate
+///   reasonable values of a "batch size"--the number of texts to send at once, and the time to
+///   wait between requests in seconds.
+/// * `wait_after_request_s` - See `batch_size`.
+/// * `embedding_dim` - The embedding dimensions you expect to receive.
+///
+/// # Returns
+///
+/// If successful, an Arrow array containing the embeddings.
 #[allow(clippy::too_many_arguments)]
 pub async fn compute_embeddings_async<
-    T: EmbeddingApiResponse + for<'de> Deserialize<'de>,
-    U: EmbeddingApiRequestTexts<U> + Serialize + Send + Sync + std::fmt::Debug,
+    T: EmbeddingApiRequestTexts<T> + Serialize + Send + Sync + std::fmt::Debug,
+    U: EmbeddingApiResponse + for<'de> Deserialize<'de>,
 >(
     source: Arc<dyn arrow_array::Array>,
-    api_url: &'static str,
-    api_key_var: &'static str,
+    api_url: &str,
+    api_key_var: &str,
     api_client: impl HttpClient,
-    request_fn: fn(Vec<String>) -> U,
     embedding_provider: String,
     batch_size: usize,
     wait_after_request_s: u64,
@@ -129,19 +194,21 @@ pub async fn compute_embeddings_async<
     let num_chunks = chunks.len();
 
     for (i, batch) in chunks.enumerate() {
-        // Build mask for non-empty strings
+        // For every batch, we need to handle the case of empty/whitespace strings, since some
+        // providers (and by some I mean one and by one I mean Voyage) do not like handling them.
+        // 1. Build a mask of "real" vs "empty" slots
         let mask: Vec<bool> = batch
             .iter()
             .map(|opt| opt.as_ref().is_some_and(|s| !s.trim().is_empty()))
             .collect();
 
-        // Extract non-empty current texts
+        // 2. Extract only the non-empty strings to send
         let cur_texts: Vec<String> = batch
             .iter()
             .filter_map(|opt| opt.clone().filter(|s| !s.trim().is_empty()))
             .collect();
 
-        // If none are real, just push zeros for whole batch
+        // 3. If none are real, just push zeros for whole batch
         if cur_texts.is_empty() {
             all_embeddings.extend(std::iter::repeat_n(vec![0.0; embedding_dim], batch.len()));
         } else {
@@ -151,13 +218,13 @@ pub async fn compute_embeddings_async<
             headers.insert("Accept", "application/json".parse()?);
 
             let start_time = Instant::now();
-            let request = request_fn(cur_texts);
+            let request = T::from_texts(cur_texts);
             let response = api_client.post_json(api_url, headers, &request).await?;
 
             let body = response.text().await?;
             log::debug!("Cohere embedding request took {:.1?}", start_time.elapsed());
 
-            let cohere_response: T = serde_json::from_str(&body)?;
+            let cohere_response: U = serde_json::from_str(&body)?;
 
             if cohere_response.is_success() {
                 let mut it = cohere_response.get_embeddings().unwrap().into_iter();
