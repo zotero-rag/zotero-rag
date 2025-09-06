@@ -52,14 +52,13 @@ where
 
         tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(compute_embeddings_async::<
-                VoyageAIResponse,
                 VoyageAIRequest,
+                VoyageAIResponse,
             >(
                 source,
                 "https://api.voyageai.com/v1/embeddings",
                 "VOYAGE_AI_API_KEY",
                 self.client.clone(),
-                VoyageAIRequest::from_texts,
                 EmbeddingProviders::VoyageAI.as_str().to_string(),
                 BATCH_SIZE,
                 WAIT_AFTER_REQUEST_S,
