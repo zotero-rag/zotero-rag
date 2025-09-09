@@ -1,11 +1,14 @@
 use crate::{
     capabilities::EmbeddingProviders,
-    constants::{VOYAGE_EMBEDDING_DIM, VOYAGE_EMBEDDING_MODEL},
-    embedding::common::{EmbeddingApiRequestTexts, EmbeddingApiResponse, compute_embeddings_async},
+    constants::{DEFAULT_VOYAGE_RERANK_MODEL, VOYAGE_EMBEDDING_DIM, VOYAGE_EMBEDDING_MODEL},
+    embedding::common::{
+        EmbeddingApiRequestTexts, EmbeddingApiResponse, Rerank, compute_embeddings_async,
+    },
 };
-use std::{borrow::Cow, sync::Arc};
+use std::{borrow::Cow, env, sync::Arc, time::Instant};
 
 use arrow_schema::{DataType, Field};
+use http::HeaderMap;
 use lancedb::embeddings::EmbeddingFunction;
 use serde::{Deserialize, Serialize};
 
@@ -208,8 +211,72 @@ impl<T: HttpClient + Default + Clone + std::fmt::Debug> EmbeddingFunction for Vo
     }
 }
 
+#[derive(Serialize)]
+struct VoyageAIRerankRequest {
+    query: String,
+    documents: Vec<String>,
+    model: String,
+}
+
+#[derive(Clone, Deserialize)]
+struct VoyageAIRerankedDoc {
+    index: usize,
+}
+
+#[derive(Deserialize)]
+struct VoyageAIRerankResponse {
+    data: Vec<VoyageAIRerankedDoc>,
+}
+
+impl<T: HttpClient> Rerank<String> for VoyageAIClient<T> {
+    async fn rerank(&self, items: Vec<String>, query: &str) -> Result<Vec<String>, LLMError> {
+        const RERANK_API_URL: &str = "https://api.voyageai.com/v1/rerank";
+        let api_key = env::var("VOYAGE_AI_API_KEY")?;
+
+        let request = VoyageAIRerankRequest {
+            model: env::var("VOYAGE_AI_RERANK_MODEL")
+                .unwrap_or(DEFAULT_VOYAGE_RERANK_MODEL.into())
+                .into(),
+            query: query.into(),
+            documents: items.clone(),
+        };
+
+        let mut headers = HeaderMap::new();
+        headers.insert("Authorization", format!("Bearer {api_key}").parse()?);
+        headers.insert("Content-Type", "application/json".parse()?);
+        headers.insert("Accept", "application/json".parse()?);
+
+        let start_time = Instant::now();
+        let response = self
+            .client
+            .post_json(RERANK_API_URL, headers, &request)
+            .await?;
+
+        let body = response.text().await?;
+        log::debug!("Voyage AI rerank request took {:.1?}", start_time.elapsed());
+
+        let voyage_response: Result<VoyageAIRerankResponse, serde_json::Error> =
+            serde_json::from_str(&body);
+
+        if let Err(e) = voyage_response {
+            log::warn!("Error deserializing Voyage AI reranker response: {e}");
+            return Err(LLMError::DeserializationError(e.to_string()));
+        }
+
+        let voyage_response = voyage_response.unwrap().data;
+        let res = voyage_response
+            .iter()
+            .filter_map(|result| items.get(result.index))
+            .cloned()
+            .collect::<Vec<_>>();
+
+        Ok(res)
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use crate::embedding::common::Rerank;
     use crate::embedding::voyage::{VOYAGE_EMBEDDING_DIM, VoyageAIClient};
     use crate::llm::http_client::ReqwestClient;
     use arrow_array::Array;
@@ -244,5 +311,30 @@ mod tests {
 
         assert_eq!(vector.len(), 6);
         assert_eq!(vector.value_length(), VOYAGE_EMBEDDING_DIM as i32);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn test_rerank() {
+        dotenv().ok();
+
+        let array = vec![
+            "Hello, World!".to_string(),
+            "A second string".to_string(),
+            "A third string".to_string(),
+        ];
+        let query = "A string";
+
+        let client = VoyageAIClient::<ReqwestClient>::default();
+        let reranked = client.rerank(array.clone(), query).await;
+
+        // Debug the error if there is one
+        if reranked.is_err() {
+            println!("Voyage AI reranker error: {:?}", reranked.as_ref().err());
+        }
+
+        assert!(reranked.is_ok());
+
+        let reranked = reranked.unwrap();
+        assert_eq!(reranked.len(), array.len());
     }
 }

@@ -1,11 +1,13 @@
 use super::common::{EmbeddingApiRequestTexts, EmbeddingApiResponse};
 use crate::{
     capabilities::EmbeddingProviders,
-    constants::{COHERE_EMBEDDING_DIM, COHERE_EMBEDDING_MODEL},
-    embedding::common::compute_embeddings_async,
+    constants::{COHERE_EMBEDDING_DIM, COHERE_EMBEDDING_MODEL, DEFAULT_COHERE_RERANK_MODEL},
+    embedding::common::{Rerank, compute_embeddings_async},
 };
+use http::HeaderMap;
 use serde::{Deserialize, Serialize};
-use std::{borrow::Cow, sync::Arc};
+use std::error::Error;
+use std::{borrow::Cow, env, sync::Arc, time::Instant};
 
 use arrow_schema::{DataType, Field};
 use lancedb::embeddings::EmbeddingFunction;
@@ -183,10 +185,75 @@ impl<T: HttpClient + Default + Clone + std::fmt::Debug> EmbeddingFunction for Co
     }
 }
 
+#[derive(Serialize)]
+struct CohereRerankRequest {
+    model: String,
+    query: String,
+    top_n: Option<usize>,
+    documents: Vec<String>,
+}
+
+#[derive(Clone, Deserialize)]
+struct CohereRerankedDocument {
+    index: usize,
+}
+
+#[derive(Deserialize)]
+struct CohereRerankResponse {
+    results: Vec<CohereRerankedDocument>,
+}
+
+impl<T: HttpClient> Rerank<String> for CohereClient<T> {
+    async fn rerank(&self, items: Vec<String>, query: &str) -> Result<Vec<String>, LLMError> {
+        const RERANK_API_URL: &str = "https://api.cohere.com/v2/rerank";
+        let api_key = env::var("COHERE_API_KEY")?;
+
+        let request = CohereRerankRequest {
+            model: env::var("COHERE_RERANK_MODEL")
+                .unwrap_or(DEFAULT_COHERE_RERANK_MODEL.into())
+                .into(),
+            query: query.into(),
+            top_n: None,
+            documents: items.clone(),
+        };
+
+        let mut headers = HeaderMap::new();
+        headers.insert("Authorization", format!("Bearer {api_key}").parse()?);
+        headers.insert("Content-Type", "application/json".parse()?);
+        headers.insert("Accept", "application/json".parse()?);
+
+        let start_time = Instant::now();
+        let response = self
+            .client
+            .post_json(RERANK_API_URL, headers, &request)
+            .await?;
+
+        let body = response.text().await?;
+        log::debug!("Cohere rerank request took {:.1?}", start_time.elapsed());
+
+        let cohere_response: Result<CohereRerankResponse, serde_json::Error> =
+            serde_json::from_str(&body);
+
+        if let Err(e) = cohere_response {
+            log::warn!("Error deserializing Cohere reranker response: {e}");
+            return Err(LLMError::DeserializationError(e.to_string()));
+        }
+
+        let cohere_response = cohere_response.unwrap().results;
+        let res = cohere_response
+            .iter()
+            .filter_map(|result| items.get(result.index))
+            .cloned()
+            .collect::<Vec<_>>();
+
+        Ok(res)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{COHERE_EMBEDDING_DIM, CohereClient};
-    use crate::llm::http_client::ReqwestClient;
+    use crate::{embedding::common::Rerank, llm::http_client::ReqwestClient};
     use arrow_array::Array;
     use dotenv::dotenv;
     use std::sync::Arc;
@@ -219,5 +286,30 @@ mod tests {
 
         assert_eq!(vector.len(), 6);
         assert_eq!(vector.value_length(), COHERE_EMBEDDING_DIM as i32);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn test_rerank() {
+        dotenv().ok();
+
+        let array = vec![
+            "Hello, World!".to_string(),
+            "A second string".to_string(),
+            "A third string".to_string(),
+        ];
+        let query = "A string";
+
+        let client = CohereClient::<ReqwestClient>::default();
+        let reranked = client.rerank(array.clone(), query).await;
+
+        // Debug the error if there is one
+        if reranked.is_err() {
+            println!("Cohere reranker error: {:?}", reranked.as_ref().err());
+        }
+
+        assert!(reranked.is_ok());
+
+        let reranked = reranked.unwrap();
+        assert_eq!(reranked.len(), array.len());
     }
 }

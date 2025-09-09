@@ -78,7 +78,8 @@ pub fn get_embedding_provider(
 /// custom logic if they prefer (or if, for some reason, their struct's `AsRef<str>` is implemented
 /// with a different purpose, but the resulting string isn't useful for reranking purposes).
 pub trait Rerank<T: AsRef<str>> {
-    fn rerank(items: Vec<T>, query: &str) -> Vec<T>;
+    #[allow(async_fn_in_trait)]
+    async fn rerank(&self, items: Vec<T>, query: &str) -> Result<Vec<T>, LLMError>;
 }
 
 /// A trait expected to be implemented by requests to embedding providers. Typically, you want to

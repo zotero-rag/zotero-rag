@@ -41,3 +41,9 @@ pub const DEFAULT_OPENAI_EMBEDDING_MODEL: &str = "text-embedding-3-small";
 
 /// Default Gemini embedding model
 pub const DEFAULT_GEMINI_EMBEDDING_MODEL: &str = "gemini-embedding-001";
+
+/// Default Cohere rerank model
+pub const DEFAULT_COHERE_RERANK_MODEL: &str = "rerank-v3.5";
+
+/// Default Voyage AI rerank model
+pub const DEFAULT_VOYAGE_RERANK_MODEL: &str = "rerank-2.5";
