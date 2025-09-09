@@ -253,15 +253,12 @@ impl<T: HttpClient> Rerank<String> for VoyageAIClient<T> {
         let body = response.text().await?;
         log::debug!("Voyage AI rerank request took {:.1?}", start_time.elapsed());
 
-        let voyage_response: Result<VoyageAIRerankResponse, serde_json::Error> =
-            serde_json::from_str(&body);
-
-        if let Err(e) = voyage_response {
+        let voyage_response: VoyageAIRerankResponse = serde_json::from_str(&body).map_err(|e| {
             log::warn!("Error deserializing Voyage AI reranker response: {e}");
-            return Err(LLMError::DeserializationError(e.to_string()));
-        }
+            LLMError::DeserializationError(e.to_string())
+        })?;
 
-        let voyage_response = voyage_response.unwrap().data;
+        let voyage_response = voyage_response.data;
         let res = voyage_response
             .iter()
             .filter_map(|result| items.get(result.index))

@@ -223,12 +223,15 @@ pub async fn compute_embeddings_async<
             let response = api_client.post_json(api_url, headers, &request).await?;
 
             let body = response.text().await?;
-            log::debug!("Cohere embedding request took {:.1?}", start_time.elapsed());
+            log::debug!(
+                "{embedding_provider} embedding request took {:.1?}",
+                start_time.elapsed()
+            );
 
-            let cohere_response: U = serde_json::from_str(&body)?;
+            let api_response: U = serde_json::from_str(&body)?;
 
-            if cohere_response.is_success() {
-                let mut it = cohere_response.get_embeddings().unwrap().into_iter();
+            if api_response.is_success() {
+                let mut it = api_response.get_embeddings().unwrap().into_iter();
 
                 // 4. Weave the real embeddings back into the right spots, zero‐padding empties
                 let mut batch_embs = Vec::with_capacity(batch.len());
@@ -246,7 +249,7 @@ pub async fn compute_embeddings_async<
                 eprintln!(
                     "Got a 4xx response from the {} API: {}\n",
                     embedding_provider,
-                    cohere_response
+                    api_response
                         .get_error_message()
                         .unwrap_or(String::from("No error found."))
                 );

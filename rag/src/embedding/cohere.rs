@@ -135,12 +135,6 @@ impl EmbeddingApiResponse for CohereAIResponse {
     }
 }
 
-#[derive(serde::Serialize, serde::Deserialize)]
-pub struct FailedTexts {
-    pub embedding_provider: String,
-    pub texts: Vec<String>,
-}
-
 impl<T: HttpClient + Default + Clone + std::fmt::Debug> EmbeddingFunction for CohereClient<T> {
     fn name(&self) -> &str {
         "Cohere"
@@ -228,15 +222,12 @@ impl<T: HttpClient> Rerank<String> for CohereClient<T> {
         let body = response.text().await?;
         log::debug!("Cohere rerank request took {:.1?}", start_time.elapsed());
 
-        let cohere_response: Result<CohereRerankResponse, serde_json::Error> =
-            serde_json::from_str(&body);
-
-        if let Err(e) = cohere_response {
+        let cohere_response: CohereRerankResponse = serde_json::from_str(&body).map_err(|e| {
             log::warn!("Error deserializing Cohere reranker response: {e}");
-            return Err(LLMError::DeserializationError(e.to_string()));
-        }
+            LLMError::DeserializationError(e.to_string())
+        })?;
 
-        let cohere_response = cohere_response.unwrap().results;
+        let cohere_response = cohere_response.results;
         let res = cohere_response
             .iter()
             .filter_map(|result| items.get(result.index))
