@@ -12,19 +12,14 @@ This is a Rust-based Zotero RAG QA System for answering questions from academic 
 
 ### Building and Testing
 
-```bash
-# Build entire workspace
-cargo build
-
-# Build release version
-cargo build --release
-
-# Run tests
-cargo test
-
-# Run specific crate
-cargo run --bin zqa
-```
+- Build (release): `cargo build --release`
+- Run CLI: `cargo run --bin zqa`
+- Tests (workspace): `cargo test --workspace`
+- Tests (per crate): `cargo test -p rag` (or `-p zqa`, `-p pdftools`)
+- Lint: `cargo clippy --all-targets --all-features -- -D warnings`
+- Format: `cargo fmt --all`
+- Bench (pdftools): `cargo bench -p pdftools`
+- Faster Linux linking: uses `mold` via `.cargo/config.toml` (install or remove the flag).
 
 ### Environment Setup
 
@@ -51,6 +46,19 @@ cargo run --bin zqa
 - In general, functions should have documentation above them. This does not need to be done for trait implementations, if the trait is standard in Rust (e.g., `From<...>`, `Copy`, etc.).
 - In general, the library crates `pdftools` and `rag` should not have side-effects such as printing to `stdout`, _unless_ that side-effect provides useful information to the user (e.g., warnings, specific error messages, etc.).
 - Although `cargo clippy` is automatically run and will block PR merging, you should also perform checks for idiomatic Rust, especially for code that reimplements functions that are built-in. However, if the user notes, or you believe, that Clippy marked that instance as okay, this is fine, and Clippy's ruling should be followed.
+* Documentation comments for functions follow this pattern:
+```rs
+/// Description
+///
+/// # Arguments:
+///
+/// * `some_arg` - Description
+///
+/// # Returns
+///
+/// Description
+```
+In particular, there is no colon after `# Returns`.
 
 ## PR Review
 
@@ -79,11 +87,24 @@ cargo run --bin zqa
 ## Important Files
 
 - `rag/src/llm/`: LLM client implementations
+- `rag/src/embedding/`: Embedding client implementations
 - `rag/src/vector/`: Vector database operations
 - `pdftools/src/`: PDF parsing utilities
 - `zqa/src/`: CLI interface (work in progress)
 
 ## Testing Notes
 
-- Integration tests in `zqa/tests/`--currently disabled since we need a Zotero mocker.
+- Integration tests in `zqa/tests/`--currently disabled
 - Use `cargo test` to run available tests. If you are debugging, use `RUST_BACKTRACE=1`.
+
+## Commit & Pull Request Guidelines
+
+- Commits follow Conventional Commits, e.g.: `feat(rag): add checkhealth`, `fix(ci): ...`, `perf(pdftools): ...`, `lint: cargo clippy`.
+- PRs should include: concise description, rationale, linked issues, and test notes/output (use `--log-level debug` when relevant).
+- Ensure `cargo fmt`, `cargo clippy`, and `cargo test --workspace` pass.
+
+## Security & Configuration Tips
+
+- Secrets: configure via `.env` (see `.env.tmpl`); never commit real keys.
+- Recommended defaults: Anthropic for generation, Voyage AI for embeddings.
+- Data location: LanceDB under `data/lancedb-table/`. Remove the folder to reset the index.
