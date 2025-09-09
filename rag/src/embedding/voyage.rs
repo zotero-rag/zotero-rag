@@ -234,9 +234,7 @@ impl<T: HttpClient> Rerank<String> for VoyageAIClient<T> {
         let api_key = env::var("VOYAGE_AI_API_KEY")?;
 
         let request = VoyageAIRerankRequest {
-            model: env::var("VOYAGE_AI_RERANK_MODEL")
-                .unwrap_or(DEFAULT_VOYAGE_RERANK_MODEL.into())
-                .into(),
+            model: env::var("VOYAGE_AI_RERANK_MODEL").unwrap_or(DEFAULT_VOYAGE_RERANK_MODEL.into()),
             query: query.into(),
             documents: items.clone(),
         };

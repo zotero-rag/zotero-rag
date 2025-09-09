@@ -6,7 +6,6 @@ use crate::{
 };
 use http::HeaderMap;
 use serde::{Deserialize, Serialize};
-use std::error::Error;
 use std::{borrow::Cow, env, sync::Arc, time::Instant};
 
 use arrow_schema::{DataType, Field};
@@ -209,9 +208,7 @@ impl<T: HttpClient> Rerank<String> for CohereClient<T> {
         let api_key = env::var("COHERE_API_KEY")?;
 
         let request = CohereRerankRequest {
-            model: env::var("COHERE_RERANK_MODEL")
-                .unwrap_or(DEFAULT_COHERE_RERANK_MODEL.into())
-                .into(),
+            model: env::var("COHERE_RERANK_MODEL").unwrap_or(DEFAULT_COHERE_RERANK_MODEL.into()),
             query: query.into(),
             top_n: None,
             documents: items.clone(),
