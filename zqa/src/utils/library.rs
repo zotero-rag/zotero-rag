@@ -5,6 +5,7 @@ use rusqlite::Connection;
 use std::collections::HashSet;
 use std::env;
 use std::error::Error;
+use std::hash::Hash;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -42,11 +43,26 @@ fn get_lib_path() -> Option<PathBuf> {
 }
 
 /// Metadata for items in the Zotero library.
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Clone)]
 pub struct ZoteroItemMetadata {
     pub library_key: String,
     pub title: String,
     pub file_path: PathBuf,
+}
+
+impl PartialEq for ZoteroItemMetadata {
+    fn eq(&self, other: &Self) -> bool {
+        self.library_key == other.library_key && self.title == other.title
+    }
+}
+
+impl Eq for ZoteroItemMetadata {}
+
+impl Hash for ZoteroItemMetadata {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        state.write(self.library_key.as_bytes());
+        state.write(self.title.as_bytes());
+    }
 }
 
 /// A Zotero library item. Includes full-text from parsing PDFs when they exist.
