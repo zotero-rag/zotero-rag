@@ -5,7 +5,7 @@ use crate::{
         EmbeddingApiRequestTexts, EmbeddingApiResponse, Rerank, compute_embeddings_async,
     },
 };
-use std::{borrow::Cow, env, sync::Arc, time::Instant};
+use std::{borrow::Cow, env, future::Future, pin::Pin, sync::Arc, time::Instant};
 
 use arrow_schema::{DataType, Field};
 use http::HeaderMap;
@@ -228,44 +228,57 @@ struct VoyageAIRerankResponse {
     data: Vec<VoyageAIRerankedDoc>,
 }
 
-impl<T: HttpClient> Rerank<String> for VoyageAIClient<T> {
-    async fn rerank(&self, items: Vec<String>, query: &str) -> Result<Vec<String>, LLMError> {
-        const RERANK_API_URL: &str = "https://api.voyageai.com/v1/rerank";
-        let api_key = env::var("VOYAGE_AI_API_KEY")?;
+impl<T: HttpClient, U: AsRef<str> + Send + Clone> Rerank<U> for VoyageAIClient<T> {
+    type Client = T;
 
-        let request = VoyageAIRerankRequest {
-            model: env::var("VOYAGE_AI_RERANK_MODEL").unwrap_or(DEFAULT_VOYAGE_RERANK_MODEL.into()),
-            query: query.into(),
-            documents: items.clone(),
-        };
+    fn rerank<'a>(
+        &'a self,
+        client: &'a T,
+        items: Vec<U>,
+        query: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<U>, LLMError>> + Send + 'a>>
+    where
+        U: 'a,
+    {
+        Box::pin(async move {
+            const RERANK_API_URL: &str = "https://api.voyageai.com/v1/rerank";
+            let api_key = env::var("VOYAGE_AI_API_KEY")?;
 
-        let mut headers = HeaderMap::new();
-        headers.insert("Authorization", format!("Bearer {api_key}").parse()?);
-        headers.insert("Content-Type", "application/json".parse()?);
-        headers.insert("Accept", "application/json".parse()?);
+            let documents: Vec<String> =
+                items.iter().map(|item| item.as_ref().to_string()).collect();
+            let request = VoyageAIRerankRequest {
+                model: env::var("VOYAGE_AI_RERANK_MODEL")
+                    .unwrap_or(DEFAULT_VOYAGE_RERANK_MODEL.into()),
+                query: query.into(),
+                documents,
+            };
 
-        let start_time = Instant::now();
-        let response = self
-            .client
-            .post_json(RERANK_API_URL, headers, &request)
-            .await?;
+            let mut headers = HeaderMap::new();
+            headers.insert("Authorization", format!("Bearer {api_key}").parse()?);
+            headers.insert("Content-Type", "application/json".parse()?);
+            headers.insert("Accept", "application/json".parse()?);
 
-        let body = response.text().await?;
-        log::debug!("Voyage AI rerank request took {:.1?}", start_time.elapsed());
+            let start_time = Instant::now();
+            let response = client.post_json(RERANK_API_URL, headers, &request).await?;
 
-        let voyage_response: VoyageAIRerankResponse = serde_json::from_str(&body).map_err(|e| {
-            log::warn!("Error deserializing Voyage AI reranker response: {e}");
-            LLMError::DeserializationError(e.to_string())
-        })?;
+            let body = response.text().await?;
+            log::debug!("Voyage AI rerank request took {:.1?}", start_time.elapsed());
 
-        let voyage_response = voyage_response.data;
-        let res = voyage_response
-            .iter()
-            .filter_map(|result| items.get(result.index))
-            .cloned()
-            .collect::<Vec<_>>();
+            let voyage_response: VoyageAIRerankResponse =
+                serde_json::from_str(&body).map_err(|e| {
+                    log::warn!("Error deserializing Voyage AI reranker response: {e}");
+                    LLMError::DeserializationError(e.to_string())
+                })?;
 
-        Ok(res)
+            let voyage_response = voyage_response.data;
+            let res = voyage_response
+                .iter()
+                .filter_map(|result| items.get(result.index))
+                .cloned()
+                .collect::<Vec<_>>();
+
+            Ok(res)
+        })
     }
 }
 
@@ -320,7 +333,7 @@ mod tests {
         let query = "A string";
 
         let client = VoyageAIClient::<ReqwestClient>::default();
-        let reranked = client.rerank(array.clone(), query).await;
+        let reranked = client.rerank(&client.client, array.clone(), query).await;
 
         // Debug the error if there is one
         if reranked.is_err() {

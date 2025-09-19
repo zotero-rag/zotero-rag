@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::{
     env, fs,
+    future::Future,
+    pin::Pin,
     time::{Duration, Instant},
 };
 
@@ -78,8 +80,26 @@ pub fn get_embedding_provider(
 /// custom logic if they prefer (or if, for some reason, their struct's `AsRef<str>` is implemented
 /// with a different purpose, but the resulting string isn't useful for reranking purposes).
 pub trait Rerank<T: AsRef<str>> {
-    #[allow(async_fn_in_trait)]
-    async fn rerank(&self, items: Vec<T>, query: &str) -> Result<Vec<T>, LLMError>;
+    type Client: HttpClient;
+
+    fn rerank<'a>(
+        &'a self,
+        client: &'a Self::Client,
+        items: Vec<T>,
+        query: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<T>, LLMError>> + Send + 'a>>
+    where
+        T: 'a;
+}
+
+pub fn get_reranking_provider<T: AsRef<str> + Send + Clone>(
+    provider: &str,
+) -> Result<Arc<dyn Rerank<T, Client = ReqwestClient>>, LLMError> {
+    match provider {
+        "voyageai" => Ok(Arc::new(VoyageAIClient::<ReqwestClient>::default())),
+        "cohere" => Ok(Arc::new(CohereClient::<ReqwestClient>::default())),
+        _ => Err(LLMError::InvalidProviderError(provider.to_string())),
+    }
 }
 
 /// A trait expected to be implemented by requests to embedding providers. Typically, you want to

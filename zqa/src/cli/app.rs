@@ -238,10 +238,13 @@ async fn search_for_papers<O: Write, E: Write>(
     query: String,
     ctx: &mut Context<O, E>,
 ) -> Result<(), CLIError> {
-    let embedding_name = ctx.args.embedding.clone();
-
     let vector_search_start = Instant::now();
-    let search_results = vector_search(query.clone(), embedding_name).await?;
+    let search_results = vector_search(
+        query.clone(),
+        &ctx.args.embedding,
+        ctx.args.reranker.clone(),
+    )
+    .await?;
     let vector_search_duration = vector_search_start.elapsed();
     writeln!(
         &mut ctx.err,
@@ -269,11 +272,15 @@ async fn run_query<O: Write, E: Write>(
     query: String,
     ctx: &mut Context<O, E>,
 ) -> Result<(), CLIError> {
-    let embedding_name = ctx.args.embedding.clone();
     let model_provider = ctx.args.model_provider.clone();
 
     let vector_search_start = Instant::now();
-    let search_results = vector_search(query.clone(), embedding_name).await?;
+    let search_results = vector_search(
+        query.clone(),
+        &ctx.args.embedding,
+        ctx.args.reranker.clone(),
+    )
+    .await?;
     let vector_search_duration = vector_search_start.elapsed();
     writeln!(
         &mut ctx.err,

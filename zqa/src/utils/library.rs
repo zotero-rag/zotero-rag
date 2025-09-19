@@ -4,12 +4,12 @@ use rag::vector::lance::{LanceError, get_lancedb_items, lancedb_exists};
 use rusqlite::Connection;
 use std::collections::HashSet;
 use std::env;
-use std::error::Error;
 use std::hash::Hash;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Instant;
+use thiserror::Error;
 
 use pdftools::parse::extract_text;
 
@@ -66,14 +66,19 @@ impl Hash for ZoteroItemMetadata {
 }
 
 /// A Zotero library item. Includes full-text from parsing PDFs when they exist.
+#[derive(Clone)]
 pub struct ZoteroItem {
     pub metadata: ZoteroItemMetadata,
     pub text: String,
 }
 
-/// A general error struct for Zotero library parsing.
-use thiserror::Error;
+impl AsRef<str> for ZoteroItem {
+    fn as_ref(&self) -> &str {
+        &self.text
+    }
+}
 
+/// A general error struct for Zotero library parsing.
 #[derive(Clone, Debug, Error)]
 pub enum LibraryParsingError {
     #[error("Library not found!")]
@@ -96,13 +101,11 @@ impl From<LanceError> for LibraryParsingError {
     }
 }
 
-impl From<Box<dyn Error>> for LibraryParsingError {
-    fn from(value: Box<dyn Error>) -> Self {
+impl From<Box<dyn std::error::Error>> for LibraryParsingError {
+    fn from(value: Box<dyn std::error::Error>) -> Self {
         LibraryParsingError::PdfParsingError(value.to_string())
     }
 }
-
-// Display and Error are derived by thiserror
 
 /// Assuming an existing LanceDB database exists, returns a list of items present in the Zotero
 /// library but not in the database. The primary use case for this is to update the DB with new
