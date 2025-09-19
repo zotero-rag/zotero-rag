@@ -8,8 +8,10 @@ use crate::{
     utils::library::{ZoteroItem, ZoteroItemMetadata},
 };
 use rag::{
-    embedding::common::{get_embedding_dims_by_provider, get_embedding_provider},
-    llm::errors::LLMError,
+    embedding::common::{
+        get_embedding_dims_by_provider, get_embedding_provider, get_reranking_provider,
+    },
+    llm::{errors::LLMError, http_client::ReqwestClient},
     vector::lance::{LanceError, lancedb_exists, vector_search as rag_vector_search},
 };
 
@@ -222,6 +224,7 @@ pub fn get_column_from_batch(batch: &RecordBatch, column: usize) -> Vec<String> 
 /// * `query` - The query to search the LanceDB table for.
 /// * `embedding_name` - The embedding method to use. Must be one of `EmbeddingProviders`. Note
 ///   that this must be the same embedding provider used when initially creating the database.
+/// * `reranker` - The reranker provider to use.
 ///
 /// # Returns
 ///
@@ -230,9 +233,10 @@ pub fn get_column_from_batch(batch: &RecordBatch, column: usize) -> Vec<String> 
 /// unsuccessful for any reason.
 pub async fn vector_search(
     query: String,
-    embedding_name: String,
+    embedding_name: &str,
+    reranker: String,
 ) -> Result<Vec<ZoteroItem>, ArrowError> {
-    let batches = rag_vector_search(query, embedding_name).await?;
+    let batches = rag_vector_search(query.clone(), embedding_name).await?;
 
     let items: Vec<ZoteroItem> = batches
         .iter()
@@ -263,6 +267,10 @@ pub async fn vector_search(
             items_batch
         })
         .collect();
+
+    let rerank_provider = get_reranking_provider::<ZoteroItem>(&reranker)?;
+    let client = ReqwestClient::default();
+    let items = rerank_provider.rerank(&client, items, &query).await?;
 
     Ok(items)
 }

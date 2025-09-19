@@ -6,7 +6,7 @@ use crate::{
 };
 use http::HeaderMap;
 use serde::{Deserialize, Serialize};
-use std::{borrow::Cow, env, sync::Arc, time::Instant};
+use std::{borrow::Cow, env, future::Future, pin::Pin, sync::Arc, time::Instant};
 
 use arrow_schema::{DataType, Field};
 use lancedb::embeddings::EmbeddingFunction;
@@ -196,45 +196,58 @@ struct CohereRerankResponse {
     results: Vec<CohereRerankedDocument>,
 }
 
-impl<T: HttpClient> Rerank<String> for CohereClient<T> {
-    async fn rerank(&self, items: Vec<String>, query: &str) -> Result<Vec<String>, LLMError> {
-        const RERANK_API_URL: &str = "https://api.cohere.com/v2/rerank";
-        let api_key = env::var("COHERE_API_KEY")?;
+impl<T: HttpClient, U: AsRef<str> + Send + Clone> Rerank<U> for CohereClient<T> {
+    type Client = T;
 
-        let request = CohereRerankRequest {
-            model: env::var("COHERE_RERANK_MODEL").unwrap_or(DEFAULT_COHERE_RERANK_MODEL.into()),
-            query: query.into(),
-            top_n: None,
-            documents: items.clone(),
-        };
+    fn rerank<'a>(
+        &'a self,
+        client: &'a T,
+        items: Vec<U>,
+        query: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<U>, LLMError>> + Send + 'a>>
+    where
+        U: 'a,
+    {
+        Box::pin(async move {
+            const RERANK_API_URL: &str = "https://api.cohere.com/v2/rerank";
+            let api_key = env::var("COHERE_API_KEY")?;
 
-        let mut headers = HeaderMap::new();
-        headers.insert("Authorization", format!("Bearer {api_key}").parse()?);
-        headers.insert("Content-Type", "application/json".parse()?);
-        headers.insert("Accept", "application/json".parse()?);
+            let documents: Vec<String> =
+                items.iter().map(|item| item.as_ref().to_string()).collect();
+            let request = CohereRerankRequest {
+                model: env::var("COHERE_RERANK_MODEL")
+                    .unwrap_or(DEFAULT_COHERE_RERANK_MODEL.into()),
+                query: query.into(),
+                top_n: None,
+                documents,
+            };
 
-        let start_time = Instant::now();
-        let response = self
-            .client
-            .post_json(RERANK_API_URL, headers, &request)
-            .await?;
+            let mut headers = HeaderMap::new();
+            headers.insert("Authorization", format!("Bearer {api_key}").parse()?);
+            headers.insert("Content-Type", "application/json".parse()?);
+            headers.insert("Accept", "application/json".parse()?);
 
-        let body = response.text().await?;
-        log::debug!("Cohere rerank request took {:.1?}", start_time.elapsed());
+            let start_time = Instant::now();
+            let response = client.post_json(RERANK_API_URL, headers, &request).await?;
 
-        let cohere_response: CohereRerankResponse = serde_json::from_str(&body).map_err(|e| {
-            log::warn!("Error deserializing Cohere reranker response: {e}");
-            LLMError::DeserializationError(e.to_string())
-        })?;
+            let body = response.text().await?;
+            log::debug!("Cohere rerank request took {:.1?}", start_time.elapsed());
 
-        let cohere_response = cohere_response.results;
-        let res = cohere_response
-            .iter()
-            .filter_map(|result| items.get(result.index))
-            .cloned()
-            .collect::<Vec<_>>();
+            let cohere_response: CohereRerankResponse =
+                serde_json::from_str(&body).map_err(|e| {
+                    log::warn!("Error deserializing Cohere reranker response: {e}");
+                    LLMError::DeserializationError(e.to_string())
+                })?;
 
-        Ok(res)
+            let cohere_response = cohere_response.results;
+            let res = cohere_response
+                .iter()
+                .filter_map(|result| items.get(result.index))
+                .cloned()
+                .collect::<Vec<_>>();
+
+            Ok(res)
+        })
     }
 }
 
@@ -288,7 +301,7 @@ mod tests {
         let query = "A string";
 
         let client = CohereClient::<ReqwestClient>::default();
-        let reranked = client.rerank(array.clone(), query).await;
+        let reranked = client.rerank(&client.client, array.clone(), query).await;
 
         // Debug the error if there is one
         if reranked.is_err() {

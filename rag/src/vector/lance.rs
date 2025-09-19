@@ -192,10 +192,10 @@ pub async fn get_lancedb_items(
 /// * batches: A vector of Arrow `RecordBatch` objects containing the results.
 pub async fn vector_search(
     query: String,
-    embedding_name: String,
+    embedding_name: &str,
 ) -> Result<Vec<RecordBatch>, LanceError> {
     let start_time = Instant::now();
-    let db = get_db_with_embeddings(&embedding_name).await?;
+    let db = get_db_with_embeddings(embedding_name).await?;
 
     let tbl = db.open_table(TABLE_NAME).execute().await.map_err(|_| {
         LanceError::InvalidStateError(format!("The table {TABLE_NAME} does not exist"))
@@ -205,7 +205,7 @@ pub async fn vector_search(
     let start_time = Instant::now();
     let embedding =
         db.embedding_registry()
-            .get(&embedding_name)
+            .get(embedding_name)
             .ok_or(LanceError::InvalidStateError(format!(
                 "{embedding_name} is not in the database embedding registry"
             )))?;
