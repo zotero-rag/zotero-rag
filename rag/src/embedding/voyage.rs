@@ -229,11 +229,8 @@ struct VoyageAIRerankResponse {
 }
 
 impl<T: HttpClient, U: AsRef<str> + Send + Clone> Rerank<U> for VoyageAIClient<T> {
-    type Client = T;
-
     fn rerank<'a>(
         &'a self,
-        client: &'a T,
         items: Vec<U>,
         query: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<Vec<U>, LLMError>> + Send + 'a>>
@@ -259,7 +256,10 @@ impl<T: HttpClient, U: AsRef<str> + Send + Clone> Rerank<U> for VoyageAIClient<T
             headers.insert("Accept", "application/json".parse()?);
 
             let start_time = Instant::now();
-            let response = client.post_json(RERANK_API_URL, headers, &request).await?;
+            let response = self
+                .client
+                .post_json(RERANK_API_URL, headers, &request)
+                .await?;
 
             let body = response.text().await?;
             log::debug!("Voyage AI rerank request took {:.1?}", start_time.elapsed());
@@ -333,7 +333,7 @@ mod tests {
         let query = "A string";
 
         let client = VoyageAIClient::<ReqwestClient>::default();
-        let reranked = client.rerank(&client.client, array.clone(), query).await;
+        let reranked = client.rerank(array.clone(), query).await;
 
         // Debug the error if there is one
         if reranked.is_err() {

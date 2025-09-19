@@ -11,7 +11,7 @@ use rag::{
     embedding::common::{
         get_embedding_dims_by_provider, get_embedding_provider, get_reranking_provider,
     },
-    llm::{errors::LLMError, http_client::ReqwestClient},
+    llm::errors::LLMError,
     vector::lance::{LanceError, lancedb_exists, vector_search as rag_vector_search},
 };
 
@@ -267,8 +267,7 @@ pub async fn vector_search(
         .collect();
 
     let rerank_provider = get_reranking_provider::<ZoteroItem>(&reranker)?;
-    let client = ReqwestClient::default();
-    let items = rerank_provider.rerank(&client, items, &query).await?;
+    let items = rerank_provider.rerank(items, &query).await?;
 
     Ok(items)
 }
