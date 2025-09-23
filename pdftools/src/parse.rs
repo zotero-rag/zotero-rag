@@ -11,7 +11,7 @@ use crate::math::{from_cmex, from_cmmi, from_cmsy, from_msbm};
 
 const ASCII_PLUS: u8 = b'+';
 const DEFAULT_SAME_WORD_THRESHOLD: f32 = 60.0;
-const DEFAULT_SUBSCRIPT_THRESHOLD: f32 = 9.0;
+const DEFAULT_SUBSCRIPT_WINDOW: usize = 500;
 const DEFAULT_TABLE_EUCLIDEAN_THRESHOLD: f32 = 20.0;
 
 /// A wrapper for all PDF parsing errors
@@ -45,8 +45,10 @@ impl std::fmt::Display for PdfError {
 struct PdfParserConfig {
     /// Threshold for determining when to join words
     same_word_threshold: f32,
-    /// Vertical movement threshold to declare sub/superscript
-    subscript_threshold: f32,
+    /// In sub/super-script detection, the window to decide if two characters are at equal vertical
+    /// positions because they were on different columns. You typically want this to be relatively
+    /// large; the default is 500.
+    subscript_window: usize,
     /// Euclidean distance threshold between `Td` alignment to declare a table
     table_alignment_threshold: f32,
 }
@@ -55,7 +57,7 @@ impl Default for PdfParserConfig {
     fn default() -> Self {
         Self {
             same_word_threshold: DEFAULT_SAME_WORD_THRESHOLD,
-            subscript_threshold: DEFAULT_SUBSCRIPT_THRESHOLD,
+            subscript_window: DEFAULT_SUBSCRIPT_WINDOW,
             table_alignment_threshold: DEFAULT_TABLE_EUCLIDEAN_THRESHOLD,
         }
     }
@@ -171,8 +173,6 @@ struct PdfParser {
     /// The current font we're using. This is not the font string in the dictionary (e.g. "F28"),
     /// but rather the font's name itself (e.g. "CMMI10").
     cur_font: String,
-    /// A variable that tracks the sub/super-script level.
-    script_status: i32,
     /// Current font size
     cur_font_size: f32,
     /// The \baselineskip set by the user.
@@ -189,8 +189,7 @@ impl PdfParser {
         Self {
             config,
             cur_font: String::new(),
-            cur_font_size: 12.0, // Doesn't really matter
-            script_status: 0,
+            cur_font_size: 12.0,   // Doesn't really matter
             cur_baselineskip: 1.2, // The pdflatex default
         }
     }
@@ -390,6 +389,10 @@ impl PdfParser {
         let mut cur_parse_idx = 0;
         let mut parsed = String::new();
 
+        // Keep track of the font sizes (Tf), and vertical movements (second arg of Td) and associated positions
+        let mut tf_history: Vec<(f32, usize)> = Vec::new();
+        let mut y_history: Vec<(f32, usize)> = Vec::new();
+
         /* A loop over TJ blocks. The broad idea is:
          * 1. Look for tables/images--and skip them.
          * 2. Handle super/sub-scripts and footnotes.
@@ -434,41 +437,73 @@ impl PdfParser {
                 }
             }
 
+            let et_idx = content[cur_parse_idx..].find("ET").unwrap_or(0);
+
             // Get the current font size, if it's set.
-            if let Some(tf_idx) = content[cur_parse_idx..].find("Tf") {
+            if let Some(tf_idx) = content[cur_parse_idx..].find("Tf")
+                && tf_idx < et_idx
+            {
                 let [font_size_str] = self.get_params::<1>(&content, cur_parse_idx + tf_idx)?;
 
-                // If it didn't work, it might not be a PDF command.
-                let font_size = font_size_str.parse::<f32>().unwrap_or(self.cur_font_size);
-
-                self.cur_font_size = font_size;
+                if let Ok(font_size) = font_size_str.parse::<f32>() {
+                    tf_history.push((font_size, parsed.len()));
+                    self.cur_font_size = font_size;
+                }
             }
 
-            /* Heuristic: look for <number> <number> Td. If the second number (vertical) is
-             * positive and less than 9 (which is a reasonable line height), we treat it as a superscript
-             * until we find the same number, but negative. We do the same with subscripts. */
-            if let Some(td_idx) = content[cur_parse_idx..].find("Td") {
-                let [vert_str] = self.get_params::<1>(&content, cur_parse_idx + td_idx)?;
+            // `y_history` maintains a stack of every time we changed vertical position, and the
+            // current position in `parsed` each time that happened. We look at the "incoming"
+            // vertical position--which is calculated as the running position + the new change
+            // determined by the `Td` args--if this is the same as the penultimate position on the
+            // stack, we've moved and went back to where we were, which indicates a
+            // sub/super-script.
+            //
+            // Of course, this can also happen on two-column layouts, which we handle via a
+            // "large-enough" window.
+            if let Some(td_idx) = content[cur_parse_idx..].find("Td")
+                && td_idx < et_idx
+            {
+                let [_, vert_str] = self.get_params::<2>(&content, cur_parse_idx + td_idx)?;
 
                 if let Ok(vert) = vert_str.parse::<f32>() {
-                    // We shouldn't include 0 in these ranges
-                    if (0.1..=self.config.subscript_threshold).contains(&vert) {
-                        if self.script_status < 0 {
-                            parsed += "}"; // end the subscript level
-                        } else {
-                            parsed += "^{"; // begin a superscript level
+                    // `Td` args are movements, not absolute
+                    let (cur_y, _) = y_history.last().unwrap_or(&(0.0, 0));
+
+                    let new_y = cur_y + vert;
+
+                    let mut idx = y_history.len().saturating_sub(1);
+                    while idx > 0 {
+                        let (prev_y, prev_pos) = y_history[idx];
+                        if prev_y == new_y
+                            || parsed.len() - prev_pos > 100
+                            || (prev_y - new_y).abs() < 25.0
+                        {
+                            break;
                         }
-                        self.script_status += 1;
-                    } else if (-self.config.subscript_threshold..0.0).contains(&vert) {
-                        if self.script_status <= 0 {
-                            parsed += "_{";
+
+                        idx -= 1;
+                    }
+
+                    if idx < y_history.len() {
+                        let (prev_y, prev_pos) = y_history[idx];
+                        if prev_y == new_y && parsed.len() - prev_pos < self.config.subscript_window
+                        {
+                            y_history.truncate(idx - 1);
+
+                            parsed.insert_str(prev_pos, if vert < 0. { "_{" } else { "^{" });
+                            parsed.push('}');
                         } else {
-                            parsed += "}";
+                            y_history.push((new_y, parsed.len()));
                         }
-                        self.script_status -= 1;
+                    } else {
+                        y_history.push((new_y, parsed.len()));
                     }
                 }
             }
+            dbg!(&y_history);
+            dbg!(&parsed);
+            dbg!(&content[cur_parse_idx..(cur_parse_idx + 50).min(content.len())]);
+            println!("");
             /* TODO: The above logic also captures footnotes, so we might want to parse those while
              * we're here. */
 
@@ -674,7 +709,7 @@ mod tests {
         }
 
         // NOTE: Maintainers: use this as a way to quickly get the UTF-8 content of raw PDF commands.
-        let path = PathBuf::from("assets").join("ntk.pdf");
+        let path = PathBuf::from("assets").join("symbols.pdf");
 
         let doc = Document::load(path).unwrap();
         let content = get_raw_content_stream(&doc, 0).unwrap();
@@ -774,6 +809,8 @@ mod tests {
         for op in [r"\int", r"\sum", r"\infty"] {
             assert!(content.contains(op));
         }
+
+        println!("{}", content);
     }
 
     #[test]
