@@ -572,8 +572,14 @@ impl PdfParser {
             parsed = parsed.replace(from, to);
         }
 
-        dbg!(&y_history);
-
+        // Having collected all the positions where the y position was changed, we can now work
+        // backwards to add sub/superscript markers. The core idea here is that when we "come back"
+        // from a script, the y position will return to one that we've seen. This creates a span of
+        // indices to look through. Within this span, we can parse nested scripts (but note that
+        // these might not all follow the same "direction", particularly because for sums, the
+        // upper limit comes before the summation symbol for some reason in LaTeX-created content
+        // streams. We use the sign in the difference between y positions to determine what kind of
+        // a script it is.
         let mut i = y_history.len() - 1;
         while i > 0 {
             // Find the last index where the y position was equal to the y position recorded by
