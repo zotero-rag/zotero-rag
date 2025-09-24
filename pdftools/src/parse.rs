@@ -447,6 +447,7 @@ impl PdfParser {
 
                 if let Ok(font_size) = font_size_str.parse::<f32>() {
                     tf_history.push((font_size, parsed.len()));
+
                     self.cur_font_size = font_size;
                 }
             }
@@ -461,6 +462,7 @@ impl PdfParser {
             // Of course, this can also happen on two-column layouts, which we handle via a
             // "large-enough" window.
             if let Some(td_idx) = content[cur_parse_idx..].find("Td")
+                // We need this Td to be before an ET, otherwise we could be looking too far ahead
                 && td_idx < et_idx
             {
                 let [_, vert_str] = self.get_params::<2>(&content, cur_parse_idx + td_idx)?;
@@ -468,42 +470,13 @@ impl PdfParser {
                 if let Ok(vert) = vert_str.parse::<f32>() {
                     // `Td` args are movements, not absolute
                     let (cur_y, _) = y_history.last().unwrap_or(&(0.0, 0));
-
                     let new_y = cur_y + vert;
 
-                    let mut idx = y_history.len().saturating_sub(1);
-                    while idx > 0 {
-                        let (prev_y, prev_pos) = y_history[idx];
-                        if prev_y == new_y
-                            || parsed.len() - prev_pos > 100
-                            || (prev_y - new_y).abs() < 25.0
-                        {
-                            break;
-                        }
-
-                        idx -= 1;
-                    }
-
-                    if idx < y_history.len() {
-                        let (prev_y, prev_pos) = y_history[idx];
-                        if prev_y == new_y && parsed.len() - prev_pos < self.config.subscript_window
-                        {
-                            y_history.truncate(idx - 1);
-
-                            parsed.insert_str(prev_pos, if vert < 0. { "_{" } else { "^{" });
-                            parsed.push('}');
-                        } else {
-                            y_history.push((new_y, parsed.len()));
-                        }
-                    } else {
+                    if vert != 0.0 {
                         y_history.push((new_y, parsed.len()));
                     }
                 }
             }
-            dbg!(&y_history);
-            dbg!(&parsed);
-            dbg!(&content[cur_parse_idx..(cur_parse_idx + 50).min(content.len())]);
-            println!("");
             /* TODO: The above logic also captures footnotes, so we might want to parse those while
              * we're here. */
 
@@ -597,6 +570,37 @@ impl PdfParser {
         // Replace ligatures with constitutent characters
         for (from, to) in OCTAL_REPLACEMENTS.iter() {
             parsed = parsed.replace(from, to);
+        }
+
+        dbg!(&y_history);
+
+        let mut i = y_history.len() - 1;
+        while i > 0 {
+            // Find the last index where the y position was equal to the y position recorded by
+            // `y_history[i]`.
+            let j = (0..i)
+                .rev()
+                .filter(|k| y_history[*k].0 == y_history[i].0)
+                .next();
+
+            if j.is_none() {
+                i -= 1;
+                continue;
+            }
+
+            // Start at the next position...
+            let j_orig = j.unwrap();
+            let mut j = j_orig + 1;
+
+            // ...and go in pairs
+            while j < i {
+                parsed.insert_str(y_history[j + 1].1 - 1, "}");
+                parsed.insert_str(y_history[j].1, "^{");
+
+                j += 2;
+            }
+
+            i = j_orig.saturating_sub(1);
         }
 
         Ok(parsed)
