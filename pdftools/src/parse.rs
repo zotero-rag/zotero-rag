@@ -569,7 +569,7 @@ impl PdfParser {
         // streams. We use the sign in the difference between y positions to determine what kind of
         // a script it is.
         let mut additions: Vec<(usize, &str)> = Vec::new();
-        let mut i = y_history.len() - 1;
+        let mut i = y_history.len().saturating_sub(1);
         while i > 0 {
             // Find the last index where the y position was equal to the y position recorded by
             // `y_history[i]`.
