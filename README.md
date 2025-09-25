@@ -12,15 +12,15 @@ This project provides a command-line interface for querying your Zotero library 
 ### Features
 
 * We can currently extract text from PDFs and ignore tables/figures (they're unlikely to have useful context for LLMs)
-* We can call LLMs (currently OpenAI and Anthropic) for embedding text and generating text.
+* We can call LLMs for embedding text and generating text.
 * We can embed text using LanceDB.
 * We can embed queries and perform vector search.
 
 ### Limitations
 
-* The `zqa` CLI is limited--it can create embeddings for your library and perform vector search, but that's pretty much it.
-* We only support OpenAI and Anthropic for LLMs, and only OpenAI and Voyage AI for embeddings. Future plans include Gemini, Vertex AI, ollama, and possibly OpenRouter and Groq.
-* We do not perform chunking, so OpenAI embeddings are unlikely to work. Use Voyage AI in the meantime.
+* We do not perform chunking, so OpenAI embeddings are unlikely to work. Use Voyage AI or Cohere in the meantime, both of which perform truncation.
+* The equation parsing currently leaves a lot to be desired. This part is particularly under active work, but this is the most likely place LLMs will make mistakes due to the PDF parsing not being particularly great for this yet.
+* There are several other feature requests/bugs currently being tracked in [Issues](https://github.com/zotero-rag/zotero-rag/issues).
 
 ## Project Structure
 
@@ -45,11 +45,22 @@ cd zotero-rag
 
 # Build the project
 cargo build --release
+
+# Install the CLI
+cargo install --path zqa
 ```
+
+This will install the `zqa` binary in `~/.cargo/bin/`, so you should make sure this is in your `$PATH`. If you prefer, you can change this location to be, for example, `/usr/local/bin`, like so:
+
+```
+cargo install --path zqa --root /usr/local/bin
+```
+
+Note that wherever you run `zqa` later, the program will look for API keys and your choices of models in a `.env` file. A future release will make these configurable globally.
 
 ### Note for building on Linux
 
-On Linux, the project is configured to use the `mold` linker for faster linking. You can either install `mold` by following the [repo's instructions](https://github.com/rui314/mold) or by simply removing the `rustflags` line from `.cargo/config.toml`.
+On Linux, the project is configured to use the `mold` linker for faster linking. You can either install `mold` by following the [repo's instructions](https://github.com/rui314/mold) or simply remove the `rustflags` line from `.cargo/config.toml`.
 
 ## Usage
 
@@ -63,12 +74,21 @@ OPENAI_API_KEY=
 OPENAI_EMBEDDING_MODEL=text-embedding-3-small
 OPENAI_MODEL=o4-mini-2025-04-16
 VOYAGE_AI_API_KEY=
+VOYAGE_AI_RERANK_MODEL=rerank-2.5
+COHERE_API_KEY=
+COHERE_RERANK_MODEL=rerank-v3.5
 GEMINI_API_KEY=
+GEMINI_MODEL=gemini-2.5-pro
+GEMINI_EMBEDDING_MODEL=gemini-embedding-001
+OPENROUTER_MODEL=
+OPENROUTER_API_KEY=
 
 MAX_CONCURRENT_REQUESTS=5
 ```
 
 The model choices and the maximum concurrent requests above are defaults, and you can omit them. By default, the app uses Anthropic for generation and Voyage AI for embedding. This is currently the recommended settings (and so you won't need an OpenAI API key set up). Note that Voyage AI embeddings are the only ones that are known to work in a real setting; it is quite unlikely for the OpenAI embeddings to work at this moment, because we do not perform any chunking. For `OPENAI_MODEL`, o4-mini is recommended, unless you have a Usage Tier 3 account--in which case you may prefer gpt-4.1.
+
+You likely don't need _all_ of these set (or even mentioned) in your `.env` file: add just the ones you need, and defaults will be used for all the others. The exception to this is if you're _contributing_--in which case you will need _all_ of them set so that tests can run locally. Because the LLM space changes often, most tests are written without mocking so that any breaking changes caused by APIs changing is caught early.
 
 ### Running the program
 
@@ -91,10 +111,6 @@ At any time, use `/help` to see available commands. You can use `quit`, `/quit`,
 ### Reporting issues
 
 To report a bug, please re-run using `--log-level debug` and add the logs to your issue.
-
-## Status
-
-This project is a work in progress. Features and API may change significantly between versions.
 
 ## License
 

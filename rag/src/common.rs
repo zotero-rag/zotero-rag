@@ -63,6 +63,7 @@ mod tests {
     use serde::Serialize;
     use serde_json::json;
     use std::{
+        pin::Pin,
         sync::{Arc, Mutex},
         time::Duration,
     };
@@ -82,41 +83,44 @@ mod tests {
     }
 
     impl HttpClient for MockRateLimitClient {
-        async fn post_json<T: Serialize + Send + Sync>(
-            &self,
-            _url: &str,
+        fn post_json<'a, T: Serialize + Send + Sync>(
+            &'a self,
+            _url: &'a str,
             _headers: HeaderMap,
-            _body: &T,
-        ) -> Result<Response, reqwest::Error> {
-            let mut count = { self.call_count.lock().unwrap() };
-            *count += 1;
+            _body: &'a T,
+        ) -> Pin<Box<dyn Future<Output = Result<reqwest::Response, reqwest::Error>> + Send + 'a>>
+        {
+            Box::pin(async move {
+                let mut count = { self.call_count.lock().unwrap() };
+                *count += 1;
 
-            if *count <= self.max_failures {
-                // Return 429 response with retry-after header
-                let json = json!({"error": "Rate limit exceeded"});
-                let bytes = bytes::Bytes::from(json.to_string());
+                if *count <= self.max_failures {
+                    // Return 429 response with retry-after header
+                    let json = json!({"error": "Rate limit exceeded"});
+                    let bytes = bytes::Bytes::from(json.to_string());
 
-                let http_response = http::Response::builder()
-                    .status(429)
-                    .header("content-type", "application/json")
-                    .header("retry-after", "2")
-                    .body(bytes)
-                    .unwrap();
+                    let http_response = http::Response::builder()
+                        .status(429)
+                        .header("content-type", "application/json")
+                        .header("retry-after", "2")
+                        .body(bytes)
+                        .unwrap();
 
-                Ok(Response::from(http_response))
-            } else {
-                // Return successful response
-                let json = json!({"success": true});
-                let bytes = bytes::Bytes::from(json.to_string());
+                    Ok(Response::from(http_response))
+                } else {
+                    // Return successful response
+                    let json = json!({"success": true});
+                    let bytes = bytes::Bytes::from(json.to_string());
 
-                let http_response = http::Response::builder()
-                    .status(200)
-                    .header("content-type", "application/json")
-                    .body(bytes)
-                    .unwrap();
+                    let http_response = http::Response::builder()
+                        .status(200)
+                        .header("content-type", "application/json")
+                        .body(bytes)
+                        .unwrap();
 
-                Ok(Response::from(http_response))
-            }
+                    Ok(Response::from(http_response))
+                }
+            })
         }
     }
 

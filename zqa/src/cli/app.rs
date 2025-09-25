@@ -598,6 +598,7 @@ mod tests {
             tui: false,
             log_level: "none".into(),
             embedding: "voyageai".into(),
+            reranker: "voyageai".into(),
             model_provider: "anthropic".into(),
         };
         let out_buf: Vec<u8> = Vec::new();
