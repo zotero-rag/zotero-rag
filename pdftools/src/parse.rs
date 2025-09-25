@@ -575,10 +575,7 @@ impl PdfParser {
         while i > 0 {
             // Find the last index where the y position was equal to the y position recorded by
             // `y_history[i]`.
-            let j = (0..i)
-                .rev()
-                .filter(|k| y_history[*k].0 == y_history[i].0)
-                .next();
+            let j = (0..i).rev().find(|k| y_history[*k].0 == y_history[i].0);
 
             if j.is_none() {
                 i -= 1;
