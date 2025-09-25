@@ -431,7 +431,7 @@ impl PdfParser {
                 }
             }
 
-            let et_idx = content[cur_parse_idx..].find("ET").unwrap_or(0);
+            let et_idx = content[cur_parse_idx..].find("ET").unwrap_or(usize::MAX);
 
             // Get the current font size, if it's set.
             if let Some(tf_idx) = content[cur_parse_idx..].find("Tf")
@@ -560,8 +560,6 @@ impl PdfParser {
             parsed = parsed.replace(from, to);
         }
 
-        dbg!(&y_history);
-
         // Having collected all the positions where the y position was changed, we can now work
         // backwards to add sub/superscript markers. The core idea here is that when we "come back"
         // from a script, the y position will return to one that we've seen. This creates a span of
@@ -604,7 +602,7 @@ impl PdfParser {
                 // TODO: Refine the below rule.
                 additions.push((
                     y_history[j].1 + offset,
-                    if y_history[j_orig].0 < y_history[j_orig - 1].0 {
+                    if y_history[j].0 > y_history[j_orig].0 {
                         "^{"
                     } else {
                         "_{"
@@ -833,8 +831,6 @@ mod tests {
         for op in [r"\int", r"\sum", r"\infty"] {
             assert!(content.contains(op));
         }
-
-        println!("{}", content);
     }
 
     #[test]
