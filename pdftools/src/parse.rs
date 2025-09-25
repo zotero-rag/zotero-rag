@@ -592,7 +592,7 @@ impl PdfParser {
                 // The offset measures how much we need to shift the opening curly braces by. This
                 // is because while symbols are single characters in math fonts (such as CMEX),
                 // they expand to a longer string, so we account for the difference in lengths.
-                let offset = if parsed.as_bytes()[y_history[j].1] == BACKSLASH_ASCII {
+                let offset = if parsed.as_bytes().get(y_history[j].1) == Some(&BACKSLASH_ASCII) {
                     parsed[y_history[j].1..].find(' ').unwrap()
                 } else {
                     0
@@ -618,7 +618,9 @@ impl PdfParser {
         // Sort in descending order and then perform the insertions
         additions.sort_by(|a, b| b.0.cmp(&a.0));
         for (pos, s) in additions {
-            parsed.insert_str(pos, s);
+            if pos < parsed.len() {
+                parsed.insert_str(pos, s);
+            }
         }
 
         Ok(parsed)
