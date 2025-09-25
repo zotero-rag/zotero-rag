@@ -11,7 +11,6 @@ use crate::math::{from_cmex, from_cmmi, from_cmsy, from_msbm};
 
 const ASCII_PLUS: u8 = b'+';
 const DEFAULT_SAME_WORD_THRESHOLD: f32 = 60.0;
-const DEFAULT_SUBSCRIPT_WINDOW: usize = 500;
 const DEFAULT_TABLE_EUCLIDEAN_THRESHOLD: f32 = 20.0;
 
 /// A wrapper for all PDF parsing errors
@@ -45,10 +44,6 @@ impl std::fmt::Display for PdfError {
 struct PdfParserConfig {
     /// Threshold for determining when to join words
     same_word_threshold: f32,
-    /// In sub/super-script detection, the window to decide if two characters are at equal vertical
-    /// positions because they were on different columns. You typically want this to be relatively
-    /// large; the default is 500.
-    subscript_window: usize,
     /// Euclidean distance threshold between `Td` alignment to declare a table
     table_alignment_threshold: f32,
 }
@@ -57,7 +52,6 @@ impl Default for PdfParserConfig {
     fn default() -> Self {
         Self {
             same_word_threshold: DEFAULT_SAME_WORD_THRESHOLD,
-            subscript_window: DEFAULT_SUBSCRIPT_WINDOW,
             table_alignment_threshold: DEFAULT_TABLE_EUCLIDEAN_THRESHOLD,
         }
     }
@@ -453,14 +447,8 @@ impl PdfParser {
             }
 
             // `y_history` maintains a stack of every time we changed vertical position, and the
-            // current position in `parsed` each time that happened. We look at the "incoming"
-            // vertical position--which is calculated as the running position + the new change
-            // determined by the `Td` args--if this is the same as the penultimate position on the
-            // stack, we've moved and went back to where we were, which indicates a
-            // sub/super-script.
-            //
-            // Of course, this can also happen on two-column layouts, which we handle via a
-            // "large-enough" window.
+            // current position in `parsed` each time that happened. If the y-delta is zero, then
+            // we don't care about this.
             if let Some(td_idx) = content[cur_parse_idx..].find("Td")
                 // We need this Td to be before an ET, otherwise we could be looking too far ahead
                 && td_idx < et_idx
@@ -572,6 +560,8 @@ impl PdfParser {
             parsed = parsed.replace(from, to);
         }
 
+        dbg!(&y_history);
+
         // Having collected all the positions where the y position was changed, we can now work
         // backwards to add sub/superscript markers. The core idea here is that when we "come back"
         // from a script, the y position will return to one that we've seen. This creates a span of
@@ -580,6 +570,7 @@ impl PdfParser {
         // upper limit comes before the summation symbol for some reason in LaTeX-created content
         // streams. We use the sign in the difference between y positions to determine what kind of
         // a script it is.
+        let mut additions: Vec<(usize, &str)> = Vec::new();
         let mut i = y_history.len() - 1;
         while i > 0 {
             // Find the last index where the y position was equal to the y position recorded by
@@ -598,15 +589,41 @@ impl PdfParser {
             let j_orig = j.unwrap();
             let mut j = j_orig + 1;
 
-            // ...and go in pairs
+            // ...and go in pairs. We can only collect the additions at this point, since they may
+            // be overlapping.
             while j < i {
-                parsed.insert_str(y_history[j + 1].1 - 1, "}");
-                parsed.insert_str(y_history[j].1, "^{");
+                const BACKSLASH_ASCII: u8 = 92;
+
+                // The offset measures how much we need to shift the opening curly braces by. This
+                // is because while symbols are single characters in math fonts (such as CMEX),
+                // they expand to a longer string, so we account for the difference in lengths.
+                let offset = if parsed.as_bytes()[y_history[j].1] == BACKSLASH_ASCII {
+                    parsed[y_history[j].1..].find(' ').unwrap()
+                } else {
+                    0
+                };
+
+                additions.push((y_history[j + 1].1 - 1, "}"));
+                // TODO: Refine the below rule.
+                additions.push((
+                    y_history[j].1 + offset,
+                    if y_history[j_orig].0 < y_history[j_orig - 1].0 {
+                        "^{"
+                    } else {
+                        "_{"
+                    },
+                ));
 
                 j += 2;
             }
 
             i = j_orig.saturating_sub(1);
+        }
+
+        // Sort in descending order and then perform the insertions
+        additions.sort_by(|a, b| b.0.cmp(&a.0));
+        for (pos, s) in additions {
+            parsed.insert_str(pos, s);
         }
 
         Ok(parsed)
