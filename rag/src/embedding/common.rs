@@ -149,7 +149,7 @@ pub trait EmbeddingApiResponse {
 /// Note that in case of failed requests, this function adds zero vectors in place of texts that
 /// failed. This is currently implemented this way because Arrow arrays are somewhat obnoxious to
 /// work with and it's not the easiest thing to remove values by index. This is, admittedly, not
-/// the best UX, and the workaround provided is the `/repair` command that retries these at a later
+/// the best UX, and the workaround provided is the `/embed` command that retries these at a later
 /// time.
 ///
 /// TODO: Consider making this more robust later.
