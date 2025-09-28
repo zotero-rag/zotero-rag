@@ -36,6 +36,9 @@ pub enum LanceError {
     /// The database is in an invalid state
     #[error("The DB is in an invalid state: {0}")]
     InvalidStateError(String),
+    /// IO errors, used by repair.rs.
+    #[error(transparent)]
+    IOError(#[from] std::io::Error),
     /// Other LanceDB-related errors
     #[error(transparent)]
     Other(#[from] LanceDbError),

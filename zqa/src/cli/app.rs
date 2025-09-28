@@ -10,6 +10,7 @@ use rag::llm::base::{ApiClient, CompletionApiResponse, UserMessage};
 use rag::llm::errors::LLMError;
 use rag::llm::factory::get_client_by_provider;
 use rag::vector::checkhealth::lancedb_health_check;
+use rag::vector::doctor::doctor as rag_doctor;
 use rag::vector::lance::{create_initial_table, db_statistics, lancedb_exists};
 use rustyline::error::ReadlineError;
 use tokio::task::JoinSet;
@@ -41,7 +42,7 @@ const RESET: &str = "\x1b[0m";
 /// the `BATCH_ITER_FILE` and uses the data in there to compute embeddings and write out
 /// the LanceDB table.
 ///
-/// # Arguments
+/// # Arguments:
 ///
 /// * `ctx` - A `Context` object that contains CLI args and objects that implement
 ///   `std::io::Write` for `stdout` and `stderr`.
@@ -108,7 +109,8 @@ async fn embed<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Result<(), CLIErr
 /// Performs comprehensive health checks on the LanceDB database and reports status
 /// with colored output using ASCII escape codes.
 ///
-/// # Arguments
+/// # Arguments:
+///
 /// * `ctx` - A `Context` object that contains CLI args and objects that implement
 ///   `std::io::Write` for `stdout` and `stderr`.
 async fn checkhealth<O: Write, E: Write>(ctx: &mut Context<O, E>) {
@@ -120,12 +122,30 @@ async fn checkhealth<O: Write, E: Write>(ctx: &mut Context<O, E>) {
     };
 }
 
+/// Runs health checks on the LanceDB database and provides helpful suggestions to the user on how
+/// to fix any issues, if that is possible.
+/// TODO: Currently assumed /embed fixes zero-embeddings and /index exists.
+///
+/// # Arguments:
+///
+/// * `ctx` - A `Context` object that contains CLI args and objects that implement
+///   `std::io::Write` for `stdout` and `stderr`.
+async fn doctor<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Result<(), CLIError> {
+    let schema = get_schema(&ctx.args.embedding).await;
+
+    if let Err(e) = rag_doctor(schema, "embeddings", &mut ctx.out).await {
+        writeln!(ctx.err, "{e}")?;
+    };
+
+    Ok(())
+}
+
 /// Process a user's Zotero library. This acts as one of the main functions provided by the CLI.
 /// This parses the library, extracts the text from each file, stores them in a LanceDB
 /// table, and adds their embeddings. If the last step fails, the parsed texts are stored
 /// in `BATCH_ITER_FILE`.
 ///
-/// # Arguments
+/// # Arguments:
 ///
 /// * `ctx` - A `Context` object that contains CLI args and objects that implement
 ///   `std::io::Write` for `stdout` and `stderr`.
@@ -209,7 +229,7 @@ async fn process<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Result<(), CLIE
 
 /// Given a positive number, returns a thousands separator-formatted string representation
 ///
-/// # Arguments
+/// # Arguments:
 ///
 /// * `num` - The number to format
 ///
@@ -489,12 +509,19 @@ pub async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<(), CLIEr
                             &mut ctx.out,
                             "/checkhealth\tRun health checks on your LanceDB."
                         )?;
+                        writeln!(
+                            &mut ctx.out,
+                            "/doctor\t\tGet suggestions on how to fix issues spotted by /checkhealth."
+                        )?;
                         writeln!(&mut ctx.out, "/stats\t\tShow table statistics.")?;
                         writeln!(&mut ctx.out, "/quit\t\tExit the program")?;
                         writeln!(&mut ctx.out)?;
                     }
                     "/checkhealth" => {
                         checkhealth(&mut ctx).await;
+                    }
+                    "/doctor" => {
+                        doctor(&mut ctx).await?;
                     }
                     "/embed" => {
                         if let Err(e) = embed(&mut ctx).await {
