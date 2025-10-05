@@ -8,8 +8,7 @@ on:
 
 jobs:
   coverage:
-    runs-on:
-      group: runners-xl
+    runs-on: blacksmith-8vcpu-ubuntu-2404
     env:
       CARGO_TERM_COLOR: always
     steps:
