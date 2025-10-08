@@ -40,8 +40,20 @@ pub enum LanceError {
     #[error(transparent)]
     IOError(#[from] std::io::Error),
     /// Other LanceDB-related errors
-    #[error(transparent)]
-    Other(#[from] LanceDbError),
+    #[error("Other LanceDB error: {0}")]
+    Other(String),
+}
+
+impl From<ArrowError> for LanceError {
+    fn from(value: ArrowError) -> Self {
+        Self::Other(value.to_string())
+    }
+}
+
+impl From<LanceDbError> for LanceError {
+    fn from(value: LanceDbError) -> Self {
+        Self::Other(value.to_string())
+    }
 }
 
 /// Table statistics, to be shown when the user calls the `/stats` command.

@@ -3,9 +3,10 @@ use crate::cli::prompts::{get_extraction_prompt, get_summarize_prompt};
 use crate::cli::readline::get_readline_config;
 use crate::utils::arrow::{get_schema, vector_search};
 use crate::utils::library::get_new_library_items;
-use arrow_array::{self, RecordBatch, RecordBatchIterator};
+use arrow_array::{self, RecordBatch, RecordBatchIterator, StringArray};
 use lancedb::embeddings::EmbeddingDefinition;
 use rag::capabilities::ModelProviders;
+use rag::embedding::common::get_embedding_provider;
 use rag::llm::base::{ApiClient, CompletionApiResponse, UserMessage};
 use rag::llm::errors::LLMError;
 use rag::llm::factory::get_client_by_provider;
@@ -20,6 +21,7 @@ use crate::common::Context;
 use crate::{library_to_arrow, utils::library::parse_library_metadata};
 use arrow_ipc::reader::FileReader;
 use arrow_ipc::writer::FileWriter;
+use std::sync::Arc;
 use std::{
     fs::File,
     io::{self, Write},
@@ -46,7 +48,16 @@ const RESET: &str = "\x1b[0m";
 ///
 /// * `ctx` - A `Context` object that contains CLI args and objects that implement
 ///   `std::io::Write` for `stdout` and `stderr`.
-async fn embed<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Result<(), CLIError> {
+/// * `fix_zeros` - If `true`, fixes zero-embedding vectors, but does not handle PDFs
+///   parsed but not embedded.
+async fn embed<O: Write, E: Write>(
+    ctx: &mut Context<O, E>,
+    fix_zeros: bool,
+) -> Result<(), CLIError> {
+    if fix_zeros {
+        return fix_zero_embeddings(ctx).await;
+    }
+
     let file = File::open(BATCH_ITER_FILE)?;
     let reader = FileReader::try_new(file, None)?;
 
@@ -106,6 +117,27 @@ async fn embed<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Result<(), CLIErr
     Ok(())
 }
 
+/// Fix the zero-embedding problem. In some error cases, we store zero-vectors as embeddings in
+/// LanceDB. This function fixes those errors by replacing them with "real" embeddings.
+///
+/// # Arguments:
+///
+/// * `ctx` - A `Context` object that contains CLI args and objects that implement
+async fn fix_zero_embeddings<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Result<(), CLIError> {
+    let schema = get_schema(&ctx.args.embedding).await;
+    let healthcheck_results = lancedb_health_check(schema, "pdf_text", "embeddings").await?;
+
+    if let Some(Ok(zero_items)) = healthcheck_results.zero_embedding_items {
+        let sources = StringArray::from_iter_values(zero_items.iter());
+
+        let embedding_provider = get_embedding_provider(&ctx.args.embedding)?;
+        let embeddings = embedding_provider.compute_source_embeddings(Arc::new(sources));
+        // TODO: Replace the texts
+    }
+
+    Ok(())
+}
+
 /// Performs comprehensive health checks on the LanceDB database and reports status
 /// with colored output using ASCII escape codes.
 ///
@@ -116,7 +148,7 @@ async fn embed<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Result<(), CLIErr
 async fn checkhealth<O: Write, E: Write>(ctx: &mut Context<O, E>) {
     let schema = get_schema(&ctx.args.embedding).await;
 
-    let _ = match lancedb_health_check(schema, "embeddings").await {
+    let _ = match lancedb_health_check(schema, "pdf_text", "embeddings").await {
         Ok(result) => writeln!(ctx.out, "{result}"),
         Err(e) => writeln!(ctx.err, "{e}"),
     };
@@ -133,11 +165,15 @@ async fn checkhealth<O: Write, E: Write>(ctx: &mut Context<O, E>) {
 async fn doctor<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Result<(), CLIError> {
     let schema = get_schema(&ctx.args.embedding).await;
 
-    if let Err(e) = rag_doctor(schema, "embeddings", &mut ctx.out).await {
+    // TODO: We should have `rag_doctor` return a `Vec<SuggestedAction>` or something that tells us
+    // what kinds of things we should do, and then provide user-facing functionality to do those
+    // things, so that this is not a shorter version of /checkhealth
+    if let Err(e) = rag_doctor(schema.clone(), "pdf_text", "embeddings", &mut ctx.out).await {
         writeln!(ctx.err, "{e}")?;
     };
 
-    Ok(())
+    // Currently, we can really only fix the zero-embeddings issue
+    return fix_zero_embeddings(ctx).await;
 }
 
 /// Process a user's Zotero library. This acts as one of the main functions provided by the CLI.
@@ -219,7 +255,7 @@ async fn process<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Result<(), CLIE
             writeln!(&mut ctx.out, "Parsing library failed: {e}")?;
             writeln!(
                 &mut ctx.out,
-                "The parsed PDFs have been saved in 'batch_iter.bin'. Run '/embed' to retry embedding."
+                "The parsed PDFs have been saved in 'batch_iter.bin'. Run '/embed fix' to retry embedding."
             )?;
         }
     }
@@ -524,7 +560,7 @@ pub async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<(), CLIEr
                         doctor(&mut ctx).await?;
                     }
                     "/embed" => {
-                        if let Err(e) = embed(&mut ctx).await {
+                        if let Err(e) = embed(&mut ctx, false).await {
                             writeln!(
                                 &mut ctx.err,
                                 "Failed to create embeddings. You may find relevant error messages below:\n\t{e}"
@@ -578,6 +614,16 @@ pub async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<(), CLIEr
                                 )?;
                             }
 
+                            continue;
+                        } else if query.starts_with("/embed") {
+                            // Handle `/embed fix`
+                            let subcmd = query.strip_prefix("/embed").unwrap().trim();
+                            if subcmd != "fix" {
+                                writeln!(&mut ctx.err, "Invalid subcommand to /embed: {subcmd}")?;
+                                continue;
+                            }
+
+                            embed(&mut ctx, true).await?;
                             continue;
                         }
 
@@ -666,7 +712,7 @@ mod tests {
         writer.finish().unwrap();
 
         // Actually call `embed`
-        let result = embed(&mut ctx).await;
+        let result = embed(&mut ctx, false).await;
         assert!(result.is_ok());
 
         let output = String::from_utf8(ctx.out.into_inner()).unwrap();
