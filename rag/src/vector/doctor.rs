@@ -41,6 +41,7 @@ fn symptom(out: &mut impl Write, msg: &str) -> Result<(), LanceError> {
 /// # Arguments:
 ///
 /// * `schema`: The expected schema for the LanceDB table.
+/// * `text_col` - The name of the column containing the full texts.
 /// * `embeddings_col`: The name of the column with the embeddings.
 /// * `stdout`: A writer object. This does not *have* to be `stdout`, but it is unlikely you would
 ///   want these messages going to an error stream, considering the messages printed here are meant
@@ -52,10 +53,11 @@ fn symptom(out: &mut impl Write, msg: &str) -> Result<(), LanceError> {
 /// (an invalid state being one that is not expected, and is likely a bug).
 pub async fn doctor(
     schema: arrow_schema::Schema,
+    text_col: &str,
     embeddings_col: &str,
     stdout: &mut impl Write,
 ) -> Result<(), LanceError> {
-    let healthcheck_results = lancedb_health_check(schema, embeddings_col).await?;
+    let healthcheck_results = lancedb_health_check(schema, text_col, embeddings_col).await?;
 
     if !healthcheck_results.directory_exists {
         symptom(stdout, "database directory does not exist.")?;
@@ -111,7 +113,7 @@ pub async fn doctor(
         && zero_items.len() > 0
     {
         symptom(stdout, "some items have zero embedding vectors.")?;
-        help(stdout, "run /embed to fix this.")?;
+        help(stdout, "run `/embed fix` to fix this.")?;
 
         writeln!(stdout, "")?;
     }

@@ -1,7 +1,7 @@
 use std::io;
 use thiserror::Error;
 
-use rag::llm::errors::LLMError;
+use rag::{llm::errors::LLMError, vector::lance::LanceError};
 use rustyline::error::ReadlineError;
 
 use crate::utils;
@@ -18,6 +18,8 @@ pub enum CLIError {
     MalformedBatchError,
     #[error("Error from readline: {0}")]
     ReadlineError(String),
+    #[error("LanceDB error: {0}")]
+    LanceError(#[from] LanceError),
 }
 
 impl From<utils::arrow::ArrowError> for CLIError {

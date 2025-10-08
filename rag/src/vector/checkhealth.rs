@@ -1,6 +1,5 @@
 use super::lance::LanceError;
 use super::lance::{DB_URI, TABLE_NAME};
-use arrow_array::Array;
 use arrow_array::cast::AsArray;
 use arrow_array::types::Float32Type;
 use arrow_schema::Schema;
@@ -12,7 +11,6 @@ use std::fmt;
 use std::fs;
 use std::io;
 use std::path::PathBuf;
-use std::sync::Arc;
 
 /// ANSI color codes for console output
 const RED: &str = "\x1b[31m";
@@ -39,7 +37,7 @@ pub struct HealthCheckResult {
     /// Rows with all-zero embeddings. `None` when the check hasn't run, `Some(Ok(rows))` if
     /// we successfully computed the rows with zero embeddings, and `Some(Err(...))` when
     /// there was an error connecting to the DB or opening the table.
-    pub zero_embedding_items: Option<Result<Vec<Arc<dyn arrow_array::Array>>, LanceError>>,
+    pub zero_embedding_items: Option<Result<Vec<String>, LanceError>>,
     /// Index information: (index_name, index_type). `None` when the check hasn't run,
     /// `Some(Ok(index_info))` if we successfully got the index information, and `Some(Err(...))`
     /// when there was an error connecting to the DB or opening the table.
@@ -247,6 +245,7 @@ fn calculate_directory_size(path: &std::path::Path) -> Result<u64, std::io::Erro
 /// # Arguments:
 /// * `tbl` - The LanceDB table to query
 /// * `schema` - The expected schema of this table
+/// * `return_col` - The column to return
 /// * `embeddings_col` - The name of the column containing embeddings in this table
 /// * `query_limit` - Limit on the number of rows in the table to query
 ///
@@ -255,12 +254,13 @@ fn calculate_directory_size(path: &std::path::Path) -> Result<u64, std::io::Erro
 /// * Otherwise, a `LanceError` detailing what went wrong and why:
 ///     * A `QueryError` if some query failed
 ///     * An `InvalidStateError` if the table is in some invalid state
-async fn get_zero_vectors(
+pub async fn get_zero_vectors(
     tbl: &Table,
     schema: &Schema,
+    return_col: &str,
     embeddings_col: &str,
     query_limit: usize,
-) -> Result<Vec<Arc<dyn Array>>, LanceError> {
+) -> Result<Vec<String>, LanceError> {
     let stream = tbl
         .query()
         .limit(query_limit)
@@ -273,7 +273,7 @@ async fn get_zero_vectors(
         .await
         .map_err(|e| LanceError::QueryError(e.to_string()))?;
 
-    let mut zero_rows = Vec::<Arc<dyn arrow_array::Array>>::new();
+    let mut zero_rows = Vec::<String>::new();
     let mut error: Option<LanceError> = None;
 
     // Note that this code assumes that all the batches have the same schema
@@ -308,19 +308,32 @@ async fn get_zero_vectors(
             break;
         }
 
-        let idx = embedding_col_index.unwrap();
-        let embeddings = batch.column(idx).as_fixed_size_list();
-        for row in embeddings.iter() {
+        let ret_col_index = schema.index_of(return_col);
+        if ret_col_index.is_err() {
+            error = Some(LanceError::InvalidStateError(
+                "Invalid schema in LanceDB table: No `{return_col}` column found.".to_string(),
+            ));
+            break;
+        }
+
+        let embeddings = batch.column(embedding_col_index?).as_fixed_size_list();
+        let returned = batch.column(ret_col_index?).as_string::<i32>();
+
+        let mut embeddings_iter = embeddings.iter();
+        let mut return_col_iter = returned.iter();
+        while let Some(embedding) = embeddings_iter.next()
+            && let Some(Some(return_col_val)) = return_col_iter.next()
+        {
             // For now, we won't treat this as an error
-            if row.is_none() {
+            if embedding.is_none() {
                 continue;
             }
 
-            let row = row.unwrap();
-            let float_array = row.as_primitive::<Float32Type>();
+            let embedding = embedding.unwrap();
+            let float_array = embedding.as_primitive::<Float32Type>();
 
             if float_array.iter().all(|v| v.unwrap_or(0.0) == 0.0) {
-                zero_rows.push(Arc::clone(&row));
+                zero_rows.push(return_col_val.to_string());
             }
         }
     }
@@ -368,6 +381,7 @@ async fn check_indexes(tbl: &lancedb::table::Table) -> Result<Vec<(String, Strin
 ///
 /// # Arguments:
 /// * `schema` - The expected schema for the LanceDB table.
+/// * `text_col` - The name of the column containing the full texts.
 /// * `embeddings_col` - The name of the column containing embeddings.
 ///
 /// # Returns:
@@ -375,6 +389,7 @@ async fn check_indexes(tbl: &lancedb::table::Table) -> Result<Vec<(String, Strin
 /// A `Result<HealthCheckResult, LanceError>` indicating success and whether issues were found
 pub async fn lancedb_health_check(
     schema: arrow_schema::Schema,
+    text_col: &str,
     embeddings_col: &str,
 ) -> Result<HealthCheckResult, LanceError> {
     let mut result = HealthCheckResult {
@@ -437,7 +452,7 @@ pub async fn lancedb_health_check(
     };
 
     result.zero_embedding_items =
-        Some(get_zero_vectors(&tbl, &schema, embeddings_col, query_limit).await);
+        Some(get_zero_vectors(&tbl, &schema, text_col, embeddings_col, query_limit).await);
 
     result.index_info = Some(check_indexes(&tbl).await);
 
@@ -469,7 +484,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(DB_URI);
         let _ = std::fs::remove_dir_all(format!("rag/{}", DB_URI));
 
-        let result = lancedb_health_check(schema, "embeddings").await;
+        let result = lancedb_health_check(schema, "pdf_text", "embeddings").await;
         assert!(result.is_ok());
 
         let health_result = result.unwrap();
@@ -511,7 +526,7 @@ mod tests {
         .unwrap();
 
         // Now test health check
-        let result = lancedb_health_check(schema, "embeddings").await;
+        let result = lancedb_health_check(schema, "pdf_text", "embeddings").await;
         assert!(result.is_ok());
 
         let health_result = result.unwrap();
