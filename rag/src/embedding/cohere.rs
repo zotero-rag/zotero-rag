@@ -146,7 +146,7 @@ impl<T: HttpClient + Default + Clone + std::fmt::Debug> EmbeddingFunction for Co
 
     fn dest_type(&self) -> Result<Cow<'_, DataType>, lancedb::Error> {
         Ok(Cow::Owned(DataType::FixedSizeList(
-            Arc::new(Field::new("item", DataType::Float32, false)),
+            Arc::new(Field::new("item", DataType::Float32, true)),
             COHERE_EMBEDDING_DIM as i32,
         )))
     }

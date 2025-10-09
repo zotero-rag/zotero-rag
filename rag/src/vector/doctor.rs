@@ -109,8 +109,8 @@ pub async fn doctor(
                 .into(),
         ))?;
 
-    if let Ok(zero_items) = zero_embedding_items
-        && zero_items.len() > 0
+    if let Ok(zero_batches) = zero_embedding_items
+        && !zero_batches.is_empty()
     {
         symptom(stdout, "some items have zero embedding vectors.")?;
         help(stdout, "run `/embed fix` to fix this.")?;

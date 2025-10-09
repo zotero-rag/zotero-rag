@@ -19,7 +19,19 @@ pub enum CLIError {
     #[error("Error from readline: {0}")]
     ReadlineError(String),
     #[error("LanceDB error: {0}")]
-    LanceError(#[from] LanceError),
+    LanceError(String),
+}
+
+impl From<LanceError> for CLIError {
+    fn from(value: LanceError) -> Self {
+        Self::LanceError(value.to_string())
+    }
+}
+
+impl From<lancedb::Error> for CLIError {
+    fn from(value: lancedb::Error) -> Self {
+        Self::LanceError(value.to_string())
+    }
 }
 
 impl From<utils::arrow::ArrowError> for CLIError {

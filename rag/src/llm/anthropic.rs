@@ -176,7 +176,7 @@ impl<T: HttpClient + Default + std::fmt::Debug> EmbeddingFunction for AnthropicC
 
     fn dest_type(&self) -> Result<Cow<'_, DataType>, lancedb::Error> {
         Ok(Cow::Owned(DataType::FixedSizeList(
-            Arc::new(Field::new("item", DataType::Float32, false)),
+            Arc::new(Field::new("item", DataType::Float32, true)),
             OPENAI_EMBEDDING_DIM as i32, // text-embedding-3-small size
         )))
     }

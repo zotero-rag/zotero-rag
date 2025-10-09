@@ -3,16 +3,18 @@ use crate::cli::prompts::{get_extraction_prompt, get_summarize_prompt};
 use crate::cli::readline::get_readline_config;
 use crate::utils::arrow::{get_schema, vector_search};
 use crate::utils::library::get_new_library_items;
-use arrow_array::{self, RecordBatch, RecordBatchIterator, StringArray};
+use arrow_array::{self, RecordBatch, RecordBatchIterator};
 use lancedb::embeddings::EmbeddingDefinition;
 use rag::capabilities::ModelProviders;
-use rag::embedding::common::get_embedding_provider;
 use rag::llm::base::{ApiClient, CompletionApiResponse, UserMessage};
 use rag::llm::errors::LLMError;
 use rag::llm::factory::get_client_by_provider;
 use rag::vector::checkhealth::lancedb_health_check;
 use rag::vector::doctor::doctor as rag_doctor;
-use rag::vector::lance::{create_initial_table, db_statistics, lancedb_exists};
+use rag::vector::lance::{
+    create_initial_table, db_statistics, fix_zero_embeddings as rag_fix_zero_embeddings,
+    lancedb_exists,
+};
 use rustyline::error::ReadlineError;
 use tokio::task::JoinSet;
 
@@ -21,7 +23,6 @@ use crate::common::Context;
 use crate::{library_to_arrow, utils::library::parse_library_metadata};
 use arrow_ipc::reader::FileReader;
 use arrow_ipc::writer::FileWriter;
-use std::sync::Arc;
 use std::{
     fs::File,
     io::{self, Write},
@@ -125,14 +126,23 @@ async fn embed<O: Write, E: Write>(
 /// * `ctx` - A `Context` object that contains CLI args and objects that implement
 async fn fix_zero_embeddings<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Result<(), CLIError> {
     let schema = get_schema(&ctx.args.embedding).await;
-    let healthcheck_results = lancedb_health_check(schema, "pdf_text", "embeddings").await?;
 
-    if let Some(Ok(zero_items)) = healthcheck_results.zero_embedding_items {
-        let sources = StringArray::from_iter_values(zero_items.iter());
-
-        let embedding_provider = get_embedding_provider(&ctx.args.embedding)?;
-        let embeddings = embedding_provider.compute_source_embeddings(Arc::new(sources));
-        // TODO: Replace the texts
+    match rag_fix_zero_embeddings(schema, "pdf_text", "embeddings", &ctx.args.embedding).await {
+        Ok(fixed_count) => {
+            if fixed_count > 0 {
+                writeln!(
+                    ctx.out,
+                    "Successfully fixed {} zero embeddings!",
+                    fixed_count
+                )?;
+            } else {
+                writeln!(ctx.out, "No zero embeddings found to fix.")?;
+            }
+        }
+        Err(e) => {
+            writeln!(ctx.err, "Failed to fix zero embeddings: {}", e)?;
+            return Err(CLIError::LLMError(e.to_string()));
+        }
     }
 
     Ok(())

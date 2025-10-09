@@ -4900,6 +4900,7 @@ version = "0.1.0"
 dependencies = [
  "arrow-array",
  "arrow-schema",
+ "arrow-select",
  "bytes",
  "dotenv",
  "futures",
