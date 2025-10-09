@@ -134,7 +134,7 @@ pub async fn compute_openai_embeddings_async(
     let values = arrow_array::Float32Array::from(flattened);
 
     let list_array = arrow_array::FixedSizeListArray::try_new(
-        Arc::new(Field::new("item", DataType::Float32, false)),
+        Arc::new(Field::new("item", DataType::Float32, true)),
         embedding_dim as i32,
         Arc::new(values),
         None,

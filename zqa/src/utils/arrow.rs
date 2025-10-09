@@ -82,7 +82,7 @@ pub async fn get_schema(embedding_name: &str) -> arrow_schema::Schema {
                 Arc::new(arrow_schema::Field::new(
                     "item",
                     arrow_schema::DataType::Float32,
-                    false,
+                    true,
                 )),
                 get_embedding_dims_by_provider(embedding_name) as i32,
             ),

@@ -150,7 +150,7 @@ where
         let values = arrow_array::Float32Array::from(flattened);
 
         let list_array = arrow_array::FixedSizeListArray::try_new(
-            Arc::new(Field::new("item", DataType::Float32, false)),
+            Arc::new(Field::new("item", DataType::Float32, true)),
             embedding_dim as i32,
             Arc::new(values),
             None,
@@ -405,7 +405,7 @@ impl<T: HttpClient + Default + std::fmt::Debug> EmbeddingFunction for GeminiClie
 
     fn dest_type(&self) -> Result<Cow<'_, DataType>, lancedb::Error> {
         Ok(Cow::Owned(DataType::FixedSizeList(
-            Arc::new(Field::new("item", DataType::Float32, false)),
+            Arc::new(Field::new("item", DataType::Float32, true)),
             GEMINI_EMBEDDING_DIM as i32,
         )))
     }

@@ -1,5 +1,6 @@
 use super::lance::LanceError;
 use super::lance::{DB_URI, TABLE_NAME};
+use arrow_array::RecordBatch;
 use arrow_array::cast::AsArray;
 use arrow_array::types::Float32Type;
 use arrow_schema::Schema;
@@ -34,10 +35,10 @@ pub struct HealthCheckResult {
     /// accessible, and `Some(Err(...))` when there was an error connecting to the DB or opening
     /// the table.
     pub num_rows: Option<Result<usize, LanceError>>,
-    /// Rows with all-zero embeddings. `None` when the check hasn't run, `Some(Ok(rows))` if
-    /// we successfully computed the rows with zero embeddings, and `Some(Err(...))` when
+    /// Rows with all-zero embeddings. `None` when the check hasn't run, `Some(Ok(batches))` if
+    /// we successfully computed the complete record batches with zero embeddings, and `Some(Err(...))` when
     /// there was an error connecting to the DB or opening the table.
-    pub zero_embedding_items: Option<Result<Vec<String>, LanceError>>,
+    pub zero_embedding_items: Option<Result<Vec<RecordBatch>, LanceError>>,
     /// Index information: (index_name, index_type). `None` when the check hasn't run,
     /// `Some(Ok(index_info))` if we successfully got the index information, and `Some(Err(...))`
     /// when there was an error connecting to the DB or opening the table.
@@ -144,16 +145,16 @@ impl fmt::Display for HealthCheckResult {
 
         // Check 4: Zero embeddings
         match &self.zero_embedding_items {
-            Some(Ok(zero_items)) => {
-                if zero_items.is_empty() {
+            Some(Ok(zero_batches)) => {
+                let total_zero_rows: usize =
+                    zero_batches.iter().map(|batch| batch.num_rows()).sum();
+                if total_zero_rows == 0 {
                     writeln!(f, "{}✓ No zero embeddings found{}", GREEN, RESET)?;
                 } else {
                     writeln!(
                         f,
                         "{}⚠ Found {} rows with zero embeddings{}. Run /embed to fix.",
-                        YELLOW,
-                        zero_items.len(),
-                        RESET
+                        YELLOW, total_zero_rows, RESET
                     )?;
                 }
             }
@@ -250,7 +251,7 @@ fn calculate_directory_size(path: &std::path::Path) -> Result<u64, std::io::Erro
 /// * `query_limit` - Limit on the number of rows in the table to query
 ///
 /// # Returns:
-/// * A list of rows that have zero embeddings, if nothing went wrong
+/// * A list of complete RecordBatches for rows that have zero embeddings, if nothing went wrong
 /// * Otherwise, a `LanceError` detailing what went wrong and why:
 ///     * A `QueryError` if some query failed
 ///     * An `InvalidStateError` if the table is in some invalid state
@@ -260,7 +261,7 @@ pub async fn get_zero_vectors(
     return_col: &str,
     embeddings_col: &str,
     query_limit: usize,
-) -> Result<Vec<String>, LanceError> {
+) -> Result<Vec<RecordBatch>, LanceError> {
     let stream = tbl
         .query()
         .limit(query_limit)
@@ -273,7 +274,7 @@ pub async fn get_zero_vectors(
         .await
         .map_err(|e| LanceError::QueryError(e.to_string()))?;
 
-    let mut zero_rows = Vec::<String>::new();
+    let mut zero_batches = Vec::<RecordBatch>::new();
     let mut error: Option<LanceError> = None;
 
     // Note that this code assumes that all the batches have the same schema
@@ -317,29 +318,44 @@ pub async fn get_zero_vectors(
         }
 
         let embeddings = batch.column(embedding_col_index?).as_fixed_size_list();
-        let returned = batch.column(ret_col_index?).as_string::<i32>();
 
-        let mut embeddings_iter = embeddings.iter();
-        let mut return_col_iter = returned.iter();
-        while let Some(embedding) = embeddings_iter.next()
-            && let Some(Some(return_col_val)) = return_col_iter.next()
-        {
-            // For now, we won't treat this as an error
-            if embedding.is_none() {
-                continue;
+        // Find indices of rows with zero embeddings
+        let mut zero_indices = Vec::new();
+        for (i, embedding) in embeddings.iter().enumerate() {
+            if let Some(embedding) = embedding {
+                let float_array = embedding.as_primitive::<Float32Type>();
+                if float_array.iter().all(|v| v.unwrap_or(0.0) == 0.0) {
+                    zero_indices.push(i);
+                }
+            }
+        }
+
+        // If we found zero embeddings, create a new batch with only those rows
+        if !zero_indices.is_empty() {
+            let mut new_columns = Vec::new();
+
+            for (col_idx, _field) in batch.schema().fields().iter().enumerate() {
+                let column = batch.column(col_idx);
+                let filtered_column = arrow_select::take::take(
+                    column.as_ref(),
+                    &arrow_array::UInt64Array::from(
+                        zero_indices.iter().map(|&i| i as u64).collect::<Vec<_>>(),
+                    ),
+                    None,
+                )
+                .map_err(|e| LanceError::QueryError(e.to_string()))?;
+
+                new_columns.push(filtered_column);
             }
 
-            let embedding = embedding.unwrap();
-            let float_array = embedding.as_primitive::<Float32Type>();
-
-            if float_array.iter().all(|v| v.unwrap_or(0.0) == 0.0) {
-                zero_rows.push(return_col_val.to_string());
-            }
+            let zero_batch = RecordBatch::try_new(batch.schema(), new_columns)
+                .map_err(|e| LanceError::QueryError(e.to_string()))?;
+            zero_batches.push(zero_batch);
         }
     }
 
     match error {
-        None => Ok(zero_rows),
+        None => Ok(zero_batches),
         Some(e) => Err(e),
     }
 }

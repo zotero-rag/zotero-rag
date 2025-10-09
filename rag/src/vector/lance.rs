@@ -1,7 +1,10 @@
 use crate::capabilities::EmbeddingProviders;
+use crate::embedding::common::get_embedding_provider;
 use crate::embedding::voyage::VoyageAIClient;
 use crate::llm::{anthropic::AnthropicClient, http_client::ReqwestClient, openai::OpenAIClient};
+use crate::vector::checkhealth::get_zero_vectors;
 
+use arrow_array::RecordBatchReader;
 use arrow_array::{
     RecordBatch, RecordBatchIterator, StringArray, cast::AsArray, types::Float32Type,
 };
@@ -158,6 +161,120 @@ async fn get_db_with_embeddings(embedding_name: &str) -> Result<Connection, Lanc
     }
 
     Ok(db)
+}
+
+/// A transparent wrapper around LanceDB functionality to update rows in the database. This can be
+/// used for fixing embeddings, for example. Note that the `new_data` passed should have the same
+/// schema as the table.
+///
+/// # Arguments:
+///
+/// * `on` - The set of columns to match on
+/// * `embedding_name` - The name of the embedding provider
+/// * `new_data` - The new data for all columns
+pub async fn update_records(
+    on: &[&str],
+    embedding_name: &str,
+    new_data: Box<dyn RecordBatchReader + Send>,
+) -> Result<(), LanceError> {
+    let db = get_db_with_embeddings(embedding_name).await?;
+    let tbl = db.open_table(TABLE_NAME).execute().await.map_err(|_| {
+        LanceError::InvalidStateError(format!("The table {TABLE_NAME} does not exist"))
+    })?;
+
+    let mut merge_insert = tbl.merge_insert(on);
+    let merge_condition = on
+        .iter()
+        .map(|col| format!("target.{} = source.{}", col, col))
+        .collect::<Vec<_>>()
+        .join(" AND ");
+
+    merge_insert
+        .when_matched_update_all(Some(merge_condition))
+        .when_not_matched_insert_all();
+
+    let result = merge_insert.execute(new_data).await?;
+
+    log::info!("Updated {} rows.", result.num_updated_rows);
+
+    Ok(())
+}
+
+/// Fix zero embeddings in the database by regenerating embeddings for affected records.
+/// This function identifies records with zero embeddings and updates them with proper embeddings.
+///
+/// # Arguments
+///
+/// * `schema` - The expected schema of the table
+/// * `text_col` - The column name containing the text to embed
+/// * `embeddings_col` - The column name containing the embeddings
+/// * `embedding_name` - The embedding provider to use for generating new embeddings
+///
+/// # Returns
+///
+/// Returns `Ok(usize)` with the number of records fixed, or a `LanceError` if the operation failed.
+pub async fn fix_zero_embeddings(
+    schema: arrow_schema::Schema,
+    text_col: &str,
+    embeddings_col: &str,
+    embedding_name: &str,
+) -> Result<usize, LanceError> {
+    let db = get_db_with_embeddings(embedding_name).await?;
+    let table = db.open_table(TABLE_NAME).execute().await.map_err(|_| {
+        LanceError::InvalidStateError(format!("The table {TABLE_NAME} does not exist"))
+    })?;
+
+    // Get all records with zero embeddings
+    let zero_batches = get_zero_vectors(&table, &schema, text_col, embeddings_col, 10000).await?;
+
+    if zero_batches.is_empty() {
+        return Ok(0);
+    }
+
+    let mut total_fixed = 0;
+
+    // Process each batch of zero-embedding records
+    for batch in zero_batches {
+        let num_rows = batch.num_rows();
+
+        // Get the text column to generate new embeddings
+        let text_col_idx = batch.schema().index_of(text_col).map_err(|_| {
+            LanceError::InvalidStateError(format!("Column '{}' not found", text_col))
+        })?;
+        let text_array = batch.column(text_col_idx).as_string::<i32>();
+        let sources = StringArray::from_iter_values(text_array.iter().filter_map(|s| s));
+
+        // Generate new embeddings
+        let embedding_provider = get_embedding_provider(embedding_name)
+            .map_err(|e| LanceError::InvalidStateError(e.to_string()))?;
+        let embeddings = embedding_provider
+            .compute_source_embeddings(Arc::new(sources))
+            .map_err(|e| LanceError::InvalidStateError(e.to_string()))?;
+
+        // Create new batch with updated embeddings
+        let mut columns = Vec::new();
+        for (i, field) in batch.schema().fields().iter().enumerate() {
+            if field.name() == embeddings_col {
+                columns.push(Arc::new(embeddings.clone()) as arrow_array::ArrayRef);
+            } else {
+                columns.push(batch.column(i).clone());
+            }
+        }
+
+        let updated_batch = RecordBatch::try_new(batch.schema(), columns)
+            .map_err(|e| LanceError::InvalidStateError(e.to_string()))?;
+
+        // Create reader for this single batch
+        let batches = vec![Ok(updated_batch)];
+        let batch_reader = RecordBatchIterator::new(batches.into_iter(), batch.schema());
+
+        // Update the records in the database
+        update_records(&[text_col], embedding_name, Box::new(batch_reader)).await?;
+
+        total_fixed += num_rows;
+    }
+
+    Ok(total_fixed)
 }
 
 /// Return all the rows in the LanceDB table, selecting only the columns specified. This is useful
