@@ -126,7 +126,17 @@ async fn embed<O: Write, E: Write>(
 ///
 /// * `ctx` - A `Context` object that contains CLI args and objects that implement
 async fn fix_zero_embeddings<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Result<(), CLIError> {
+    let healthcheck = lancedb_health_check(&ctx.args.embedding).await?;
     let schema = get_schema(&ctx.args.embedding).await;
+
+    if let Some(Ok(zero_items)) = healthcheck.zero_embedding_items {
+        let num_zeros = zero_items.len();
+        writeln!(
+            ctx.out,
+            "{}Fixing {num_zeros} zero-embedding items.{}",
+            DIM_TEXT, RESET
+        )?;
+    }
 
     match rag_fix_zero_embeddings(
         Arc::new(schema),

@@ -4,7 +4,6 @@ use crate::embedding::voyage::VoyageAIClient;
 use crate::llm::{anthropic::AnthropicClient, http_client::ReqwestClient, openai::OpenAIClient};
 use crate::vector::checkhealth::get_zero_vectors;
 
-use arrow_array::RecordBatchReader;
 use arrow_array::{
     RecordBatch, RecordBatchIterator, StringArray, cast::AsArray, types::Float32Type,
 };
@@ -164,44 +163,12 @@ async fn get_db_with_embeddings(embedding_name: &str) -> Result<Connection, Lanc
     Ok(db)
 }
 
-/// A transparent wrapper around LanceDB functionality to update rows in the database. This can be
-/// used for fixing embeddings, for example. Note that the `new_data` passed should have the same
-/// schema as the table.
-///
-/// # Arguments:
-///
-/// * `on` - The set of columns to match on
-/// * `embedding_name` - The name of the embedding provider
-/// * `new_data` - The new data for all columns
-pub async fn update_records(
-    on: &[&str],
-    embedding_name: &str,
-    new_data: Box<dyn RecordBatchReader + Send>,
-) -> Result<(), LanceError> {
-    let db = get_db_with_embeddings(embedding_name).await?;
-    let tbl = db.open_table(TABLE_NAME).execute().await.map_err(|_| {
-        LanceError::InvalidStateError(format!("The table {TABLE_NAME} does not exist"))
-    })?;
-
-    // TODO: Might just be easier to delete and re-insert
-    let mut merge_insert = tbl.merge_insert(on);
-
-    merge_insert
-        .when_matched_update_all(None)
-        .when_not_matched_insert_all();
-
-    let result = merge_insert.execute(new_data).await?;
-
-    log::info!("Updated {} rows.", result.num_updated_rows);
-
-    Ok(())
-}
-
 /// Fix zero embeddings in the database by regenerating embeddings for affected records.
 /// This function identifies records with zero embeddings and updates them with proper embeddings.
 ///
 /// # Arguments
 ///
+/// * `schema` - The expected schema of the DB. This should include the embedding column.
 /// * `embedding_col` - The name of the embedding column
 /// * `embedding_name` - The embedding provider to use for generating new embeddings
 /// * `merge_key` - The column name to use for matching records (should be a unique identifier)
@@ -244,18 +211,6 @@ pub async fn fix_zero_embeddings(
             LanceError::InvalidStateError(format!("Column '{}' not found", merge_key))
         })?;
         let text_array = batch.column(text_col_idx).as_string::<i32>();
-        let delete_pred = text_array
-            .iter()
-            .filter_map(|s| s.map(|id| format!("{} = '{}'", merge_key, id)))
-            .collect::<Vec<String>>()
-            .join(" OR ");
-        dbg!(&delete_pred);
-
-        // Delete the old records
-        table
-            .delete(&delete_pred)
-            .await
-            .map_err(|e| LanceError::TableUpdateError(e.to_string()))?;
 
         // Generate new embeddings
         let embedding_provider = get_embedding_provider(embedding_name)
@@ -277,13 +232,21 @@ pub async fn fix_zero_embeddings(
         let updated_batch = RecordBatch::try_new(Arc::clone(&schema), columns)
             .map_err(|e| LanceError::InvalidStateError(e.to_string()))?;
 
-        // Create reader for this single batch
+        // Create a `RecordBatchReader` implementer for this batch
         let batches = vec![Ok(updated_batch)];
         let batch_reader = RecordBatchIterator::new(batches.into_iter(), schema.clone());
 
-        let mut merge_insert = table.merge_insert(&[merge_key]);
+        // Update row embeddings using the general merge-insert op
+        let match_pred = text_array
+            .iter()
+            .filter_map(|s| s.map(|id| format!("target.{} = '{}'", merge_key, id)))
+            .collect::<Vec<String>>()
+            .join(" OR ");
 
-        merge_insert.when_not_matched_insert_all();
+        let mut merge_insert = table.merge_insert(&[merge_key]);
+        merge_insert
+            .when_not_matched_insert_all()
+            .when_matched_update_all(Some(match_pred));
 
         merge_insert.execute(Box::new(batch_reader)).await?;
 
