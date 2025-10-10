@@ -402,11 +402,6 @@ mod tests {
     async fn test_perform_health_check_no_database() {
         dotenv().ok();
 
-        let schema = arrow_schema::Schema::new(vec![
-            arrow_schema::Field::new("pdf_text", arrow_schema::DataType::Utf8, false),
-            arrow_schema::Field::new("title", arrow_schema::DataType::Utf8, false),
-        ]);
-
         // Clean up any existing data
         let _ = std::fs::remove_dir_all(DB_URI);
         let _ = std::fs::remove_dir_all(format!("rag/{}", DB_URI));

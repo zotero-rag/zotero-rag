@@ -130,12 +130,15 @@ async fn fix_zero_embeddings<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Res
     let schema = get_schema(&ctx.args.embedding).await;
 
     if let Some(Ok(zero_items)) = healthcheck.zero_embedding_items {
-        let num_zeros = zero_items.len();
-        writeln!(
-            ctx.out,
-            "{}Fixing {num_zeros} zero-embedding items.{}",
-            DIM_TEXT, RESET
-        )?;
+        let num_zeros: usize = zero_items.iter().map(|b| b.num_rows()).sum();
+
+        if num_zeros > 0 {
+            writeln!(
+                ctx.out,
+                "{}Fixing {num_zeros} zero-embedding items.{}",
+                DIM_TEXT, RESET
+            )?;
+        }
     }
 
     match rag_fix_zero_embeddings(
@@ -159,7 +162,7 @@ async fn fix_zero_embeddings<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Res
         }
         Err(e) => {
             writeln!(ctx.err, "Failed to fix zero embeddings: {}", e)?;
-            return Err(CLIError::LLMError(e.to_string()));
+            return Err(CLIError::LanceError(e.to_string()));
         }
     }
 
@@ -181,7 +184,9 @@ async fn checkhealth<O: Write, E: Write>(ctx: &mut Context<O, E>) {
 }
 
 /// Runs health checks on the LanceDB database and provides helpful suggestions to the user on how
-/// to fix any issues, if that is possible.
+/// to fix any issues, if that is possible. Automatically attempt to fix issues found. Currently,
+/// only zero-embedding vectors can be fixed, since a lot of the other issues are possibly just DB
+/// corruption. Maybe we can diagnose that in the future.
 /// TODO: Currently assumes /index exists.
 ///
 /// # Arguments:
@@ -189,9 +194,6 @@ async fn checkhealth<O: Write, E: Write>(ctx: &mut Context<O, E>) {
 /// * `ctx` - A `Context` object that contains CLI args and objects that implement
 ///   `std::io::Write` for `stdout` and `stderr`.
 async fn doctor<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Result<(), CLIError> {
-    // TODO: We should have `rag_doctor` return a `Vec<SuggestedAction>` or something that tells us
-    // what kinds of things we should do, and then provide user-facing functionality to do those
-    // things, so that this is not a shorter version of /checkhealth
     if let Err(e) = rag_doctor(&ctx.args.embedding, &mut ctx.out).await {
         writeln!(ctx.err, "{e}")?;
     };
@@ -571,7 +573,7 @@ pub async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<(), CLIEr
                         )?;
                         writeln!(
                             &mut ctx.out,
-                            "/doctor\t\tGet suggestions on how to fix issues spotted by /checkhealth."
+                            "/doctor\t\tAttempt to fix issues spotted by /checkhealth."
                         )?;
                         writeln!(&mut ctx.out, "/stats\t\tShow table statistics.")?;
                         writeln!(&mut ctx.out, "/quit\t\tExit the program")?;
