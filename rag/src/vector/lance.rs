@@ -44,18 +44,18 @@ pub enum LanceError {
     IOError(#[from] std::io::Error),
     /// Other LanceDB-related errors
     #[error("Other LanceDB error: {0}")]
-    Other(String),
+    Other(Box<dyn std::error::Error + Send + Sync + 'static>),
 }
 
 impl From<ArrowError> for LanceError {
     fn from(value: ArrowError) -> Self {
-        Self::Other(value.to_string())
+        Self::Other(Box::new(value))
     }
 }
 
 impl From<LanceDbError> for LanceError {
     fn from(value: LanceDbError) -> Self {
-        Self::Other(value.to_string())
+        Self::Other(Box::new(value))
     }
 }
 
@@ -220,12 +220,16 @@ pub async fn fix_zero_embeddings(
             .map_err(|e| LanceError::InvalidStateError(e.to_string()))?;
 
         // Create new batch with updated embeddings
-        let mut columns = Vec::new();
-        for (i, field) in batch.schema().fields().iter().enumerate() {
+        let mut columns = Vec::with_capacity(schema.fields().len());
+        for field in schema.fields() {
             if field.name() == embedding_col {
                 columns.push(Arc::new(embeddings.clone()) as arrow_array::ArrayRef);
             } else if db_columns.contains(field.name()) {
-                columns.push(batch.column(i).clone());
+                let idx = batch
+                    .schema()
+                    .index_of(field.name())
+                    .map_err(|e| LanceError::InvalidStateError(e.to_string()))?;
+                columns.push(batch.column(idx).clone());
             }
         }
 
