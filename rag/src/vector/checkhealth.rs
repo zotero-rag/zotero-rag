@@ -1,13 +1,11 @@
+use crate::embedding::common::get_embedding_dims_by_provider;
+
 use super::lance::LanceError;
 use super::lance::{DB_URI, TABLE_NAME};
 use arrow_array::RecordBatch;
-use arrow_array::cast::AsArray;
-use arrow_array::types::Float32Type;
-use arrow_schema::Schema;
 use futures::TryStreamExt;
 use lancedb::query::{ExecutableQuery, QueryBase};
 use lancedb::{Table, connect};
-use std::collections::HashSet;
 use std::fmt;
 use std::fs;
 use std::io;
@@ -245,9 +243,7 @@ fn calculate_directory_size(path: &std::path::Path) -> Result<u64, std::io::Erro
 ///
 /// # Arguments:
 /// * `tbl` - The LanceDB table to query
-/// * `schema` - The expected schema of this table
-/// * `return_col` - The column to return
-/// * `embeddings_col` - The name of the column containing embeddings in this table
+/// * `embeddings_provider` - The embedding provider used. Must be one of `EmbeddingProviders`.
 /// * `query_limit` - Limit on the number of rows in the table to query
 ///
 /// # Returns:
@@ -257,107 +253,24 @@ fn calculate_directory_size(path: &std::path::Path) -> Result<u64, std::io::Erro
 ///     * An `InvalidStateError` if the table is in some invalid state
 pub async fn get_zero_vectors(
     tbl: &Table,
-    schema: &Schema,
-    return_col: &str,
-    embeddings_col: &str,
+    embedding_provider: &str,
     query_limit: usize,
 ) -> Result<Vec<RecordBatch>, LanceError> {
+    let embedding_size = get_embedding_dims_by_provider(embedding_provider);
+
     let stream = tbl
         .query()
+        .nearest_to(vec![0.0; embedding_size as usize])?
+        .distance_range(Some(0.0), Some(1e-8))
         .limit(query_limit)
         .execute()
         .await
         .map_err(|e| LanceError::QueryError(e.to_string()))?;
 
-    let batches = stream
+    stream
         .try_collect::<Vec<_>>()
         .await
-        .map_err(|e| LanceError::QueryError(e.to_string()))?;
-
-    let mut zero_batches = Vec::<RecordBatch>::new();
-    let mut error: Option<LanceError> = None;
-
-    // Note that this code assumes that all the batches have the same schema
-    for batch in batches {
-        let batch_schema = batch.schema();
-
-        // The schema in the batch should be the same or a superset of the expected
-        // schema.
-        let batch_schema_fields = batch_schema
-            .fields
-            .iter()
-            .map(|f| f.name())
-            .collect::<HashSet<_>>();
-        let schema_fields = schema
-            .fields
-            .iter()
-            .map(|f| f.name())
-            .collect::<HashSet<_>>();
-
-        if !batch_schema_fields.is_superset(&schema_fields) {
-            error = Some(LanceError::InvalidStateError(
-                "Invalid schema in LanceDB table: Schema does not match expectation.".to_string(),
-            ));
-            break;
-        }
-
-        let embedding_col_index = schema.index_of(embeddings_col);
-        if embedding_col_index.is_err() {
-            error = Some(LanceError::InvalidStateError(
-                "Invalid schema in LanceDB table: No `embeddings` column found.".to_string(),
-            ));
-            break;
-        }
-
-        let ret_col_index = schema.index_of(return_col);
-        if ret_col_index.is_err() {
-            error = Some(LanceError::InvalidStateError(
-                "Invalid schema in LanceDB table: No `{return_col}` column found.".to_string(),
-            ));
-            break;
-        }
-
-        let embeddings = batch.column(embedding_col_index?).as_fixed_size_list();
-
-        // Find indices of rows with zero embeddings
-        let mut zero_indices = Vec::new();
-        for (i, embedding) in embeddings.iter().enumerate() {
-            if let Some(embedding) = embedding {
-                let float_array = embedding.as_primitive::<Float32Type>();
-                if float_array.iter().all(|v| v.unwrap_or(0.0) == 0.0) {
-                    zero_indices.push(i);
-                }
-            }
-        }
-
-        // If we found zero embeddings, create a new batch with only those rows
-        if !zero_indices.is_empty() {
-            let mut new_columns = Vec::new();
-
-            for (col_idx, _field) in batch.schema().fields().iter().enumerate() {
-                let column = batch.column(col_idx);
-                let filtered_column = arrow_select::take::take(
-                    column.as_ref(),
-                    &arrow_array::UInt64Array::from(
-                        zero_indices.iter().map(|&i| i as u64).collect::<Vec<_>>(),
-                    ),
-                    None,
-                )
-                .map_err(|e| LanceError::QueryError(e.to_string()))?;
-
-                new_columns.push(filtered_column);
-            }
-
-            let zero_batch = RecordBatch::try_new(batch.schema(), new_columns)
-                .map_err(|e| LanceError::QueryError(e.to_string()))?;
-            zero_batches.push(zero_batch);
-        }
-    }
-
-    match error {
-        None => Ok(zero_batches),
-        Some(e) => Err(e),
-    }
+        .map_err(|e| LanceError::QueryError(e.to_string()))
 }
 
 /// Given a LanceDB table, get basic index information. Note that LanceDB's Rust API does not
@@ -398,15 +311,13 @@ async fn check_indexes(tbl: &lancedb::table::Table) -> Result<Vec<(String, Strin
 /// # Arguments:
 /// * `schema` - The expected schema for the LanceDB table.
 /// * `text_col` - The name of the column containing the full texts.
-/// * `embeddings_col` - The name of the column containing embeddings.
+/// * `embedding_provider` - The embedding provider. Must be one of `EmbeddingProviders`.
 ///
 /// # Returns:
 ///
 /// A `Result<HealthCheckResult, LanceError>` indicating success and whether issues were found
 pub async fn lancedb_health_check(
-    schema: arrow_schema::Schema,
-    text_col: &str,
-    embeddings_col: &str,
+    embedding_provider: &str,
 ) -> Result<HealthCheckResult, LanceError> {
     let mut result = HealthCheckResult {
         directory_exists: false,
@@ -468,7 +379,7 @@ pub async fn lancedb_health_check(
     };
 
     result.zero_embedding_items =
-        Some(get_zero_vectors(&tbl, &schema, text_col, embeddings_col, query_limit).await);
+        Some(get_zero_vectors(&tbl, embedding_provider, query_limit).await);
 
     result.index_info = Some(check_indexes(&tbl).await);
 
@@ -500,7 +411,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(DB_URI);
         let _ = std::fs::remove_dir_all(format!("rag/{}", DB_URI));
 
-        let result = lancedb_health_check(schema, "pdf_text", "embeddings").await;
+        let result = lancedb_health_check("voyageai").await;
         assert!(result.is_ok());
 
         let health_result = result.unwrap();
@@ -542,7 +453,7 @@ mod tests {
         .unwrap();
 
         // Now test health check
-        let result = lancedb_health_check(schema, "pdf_text", "embeddings").await;
+        let result = lancedb_health_check("voyageai").await;
         assert!(result.is_ok());
 
         let health_result = result.unwrap();

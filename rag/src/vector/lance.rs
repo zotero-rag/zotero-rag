@@ -8,6 +8,7 @@ use arrow_array::RecordBatchReader;
 use arrow_array::{
     RecordBatch, RecordBatchIterator, StringArray, cast::AsArray, types::Float32Type,
 };
+use arrow_schema::Schema;
 use futures::TryStreamExt;
 use lancedb::{
     Connection, Error as LanceDbError, arrow::arrow_schema::ArrowError, connect,
@@ -182,15 +183,11 @@ pub async fn update_records(
         LanceError::InvalidStateError(format!("The table {TABLE_NAME} does not exist"))
     })?;
 
+    // TODO: Might just be easier to delete and re-insert
     let mut merge_insert = tbl.merge_insert(on);
-    let merge_condition = on
-        .iter()
-        .map(|col| format!("target.{} = source.{}", col, col))
-        .collect::<Vec<_>>()
-        .join(" AND ");
 
     merge_insert
-        .when_matched_update_all(Some(merge_condition))
+        .when_matched_update_all(None)
         .when_not_matched_insert_all();
 
     let result = merge_insert.execute(new_data).await?;
@@ -205,27 +202,32 @@ pub async fn update_records(
 ///
 /// # Arguments
 ///
-/// * `schema` - The expected schema of the table
-/// * `text_col` - The column name containing the text to embed
-/// * `embeddings_col` - The column name containing the embeddings
+/// * `embedding_col` - The name of the embedding column
 /// * `embedding_name` - The embedding provider to use for generating new embeddings
+/// * `merge_key` - The column name to use for matching records (should be a unique identifier)
 ///
 /// # Returns
 ///
 /// Returns `Ok(usize)` with the number of records fixed, or a `LanceError` if the operation failed.
 pub async fn fix_zero_embeddings(
-    schema: arrow_schema::Schema,
-    text_col: &str,
-    embeddings_col: &str,
+    schema: Arc<Schema>,
+    embedding_col: &str,
     embedding_name: &str,
+    merge_key: &str,
 ) -> Result<usize, LanceError> {
     let db = get_db_with_embeddings(embedding_name).await?;
     let table = db.open_table(TABLE_NAME).execute().await.map_err(|_| {
         LanceError::InvalidStateError(format!("The table {TABLE_NAME} does not exist"))
     })?;
 
+    let db_columns = schema
+        .fields
+        .iter()
+        .map(|f| f.name().clone())
+        .collect::<Vec<String>>();
+
     // Get all records with zero embeddings
-    let zero_batches = get_zero_vectors(&table, &schema, text_col, embeddings_col, 10000).await?;
+    let zero_batches = get_zero_vectors(&table, embedding_name, 10000).await?;
 
     if zero_batches.is_empty() {
         return Ok(0);
@@ -238,38 +240,52 @@ pub async fn fix_zero_embeddings(
         let num_rows = batch.num_rows();
 
         // Get the text column to generate new embeddings
-        let text_col_idx = batch.schema().index_of(text_col).map_err(|_| {
-            LanceError::InvalidStateError(format!("Column '{}' not found", text_col))
+        let text_col_idx = batch.schema().index_of(merge_key).map_err(|_| {
+            LanceError::InvalidStateError(format!("Column '{}' not found", merge_key))
         })?;
         let text_array = batch.column(text_col_idx).as_string::<i32>();
-        let sources = StringArray::from_iter_values(text_array.iter().filter_map(|s| s));
+        let delete_pred = text_array
+            .iter()
+            .filter_map(|s| s.map(|id| format!("{} = '{}'", merge_key, id)))
+            .collect::<Vec<String>>()
+            .join(" OR ");
+        dbg!(&delete_pred);
+
+        // Delete the old records
+        table
+            .delete(&delete_pred)
+            .await
+            .map_err(|e| LanceError::TableUpdateError(e.to_string()))?;
 
         // Generate new embeddings
         let embedding_provider = get_embedding_provider(embedding_name)
             .map_err(|e| LanceError::InvalidStateError(e.to_string()))?;
         let embeddings = embedding_provider
-            .compute_source_embeddings(Arc::new(sources))
+            .compute_source_embeddings(Arc::new(text_array.clone()))
             .map_err(|e| LanceError::InvalidStateError(e.to_string()))?;
 
         // Create new batch with updated embeddings
         let mut columns = Vec::new();
         for (i, field) in batch.schema().fields().iter().enumerate() {
-            if field.name() == embeddings_col {
+            if field.name() == embedding_col {
                 columns.push(Arc::new(embeddings.clone()) as arrow_array::ArrayRef);
-            } else {
+            } else if db_columns.contains(field.name()) {
                 columns.push(batch.column(i).clone());
             }
         }
 
-        let updated_batch = RecordBatch::try_new(batch.schema(), columns)
+        let updated_batch = RecordBatch::try_new(Arc::clone(&schema), columns)
             .map_err(|e| LanceError::InvalidStateError(e.to_string()))?;
 
         // Create reader for this single batch
         let batches = vec![Ok(updated_batch)];
-        let batch_reader = RecordBatchIterator::new(batches.into_iter(), batch.schema());
+        let batch_reader = RecordBatchIterator::new(batches.into_iter(), schema.clone());
 
-        // Update the records in the database
-        update_records(&[text_col], embedding_name, Box::new(batch_reader)).await?;
+        let mut merge_insert = table.merge_insert(&[merge_key]);
+
+        merge_insert.when_not_matched_insert_all();
+
+        merge_insert.execute(Box::new(batch_reader)).await?;
 
         total_fixed += num_rows;
     }
