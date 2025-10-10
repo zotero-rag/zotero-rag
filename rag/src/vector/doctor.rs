@@ -40,9 +40,7 @@ fn symptom(out: &mut impl Write, msg: &str) -> Result<(), LanceError> {
 ///
 /// # Arguments:
 ///
-/// * `schema`: The expected schema for the LanceDB table.
-/// * `text_col` - The name of the column containing the full texts.
-/// * `embeddings_col`: The name of the column with the embeddings.
+/// * `embeddings_provider`: The embedding provider. Must be one of `EmbeddingProviders`.
 /// * `stdout`: A writer object. This does not *have* to be `stdout`, but it is unlikely you would
 ///   want these messages going to an error stream, considering the messages printed here are meant
 ///   for end-users.
@@ -51,13 +49,8 @@ fn symptom(out: &mut impl Write, msg: &str) -> Result<(), LanceError> {
 ///
 /// Nothing; errors if writing fails or if the health check is in an invalid state for some reason
 /// (an invalid state being one that is not expected, and is likely a bug).
-pub async fn doctor(
-    schema: arrow_schema::Schema,
-    text_col: &str,
-    embeddings_col: &str,
-    stdout: &mut impl Write,
-) -> Result<(), LanceError> {
-    let healthcheck_results = lancedb_health_check(schema, text_col, embeddings_col).await?;
+pub async fn doctor(embedding_provider: &str, stdout: &mut impl Write) -> Result<(), LanceError> {
+    let healthcheck_results = lancedb_health_check(embedding_provider).await?;
 
     if !healthcheck_results.directory_exists {
         symptom(stdout, "database directory does not exist.")?;
@@ -99,7 +92,7 @@ pub async fn doctor(
             "this is usually transient; if this persists, your database may be corrupted.",
         )?;
 
-        writeln!(stdout, "")?;
+        writeln!(stdout)?;
     }
 
     let zero_embedding_items = healthcheck_results
@@ -115,7 +108,7 @@ pub async fn doctor(
         symptom(stdout, "some items have zero embedding vectors.")?;
         help(stdout, "run `/embed fix` to fix this.")?;
 
-        writeln!(stdout, "")?;
+        writeln!(stdout)?;
     }
 
     let index_info = healthcheck_results
@@ -125,23 +118,21 @@ pub async fn doctor(
             .into(),
     ))?;
 
-    if index_info.is_err() {
+    if let Ok(indices) = index_info {
+        if indices.is_empty()
+            && let Ok(row_count) = row_count
+            && row_count > 10000
+        {
+            symptom(stdout, "there were no indices with > 10k rows.")?;
+            // TODO: /index is not an implemented command yet.
+            help(stdout, "run /index to create indices.")?;
+        }
+    } else {
         symptom(stdout, "index information could not be obtained")?;
         help(
             stdout,
             "this is usually transient; if this persists, your database may be corrupted.",
         )?;
-    } else {
-        let indices = index_info.unwrap();
-        if indices.is_empty() {
-            if let Ok(row_count) = row_count {
-                if row_count > 10000 {
-                    symptom(stdout, "there were no indices with > 10k rows.")?;
-                    // TODO: /index is not an implemented command yet.
-                    help(stdout, "run /index to create indices.")?;
-                }
-            }
-        }
     }
     writeln!(stdout, "Analysis completed.")?;
 

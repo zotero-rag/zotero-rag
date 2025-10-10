@@ -23,6 +23,7 @@ use crate::common::Context;
 use crate::{library_to_arrow, utils::library::parse_library_metadata};
 use arrow_ipc::reader::FileReader;
 use arrow_ipc::writer::FileWriter;
+use std::sync::Arc;
 use std::{
     fs::File,
     io::{self, Write},
@@ -127,7 +128,14 @@ async fn embed<O: Write, E: Write>(
 async fn fix_zero_embeddings<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Result<(), CLIError> {
     let schema = get_schema(&ctx.args.embedding).await;
 
-    match rag_fix_zero_embeddings(schema, "pdf_text", "embeddings", &ctx.args.embedding).await {
+    match rag_fix_zero_embeddings(
+        Arc::new(schema),
+        "embeddings",
+        &ctx.args.embedding,
+        "library_key",
+    )
+    .await
+    {
         Ok(fixed_count) => {
             if fixed_count > 0 {
                 writeln!(
@@ -156,9 +164,7 @@ async fn fix_zero_embeddings<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Res
 /// * `ctx` - A `Context` object that contains CLI args and objects that implement
 ///   `std::io::Write` for `stdout` and `stderr`.
 async fn checkhealth<O: Write, E: Write>(ctx: &mut Context<O, E>) {
-    let schema = get_schema(&ctx.args.embedding).await;
-
-    let _ = match lancedb_health_check(schema, "pdf_text", "embeddings").await {
+    let _ = match lancedb_health_check(&ctx.args.embedding).await {
         Ok(result) => writeln!(ctx.out, "{result}"),
         Err(e) => writeln!(ctx.err, "{e}"),
     };
@@ -166,19 +172,17 @@ async fn checkhealth<O: Write, E: Write>(ctx: &mut Context<O, E>) {
 
 /// Runs health checks on the LanceDB database and provides helpful suggestions to the user on how
 /// to fix any issues, if that is possible.
-/// TODO: Currently assumed /embed fixes zero-embeddings and /index exists.
+/// TODO: Currently assumes /index exists.
 ///
 /// # Arguments:
 ///
 /// * `ctx` - A `Context` object that contains CLI args and objects that implement
 ///   `std::io::Write` for `stdout` and `stderr`.
 async fn doctor<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Result<(), CLIError> {
-    let schema = get_schema(&ctx.args.embedding).await;
-
     // TODO: We should have `rag_doctor` return a `Vec<SuggestedAction>` or something that tells us
     // what kinds of things we should do, and then provide user-facing functionality to do those
     // things, so that this is not a shorter version of /checkhealth
-    if let Err(e) = rag_doctor(schema.clone(), "pdf_text", "embeddings", &mut ctx.out).await {
+    if let Err(e) = rag_doctor(&ctx.args.embedding, &mut ctx.out).await {
         writeln!(ctx.err, "{e}")?;
     };
 
