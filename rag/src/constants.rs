@@ -4,7 +4,7 @@
 pub const DEFAULT_OPENAI_MODEL: &str = "gpt-4.1-2025-04-14";
 
 /// Default Anthropic model for chat completions  
-pub const DEFAULT_ANTHROPIC_MODEL: &str = "claude-sonnet-4-20250514";
+pub const DEFAULT_ANTHROPIC_MODEL: &str = "claude-sonnet-4-5";
 
 /// Default Gemini model for chat completions
 pub const DEFAULT_GEMINI_MODEL: &str = "gemini-2.5-pro";
