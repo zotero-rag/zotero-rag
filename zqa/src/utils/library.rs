@@ -1,3 +1,4 @@
+use arrow_array::RecordBatch;
 use directories::UserDirs;
 use indicatif::ProgressBar;
 use rag::vector::lance::{LanceError, get_lancedb_items, lancedb_exists};
@@ -72,9 +73,63 @@ pub struct ZoteroItem {
     pub text: String,
 }
 
+// A convenience struct that represents a set of Zotero library items; this helps get around
+// coherence rules so we can implement `From<Vec<RecordBatch>>`.
+#[derive(Clone)]
+pub struct ZoteroItemSet {
+    pub items: Vec<ZoteroItem>,
+}
+
+impl From<ZoteroItemSet> for Vec<ZoteroItem> {
+    fn from(value: ZoteroItemSet) -> Self {
+        value.items
+    }
+}
+
+impl From<Vec<ZoteroItem>> for ZoteroItemSet {
+    fn from(value: Vec<ZoteroItem>) -> Self {
+        Self { items: value }
+    }
+}
+
 impl AsRef<str> for ZoteroItem {
     fn as_ref(&self) -> &str {
         &self.text
+    }
+}
+
+impl From<Vec<RecordBatch>> for ZoteroItemSet {
+    fn from(batches: Vec<RecordBatch>) -> Self {
+        batches
+            .iter()
+            .flat_map(|batch| {
+                let schema = batch.schema();
+                let key_idx = schema.index_of("library_key").unwrap();
+                let title_idx = schema.index_of("title").unwrap();
+                let file_path_idx = schema.index_of("file_path").unwrap();
+                let text_idx = schema.index_of("pdf_text").unwrap();
+
+                let lib_keys = get_column_from_batch(batch, key_idx);
+                let titles = get_column_from_batch(batch, title_idx);
+                let file_paths = get_column_from_batch(batch, file_path_idx);
+                let texts = get_column_from_batch(batch, text_idx);
+
+                let zipped = izip!(lib_keys, titles, file_paths, texts);
+                let items_batch: Vec<ZoteroItem> = zipped
+                    .map(|(lib_key, title, file_path, text)| ZoteroItem {
+                        metadata: ZoteroItemMetadata {
+                            library_key: lib_key,
+                            title,
+                            file_path: PathBuf::from(file_path),
+                        },
+                        text,
+                    })
+                    .collect();
+
+                items_batch
+            })
+            .collect::<Vec<_>>()
+            .into()
     }
 }
 

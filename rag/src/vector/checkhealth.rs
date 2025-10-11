@@ -251,7 +251,7 @@ fn calculate_directory_size(path: &std::path::Path) -> Result<u64, std::io::Erro
 /// * Otherwise, a `LanceError` detailing what went wrong and why:
 ///     * A `QueryError` if some query failed
 ///     * An `InvalidStateError` if the table is in some invalid state
-pub async fn get_zero_vectors(
+pub(crate) async fn get_zero_vectors(
     tbl: &Table,
     embedding_provider: &str,
     query_limit: usize,
@@ -390,7 +390,7 @@ pub async fn lancedb_health_check(
 mod tests {
     use super::lancedb_health_check;
     use crate::vector::lance::DB_URI;
-    use crate::vector::lance::create_initial_table;
+    use crate::vector::lance::insert_records;
     use arrow_array::{RecordBatch, RecordBatchIterator, StringArray};
     use dotenv::dotenv;
     use lancedb::embeddings::EmbeddingDefinition;
@@ -439,7 +439,7 @@ mod tests {
         let batches = vec![Ok(record_batch.clone())];
         let reader = RecordBatchIterator::new(batches.into_iter(), record_batch.schema());
 
-        let _db = create_initial_table(
+        let _db = insert_records(
             reader,
             None,
             EmbeddingDefinition::new("pdf_text", "voyageai", Some("embeddings")),

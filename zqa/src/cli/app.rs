@@ -1,8 +1,8 @@
 use crate::cli::placeholder::PlaceholderText;
 use crate::cli::prompts::{get_extraction_prompt, get_summarize_prompt};
 use crate::cli::readline::get_readline_config;
-use crate::utils::arrow::{get_schema, vector_search};
-use crate::utils::library::get_new_library_items;
+use crate::utils::arrow::{get_schema, library_to_arrow, vector_search};
+use crate::utils::library::{ZoteroItem, ZoteroItemSet, get_new_library_items};
 use arrow_array::{self, RecordBatch, RecordBatchIterator};
 use lancedb::embeddings::EmbeddingDefinition;
 use rag::capabilities::ModelProviders;
@@ -12,7 +12,7 @@ use rag::llm::factory::get_client_by_provider;
 use rag::vector::checkhealth::lancedb_health_check;
 use rag::vector::doctor::doctor as rag_doctor;
 use rag::vector::lance::{
-    create_initial_table, db_statistics, fix_zero_embeddings as rag_fix_zero_embeddings,
+    db_statistics, delete_rows, get_lancedb_items, get_zero_vector_records, insert_records,
     lancedb_exists,
 };
 use rustyline::error::ReadlineError;
@@ -20,7 +20,7 @@ use tokio::task::JoinSet;
 
 use crate::cli::errors::CLIError;
 use crate::common::Context;
-use crate::{library_to_arrow, utils::library::parse_library_metadata};
+use crate::{full_library_to_arrow, utils::library::parse_library_metadata};
 use arrow_ipc::reader::FileReader;
 use arrow_ipc::writer::FileWriter;
 use std::sync::Arc;
@@ -94,7 +94,7 @@ async fn embed<O: Write, E: Write>(
     writeln!(ctx.out, ".")?;
 
     let embedding_provider = ctx.args.embedding.as_str();
-    let db = create_initial_table(
+    let db = insert_records(
         batch_iter,
         Some(&["library_key"]),
         EmbeddingDefinition::new(
@@ -120,7 +120,10 @@ async fn embed<O: Write, E: Write>(
 }
 
 /// Fix the zero-embedding problem. In some error cases, we store zero-vectors as embeddings in
-/// LanceDB. This function fixes those errors by replacing them with "real" embeddings.
+/// LanceDB. This function fixes those errors by replacing them with "real" embeddings. Note that
+/// there are cases where the embeddings are zeros not because there was an error, but because the
+/// extracted text was empty. This could be the result of a failed attempt to parse, or some other
+/// similar error. APIs like Voyage do accept empty strings, and simply return a zero vector.
 ///
 /// # Arguments:
 ///
@@ -141,30 +144,87 @@ async fn fix_zero_embeddings<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Res
         }
     }
 
-    match rag_fix_zero_embeddings(
-        Arc::new(schema),
-        "embeddings",
-        &ctx.args.embedding,
-        "library_key",
-    )
-    .await
-    {
-        Ok(fixed_count) => {
-            if fixed_count > 0 {
-                writeln!(
-                    ctx.out,
-                    "Successfully fixed {} zero embeddings!",
-                    fixed_count
-                )?;
-            } else {
-                writeln!(ctx.out, "No zero embeddings found to fix.")?;
-            }
-        }
-        Err(e) => {
-            writeln!(ctx.err, "Failed to fix zero embeddings: {}", e)?;
-            return Err(CLIError::LanceError(e.to_string()));
-        }
+    let zero_batches = get_zero_vector_records(&ctx.args.embedding).await?;
+
+    if zero_batches.is_empty() {
+        writeln!(ctx.out, "{}Done!{}", DIM_TEXT, RESET)?;
+        return Ok(());
     }
+
+    let zero_items: ZoteroItemSet = zero_batches.into();
+    let zero_items: Vec<ZoteroItem> = zero_items.into();
+    let zero_item_keys = zero_items
+        .into_iter()
+        .map(|item| item.metadata.library_key)
+        .collect::<Vec<_>>();
+
+    // We need to refetch the items from Zotero because it's likely the results from LanceDB don't
+    // have the PDF text either.
+    let db_items = get_lancedb_items(
+        &ctx.args.embedding,
+        vec![
+            "library_key".into(),
+            "title".into(),
+            "file_path".into(),
+            "pdf_text".into(),
+        ],
+    )
+    .await?;
+
+    let db_items: ZoteroItemSet = db_items.into();
+    let db_items: Vec<ZoteroItem> = db_items.into();
+
+    let zero_subset = db_items
+        .into_iter()
+        .filter(|item| zero_item_keys.contains(&item.metadata.library_key))
+        .collect::<Vec<_>>();
+
+    let nonempty_zero_subset = zero_subset
+        .iter()
+        .filter(|&item| !item.text.is_empty())
+        .cloned()
+        .collect::<Vec<_>>();
+
+    let num_empty_texts = zero_subset.len() - nonempty_zero_subset.len();
+
+    let zero_subset_batch = library_to_arrow(zero_subset, &ctx.args.embedding).await?;
+
+    // For the same reason, we also can't simply use `merge_insert`; we need to delete the rows and
+    // re-insert them.
+    delete_rows(
+        zero_subset_batch.clone(),
+        "library_key",
+        &ctx.args.embedding,
+    )
+    .await?;
+
+    writeln!(
+        ctx.out,
+        "{num_empty_texts} items had empty texts, and will be deleted."
+    )?;
+
+    if nonempty_zero_subset.is_empty() {
+        return Ok(());
+    }
+
+    let nonempty_zero_subset_batch =
+        library_to_arrow(nonempty_zero_subset, &ctx.args.embedding).await?;
+
+    let batches = vec![Ok(nonempty_zero_subset_batch)];
+    let batch_iter = RecordBatchIterator::new(batches.into_iter(), Arc::new(schema));
+
+    insert_records(
+        batch_iter,
+        Some(&["library_key"]),
+        EmbeddingDefinition::new(
+            "pdf_text", // source column
+            &ctx.args.embedding,
+            Some("embeddings"), // dest column
+        ),
+    )
+    .await?;
+
+    writeln!(ctx.out, "Successfully fixed zero embeddings!",)?;
 
     Ok(())
 }
@@ -248,7 +308,7 @@ async fn process<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Result<(), CLIE
         }
     }
 
-    let record_batch = library_to_arrow(&embedding_name, None, None).await?;
+    let record_batch = full_library_to_arrow(&embedding_name, None, None).await?;
     let schema = record_batch.schema();
     let batches = vec![Ok(record_batch.clone())];
     let batch_iter = RecordBatchIterator::new(batches.into_iter(), schema.clone());
@@ -261,7 +321,7 @@ async fn process<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Result<(), CLIE
     writer.finish()?;
 
     let embedding_provider = ctx.args.embedding.as_str();
-    let result = create_initial_table(
+    let result = insert_records(
         batch_iter,
         Some(&["library_key"]),
         EmbeddingDefinition::new(

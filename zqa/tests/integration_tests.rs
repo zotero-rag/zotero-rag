@@ -6,8 +6,8 @@ use zqa::common::setup_logger;
 
 use std::env;
 
-use rag::vector::lance::create_initial_table;
-use zqa::library_to_arrow;
+use rag::vector::lance::insert_records;
+use zqa::full_library_to_arrow;
 
 #[ignore]
 #[tokio::test]
@@ -20,7 +20,7 @@ async fn test_integration_works() {
         return;
     }
 
-    let record_batch = library_to_arrow("voyageai", None, None).await;
+    let record_batch = full_library_to_arrow("voyageai", None, None).await;
     assert!(record_batch.is_ok());
 
     let record_batch = record_batch.unwrap();
@@ -28,7 +28,7 @@ async fn test_integration_works() {
     let batches = vec![Ok(record_batch.clone())];
     let batch_iter = RecordBatchIterator::new(batches.into_iter(), schema.clone());
 
-    let db = create_initial_table(
+    let db = insert_records(
         batch_iter,
         None,
         EmbeddingDefinition::new(
