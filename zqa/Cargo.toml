@@ -29,6 +29,7 @@ temp-env = { version = "0.3.6", features = ["async_closure"] }
 fern = "0.7.1"
 humantime = "2.2.0"
 thiserror = "1.0"
+toml = "0.9.8"
 
 [[bin]]
 name = "zqa"
