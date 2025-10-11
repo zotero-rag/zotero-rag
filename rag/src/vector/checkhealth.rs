@@ -371,17 +371,17 @@ pub async fn lancedb_health_check(
         Err(e) => Some(Err(LanceError::QueryError(e.to_string()))),
     };
 
-    // Check 5: All-zero embeddings
-    let query_limit = match result.num_rows {
-        None => unreachable!("Unreachable code: `result.num_rows` is `None`."),
-        Some(Ok(count)) => count,
-        Some(Err(_)) => 100, // We need some default
-    };
-
-    result.zero_embedding_items =
-        Some(get_zero_vectors(&tbl, embedding_provider, query_limit).await);
-
+    // Check 5: Check indexes
     result.index_info = Some(check_indexes(&tbl).await);
+
+    // Check 6: All-zero embeddings
+    // We can't have `result.num_rows` be `None` at this point.
+    if let Some(query_limit) = &result.num_rows {
+        result.zero_embedding_items = match query_limit {
+            Ok(count) => Some(Ok(get_zero_vectors(&tbl, embedding_provider, *count).await?)),
+            Err(e) => Some(Err(LanceError::QueryError(e.to_string()))),
+        }
+    };
 
     Ok(result)
 }
