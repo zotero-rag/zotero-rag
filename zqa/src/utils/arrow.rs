@@ -1,12 +1,8 @@
 use arrow_array::{ArrayRef, RecordBatch, StringArray, cast::AsArray};
 use arrow_schema;
-use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::{
-    izip,
-    utils::library::{ZoteroItem, ZoteroItemMetadata},
-};
+use crate::utils::library::{ZoteroItem, ZoteroItemSet};
 use rag::{
     embedding::common::{
         get_embedding_dims_by_provider, get_embedding_provider, get_reranking_provider,
@@ -92,7 +88,78 @@ pub async fn get_schema(embedding_name: &str) -> arrow_schema::Schema {
     arrow_schema::Schema::new(schema_fields)
 }
 
-/// Converts Zotero library items to an Arrow RecordBatch.
+/// A helper that converts an arbitrary `Vec<ZoteroItem>` into a `RecordBatch`. Note that because
+/// we need the embedding provider as well, this can't be done with just a `From<..>`
+/// implementation.
+///
+/// # Arguments:
+///
+/// * `items` - The items to convert to a `RecordBatch`
+/// * `embedding_name` - The embedding provider
+///
+/// # Returns
+///
+/// A `RecordBatch` that can be used to interact with LanceDB.
+pub async fn library_to_arrow(
+    items: Vec<ZoteroItem>,
+    embedding_name: &str,
+) -> Result<RecordBatch, ArrowError> {
+    let schema = Arc::new(get_schema(embedding_name).await);
+
+    // Convert ZoteroItemMetadata to Arrow arrays
+    let library_keys = StringArray::from(
+        items
+            .iter()
+            .map(|item| item.metadata.library_key.as_str())
+            .collect::<Vec<&str>>(),
+    );
+
+    let titles = StringArray::from(
+        items
+            .iter()
+            .map(|item| item.metadata.title.as_str())
+            .collect::<Vec<&str>>(),
+    );
+
+    let pdf_texts = StringArray::from(
+        items
+            .iter()
+            .map(|item| item.text.as_str())
+            .collect::<Vec<&str>>(),
+    );
+
+    // Convert file paths to strings, returning an error if any path has invalid UTF-8
+    let file_paths_vec: Result<Vec<&str>, ArrowError> = items
+        .iter()
+        .map(|item| {
+            item.metadata
+                .file_path
+                .to_str()
+                .ok_or(ArrowError::PathEncodingError)
+        })
+        .collect();
+    let file_paths = StringArray::from(file_paths_vec?);
+
+    let mut record_batch_cols = vec![
+        Arc::new(library_keys) as ArrayRef,
+        Arc::new(titles) as ArrayRef,
+        Arc::new(file_paths) as ArrayRef,
+        Arc::new(pdf_texts.clone()) as ArrayRef,
+    ];
+
+    if lancedb_exists().await {
+        let embedding_provider = get_embedding_provider(embedding_name)?;
+        let query_vec = embedding_provider.compute_source_embeddings(Arc::new(pdf_texts))?;
+        let query_vec = query_vec.as_fixed_size_list();
+
+        record_batch_cols.push(Arc::new(query_vec.clone()));
+    }
+    let record_batch = RecordBatch::try_new(schema.clone(), record_batch_cols)?;
+
+    Ok(record_batch)
+}
+
+/// Converts new Zotero library items to an Arrow RecordBatch.
 ///
 /// This function parses the Zotero library using `parse_library()` and converts
 /// the resulting `ZoteroItemMetadata` entries into a structured Arrow RecordBatch.
@@ -122,7 +189,7 @@ pub async fn get_schema(embedding_name: &str) -> arrow_schema::Schema {
 /// * `start_from` - An optional offset for the SQL query. Useful for debugging, pagination,
 ///   multi-threading, etc.
 /// * `limit` - Optional limit, meant to be used in conjunction with `start_from`.
-pub async fn library_to_arrow(
+pub async fn full_library_to_arrow(
     embedding_name: &str,
     start_from: Option<usize>,
     limit: Option<usize>,
@@ -130,59 +197,7 @@ pub async fn library_to_arrow(
     let lib_items = parse_library(embedding_name, start_from, limit).await?;
     log::info!("Finished parsing library items.");
 
-    let schema = Arc::new(get_schema(embedding_name).await);
-
-    // Convert ZoteroItemMetadata to Arrow arrays
-    let library_keys = StringArray::from(
-        lib_items
-            .iter()
-            .map(|item| item.metadata.library_key.as_str())
-            .collect::<Vec<&str>>(),
-    );
-
-    let titles = StringArray::from(
-        lib_items
-            .iter()
-            .map(|item| item.metadata.title.as_str())
-            .collect::<Vec<&str>>(),
-    );
-
-    let pdf_texts = StringArray::from(
-        lib_items
-            .iter()
-            .map(|item| item.text.as_str())
-            .collect::<Vec<&str>>(),
-    );
-
-    // Convert file paths to strings, returning an error if any path has invalid UTF-8
-    let file_paths_vec: Result<Vec<&str>, ArrowError> = lib_items
-        .iter()
-        .map(|item| {
-            item.metadata
-                .file_path
-                .to_str()
-                .ok_or(ArrowError::PathEncodingError)
-        })
-        .collect();
-    let file_paths = StringArray::from(file_paths_vec?);
-
-    let mut record_batch_cols = vec![
-        Arc::new(library_keys) as ArrayRef,
-        Arc::new(titles) as ArrayRef,
-        Arc::new(file_paths) as ArrayRef,
-        Arc::new(pdf_texts.clone()) as ArrayRef,
-    ];
-
-    if lancedb_exists().await {
-        let embedding_provider = get_embedding_provider(embedding_name)?;
-        let query_vec = embedding_provider.compute_source_embeddings(Arc::new(pdf_texts))?;
-        let query_vec = query_vec.as_fixed_size_list();
-
-        record_batch_cols.push(Arc::new(query_vec.clone()));
-    }
-    let record_batch = RecordBatch::try_new(schema.clone(), record_batch_cols)?;
-
-    Ok(record_batch)
+    library_to_arrow(lib_items, embedding_name).await
 }
 
 /// From a `RecordBatch`, return all values from a specified column as a `Vec<String>`.
@@ -236,35 +251,8 @@ pub async fn vector_search(
 ) -> Result<Vec<ZoteroItem>, ArrowError> {
     let batches = rag_vector_search(query.clone(), embedding_name).await?;
 
-    let items: Vec<ZoteroItem> = batches
-        .iter()
-        .flat_map(|batch| {
-            let schema = batch.schema();
-            let key_idx = schema.index_of("library_key").unwrap();
-            let title_idx = schema.index_of("title").unwrap();
-            let file_path_idx = schema.index_of("file_path").unwrap();
-            let text_idx = schema.index_of("pdf_text").unwrap();
-
-            let lib_keys = get_column_from_batch(batch, key_idx);
-            let titles = get_column_from_batch(batch, title_idx);
-            let file_paths = get_column_from_batch(batch, file_path_idx);
-            let texts = get_column_from_batch(batch, text_idx);
-
-            let zipped = izip!(lib_keys, titles, file_paths, texts);
-            let items_batch: Vec<ZoteroItem> = zipped
-                .map(|(lib_key, title, file_path, text)| ZoteroItem {
-                    metadata: ZoteroItemMetadata {
-                        library_key: lib_key,
-                        title,
-                        file_path: PathBuf::from(file_path),
-                    },
-                    text,
-                })
-                .collect();
-
-            items_batch
-        })
-        .collect();
+    let items: ZoteroItemSet = batches.into();
+    let items: Vec<ZoteroItem> = items.into();
 
     let rerank_provider = get_reranking_provider::<ZoteroItem>(&reranker)?;
     let items = rerank_provider.rerank(items, &query).await?;
@@ -291,7 +279,7 @@ mod tests {
         let _ = fs::remove_dir_all(format!("zqa/{}", TABLE_NAME));
         let _ = fs::remove_dir_all(format!("rag/{}", TABLE_NAME));
 
-        let record_batch = library_to_arrow("voyageai", Some(0), Some(5)).await;
+        let record_batch = full_library_to_arrow("voyageai", Some(0), Some(5)).await;
         assert!(
             record_batch.is_ok(),
             "Failed to fetch library: {:?}",
