@@ -1,7 +1,7 @@
 use crate::cli::placeholder::PlaceholderText;
 use crate::cli::prompts::{get_extraction_prompt, get_summarize_prompt};
 use crate::cli::readline::get_readline_config;
-use crate::utils::arrow::{get_schema, library_to_arrow, vector_search};
+use crate::utils::arrow::{library_to_arrow, vector_search};
 use crate::utils::library::{ZoteroItem, ZoteroItemSet, get_new_library_items};
 use arrow_array::{self, RecordBatch, RecordBatchIterator, StringArray};
 use arrow_schema::Schema;
@@ -130,7 +130,6 @@ async fn embed<O: Write, E: Write>(
 /// * `ctx` - A `Context` object that contains CLI args and objects that implement
 async fn fix_zero_embeddings<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Result<(), CLIError> {
     let healthcheck = lancedb_health_check(&ctx.args.embedding).await?;
-    let schema = get_schema(&ctx.args.embedding).await;
 
     if let Some(Ok(zero_items)) = healthcheck.zero_embedding_items {
         let num_zeros: usize = zero_items.iter().map(|b| b.num_rows()).sum();
@@ -172,12 +171,7 @@ async fn fix_zero_embeddings<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Res
     )]));
     let zero_subset_batch = RecordBatch::try_new(delete_schema, vec![Arc::new(key_array)])?;
 
-    delete_rows(
-        zero_subset_batch.clone(),
-        "library_key",
-        &ctx.args.embedding,
-    )
-    .await?;
+    delete_rows(zero_subset_batch, "library_key", &ctx.args.embedding).await?;
 
     writeln!(
         ctx.out,
@@ -191,8 +185,9 @@ async fn fix_zero_embeddings<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Res
     let nonempty_zero_subset_batch =
         library_to_arrow(nonempty_zero_subset, &ctx.args.embedding).await?;
 
-    let batches = vec![Ok(nonempty_zero_subset_batch)];
-    let batch_iter = RecordBatchIterator::new(batches.into_iter(), Arc::new(schema));
+    let batches = vec![Ok(nonempty_zero_subset_batch.clone())];
+    let batch_iter =
+        RecordBatchIterator::new(batches.into_iter(), nonempty_zero_subset_batch.schema());
 
     insert_records(
         batch_iter,
