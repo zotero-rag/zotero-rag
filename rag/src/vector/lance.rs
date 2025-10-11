@@ -192,14 +192,23 @@ pub async fn delete_rows(
         return Ok(());
     }
 
-    let key_col = as_string_array(&key_col);
-    let delete_pred = key_col
+    for key_chunk in as_string_array(key_col)
         .iter()
-        .filter_map(|maybe_key| maybe_key.map(|k| format!("{} = '{}'", key, k.replace("'", "''"))))
         .collect::<Vec<_>>()
-        .join(" OR ");
+        .chunks(100)
+    {
+        let delete_pred = key_chunk
+            .iter()
+            .filter_map(|maybe_key| {
+                maybe_key.map(|k| format!("{} = '{}'", key, k.replace("'", "''")))
+            })
+            .collect::<Vec<_>>()
+            .join(" OR ");
 
-    table.delete(&delete_pred).await?;
+        if !delete_pred.is_empty() {
+            table.delete(&delete_pred).await?;
+        }
+    }
 
     Ok(())
 }
