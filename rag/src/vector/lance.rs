@@ -187,10 +187,15 @@ pub async fn delete_rows(
             key
         )))?;
 
+    // Avoid potentially deleting all rows
+    if key_col.is_empty() {
+        return Ok(());
+    }
+
     let key_col = as_string_array(&key_col);
     let delete_pred = key_col
         .iter()
-        .filter_map(|maybe_key| maybe_key.map(|k| format!("{} = '{}'", key, k)))
+        .filter_map(|maybe_key| maybe_key.map(|k| format!("{} = '{}'", key, k.replace("'", "''"))))
         .collect::<Vec<_>>()
         .join(" OR ");
 
