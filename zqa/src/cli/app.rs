@@ -93,7 +93,7 @@ async fn embed<O: Write, E: Write>(
     }
     writeln!(ctx.out, ".")?;
 
-    let embedding_provider = ctx.args.embedding.as_str();
+    let embedding_provider = &ctx.config.embedding_provider;
     let db = insert_records(
         batch_iter,
         Some(&["library_key"]),
@@ -129,7 +129,7 @@ async fn embed<O: Write, E: Write>(
 ///
 /// * `ctx` - A `Context` object that contains CLI args and objects that implement
 async fn fix_zero_embeddings<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Result<(), CLIError> {
-    let healthcheck = lancedb_health_check(&ctx.args.embedding).await?;
+    let healthcheck = lancedb_health_check(&ctx.config.embedding_provider).await?;
 
     if let Some(Ok(zero_items)) = healthcheck.zero_embedding_items {
         let num_zeros: usize = zero_items.iter().map(|b| b.num_rows()).sum();
@@ -143,7 +143,8 @@ async fn fix_zero_embeddings<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Res
         }
     }
 
-    let zero_batches: Vec<RecordBatch> = get_zero_vector_records(&ctx.args.embedding).await?;
+    let zero_batches: Vec<RecordBatch> =
+        get_zero_vector_records(&ctx.config.embedding_provider).await?;
 
     if zero_batches.is_empty() {
         writeln!(ctx.out, "{}Done!{}", DIM_TEXT, RESET)?;
@@ -171,7 +172,12 @@ async fn fix_zero_embeddings<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Res
     )]));
     let zero_subset_batch = RecordBatch::try_new(delete_schema, vec![Arc::new(key_array)])?;
 
-    delete_rows(zero_subset_batch, "library_key", &ctx.args.embedding).await?;
+    delete_rows(
+        zero_subset_batch,
+        "library_key",
+        &ctx.config.embedding_provider,
+    )
+    .await?;
 
     writeln!(
         ctx.out,
@@ -183,7 +189,7 @@ async fn fix_zero_embeddings<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Res
     }
 
     let nonempty_zero_subset_batch =
-        library_to_arrow(nonempty_zero_subset, &ctx.args.embedding).await?;
+        library_to_arrow(nonempty_zero_subset, &ctx.config.embedding_provider).await?;
 
     let batches = vec![Ok(nonempty_zero_subset_batch.clone())];
     let batch_iter =
@@ -194,7 +200,7 @@ async fn fix_zero_embeddings<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Res
         Some(&["library_key"]),
         EmbeddingDefinition::new(
             "pdf_text", // source column
-            &ctx.args.embedding,
+            &ctx.config.embedding_provider,
             Some("embeddings"), // dest column
         ),
     )
@@ -213,7 +219,7 @@ async fn fix_zero_embeddings<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Res
 /// * `ctx` - A `Context` object that contains CLI args and objects that implement
 ///   `std::io::Write` for `stdout` and `stderr`.
 async fn checkhealth<O: Write, E: Write>(ctx: &mut Context<O, E>) {
-    let _ = match lancedb_health_check(&ctx.args.embedding).await {
+    let _ = match lancedb_health_check(&ctx.config.embedding_provider).await {
         Ok(result) => writeln!(ctx.out, "{result}"),
         Err(e) => writeln!(ctx.err, "{e}"),
     };
@@ -230,7 +236,7 @@ async fn checkhealth<O: Write, E: Write>(ctx: &mut Context<O, E>) {
 /// * `ctx` - A `Context` object that contains CLI args and objects that implement
 ///   `std::io::Write` for `stdout` and `stderr`.
 async fn doctor<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Result<(), CLIError> {
-    if let Err(e) = rag_doctor(&ctx.args.embedding, &mut ctx.out).await {
+    if let Err(e) = rag_doctor(&ctx.config.embedding_provider, &mut ctx.out).await {
         writeln!(ctx.err, "{e}")?;
     };
 
@@ -250,7 +256,7 @@ async fn doctor<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Result<(), CLIEr
 async fn process<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Result<(), CLIError> {
     const WARNING_THRESHOLD: usize = 100;
 
-    let embedding_name = ctx.args.embedding.clone();
+    let embedding_name = ctx.config.embedding_provider.clone();
 
     let item_metadata = match lancedb_exists().await {
         true => get_new_library_items(&embedding_name).await,
@@ -296,7 +302,7 @@ async fn process<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Result<(), CLIE
     writer.write(&record_batch)?;
     writer.finish()?;
 
-    let embedding_provider = ctx.args.embedding.as_str();
+    let embedding_provider = ctx.config.embedding_provider.as_str();
     let result = insert_records(
         batch_iter,
         Some(&["library_key"]),
@@ -359,8 +365,8 @@ async fn search_for_papers<O: Write, E: Write>(
     let vector_search_start = Instant::now();
     let search_results = vector_search(
         query.clone(),
-        &ctx.args.embedding,
-        ctx.args.reranker.clone(),
+        &ctx.config.embedding_provider,
+        ctx.config.reranker_provider.clone(),
     )
     .await?;
     let vector_search_duration = vector_search_start.elapsed();
@@ -390,13 +396,13 @@ async fn run_query<O: Write, E: Write>(
     query: String,
     ctx: &mut Context<O, E>,
 ) -> Result<(), CLIError> {
-    let model_provider = ctx.args.model_provider.clone();
+    let model_provider = ctx.config.model_provider.clone();
 
     let vector_search_start = Instant::now();
     let search_results = vector_search(
         query.clone(),
-        &ctx.args.embedding,
-        ctx.args.reranker.clone(),
+        &ctx.config.embedding_provider,
+        ctx.config.reranker_provider.clone(),
     )
     .await?;
     let vector_search_duration = vector_search_start.elapsed();

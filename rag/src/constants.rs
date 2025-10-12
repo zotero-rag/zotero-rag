@@ -10,7 +10,7 @@ pub const DEFAULT_ANTHROPIC_MODEL: &str = "claude-sonnet-4-5";
 pub const DEFAULT_GEMINI_MODEL: &str = "gemini-2.5-pro";
 
 /// Default maximum tokens for Anthropic requests
-pub const DEFAULT_ANTHROPIC_MAX_TOKENS: u32 = 8192;
+pub const DEFAULT_ANTHROPIC_MAX_TOKENS: u32 = 64000;
 
 /// Default maximum concurrent requests for embedding processing
 pub const DEFAULT_MAX_CONCURRENT_REQUESTS: usize = 5;
