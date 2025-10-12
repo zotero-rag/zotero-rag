@@ -1,14 +1,36 @@
 use std::io::{stderr, stdout};
 
 use clap::Parser;
+use directories;
 use dotenv::dotenv;
 use zqa::cli::app::cli;
 use zqa::common::{Args, Context, setup_logger};
+use zqa::config::Config;
 use zqa::ui::app::App;
 
 #[tokio::main]
 pub async fn main() {
     dotenv().ok();
+
+    // Load the configs in priority order: TOML < env < CLI args
+    let mut config = Config::default();
+    if let Some(xdg_config_dir) = directories::UserDirs::new() {
+        let config_path = xdg_config_dir
+            .home_dir()
+            .join(".config")
+            .join("zqa")
+            .join("config.toml");
+
+        if config_path.exists() {
+            // We want to panic here if the config is invalid; it's early enough that we can
+            // reasonably ask a user to fix the underlying issue.
+            config = Config::from_file(config_path).unwrap()
+        }
+    }
+
+    // Overwrite with env
+    config.read_env().unwrap();
+
     let args = Args::parse();
 
     // Avoid RUST_LOG from interfering by not instantiating the logger if it's disabled.
@@ -38,6 +60,7 @@ pub async fn main() {
     }
 
     let context = Context {
+        config,
         args,
         out: stdout(),
         err: stderr(),

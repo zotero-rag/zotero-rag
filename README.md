@@ -64,6 +64,56 @@ On Linux, the project is configured to use the `mold` linker for faster linking.
 
 ## Usage
 
+The first step is to configure your choice of providers and models and set their API keys. You can do this using either a TOML config file in `~/.config/zqa/config.toml` or using environment variables (either using `export` or your shell's equivalent, or a `.env` file). You can also have both, in which case options present in the environment variables override the TOML config.
+
+### TOML config
+
+The TOML config goes in `~/.config/zqa/config.toml`, and has the following structure:
+
+```toml
+model_provider = "anthropic"  # Generation model provider
+embedding_provider = "voyageai"  # Embedding/reranker model provider
+reranker_provider = "voyageai"  # Usually this will be the same as your `embedding_provider`
+max_concurrent_requests = 5  # Max concurrent embedding requests
+max_retries = 3  # Max retries when network requests fail
+
+# `log_level` is a CLI-only arg so it isn't applied inadvertently.
+
+# Provider-specific configs. This allows you to merely change the `model_provider`
+# above and have the settings for that provider applied.
+[anthropic]
+model = "claude-sonnet-4-5"
+api_key = "sk-ant-..."
+max_tokens = 64000
+
+[openai]
+model = "gpt-5"
+api_key = "sk-proj-..."
+max_tokens = 8192
+embedding_model = "text-embedding-3-small"
+embedding_dims = 1536
+
+[gemini]
+model = "gemini-2.5-pro"
+api_key = "AI..."
+embedding_model = "gemini-embedding-001"
+embedding_dims = 3072
+
+[voyageai]
+reranker = "rerank-2.5"
+embedding_model = "voyage-3-large"
+embedding_dims = 2048
+
+[cohere]
+reranker = "rerank-v3.5"
+embedding_model = "embed-v4.0"
+embedding_dims = 1536
+
+[openrouter]
+api_key = "..."
+model = "anthropic/claude-sonnet-4.5"
+```
+
 ### Set up environment variables
 
 Create a `.env` in the root of the project with the following structure:
@@ -74,9 +124,11 @@ OPENAI_API_KEY=
 OPENAI_EMBEDDING_MODEL=text-embedding-3-small
 OPENAI_MODEL=o4-mini-2025-04-16
 VOYAGE_AI_API_KEY=
+VOYAGE_AI_MODEL=voyage-3-large
 VOYAGE_AI_RERANK_MODEL=rerank-2.5
 COHERE_API_KEY=
-COHERE_RERANK_MODEL=rerank-v3.5
+COHERE_MODEL=
+COHERE_RERANKER=rerank-v3.5
 GEMINI_API_KEY=
 GEMINI_MODEL=gemini-2.5-pro
 GEMINI_EMBEDDING_MODEL=gemini-embedding-001

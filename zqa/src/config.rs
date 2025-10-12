@@ -1,9 +1,12 @@
+use rag::constants::{
+    DEFAULT_ANTHROPIC_MAX_TOKENS, DEFAULT_MAX_CONCURRENT_REQUESTS, DEFAULT_MAX_RETRIES,
+};
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::{env, num::ParseIntError, path::Path};
 use thiserror::Error;
 
 /// TOML config. Below is an example config with all the defaults. The TOML config is
-/// overridden by CLI args. In order, the priority is TOML < env < CLI args.
+/// overridden by environment variables.
 ///
 /// ```toml
 /// model_provider = "anthropic"  # Generation model provider
@@ -43,6 +46,10 @@ use thiserror::Error;
 /// reranker = "rerank-v3.5"
 /// embedding_model = "embed-v4.0"
 /// embedding_dims = 1536
+///
+/// [openrouter]
+/// api_key = "..."
+/// model = "anthropic/claude-sonnet-4.5"
 /// ```
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Config {
@@ -85,6 +92,10 @@ pub struct Config {
     /// Cohere-specific configuration
     #[serde(default)]
     pub cohere: Option<CohereConfig>,
+
+    /// OpenRouter-specific configuration
+    #[serde(default)]
+    pub openrouter: Option<OpenRouterConfig>,
 }
 
 /// Errors reading or parsing TOML
@@ -95,6 +106,9 @@ pub enum ConfigError {
 
     #[error("Failed to parse TOML: {0}")]
     Parse(#[from] toml::de::Error),
+
+    #[error("Failed to parse value: {0}")]
+    ParseField(#[from] ParseIntError),
 }
 
 /// Anthropic provider configuration
@@ -179,6 +193,16 @@ pub struct CohereConfig {
     pub api_key: Option<String>,
 }
 
+/// OpenRouter configuration
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct OpenRouterConfig {
+    /// Generation model
+    pub model: Option<String>,
+
+    /// API key
+    pub api_key: Option<String>,
+}
+
 // Default value functions
 fn default_model_provider() -> String {
     "anthropic".to_string()
@@ -193,19 +217,44 @@ fn default_reranker_provider() -> String {
 }
 
 fn default_max_concurrent_requests() -> usize {
-    5
+    DEFAULT_MAX_CONCURRENT_REQUESTS
 }
 
 fn default_max_retries() -> usize {
-    3
+    DEFAULT_MAX_RETRIES
 }
 
 fn default_anthropic_max_tokens() -> u32 {
-    64000
+    DEFAULT_ANTHROPIC_MAX_TOKENS
 }
 
 fn default_openai_max_tokens() -> u32 {
     8192
+}
+
+/// An extension trait for strings to be updated with a value from the environment.
+trait OverwriteFromEnv {
+    fn replace_with_env(&mut self, _var: &str)
+    where
+        Self: Sized,
+    {
+    }
+}
+
+impl OverwriteFromEnv for String {
+    fn replace_with_env(&mut self, var: &str) {
+        if let Ok(env_var) = env::var(var) {
+            *self = env_var;
+        }
+    }
+}
+
+impl OverwriteFromEnv for Option<String> {
+    fn replace_with_env(&mut self, var: &str) {
+        if let Ok(env_var) = env::var(var) {
+            *self = Some(env_var);
+        }
+    }
 }
 
 impl Config {
@@ -214,6 +263,76 @@ impl Config {
         let content = std::fs::read_to_string(path)?;
         let config: Config = toml::from_str(&content)?;
         Ok(config)
+    }
+
+    /// Overwrite config from environment variables (higher priority)
+    pub fn read_env(&mut self) -> Result<(), ConfigError> {
+        // Main options
+        // The model providers are not exposed as env options.
+        if let Ok(max_concurrent_requests) = env::var("MAX_CONCURRENT_REQUESTS") {
+            self.max_concurrent_requests = max_concurrent_requests.parse()?;
+        }
+
+        // Anthropic options
+        if let Some(anthropic_config) = &mut self.anthropic {
+            // The max tokens is not exposed as an env option.
+            anthropic_config.model.replace_with_env("ANTHROPIC_MODEL");
+            anthropic_config
+                .api_key
+                .replace_with_env("ANTHROPIC_API_KEY");
+        }
+
+        // OpenAI options
+        if let Some(openai_config) = &mut self.openai {
+            // The max tokens and embedding dims are not exposed as env options.
+            openai_config.model.replace_with_env("OPENAI_MODEL");
+            openai_config.api_key.replace_with_env("OPENAI_API_KEY");
+            openai_config
+                .embedding_model
+                .replace_with_env("OPENAI_EMBEDDING_MODEL");
+        }
+
+        // Gemini options
+        if let Some(gemini_config) = &mut self.gemini {
+            // embedding_dims is not exposed as an env option
+            gemini_config.model.replace_with_env("GEMINI_MODEL");
+            // GEMINI_API_KEY has priority over GOOGLE_API_KEY
+            gemini_config.api_key.replace_with_env("GOOGLE_API_KEY");
+            gemini_config.api_key.replace_with_env("GEMINI_API_KEY");
+            gemini_config
+                .embedding_model
+                .replace_with_env("GEMINI_EMBEDDING_MODEL");
+        }
+
+        // VoyageAI options
+        if let Some(voyage_config) = &mut self.voyageai {
+            // embedding_dims is not exposed as an env option
+            voyage_config
+                .reranker
+                .replace_with_env("VOYAGE_AI_RERANKER");
+            voyage_config
+                .embedding_model
+                .replace_with_env("VOYAGE_AI_MODEL");
+        }
+
+        // Cohere options
+        if let Some(cohere_config) = &mut self.cohere {
+            // embedding_dims is not exposed as an env option
+            cohere_config.reranker.replace_with_env("COHERE_RERANKER");
+            cohere_config
+                .embedding_model
+                .replace_with_env("COHERE_MODEL");
+        }
+
+        // OpenRouter options
+        if let Some(openrouter_config) = &mut self.openrouter {
+            openrouter_config.model.replace_with_env("OPENROUTER_MODEL");
+            openrouter_config
+                .api_key
+                .replace_with_env("OPENROUTER_API_KEY");
+        }
+
+        Ok(())
     }
 
     /// Create a default configuration
@@ -229,6 +348,7 @@ impl Config {
             gemini: None,
             voyageai: None,
             cohere: None,
+            openrouter: None,
         }
     }
 }
