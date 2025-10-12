@@ -720,6 +720,7 @@ pub async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<(), CLIEr
 #[cfg(test)]
 mod tests {
     use crate::cli::app::{BATCH_ITER_FILE, checkhealth, embed, search_for_papers, stats};
+    use crate::config::Config;
     use arrow_array::{RecordBatch, StringArray};
     use arrow_ipc::writer::FileWriter;
     use rag::vector::lance::DB_URI;
@@ -738,9 +739,6 @@ mod tests {
         let args = Args {
             tui: false,
             log_level: "none".into(),
-            embedding: "voyageai".into(),
-            reranker: "voyageai".into(),
-            model_provider: "anthropic".into(),
         };
         let out_buf: Vec<u8> = Vec::new();
         let out = Cursor::new(out_buf);
@@ -748,7 +746,14 @@ mod tests {
         let err_buf: Vec<u8> = Vec::new();
         let err = Cursor::new(err_buf);
 
-        Context { args, out, err }
+        let config = Config::default();
+
+        Context {
+            config,
+            args,
+            out,
+            err,
+        }
     }
 
     #[tokio::test]
