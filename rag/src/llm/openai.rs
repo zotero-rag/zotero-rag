@@ -127,8 +127,7 @@ impl<T: HttpClient> ApiClient for OpenAIClient<T> {
         } else {
             (
                 env::var("OPENAI_API_KEY")?,
-                env::var("OPENAI_MODEL")
-                    .unwrap_or_else(|_| DEFAULT_OPENAI_MODEL.to_string()),
+                env::var("OPENAI_MODEL").unwrap_or_else(|_| DEFAULT_OPENAI_MODEL.to_string()),
                 env::var("OPENAI_MAX_TOKENS")
                     .ok()
                     .and_then(|s| s.parse().ok()),

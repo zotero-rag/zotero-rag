@@ -9,7 +9,7 @@ use lancedb::embeddings::EmbeddingDefinition;
 use rag::capabilities::ModelProviders;
 use rag::llm::base::{ApiClient, CompletionApiResponse, UserMessage};
 use rag::llm::errors::LLMError;
-use rag::llm::factory::{get_client_by_provider, get_client_with_config, LLMClientConfig};
+use rag::llm::factory::{LLMClientConfig, get_client_by_provider, get_client_with_config};
 use rag::vector::checkhealth::lancedb_health_check;
 use rag::vector::doctor::doctor as rag_doctor;
 use rag::vector::lance::{
