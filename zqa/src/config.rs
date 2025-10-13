@@ -335,9 +335,10 @@ impl Config {
 
         Ok(())
     }
+}
 
-    /// Create a default configuration
-    pub fn default() -> Self {
+impl Default for Config {
+    fn default() -> Self {
         Self {
             model_provider: default_model_provider(),
             embedding_provider: default_embedding_provider(),

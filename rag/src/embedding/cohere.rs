@@ -226,8 +226,7 @@ impl<T: HttpClient, U: AsRef<str> + Send + Clone> Rerank<U> for CohereClient<T> 
             } else {
                 (
                     env::var("COHERE_API_KEY")?,
-                    env::var("COHERE_RERANKER")
-                        .unwrap_or(DEFAULT_COHERE_RERANK_MODEL.into()),
+                    env::var("COHERE_RERANKER").unwrap_or(DEFAULT_COHERE_RERANK_MODEL.into()),
                 )
             };
 

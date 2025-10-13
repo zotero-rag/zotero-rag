@@ -143,8 +143,7 @@ impl<T: HttpClient> ApiClient for AnthropicClient<T> {
         } else {
             (
                 env::var("ANTHROPIC_API_KEY")?,
-                env::var("ANTHROPIC_MODEL")
-                    .unwrap_or_else(|_| DEFAULT_CLAUDE_MODEL.to_string()),
+                env::var("ANTHROPIC_MODEL").unwrap_or_else(|_| DEFAULT_CLAUDE_MODEL.to_string()),
                 DEFAULT_ANTHROPIC_MAX_TOKENS,
             )
         };

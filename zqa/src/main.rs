@@ -1,7 +1,6 @@
 use std::io::{stderr, stdout};
 
 use clap::Parser;
-use directories;
 use dotenv::dotenv;
 use zqa::cli::app::cli;
 use zqa::common::{Args, Context, setup_logger};
