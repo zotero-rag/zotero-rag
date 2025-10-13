@@ -17,6 +17,7 @@ use crate::llm::http_client::{HttpClient, ReqwestClient};
 #[derive(Debug, Clone)]
 pub struct CohereClient<T: HttpClient = ReqwestClient> {
     pub client: T,
+    pub config: Option<crate::config::CohereConfig>,
 }
 
 impl<T: HttpClient + Default + Clone> Default for CohereClient<T> {
@@ -29,9 +30,20 @@ impl<T> CohereClient<T>
 where
     T: HttpClient + Default + Clone,
 {
+    /// Creates a new CohereClient instance without configuration
+    /// (will fall back to environment variables)
     pub fn new() -> Self {
         Self {
             client: T::default(),
+            config: None,
+        }
+    }
+
+    /// Creates a new CohereClient instance with provided configuration
+    pub fn with_config(config: crate::config::CohereConfig) -> Self {
+        Self {
+            client: T::default(),
+            config: Some(config),
         }
     }
 
@@ -207,13 +219,22 @@ impl<T: HttpClient, U: AsRef<str> + Send + Clone> Rerank<U> for CohereClient<T> 
     {
         Box::pin(async move {
             const RERANK_API_URL: &str = "https://api.cohere.com/v2/rerank";
-            let api_key = env::var("COHERE_API_KEY")?;
+
+            // Use config if available, otherwise fall back to env vars
+            let (api_key, reranker_model) = if let Some(ref config) = self.config {
+                (config.api_key.clone(), config.reranker.clone())
+            } else {
+                (
+                    env::var("COHERE_API_KEY")?,
+                    env::var("COHERE_RERANKER")
+                        .unwrap_or(DEFAULT_COHERE_RERANK_MODEL.into()),
+                )
+            };
 
             let documents: Vec<String> =
                 items.iter().map(|item| item.as_ref().to_string()).collect();
             let request = CohereRerankRequest {
-                model: env::var("COHERE_RERANK_MODEL")
-                    .unwrap_or(DEFAULT_COHERE_RERANK_MODEL.into()),
+                model: reranker_model,
                 query: query.into(),
                 top_n: None,
                 documents,

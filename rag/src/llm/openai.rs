@@ -19,6 +19,7 @@ use crate::embedding::openai::compute_openai_embeddings_sync;
 #[derive(Debug, Clone)]
 pub struct OpenAIClient<T: HttpClient = ReqwestClient> {
     pub client: T,
+    pub config: Option<crate::config::OpenAIConfig>,
 }
 
 impl<T: HttpClient + Default> Default for OpenAIClient<T> {
@@ -31,10 +32,20 @@ impl<T> OpenAIClient<T>
 where
     T: HttpClient + Default,
 {
-    /// Creates a new OpenAIClient instance
+    /// Creates a new OpenAIClient instance without configuration
+    /// (will fall back to environment variables)
     pub fn new() -> Self {
         Self {
             client: T::default(),
+            config: None,
+        }
+    }
+
+    /// Creates a new OpenAIClient instance with provided configuration
+    pub fn with_config(config: crate::config::OpenAIConfig) -> Self {
+        Self {
+            client: T::default(),
+            config: Some(config),
         }
     }
 
@@ -55,36 +66,8 @@ struct OpenAIRequest {
     max_tokens: Option<u32>,
 }
 
-impl From<UserMessage> for OpenAIRequest {
-    fn from(msg: UserMessage) -> OpenAIRequest {
-        let model = env::var("OPENAI_MODEL").unwrap_or_else(|_| DEFAULT_OPENAI_MODEL.to_string());
-        let max_tokens = msg.max_tokens.or_else(|| {
-            env::var("OPENAI_MAX_TOKENS")
-                .ok()
-                .and_then(|s| s.parse().ok())
-        });
-
-        let mut messages = msg.chat_history;
-        messages.push(ChatHistoryItem {
-            role: "user".to_owned(),
-            content: msg.message,
-        });
-
-        OpenAIRequest {
-            model,
-            messages,
-            max_tokens,
-        }
-    }
-}
-
-impl From<&UserMessage> for OpenAIRequest {
-    fn from(msg: &UserMessage) -> OpenAIRequest {
-        let model = env::var("OPENAI_MODEL").unwrap_or_else(|_| DEFAULT_OPENAI_MODEL.to_string());
-        let max_tokens = env::var("OPENAI_MAX_TOKENS")
-            .ok()
-            .and_then(|s| s.parse().ok());
-
+impl OpenAIRequest {
+    fn from_message(msg: &UserMessage, model: String, max_tokens: Option<u32>) -> Self {
         let mut messages = msg.chat_history.clone();
         messages.push(ChatHistoryItem {
             role: "user".to_owned(),
@@ -94,7 +77,7 @@ impl From<&UserMessage> for OpenAIRequest {
         OpenAIRequest {
             model,
             messages,
-            max_tokens,
+            max_tokens: msg.max_tokens.or(max_tokens),
         }
     }
 }
@@ -134,13 +117,29 @@ impl<T: HttpClient> ApiClient for OpenAIClient<T> {
         &self,
         message: &UserMessage,
     ) -> Result<CompletionApiResponse, super::errors::LLMError> {
-        let key = env::var("OPENAI_API_KEY")?;
+        // Use config if available, otherwise fall back to env vars
+        let (api_key, model, max_tokens) = if let Some(ref config) = self.config {
+            (
+                config.api_key.clone(),
+                config.model.clone(),
+                Some(config.max_tokens),
+            )
+        } else {
+            (
+                env::var("OPENAI_API_KEY")?,
+                env::var("OPENAI_MODEL")
+                    .unwrap_or_else(|_| DEFAULT_OPENAI_MODEL.to_string()),
+                env::var("OPENAI_MAX_TOKENS")
+                    .ok()
+                    .and_then(|s| s.parse().ok()),
+            )
+        };
 
         let mut headers = HeaderMap::new();
-        headers.insert("Authorization", format!("Bearer {key}").parse()?);
+        headers.insert("Authorization", format!("Bearer {api_key}").parse()?);
         headers.insert("content-type", "application/json".parse()?);
 
-        let req_body: OpenAIRequest = message.into();
+        let req_body = OpenAIRequest::from_message(message, model, max_tokens);
         const MAX_RETRIES: usize = DEFAULT_MAX_RETRIES;
         let res = request_with_backoff(
             &self.client,
@@ -287,6 +286,7 @@ mod tests {
         let mock_http_client = MockHttpClient::new(mock_response);
         let mock_client = OpenAIClient {
             client: mock_http_client,
+            config: None,
         };
 
         let message = UserMessage {

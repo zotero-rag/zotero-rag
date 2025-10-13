@@ -9,7 +9,7 @@ use lancedb::embeddings::EmbeddingDefinition;
 use rag::capabilities::ModelProviders;
 use rag::llm::base::{ApiClient, CompletionApiResponse, UserMessage};
 use rag::llm::errors::LLMError;
-use rag::llm::factory::get_client_by_provider;
+use rag::llm::factory::{get_client_by_provider, get_client_with_config, LLMClientConfig};
 use rag::vector::checkhealth::lancedb_health_check;
 use rag::vector::doctor::doctor as rag_doctor;
 use rag::vector::lance::{
@@ -417,16 +417,45 @@ async fn run_query<O: Write, E: Write>(
         )));
     }
 
+    // Create LLM client with config
+    let llm_client = match model_provider.as_str() {
+        "anthropic" => ctx
+            .config
+            .anthropic
+            .clone()
+            .map(|c| get_client_with_config(LLMClientConfig::Anthropic(c.into())))
+            .transpose()?,
+        "openai" => ctx
+            .config
+            .openai
+            .clone()
+            .map(|c| get_client_with_config(LLMClientConfig::OpenAI(c.into())))
+            .transpose()?,
+        "gemini" => ctx
+            .config
+            .gemini
+            .clone()
+            .map(|c| get_client_with_config(LLMClientConfig::Gemini(c.into())))
+            .transpose()?,
+        "openrouter" => ctx
+            .config
+            .openrouter
+            .clone()
+            .map(|c| get_client_with_config(LLMClientConfig::OpenRouter(c.into())))
+            .transpose()?,
+        _ => None,
+    }
+    .unwrap_or_else(|| get_client_by_provider(&model_provider).unwrap());
+
     let mut set = JoinSet::new();
 
     let summarization_start = Instant::now();
     search_results.iter().for_each(|item| {
-        let provider = model_provider.clone();
+        let client = llm_client.clone();
         let text = item.text.clone();
         let query_clone = query.clone();
 
         set.spawn(async move {
-            let client = get_client_by_provider(&provider).unwrap();
             let message = UserMessage {
                 chat_history: Vec::new(),
                 max_tokens: None,
@@ -482,7 +511,6 @@ async fn run_query<O: Write, E: Write>(
         .join("\n");
     log::debug!("Search results:\n{search_results}\n");
 
-    let client = get_client_by_provider(&model_provider).unwrap();
     let message = UserMessage {
         chat_history: Vec::new(),
         max_tokens: None,
@@ -490,7 +518,7 @@ async fn run_query<O: Write, E: Write>(
     };
 
     let final_draft_start = Instant::now();
-    let result = client.send_message(&message).await;
+    let result = llm_client.send_message(&message).await;
     let final_draft_duration = final_draft_start.elapsed();
     match result {
         Ok(response) => {

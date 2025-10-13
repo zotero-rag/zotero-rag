@@ -74,6 +74,43 @@ pub fn get_embedding_provider(
     }
 }
 
+/// Gets an embedding provider with configuration
+///
+/// # Arguments
+///
+/// * `config`: Provider-specific configuration
+///
+/// # Returns
+///
+/// A thread-safe object that can compute query embeddings
+pub fn get_embedding_provider_with_config(
+    config: EmbeddingProviderConfig,
+) -> Result<Arc<dyn EmbeddingFunction>, LLMError> {
+    match config {
+        EmbeddingProviderConfig::OpenAI(cfg) => {
+            Ok(Arc::new(OpenAIClient::<ReqwestClient>::with_config(cfg)))
+        }
+        EmbeddingProviderConfig::VoyageAI(cfg) => {
+            Ok(Arc::new(VoyageAIClient::<ReqwestClient>::with_config(cfg)))
+        }
+        EmbeddingProviderConfig::Gemini(cfg) => {
+            Ok(Arc::new(GeminiClient::<ReqwestClient>::with_config(cfg)))
+        }
+        EmbeddingProviderConfig::Cohere(cfg) => {
+            Ok(Arc::new(CohereClient::<ReqwestClient>::with_config(cfg)))
+        }
+    }
+}
+
+/// Configuration enum for embedding providers
+#[derive(Debug, Clone)]
+pub enum EmbeddingProviderConfig {
+    OpenAI(crate::config::OpenAIConfig),
+    VoyageAI(crate::config::VoyageAIConfig),
+    Gemini(crate::config::GeminiConfig),
+    Cohere(crate::config::CohereConfig),
+}
+
 /// A trait indicating reranking capabilities. This is made generic since it is expected that users
 /// will pass in whatever type they convert `RecordBatch` to, as long as we can convert it into a
 /// string in a non-consuming way. A user may also choose to `map` their `Vec<RecordBatch>` with
@@ -97,6 +134,35 @@ pub fn get_reranking_provider<T: AsRef<str> + Send + Clone>(
         "cohere" => Ok(Arc::new(CohereClient::<ReqwestClient>::default())),
         _ => Err(LLMError::InvalidProviderError(provider.to_string())),
     }
+}
+
+/// Gets a reranking provider with configuration
+///
+/// # Arguments
+///
+/// * `config`: Provider-specific configuration
+///
+/// # Returns
+///
+/// A thread-safe object that can rerank items
+pub fn get_reranking_provider_with_config<T: AsRef<str> + Send + Clone>(
+    config: RerankProviderConfig,
+) -> Result<Arc<dyn Rerank<T>>, LLMError> {
+    match config {
+        RerankProviderConfig::VoyageAI(cfg) => {
+            Ok(Arc::new(VoyageAIClient::<ReqwestClient>::with_config(cfg)))
+        }
+        RerankProviderConfig::Cohere(cfg) => {
+            Ok(Arc::new(CohereClient::<ReqwestClient>::with_config(cfg)))
+        }
+    }
+}
+
+/// Configuration enum for reranking providers
+#[derive(Debug, Clone)]
+pub enum RerankProviderConfig {
+    VoyageAI(crate::config::VoyageAIConfig),
+    Cohere(crate::config::CohereConfig),
 }
 
 /// A trait expected to be implemented by requests to embedding providers. Typically, you want to
