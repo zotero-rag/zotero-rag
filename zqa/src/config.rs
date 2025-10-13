@@ -361,8 +361,7 @@ impl From<AnthropicConfig> for rag::config::AnthropicConfig {
         Self {
             api_key: config
                 .api_key
-                .or_else(|| env::var("ANTHROPIC_API_KEY").ok())
-                .expect("ANTHROPIC_API_KEY must be set"),
+                .expect("Anthropic API key not found. Please set it in your config file or as ANTHROPIC_API_KEY."),
             model: config.model,
             max_tokens: config.max_tokens,
         }
@@ -375,7 +374,7 @@ impl From<OpenAIConfig> for rag::config::OpenAIConfig {
             api_key: config
                 .api_key
                 .or_else(|| env::var("OPENAI_API_KEY").ok())
-                .expect("OPENAI_API_KEY must be set"),
+                .expect("OpenAI API key not found. Please set it in your config file or as OPENAI_API_KEY."),
             model: config.model,
             max_tokens: config.max_tokens,
             embedding_model: config
@@ -397,7 +396,7 @@ impl From<GeminiConfig> for rag::config::GeminiConfig {
                 .api_key
                 .or_else(|| env::var("GEMINI_API_KEY").ok())
                 .or_else(|| env::var("GOOGLE_API_KEY").ok())
-                .expect("GEMINI_API_KEY or GOOGLE_API_KEY must be set"),
+                .expect("Gemini API key not found. Please set it in your config file or as GEMINI_API_KEY."),
             model: config.model,
             embedding_model: config
                 .embedding_model
@@ -419,7 +418,7 @@ impl From<VoyageAIConfig> for rag::config::VoyageAIConfig {
             api_key: config
                 .api_key
                 .or_else(|| env::var("VOYAGE_AI_API_KEY").ok())
-                .expect("VOYAGE_AI_API_KEY must be set"),
+                .expect("Voyage API key not found. Please set it in your config file or as VOYAGE_AI_API_KEY."),
             embedding_model: config
                 .embedding_model
                 .unwrap_or_else(|| VOYAGE_EMBEDDING_MODEL.to_string()),
@@ -443,7 +442,7 @@ impl From<CohereConfig> for rag::config::CohereConfig {
             api_key: config
                 .api_key
                 .or_else(|| env::var("COHERE_API_KEY").ok())
-                .expect("COHERE_API_KEY must be set"),
+                .expect("Cohere API key not found. Please set it in your config file or as COHERE_API_KEY."),
             embedding_model: config
                 .embedding_model
                 .unwrap_or_else(|| COHERE_EMBEDDING_MODEL.to_string()),
@@ -463,7 +462,7 @@ impl From<OpenRouterConfig> for rag::config::OpenRouterConfig {
             api_key: config
                 .api_key
                 .or_else(|| env::var("OPENROUTER_API_KEY").ok())
-                .expect("OPENROUTER_API_KEY must be set"),
+                .expect("OpenRouter API key not found. Please set it in your config file or as OPENROUTER_API_KEY."),
             model: config
                 .model
                 .unwrap_or_else(|| "anthropic/claude-sonnet-4.5".to_string()),
