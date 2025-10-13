@@ -1,6 +1,7 @@
 use rag::constants::{
     DEFAULT_ANTHROPIC_MAX_TOKENS, DEFAULT_MAX_CONCURRENT_REQUESTS, DEFAULT_MAX_RETRIES,
 };
+use rag::constants::{DEFAULT_OPENAI_EMBEDDING_MODEL, OPENAI_EMBEDDING_DIM};
 use serde::{Deserialize, Serialize};
 use std::{env, num::ParseIntError, path::Path};
 use thiserror::Error;
@@ -349,6 +350,122 @@ impl Config {
             voyageai: None,
             cohere: None,
             openrouter: None,
+        }
+    }
+}
+
+// Convert zqa configs to rag configs using From trait
+impl From<AnthropicConfig> for rag::config::AnthropicConfig {
+    fn from(config: AnthropicConfig) -> Self {
+        Self {
+            api_key: config
+                .api_key
+                .or_else(|| env::var("ANTHROPIC_API_KEY").ok())
+                .expect("ANTHROPIC_API_KEY must be set"),
+            model: config.model,
+            max_tokens: config.max_tokens,
+        }
+    }
+}
+
+impl From<OpenAIConfig> for rag::config::OpenAIConfig {
+    fn from(config: OpenAIConfig) -> Self {
+        Self {
+            api_key: config
+                .api_key
+                .or_else(|| env::var("OPENAI_API_KEY").ok())
+                .expect("OPENAI_API_KEY must be set"),
+            model: config.model,
+            max_tokens: config.max_tokens,
+            embedding_model: config
+                .embedding_model
+                .unwrap_or_else(|| DEFAULT_OPENAI_EMBEDDING_MODEL.to_string()),
+            embedding_dims: config
+                .embedding_dims
+                .unwrap_or(OPENAI_EMBEDDING_DIM as usize),
+        }
+    }
+}
+
+impl From<GeminiConfig> for rag::config::GeminiConfig {
+    fn from(config: GeminiConfig) -> Self {
+        use rag::constants::{DEFAULT_GEMINI_EMBEDDING_MODEL, GEMINI_EMBEDDING_DIM};
+
+        Self {
+            api_key: config
+                .api_key
+                .or_else(|| env::var("GEMINI_API_KEY").ok())
+                .or_else(|| env::var("GOOGLE_API_KEY").ok())
+                .expect("GEMINI_API_KEY or GOOGLE_API_KEY must be set"),
+            model: config.model,
+            embedding_model: config
+                .embedding_model
+                .unwrap_or_else(|| DEFAULT_GEMINI_EMBEDDING_MODEL.to_string()),
+            embedding_dims: config
+                .embedding_dims
+                .unwrap_or(GEMINI_EMBEDDING_DIM as usize),
+        }
+    }
+}
+
+impl From<VoyageAIConfig> for rag::config::VoyageAIConfig {
+    fn from(config: VoyageAIConfig) -> Self {
+        use rag::constants::{
+            DEFAULT_VOYAGE_RERANK_MODEL, VOYAGE_EMBEDDING_DIM, VOYAGE_EMBEDDING_MODEL,
+        };
+
+        Self {
+            api_key: config
+                .api_key
+                .or_else(|| env::var("VOYAGE_AI_API_KEY").ok())
+                .expect("VOYAGE_AI_API_KEY must be set"),
+            embedding_model: config
+                .embedding_model
+                .unwrap_or_else(|| VOYAGE_EMBEDDING_MODEL.to_string()),
+            embedding_dims: config
+                .embedding_dims
+                .unwrap_or(VOYAGE_EMBEDDING_DIM as usize),
+            reranker: config
+                .reranker
+                .unwrap_or_else(|| DEFAULT_VOYAGE_RERANK_MODEL.to_string()),
+        }
+    }
+}
+
+impl From<CohereConfig> for rag::config::CohereConfig {
+    fn from(config: CohereConfig) -> Self {
+        use rag::constants::{
+            COHERE_EMBEDDING_DIM, COHERE_EMBEDDING_MODEL, DEFAULT_COHERE_RERANK_MODEL,
+        };
+
+        Self {
+            api_key: config
+                .api_key
+                .or_else(|| env::var("COHERE_API_KEY").ok())
+                .expect("COHERE_API_KEY must be set"),
+            embedding_model: config
+                .embedding_model
+                .unwrap_or_else(|| COHERE_EMBEDDING_MODEL.to_string()),
+            embedding_dims: config
+                .embedding_dims
+                .unwrap_or(COHERE_EMBEDDING_DIM as usize),
+            reranker: config
+                .reranker
+                .unwrap_or_else(|| DEFAULT_COHERE_RERANK_MODEL.to_string()),
+        }
+    }
+}
+
+impl From<OpenRouterConfig> for rag::config::OpenRouterConfig {
+    fn from(config: OpenRouterConfig) -> Self {
+        Self {
+            api_key: config
+                .api_key
+                .or_else(|| env::var("OPENROUTER_API_KEY").ok())
+                .expect("OPENROUTER_API_KEY must be set"),
+            model: config
+                .model
+                .unwrap_or_else(|| "anthropic/claude-sonnet-4.5".to_string()),
         }
     }
 }

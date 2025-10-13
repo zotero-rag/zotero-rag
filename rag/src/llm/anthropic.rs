@@ -24,6 +24,7 @@ const DEFAULT_CLAUDE_MODEL: &str = DEFAULT_ANTHROPIC_MODEL;
 #[derive(Debug, Clone)]
 pub struct AnthropicClient<T: HttpClient = ReqwestClient> {
     pub client: T,
+    pub config: Option<crate::config::AnthropicConfig>,
 }
 
 impl<T: HttpClient + Default> Default for AnthropicClient<T> {
@@ -36,10 +37,20 @@ impl<T> AnthropicClient<T>
 where
     T: HttpClient + Default,
 {
-    /// Creates a new AnthropicClient instance
+    /// Creates a new AnthropicClient instance without configuration
+    /// (will fall back to environment variables)
     pub fn new() -> Self {
         Self {
             client: T::default(),
+            config: None,
+        }
+    }
+
+    /// Creates a new AnthropicClient instance with provided configuration
+    pub fn with_config(config: crate::config::AnthropicConfig) -> Self {
+        Self {
+            client: T::default(),
+            config: Some(config),
         }
     }
 
@@ -63,8 +74,8 @@ struct AnthropicRequest {
     messages: Vec<ChatHistoryItem>,
 }
 
-impl From<UserMessage> for AnthropicRequest {
-    fn from(msg: UserMessage) -> AnthropicRequest {
+impl AnthropicRequest {
+    fn from_message(msg: UserMessage, model: String, max_tokens: u32) -> Self {
         let mut messages = msg.chat_history;
         messages.push(ChatHistoryItem {
             role: "user".to_owned(),
@@ -72,8 +83,8 @@ impl From<UserMessage> for AnthropicRequest {
         });
 
         AnthropicRequest {
-            model: env::var("ANTHROPIC_MODEL").unwrap_or_else(|_| DEFAULT_CLAUDE_MODEL.to_string()),
-            max_tokens: msg.max_tokens.unwrap_or(DEFAULT_ANTHROPIC_MAX_TOKENS),
+            model,
+            max_tokens: msg.max_tokens.unwrap_or(max_tokens),
             messages,
         }
     }
@@ -122,14 +133,28 @@ struct AnthropicResponse {
 /// locality-of-behavior is worth the loss in pointless generality.
 impl<T: HttpClient> ApiClient for AnthropicClient<T> {
     async fn send_message(&self, message: &UserMessage) -> Result<CompletionApiResponse, LLMError> {
-        let key = env::var("ANTHROPIC_API_KEY")?;
+        // Use config if available, otherwise fall back to env vars
+        let (api_key, model, max_tokens) = if let Some(ref config) = self.config {
+            (
+                config.api_key.clone(),
+                config.model.clone(),
+                config.max_tokens,
+            )
+        } else {
+            (
+                env::var("ANTHROPIC_API_KEY")?,
+                env::var("ANTHROPIC_MODEL")
+                    .unwrap_or_else(|_| DEFAULT_CLAUDE_MODEL.to_string()),
+                DEFAULT_ANTHROPIC_MAX_TOKENS,
+            )
+        };
 
         let mut headers = HeaderMap::new();
-        headers.insert("x-api-key", key.parse()?);
+        headers.insert("x-api-key", api_key.parse()?);
         headers.insert("anthropic-version", "2023-06-01".parse()?);
         headers.insert("content-type", "application/json".parse()?);
 
-        let req_body: AnthropicRequest = message.clone().into();
+        let req_body = AnthropicRequest::from_message(message.clone(), model, max_tokens);
         const MAX_RETRIES: usize = DEFAULT_MAX_RETRIES;
         let res = request_with_backoff(
             &self.client,
@@ -275,6 +300,7 @@ mod tests {
         let mock_http_client = MockHttpClient::new(mock_response);
         let mock_client = AnthropicClient {
             client: mock_http_client,
+            config: None,
         };
 
         let message = UserMessage {

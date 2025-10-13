@@ -30,6 +30,7 @@ impl ApiClient for LLMClient {
 }
 
 /// Returns an ApiClient implementation based on the provider name
+/// without configuration (will fall back to environment variables)
 ///
 /// # Errors
 /// Returns LLMError::InvalidProviderError if the provider is not supported
@@ -40,5 +41,31 @@ pub fn get_client_by_provider(provider: &str) -> Result<LLMClient, LLMError> {
         "openrouter" => Ok(LLMClient::OpenRouter(OpenRouterClient::new())),
         "gemini" => Ok(LLMClient::Gemini(GeminiClient::new())),
         _ => Err(LLMError::InvalidProviderError(provider.to_string())),
+    }
+}
+
+/// Configuration for LLM clients
+#[derive(Debug, Clone)]
+pub enum LLMClientConfig {
+    Anthropic(crate::config::AnthropicConfig),
+    OpenAI(crate::config::OpenAIConfig),
+    OpenRouter(crate::config::OpenRouterConfig),
+    Gemini(crate::config::GeminiConfig),
+}
+
+/// Returns an ApiClient implementation with provided configuration
+///
+/// # Errors
+/// Returns LLMError::InvalidProviderError if the provider is not supported
+pub fn get_client_with_config(config: LLMClientConfig) -> Result<LLMClient, LLMError> {
+    match config {
+        LLMClientConfig::Anthropic(cfg) => {
+            Ok(LLMClient::Anthropic(AnthropicClient::with_config(cfg)))
+        }
+        LLMClientConfig::OpenAI(cfg) => Ok(LLMClient::OpenAI(OpenAIClient::with_config(cfg))),
+        LLMClientConfig::OpenRouter(cfg) => {
+            Ok(LLMClient::OpenRouter(OpenRouterClient::with_config(cfg)))
+        }
+        LLMClientConfig::Gemini(cfg) => Ok(LLMClient::Gemini(GeminiClient::with_config(cfg))),
     }
 }

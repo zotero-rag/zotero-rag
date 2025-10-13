@@ -16,6 +16,7 @@ const DEFAULT_MODEL: &str = "openai/gpt-4o";
 #[derive(Debug, Clone)]
 pub struct OpenRouterClient<T: HttpClient = ReqwestClient> {
     pub client: T,
+    pub config: Option<crate::config::OpenRouterConfig>,
 }
 
 impl<T: HttpClient + Default> Default for OpenRouterClient<T> {
@@ -28,10 +29,20 @@ impl<T> OpenRouterClient<T>
 where
     T: HttpClient + Default,
 {
-    /// Creates a new OpenRouterClient instance
+    /// Creates a new OpenRouterClient instance without configuration
+    /// (will fall back to environment variables)
     pub fn new() -> Self {
         Self {
             client: T::default(),
+            config: None,
+        }
+    }
+
+    /// Creates a new OpenRouterClient instance with provided configuration
+    pub fn with_config(config: crate::config::OpenRouterConfig) -> Self {
+        Self {
+            client: T::default(),
+            config: Some(config),
         }
     }
 }
@@ -45,18 +56,15 @@ struct OpenRouterRequest {
     messages: Vec<ChatHistoryItem>,
 }
 
-impl From<UserMessage> for OpenRouterRequest {
-    fn from(msg: UserMessage) -> OpenRouterRequest {
+impl OpenRouterRequest {
+    fn from_message(msg: UserMessage, model: String) -> Self {
         let mut messages = msg.chat_history;
         messages.push(ChatHistoryItem {
             role: "user".to_owned(),
             content: msg.message,
         });
 
-        OpenRouterRequest {
-            model: env::var("OPENROUTER_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.to_string()),
-            messages,
-        }
+        OpenRouterRequest { model, messages }
     }
 }
 
@@ -117,14 +125,22 @@ struct OpenRouterResponse {
 
 impl<T: HttpClient> ApiClient for OpenRouterClient<T> {
     async fn send_message(&self, message: &UserMessage) -> Result<CompletionApiResponse, LLMError> {
-        let key = env::var("OPENROUTER_API_KEY")?;
+        // Use config if available, otherwise fall back to env vars
+        let (api_key, model) = if let Some(ref config) = self.config {
+            (config.api_key.clone(), config.model.clone())
+        } else {
+            (
+                env::var("OPENROUTER_API_KEY")?,
+                env::var("OPENROUTER_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.to_string()),
+            )
+        };
 
         let mut headers = HeaderMap::new();
-        let auth = format!("Bearer {key}");
+        let auth = format!("Bearer {api_key}");
         headers.insert("Authorization", auth.parse()?);
         headers.insert("Content-Type", "application/json".parse()?);
 
-        let req_body: OpenRouterRequest = message.clone().into();
+        let req_body = OpenRouterRequest::from_message(message.clone(), model);
         const MAX_RETRIES: usize = 3;
         let res = request_with_backoff(
             &self.client,
@@ -217,6 +233,7 @@ mod tests {
         let mock_http_client = MockHttpClient::new(mock_response);
         let mock_client = OpenRouterClient {
             client: mock_http_client,
+            config: None,
         };
 
         let message = UserMessage {

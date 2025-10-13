@@ -19,6 +19,7 @@ use crate::llm::http_client::{HttpClient, ReqwestClient};
 #[derive(Debug, Clone)]
 pub struct VoyageAIClient<T: HttpClient = ReqwestClient> {
     pub client: T,
+    pub config: Option<crate::config::VoyageAIConfig>,
 }
 
 impl<T: HttpClient + Default + Clone> Default for VoyageAIClient<T> {
@@ -31,10 +32,20 @@ impl<T> VoyageAIClient<T>
 where
     T: HttpClient + Default + Clone,
 {
-    /// Creates a new VoyageAIClient instance
+    /// Creates a new VoyageAIClient instance without configuration
+    /// (will fall back to environment variables)
     pub fn new() -> Self {
         Self {
             client: T::default(),
+            config: None,
+        }
+    }
+
+    /// Creates a new VoyageAIClient instance with provided configuration
+    pub fn with_config(config: crate::config::VoyageAIConfig) -> Self {
+        Self {
+            client: T::default(),
+            config: Some(config),
         }
     }
 
@@ -239,13 +250,22 @@ impl<T: HttpClient, U: AsRef<str> + Send + Clone> Rerank<U> for VoyageAIClient<T
     {
         Box::pin(async move {
             const RERANK_API_URL: &str = "https://api.voyageai.com/v1/rerank";
-            let api_key = env::var("VOYAGE_AI_API_KEY")?;
+
+            // Use config if available, otherwise fall back to env vars
+            let (api_key, reranker_model) = if let Some(ref config) = self.config {
+                (config.api_key.clone(), config.reranker.clone())
+            } else {
+                (
+                    env::var("VOYAGE_AI_API_KEY")?,
+                    env::var("VOYAGE_AI_RERANK_MODEL")
+                        .unwrap_or(DEFAULT_VOYAGE_RERANK_MODEL.into()),
+                )
+            };
 
             let documents: Vec<String> =
                 items.iter().map(|item| item.as_ref().to_string()).collect();
             let request = VoyageAIRerankRequest {
-                model: env::var("VOYAGE_AI_RERANK_MODEL")
-                    .unwrap_or(DEFAULT_VOYAGE_RERANK_MODEL.into()),
+                model: reranker_model,
                 query: query.into(),
                 documents,
             };

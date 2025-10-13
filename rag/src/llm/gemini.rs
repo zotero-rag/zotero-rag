@@ -23,6 +23,7 @@ use super::http_client::{HttpClient, ReqwestClient};
 #[derive(Debug, Clone)]
 pub struct GeminiClient<T: HttpClient = ReqwestClient> {
     pub client: T,
+    pub config: Option<crate::config::GeminiConfig>,
 }
 
 impl<T: HttpClient + Default> Default for GeminiClient<T> {
@@ -77,10 +78,20 @@ impl<T> GeminiClient<T>
 where
     T: HttpClient + Default,
 {
-    /// Creates a new GeminiClient instance
+    /// Creates a new GeminiClient instance without configuration
+    /// (will fall back to environment variables)
     pub fn new() -> Self {
         Self {
             client: T::default(),
+            config: None,
+        }
+    }
+
+    /// Creates a new GeminiClient instance with provided configuration
+    pub fn with_config(config: crate::config::GeminiConfig) -> Self {
+        Self {
+            client: T::default(),
+            config: Some(config),
         }
     }
 
@@ -469,7 +480,10 @@ mod tests {
         };
 
         let mock_http = MockHttpClient::new(mock_response);
-        let client = GeminiClient { client: mock_http };
+        let client = GeminiClient {
+            client: mock_http,
+            config: None,
+        };
 
         let message = UserMessage {
             chat_history: vec![ChatHistoryItem {
@@ -509,7 +523,10 @@ mod tests {
         };
 
         let mock_http = MockHttpClient::new(mock);
-        let client = GeminiClient { client: mock_http };
+        let client = GeminiClient {
+            client: mock_http,
+            config: None,
+        };
 
         let array = arrow_array::StringArray::from(vec!["A", "B", " ", "C"]);
         let embeddings = client.compute_source_embeddings(Arc::new(array));
