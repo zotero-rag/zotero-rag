@@ -226,10 +226,20 @@ async fn checkhealth<O: Write, E: Write>(ctx: &mut Context<O, E>) {
     };
 }
 
-async fn update_indices() -> Result<(), CLIError> {
-    create_or_update_indexes("pdf_text", "embeddings")
-        .await
-        .map_err(|e| e.into())
+async fn update_indices<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Result<(), CLIError> {
+    writeln!(
+        &mut ctx.out,
+        "Updating indices. This may take a while depending on how many items need to be added."
+    )?;
+
+    create_or_update_indexes("pdf_text", "embeddings").await?;
+
+    writeln!(
+        &mut ctx.out,
+        "Done! You should verify the indices exist with /checkhealth."
+    )?;
+
+    Ok(())
 }
 
 /// Runs health checks on the LanceDB database and provides helpful suggestions to the user on how
@@ -680,7 +690,7 @@ pub async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<(), CLIEr
                         }
                     }
                     "/index" => {
-                        if let Err(e) = update_indices().await {
+                        if let Err(e) = update_indices(&mut ctx).await {
                             writeln!(
                                 &mut ctx.err,
                                 "Failed to update indexes. You may find the below information useful:\n\t{e}"

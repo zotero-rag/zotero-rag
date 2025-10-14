@@ -316,6 +316,7 @@ async fn check_indexes(tbl: &lancedb::table::Table) -> Result<Vec<(String, Strin
 /// # Returns:
 ///
 /// A `Result<HealthCheckResult, LanceError>` indicating success and whether issues were found
+#[must_use]
 pub async fn lancedb_health_check(
     embedding_provider: &str,
 ) -> Result<HealthCheckResult, LanceError> {
