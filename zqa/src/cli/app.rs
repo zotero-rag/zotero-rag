@@ -13,7 +13,8 @@ use rag::llm::factory::{LLMClientConfig, get_client_by_provider, get_client_with
 use rag::vector::checkhealth::lancedb_health_check;
 use rag::vector::doctor::doctor as rag_doctor;
 use rag::vector::lance::{
-    db_statistics, delete_rows, get_zero_vector_records, insert_records, lancedb_exists,
+    create_or_update_indexes, db_statistics, delete_rows, get_zero_vector_records, insert_records,
+    lancedb_exists,
 };
 use rustyline::error::ReadlineError;
 use tokio::task::JoinSet;
@@ -223,6 +224,12 @@ async fn checkhealth<O: Write, E: Write>(ctx: &mut Context<O, E>) {
         Ok(result) => writeln!(ctx.out, "{result}"),
         Err(e) => writeln!(ctx.err, "{e}"),
     };
+}
+
+async fn update_indices() -> Result<(), CLIError> {
+    create_or_update_indexes("pdf_text", "embeddings")
+        .await
+        .map_err(|e| e.into())
 }
 
 /// Runs health checks on the LanceDB database and provides helpful suggestions to the user on how
@@ -637,6 +644,7 @@ pub async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<(), CLIEr
                             &mut ctx.out,
                             "/search\t\tSearch for papers without summarizing them. Usage: /search <query>"
                         )?;
+                        writeln!(&mut ctx.out, "/index\t\tCreate or update indices.")?;
                         writeln!(
                             &mut ctx.out,
                             "/checkhealth\tRun health checks on your LanceDB."
@@ -668,6 +676,14 @@ pub async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<(), CLIEr
                             writeln!(
                                 &mut ctx.err,
                                 "Failed to create embeddings. You may find relevant error messages below:\n\t{e}"
+                            )?;
+                        }
+                    }
+                    "/index" => {
+                        if let Err(e) = update_indices().await {
+                            writeln!(
+                                &mut ctx.err,
+                                "Failed to update indexes. You may find the below information useful:\n\t{e}"
                             )?;
                         }
                     }

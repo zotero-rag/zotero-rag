@@ -2,12 +2,15 @@ use crate::capabilities::EmbeddingProviders;
 use crate::embedding::voyage::VoyageAIClient;
 use crate::llm::{anthropic::AnthropicClient, http_client::ReqwestClient, openai::OpenAIClient};
 use crate::vector::checkhealth::get_zero_vectors;
+use lancedb::table::OptimizeOptions;
+use tantivy::tokenizer::Language;
 
 use arrow_array::cast::as_string_array;
 use arrow_array::{
     RecordBatch, RecordBatchIterator, StringArray, cast::AsArray, types::Float32Type,
 };
 use futures::TryStreamExt;
+use lancedb::index::scalar::FtsIndexBuilder;
 use lancedb::{
     Connection, Error as LanceDbError, arrow::arrow_schema::ArrowError, connect,
     database::CreateTableMode, embeddings::EmbeddingDefinition, query::ExecutableQuery,
@@ -89,6 +92,55 @@ pub async fn lancedb_exists() -> bool {
     } else {
         false
     }
+}
+
+/// Create indices for the database. This function creates two indices: an IVF-PQ index on the
+/// embedding column, and a FTS index on the text column. This allows for full-text search as well
+/// as more efficient vector searches. If indices already exist, they are optimized instead.
+///
+/// # Arguments:
+///
+/// * `text_col` - The name of the column containing text
+/// * `embedding_col` - The name of the embedding column
+pub async fn create_or_update_indexes(
+    text_col: &str,
+    embedding_col: &str,
+) -> Result<(), LanceError> {
+    let db = connect(DB_URI)
+        .execute()
+        .await
+        .map_err(|e| LanceError::ConnectionError(e.to_string()))?;
+
+    let tbl = db.open_table(TABLE_NAME).execute().await?;
+
+    // If we already have indices, we just need to call optimize.
+    if !tbl.list_indices().await?.is_empty() {
+        tbl.optimize(lancedb::table::OptimizeAction::Index(OptimizeOptions {
+            num_indices_to_merge: 1, // default
+            index_names: None,       // optimize all indices
+            retrain: false,          // possibly expose this option later
+        }))
+        .await?;
+
+        return Ok(());
+    }
+
+    tbl.create_index(&[embedding_col], lancedb::index::Index::Auto)
+        .execute()
+        .await?;
+
+    // Note that currently, multi-column indexes are not supported by LanceDB.
+    tbl.create_index(
+        &[text_col],
+        lancedb::index::Index::FTS(FtsIndexBuilder::new(
+            "simple".to_string(),
+            Language::English,
+        )),
+    )
+    .execute()
+    .await?;
+
+    Ok(())
 }
 
 /// Connects to the database and prints out simple statistics.
