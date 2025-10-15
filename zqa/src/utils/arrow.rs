@@ -15,6 +15,39 @@ use super::library::{LibraryParsingError, parse_library};
 
 use thiserror::Error;
 
+/// An enum containing the fields stored by our application in LanceDB, in order. Implementations
+/// `as_ref()` and `into()` are provided to convert this to `&str` and `String` respectively.
+pub(crate) enum DbFields {
+    LibraryKey,
+    Title,
+    PdfText,
+    FilePath,
+    Embeddings,
+}
+
+impl AsRef<str> for DbFields {
+    fn as_ref(&self) -> &str {
+        match self {
+            Self::LibraryKey => "library_key",
+            Self::Title => "title",
+            Self::FilePath => "file_path",
+            Self::PdfText => "pdf_text",
+            Self::Embeddings => "embeddings",
+        }
+    }
+}
+
+impl From<DbFields> for String {
+    fn from(value: DbFields) -> Self {
+        value.as_ref().into()
+    }
+}
+
+/// This name is a bit of a misnomer, in that this does not only represent errors from Arrow.
+/// However, the rationale behind naming it as such is that `arrow.rs` is the high-level interface
+/// for the application to LanceDB, PDF parsing, and other lower-level operations. As errors from
+/// those functions propagate, they are captured here. In general, this enum should not be used
+/// outside this file, except perhaps to `impl From<ArrowError>`.
 #[derive(Debug, Error)]
 pub enum ArrowError {
     #[error("Arrow schema error: {0}")]
@@ -65,15 +98,15 @@ pub async fn get_schema(embedding_name: &str) -> arrow_schema::Schema {
     // Convert ZoteroItemMetadata to something that can be converted to Arrow
     // Need to extract fields and create appropriate Arrow arrays
     let mut schema_fields = vec![
-        arrow_schema::Field::new("library_key", arrow_schema::DataType::Utf8, false),
-        arrow_schema::Field::new("title", arrow_schema::DataType::Utf8, false),
-        arrow_schema::Field::new("file_path", arrow_schema::DataType::Utf8, false),
-        arrow_schema::Field::new("pdf_text", arrow_schema::DataType::Utf8, false),
+        arrow_schema::Field::new(DbFields::LibraryKey, arrow_schema::DataType::Utf8, false),
+        arrow_schema::Field::new(DbFields::Title, arrow_schema::DataType::Utf8, false),
+        arrow_schema::Field::new(DbFields::FilePath, arrow_schema::DataType::Utf8, false),
+        arrow_schema::Field::new(DbFields::PdfText, arrow_schema::DataType::Utf8, false),
     ];
 
     if lancedb_exists().await {
         schema_fields.push(arrow_schema::Field::new(
-            "embeddings",
+            DbFields::Embeddings,
             arrow_schema::DataType::FixedSizeList(
                 Arc::new(arrow_schema::Field::new(
                     "item",

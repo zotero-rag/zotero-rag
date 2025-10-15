@@ -15,7 +15,7 @@ use thiserror::Error;
 use pdftools::parse::extract_text;
 
 use crate::izip;
-use crate::utils::arrow::get_column_from_batch;
+use crate::utils::arrow::{DbFields, get_column_from_batch};
 
 /// Gets the Zotero library path. Works on Linux, macOS, and Windows systems.
 /// On CI environments, returns a location to a toy library in assets/ instead.
@@ -104,10 +104,10 @@ impl From<Vec<RecordBatch>> for ZoteroItemSet {
             .iter()
             .flat_map(|batch| {
                 let schema = batch.schema();
-                let key_idx = schema.index_of("library_key").unwrap();
-                let title_idx = schema.index_of("title").unwrap();
-                let file_path_idx = schema.index_of("file_path").unwrap();
-                let text_idx = schema.index_of("pdf_text").unwrap();
+                let key_idx = schema.index_of(DbFields::LibraryKey.as_ref()).unwrap();
+                let title_idx = schema.index_of(DbFields::Title.as_ref()).unwrap();
+                let file_path_idx = schema.index_of(DbFields::FilePath.as_ref()).unwrap();
+                let text_idx = schema.index_of(DbFields::PdfText.as_ref()).unwrap();
 
                 let lib_keys = get_column_from_batch(batch, key_idx);
                 let titles = get_column_from_batch(batch, title_idx);
@@ -178,7 +178,11 @@ pub async fn get_new_library_items(
 ) -> Result<Vec<ZoteroItemMetadata>, LibraryParsingError> {
     let db_items = get_lancedb_items(
         embedding_name,
-        vec!["library_key".into(), "title".into(), "file_path".into()],
+        vec![
+            DbFields::LibraryKey.into(),
+            DbFields::Title.into(),
+            DbFields::FilePath.into(),
+        ],
     )
     .await?;
 
