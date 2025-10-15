@@ -19,6 +19,7 @@ const RESET: &str = "\x1b[0m";
 
 /// Health check result for LanceDB
 #[derive(Debug)]
+#[must_use = "You should probably use this; functions exposing this generally do not have side effects."]
 pub struct HealthCheckResult {
     /// Directory exists
     pub directory_exists: bool,
@@ -316,7 +317,7 @@ async fn check_indexes(tbl: &lancedb::table::Table) -> Result<Vec<(String, Strin
 /// # Returns:
 ///
 /// A `Result<HealthCheckResult, LanceError>` indicating success and whether issues were found
-#[must_use]
+#[must_use = "This function has no side-effects, so you likely want to inspect this value."]
 pub async fn lancedb_health_check(
     embedding_provider: &str,
 ) -> Result<HealthCheckResult, LanceError> {

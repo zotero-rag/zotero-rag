@@ -1,7 +1,7 @@
 use crate::cli::placeholder::PlaceholderText;
 use crate::cli::prompts::{get_extraction_prompt, get_summarize_prompt};
 use crate::cli::readline::get_readline_config;
-use crate::utils::arrow::{library_to_arrow, vector_search};
+use crate::utils::arrow::{DbFields, library_to_arrow, vector_search};
 use crate::utils::library::{ZoteroItem, ZoteroItemSet, get_new_library_items};
 use arrow_array::{self, RecordBatch, RecordBatchIterator, StringArray};
 use arrow_schema::Schema;
@@ -97,11 +97,11 @@ async fn embed<O: Write, E: Write>(
     let embedding_provider = &ctx.config.embedding_provider;
     let db = insert_records(
         batch_iter,
-        Some(&["library_key"]),
+        Some(&[DbFields::LibraryKey.as_ref()]),
         EmbeddingDefinition::new(
-            "pdf_text", // source column
+            &DbFields::PdfText.into(), // source column
             embedding_provider,
-            Some("embeddings"), // dest column
+            Some(&DbFields::Embeddings.into()), // dest column
         ),
     )
     .await;
@@ -167,7 +167,7 @@ async fn fix_zero_embeddings<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Res
         .collect();
     let key_array = StringArray::from(zero_subset_keys);
     let delete_schema = Arc::new(Schema::new(vec![arrow_schema::Field::new(
-        "library_key",
+        DbFields::LibraryKey,
         arrow_schema::DataType::Utf8,
         false,
     )]));
@@ -175,7 +175,7 @@ async fn fix_zero_embeddings<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Res
 
     delete_rows(
         zero_subset_batch,
-        "library_key",
+        DbFields::LibraryKey.as_ref(),
         &ctx.config.embedding_provider,
     )
     .await?;
@@ -198,11 +198,11 @@ async fn fix_zero_embeddings<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Res
 
     insert_records(
         batch_iter,
-        Some(&["library_key"]),
+        Some(&[DbFields::LibraryKey.as_ref()]),
         EmbeddingDefinition::new(
-            "pdf_text", // source column
+            &DbFields::PdfText.into(), // source column
             &ctx.config.embedding_provider,
-            Some("embeddings"), // dest column
+            Some(&DbFields::Embeddings.into()), // dest column
         ),
     )
     .await?;
@@ -232,7 +232,7 @@ async fn update_indices<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Result<(
         "Updating indices. This may take a while depending on how many items need to be added."
     )?;
 
-    create_or_update_indexes("pdf_text", "embeddings").await?;
+    create_or_update_indexes(DbFields::PdfText.as_ref(), DbFields::Embeddings.as_ref()).await?;
 
     writeln!(
         &mut ctx.out,
@@ -322,11 +322,11 @@ async fn process<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Result<(), CLIE
     let embedding_provider = ctx.config.embedding_provider.as_str();
     let result = insert_records(
         batch_iter,
-        Some(&["library_key"]),
+        Some(&[DbFields::LibraryKey.as_ref()]),
         EmbeddingDefinition::new(
-            "pdf_text", // source column
+            DbFields::PdfText.as_ref(), // source column
             embedding_provider,
-            Some("embeddings"), // dest column
+            Some(DbFields::Embeddings.as_ref()), // dest column
         ),
     )
     .await;

@@ -113,32 +113,40 @@ pub async fn create_or_update_indexes(
 
     let tbl = db.open_table(TABLE_NAME).execute().await?;
 
-    // If we already have indices, we just need to call optimize.
-    if !tbl.list_indices().await?.is_empty() {
+    let indices = tbl.list_indices().await?;
+    let has_vector_index = indices
+        .iter()
+        .any(|i| i.columns.as_slice() == [embedding_col]);
+    let has_fts_index = indices.iter().any(|i| i.columns.as_slice() == [text_col]);
+
+    if !has_vector_index {
+        tbl.create_index(&[embedding_col], lancedb::index::Index::Auto)
+            .execute()
+            .await?;
+    }
+
+    if !has_fts_index {
+        // Note that currently, multi-column indexes are not supported by LanceDB.
+        tbl.create_index(
+            &[text_col],
+            lancedb::index::Index::FTS(FtsIndexBuilder::new(
+                "simple".to_string(),
+                Language::English,
+            )),
+        )
+        .execute()
+        .await?;
+    }
+
+    // If both indices already existed before this run, optimize them.
+    if has_vector_index && has_fts_index {
         tbl.optimize(lancedb::table::OptimizeAction::Index(OptimizeOptions {
             num_indices_to_merge: 1, // default
             index_names: None,       // optimize all indices
             retrain: false,          // possibly expose this option later
         }))
         .await?;
-
-        return Ok(());
     }
-
-    tbl.create_index(&[embedding_col], lancedb::index::Index::Auto)
-        .execute()
-        .await?;
-
-    // Note that currently, multi-column indexes are not supported by LanceDB.
-    tbl.create_index(
-        &[text_col],
-        lancedb::index::Index::FTS(FtsIndexBuilder::new(
-            "simple".to_string(),
-            Language::English,
-        )),
-    )
-    .execute()
-    .await?;
 
     Ok(())
 }
