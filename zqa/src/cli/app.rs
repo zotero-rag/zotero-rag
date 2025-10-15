@@ -789,6 +789,8 @@ mod tests {
         common::{Args, Context},
     };
 
+    /// Create a default `Context` object where the output and error streams are buffers that can
+    /// be written into. This allows for the output to be easily inspected in tests.
     fn create_test_context() -> Context<Cursor<Vec<u8>>, Cursor<Vec<u8>>> {
         let args = Args {
             tui: false,
