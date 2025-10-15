@@ -137,7 +137,7 @@ async fn test_extraction_prompt_anthropic() {
 
     // Create Anthropic client config
     let config = AnthropicConfig {
-        model: "claude-3-5-haiku-20241022".to_string(),
+        model: "claude-3-5-haiku-latest".to_string(),
         api_key: Some(api_key),
         max_tokens: 8192,
     };
@@ -209,7 +209,7 @@ async fn test_extraction_prompt_gemini() {
 
     // Create Gemini client config
     let config = GeminiConfig {
-        model: "gemini-1.5-flash".to_string(),
+        model: "gemini-2.5-flash".to_string(),
         api_key: Some(api_key),
         embedding_model: None,
         embedding_dims: None,
