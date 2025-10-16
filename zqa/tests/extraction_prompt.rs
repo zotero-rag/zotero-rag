@@ -59,7 +59,7 @@ async fn run_extraction_test(client: rag::llm::factory::LLMClient, provider_name
 #[tokio::test]
 async fn test_extraction_prompt_openai() {
     dotenv().ok();
-    setup_logger(LevelFilter::Info).unwrap();
+    let _ = setup_logger(LevelFilter::Info);
 
     if env::var("INTEGRATION_TESTS").is_err() {
         // Only enable this in integration tests
@@ -88,7 +88,7 @@ async fn test_extraction_prompt_openai() {
 #[tokio::test]
 async fn test_extraction_prompt_anthropic() {
     dotenv().ok();
-    setup_logger(LevelFilter::Info).unwrap();
+    let _ = setup_logger(LevelFilter::Info);
 
     if env::var("INTEGRATION_TESTS").is_err() {
         return;
@@ -115,7 +115,7 @@ async fn test_extraction_prompt_anthropic() {
 #[tokio::test]
 async fn test_extraction_prompt_gemini() {
     dotenv().ok();
-    setup_logger(LevelFilter::Info).unwrap();
+    let _ = setup_logger(LevelFilter::Info);
 
     if env::var("INTEGRATION_TESTS").is_err() {
         return;
