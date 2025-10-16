@@ -1,6 +1,4 @@
-use arrow_array::RecordBatchIterator;
 use dotenv::dotenv;
-use lancedb::embeddings::EmbeddingDefinition;
 use log::LevelFilter;
 use zqa::common::setup_logger;
 
@@ -8,54 +6,17 @@ use std::{env, fs};
 
 use rag::llm::base::{ApiClient, UserMessage};
 use rag::llm::factory::{LLMClientConfig, get_client_with_config};
-use rag::vector::lance::insert_records;
 use zqa::cli::prompts::get_extraction_prompt;
 use zqa::config::{AnthropicConfig, GeminiConfig, OpenAIConfig};
-use zqa::full_library_to_arrow;
-
-#[ignore]
-#[tokio::test]
-async fn test_integration_works() {
-    dotenv().ok();
-    setup_logger(LevelFilter::Info).unwrap();
-
-    if env::var("CI").is_ok() {
-        // Skip this test in CI environments
-        return;
-    }
-
-    let record_batch = full_library_to_arrow("voyageai", None, None).await;
-    assert!(record_batch.is_ok());
-
-    let record_batch = record_batch.unwrap();
-    let schema = record_batch.schema();
-    let batches = vec![Ok(record_batch.clone())];
-    let batch_iter = RecordBatchIterator::new(batches.into_iter(), schema.clone());
-
-    let db = insert_records(
-        batch_iter,
-        None,
-        EmbeddingDefinition::new(
-            "pdf_text",         // source column
-            "openai",           // embedding name, either "openai" or "anthropic"
-            Some("embeddings"), // dest column
-        ),
-    )
-    .await;
-
-    assert!(db.is_ok());
-}
 
 /// Test the extraction prompt with OpenAI API
-/// This is a live test that makes an actual API request
-#[ignore]
 #[tokio::test]
 async fn test_extraction_prompt_openai() {
     dotenv().ok();
     setup_logger(LevelFilter::Info).unwrap();
 
-    if env::var("CI").is_ok() {
-        // Skip this test in CI environments
+    if !env::var("INTEGRATION_TESTS").is_ok() {
+        // Only enable this in integration tests
         return;
     }
 
@@ -119,15 +80,12 @@ async fn test_extraction_prompt_openai() {
 }
 
 /// Test the extraction prompt with Anthropic API
-/// This is a live test that makes an actual API request
-#[ignore]
 #[tokio::test]
 async fn test_extraction_prompt_anthropic() {
     dotenv().ok();
     setup_logger(LevelFilter::Info).unwrap();
 
-    if env::var("CI").is_ok() {
-        // Skip this test in CI environments
+    if !env::var("INTEGRATION_TESTS").is_ok() {
         return;
     }
 
@@ -190,15 +148,12 @@ async fn test_extraction_prompt_anthropic() {
 }
 
 /// Test the extraction prompt with Gemini API
-/// This is a live test that makes an actual API request
-#[ignore]
 #[tokio::test]
 async fn test_extraction_prompt_gemini() {
     dotenv().ok();
     setup_logger(LevelFilter::Info).unwrap();
 
-    if env::var("CI").is_ok() {
-        // Skip this test in CI environments
+    if !env::var("INTEGRATION_TESTS").is_ok() {
         return;
     }
 

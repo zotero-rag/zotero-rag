@@ -164,6 +164,10 @@ At any time, use `/help` to see available commands. You can use `quit`, `/quit`,
 
 To report a bug, please re-run using `--log-level debug` and add the logs to your issue.
 
+## Testing
+
+To run unit tests, a simple `cargo test` should suffice. Note that some tests are configured to not run in CI by checking for the `CI` environment variable. Similarly, integration tests do not run by default, and are enabled via the `INTEGRATION_TESTS` environment variable.
+
 ## License
 
 MIT License - See [LICENSE](LICENSE) for details.
