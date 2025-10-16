@@ -12,7 +12,7 @@ async fn test_integration_works() {
     dotenv().ok();
     setup_logger(LevelFilter::Info).unwrap();
 
-    if !env::var("INTEGRATION_TESTS").is_ok() {
+    if env::var("INTEGRATION_TESTS").is_err() {
         // Only enable if integration testing is desired
         return;
     }

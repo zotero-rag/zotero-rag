@@ -15,7 +15,7 @@ async fn test_extraction_prompt_openai() {
     dotenv().ok();
     setup_logger(LevelFilter::Info).unwrap();
 
-    if !env::var("INTEGRATION_TESTS").is_ok() {
+    if env::var("INTEGRATION_TESTS").is_err() {
         // Only enable this in integration tests
         return;
     }
@@ -85,7 +85,7 @@ async fn test_extraction_prompt_anthropic() {
     dotenv().ok();
     setup_logger(LevelFilter::Info).unwrap();
 
-    if !env::var("INTEGRATION_TESTS").is_ok() {
+    if env::var("INTEGRATION_TESTS").is_err() {
         return;
     }
 
@@ -153,7 +153,7 @@ async fn test_extraction_prompt_gemini() {
     dotenv().ok();
     setup_logger(LevelFilter::Info).unwrap();
 
-    if !env::var("INTEGRATION_TESTS").is_ok() {
+    if env::var("INTEGRATION_TESTS").is_err() {
         return;
     }
 
