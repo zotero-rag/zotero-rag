@@ -1,5 +1,5 @@
 use crate::llm::anthropic::AnthropicClient;
-use crate::llm::base::ApiClient;
+use crate::llm::base::{ApiClient, ChatRequest};
 use crate::llm::errors::LLMError;
 use crate::llm::gemini::GeminiClient;
 use crate::llm::openai::OpenAIClient;
@@ -16,9 +16,9 @@ pub enum LLMClient {
 
 // Implement ApiClient for LLMClient to delegate to the inner implementations
 impl ApiClient for LLMClient {
-    async fn send_message(
+    async fn send_message<'a>(
         &self,
-        message: &crate::llm::base::UserMessage,
+        message: &ChatRequest<'a>,
     ) -> Result<crate::llm::base::CompletionApiResponse, LLMError> {
         match self {
             LLMClient::Anthropic(client) => client.send_message(message).await,

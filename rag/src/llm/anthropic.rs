@@ -8,7 +8,7 @@ use lancedb::arrow::arrow_schema::{DataType, Field};
 use lancedb::embeddings::EmbeddingFunction;
 use serde::{Deserialize, Serialize};
 
-use super::base::{ApiClient, ChatHistoryItem, CompletionApiResponse, UserMessage};
+use super::base::{ApiClient, ChatHistoryItem, CompletionApiResponse, UserMessage, ChatRequest};
 use super::errors::LLMError;
 use super::http_client::{HttpClient, ReqwestClient};
 use crate::common::request_with_backoff;
@@ -132,7 +132,12 @@ struct AnthropicResponse {
 /// We can use hard-coded strings here; I think the resulting
 /// locality-of-behavior is worth the loss in pointless generality.
 impl<T: HttpClient> ApiClient for AnthropicClient<T> {
-    async fn send_message(&self, message: &UserMessage) -> Result<CompletionApiResponse, LLMError> {
+    async fn send_message<'a>(
+        &self,
+        request: &ChatRequest<'a>,
+    ) -> Result<CompletionApiResponse, LLMError> {
+        // TODO: Implement tool support for Anthropic
+        let message = request.message;
         // Use config if available, otherwise fall back to env vars
         let (api_key, model, max_tokens) = if let Some(ref config) = self.config {
             (
@@ -245,7 +250,7 @@ mod tests {
 
     use crate::constants::OPENAI_EMBEDDING_DIM;
     use crate::llm::anthropic::DEFAULT_CLAUDE_MODEL;
-    use crate::llm::base::{ApiClient, UserMessage};
+    use crate::llm::base::{ApiClient, ChatRequest, UserMessage};
     use crate::llm::http_client::{MockHttpClient, ReqwestClient};
 
     use super::{
@@ -263,7 +268,8 @@ mod tests {
             message: "Hello!".to_owned(),
         };
 
-        let res = client.send_message(&message).await;
+        let request = ChatRequest::from(&message);
+        let res = client.send_message(&request).await;
 
         // Debug the error if there is one
         if res.is_err() {
@@ -308,7 +314,8 @@ mod tests {
             message: "Hello!".to_owned(),
         };
 
-        let res = mock_client.send_message(&message).await;
+        let request = ChatRequest::from(&message);
+        let res = mock_client.send_message(&request).await;
 
         // Debug the error if there is one
         if res.is_err() {

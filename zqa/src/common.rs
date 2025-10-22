@@ -2,6 +2,7 @@ use clap::Parser;
 use fern;
 use humantime;
 use log::LevelFilter;
+use rag::llm::base::ChatHistoryItem;
 use std::io::Write;
 
 use crate::config::Config;
@@ -19,9 +20,19 @@ pub struct Args {
     pub log_level: String,
 }
 
+/// The application state. This is embedded in the context, and all state variables are
+/// encapsulated in this struct to avoid polluting the `Context`.
+#[derive(Default)]
+pub struct State {
+    /// The current conversation's chat history
+    pub chat_history: Vec<ChatHistoryItem>,
+}
+
 /// A structure that holds the application context, including CLI arguments and an writers
 /// for `stdout` and `stderr`.
 pub struct Context<OutStream: Write, ErrStream: Write> {
+    /// Application state
+    pub state: State,
     /// Config from TOML and env
     pub config: Config,
     /// CLI arguments passed

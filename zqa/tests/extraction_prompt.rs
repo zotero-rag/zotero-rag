@@ -4,7 +4,7 @@ use zqa::common::setup_logger;
 
 use std::{env, fs};
 
-use rag::llm::base::{ApiClient, UserMessage};
+use rag::llm::base::{ApiClient, ChatRequest, UserMessage};
 use rag::llm::factory::{LLMClientConfig, get_client_with_config};
 use zqa::cli::prompts::get_extraction_prompt;
 use zqa::config::{AnthropicConfig, GeminiConfig, OpenAIConfig};
@@ -25,7 +25,7 @@ async fn run_extraction_test(client: rag::llm::factory::LLMClient, provider_name
         message: prompt,
     };
 
-    let result = client.send_message(&message).await;
+    let result = client.send_message(&ChatRequest::from(&message)).await;
 
     // Verify the request succeeded
     assert!(

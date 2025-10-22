@@ -15,7 +15,7 @@ use crate::constants::{
     DEFAULT_MAX_RETRIES, GEMINI_EMBEDDING_DIM,
 };
 
-use super::base::{ApiClient, CompletionApiResponse, UserMessage};
+use super::base::{ApiClient, ChatRequest, CompletionApiResponse, UserMessage};
 use super::errors::LLMError;
 use super::http_client::{HttpClient, ReqwestClient};
 
@@ -312,7 +312,12 @@ struct GeminiResponseBody {
 }
 
 impl<T: HttpClient> ApiClient for GeminiClient<T> {
-    async fn send_message(&self, message: &UserMessage) -> Result<CompletionApiResponse, LLMError> {
+    async fn send_message<'a>(
+        &self,
+        request: &ChatRequest<'a>,
+    ) -> Result<CompletionApiResponse, LLMError> {
+        // TODO: Implement tool support for Gemini
+        let message = request.message;
         let key = get_gemini_api_key()?;
         let model = env::var("GEMINI_MODEL").unwrap_or_else(|_| DEFAULT_GEMINI_MODEL.to_string());
 
@@ -451,7 +456,7 @@ impl<T: HttpClient + Default + std::fmt::Debug> EmbeddingFunction for GeminiClie
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::llm::base::{ApiClient, ChatHistoryItem, UserMessage};
+    use crate::llm::base::{ApiClient, ChatHistoryItem, ChatRequest, UserMessage};
     use crate::llm::http_client::MockHttpClient;
     use arrow_array::Array;
     use dotenv::dotenv;
@@ -486,15 +491,15 @@ mod tests {
         };
 
         let message = UserMessage {
+            message: "foo".into(),
             chat_history: vec![ChatHistoryItem {
                 role: "assistant".into(),
                 content: "Prior".into(),
             }],
             max_tokens: Some(256),
-            message: "Hi".into(),
         };
-
-        let res = client.send_message(&message).await;
+        let request = ChatRequest::from(&message);
+        let res = client.send_message(&request).await;
         assert!(res.is_ok());
         let res = res.unwrap();
         assert_eq!(res.content, "Hello from Gemini!");
@@ -579,7 +584,8 @@ mod tests {
             max_tokens: Some(1024),
             message: "Hello!".to_owned(),
         };
-        let res = client.send_message(&message).await;
+        let request = ChatRequest::from(&message);
+        let res = client.send_message(&request).await;
 
         // Debug the error if there is one
         if res.is_err() {

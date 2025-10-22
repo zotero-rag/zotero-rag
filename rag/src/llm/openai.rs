@@ -8,7 +8,7 @@ use lancedb::arrow::arrow_schema::DataType;
 use lancedb::embeddings::EmbeddingFunction;
 use serde::{Deserialize, Serialize};
 
-use super::base::{ApiClient, ChatHistoryItem, CompletionApiResponse, UserMessage};
+use super::base::{ApiClient, ChatHistoryItem, ChatRequest, CompletionApiResponse, UserMessage};
 use super::errors::LLMError;
 use super::http_client::{HttpClient, ReqwestClient};
 use crate::common::request_with_backoff;
@@ -58,12 +58,18 @@ where
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 struct OpenAIRequest {
     model: String,
-    messages: Vec<ChatHistoryItem>,
+
+    /// The conversation ID returned by the Responses API
     #[serde(skip_serializing_if = "Option::is_none")]
-    max_tokens: Option<u32>,
+    conversation: Option<String>,
+
+    input: String,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_output_tokens: Option<u32>,
 }
 
 impl OpenAIRequest {
@@ -76,47 +82,61 @@ impl OpenAIRequest {
 
         OpenAIRequest {
             model,
-            messages,
-            max_tokens: msg.max_tokens.or(max_tokens),
+            input: msg.message.clone(),
+            max_output_tokens: msg.max_tokens.or(max_tokens),
+            conversation: None,
         }
     }
 }
 
 #[derive(Serialize, Deserialize, Clone)]
 struct OpenAIUsage {
-    prompt_tokens: u32,
-    completion_tokens: u32,
+    input_tokens: u32,
+    output_tokens: u32,
     total_tokens: u32,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
-struct OpenAIChoiceMessage {
-    role: String,
-    content: String,
+struct OpenAIContent {
+    r#type: String,
+    #[serde(default)]
+    text: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
-struct OpenAIChoice {
-    message: OpenAIChoiceMessage,
-    finish_reason: Option<String>,
-    index: u32,
+#[serde(tag = "type", rename_all = "lowercase")]
+enum OpenAIOutput {
+    #[serde(rename = "reasoning")]
+    Reasoning {
+        id: String,
+        #[serde(default)]
+        summary: Vec<String>,
+    },
+    #[serde(rename = "message")]
+    Message {
+        id: String,
+        status: String,
+        content: Vec<OpenAIContent>,
+        role: String,
+    },
 }
 
 #[derive(Serialize, Deserialize, Clone)]
 struct OpenAIResponse {
     id: String,
-    object: String,
-    created: u64,
+    created_at: u64,
     model: String,
     usage: OpenAIUsage,
-    choices: Vec<OpenAIChoice>,
+    output: Vec<OpenAIOutput>,
 }
 
 impl<T: HttpClient> ApiClient for OpenAIClient<T> {
-    async fn send_message(
+    async fn send_message<'a>(
         &self,
-        message: &UserMessage,
+        request: &ChatRequest<'a>,
     ) -> Result<CompletionApiResponse, super::errors::LLMError> {
+        // TODO: Implement tool support for OpenAI
+        let message = request.message;
         // Use config if available, otherwise fall back to env vars
         let (api_key, model, max_tokens) = if let Some(ref config) = self.config {
             (
@@ -139,10 +159,11 @@ impl<T: HttpClient> ApiClient for OpenAIClient<T> {
         headers.insert("content-type", "application/json".parse()?);
 
         let req_body = OpenAIRequest::from_message(message, model, max_tokens);
+        dbg!(&req_body);
         const MAX_RETRIES: usize = DEFAULT_MAX_RETRIES;
         let res = request_with_backoff(
             &self.client,
-            "https://api.openai.com/v1/chat/completions",
+            "https://api.openai.com/v1/responses",
             &headers,
             req_body,
             MAX_RETRIES,
@@ -161,11 +182,33 @@ impl<T: HttpClient> ApiClient for OpenAIClient<T> {
             Err(_) => return Err(super::errors::LLMError::DeserializationError(body)),
         };
 
-        let choice = &response.choices[0];
+        // Find the first message output item
+        let message_output = response
+            .output
+            .iter()
+            .find_map(|item| match item {
+                OpenAIOutput::Message { content, .. } => Some(content),
+                OpenAIOutput::Reasoning { .. } => None,
+            })
+            .ok_or(LLMError::DeserializationError(
+                "No message content found in OpenAI response output.".into(),
+            ))?;
+
+        let response_parts = message_output
+            .iter()
+            .filter_map(|res| res.text.clone())
+            .collect::<Vec<_>>();
+
+        let first_text_output = response_parts
+            .first()
+            .ok_or(LLMError::DeserializationError(
+                "No text content found in OpenAI response output.".into(),
+            ))?;
+
         Ok(CompletionApiResponse {
-            content: choice.message.content.clone(),
-            input_tokens: response.usage.prompt_tokens,
-            output_tokens: response.usage.completion_tokens,
+            content: first_text_output.clone(),
+            input_tokens: response.usage.input_tokens,
+            output_tokens: response.usage.output_tokens,
         })
     }
 }
@@ -227,9 +270,9 @@ impl<T: HttpClient + Default + Debug> EmbeddingFunction for OpenAIClient<T> {
 
 #[cfg(test)]
 mod tests {
-    use super::{OpenAIChoice, OpenAIChoiceMessage, OpenAIClient, OpenAIResponse, OpenAIUsage};
+    use super::{OpenAIClient, OpenAIContent, OpenAIOutput, OpenAIResponse, OpenAIUsage};
     use crate::constants::OPENAI_EMBEDDING_DIM;
-    use crate::llm::base::{ApiClient, UserMessage};
+    use crate::llm::base::{ApiClient, ChatRequest, UserMessage};
     use crate::llm::http_client::{MockHttpClient, ReqwestClient};
     use arrow_array::Array;
     use dotenv::dotenv;
@@ -246,7 +289,8 @@ mod tests {
             max_tokens: Some(1024),
             message: "Hello!".to_owned(),
         };
-        let res = client.send_message(&message).await;
+        let request = ChatRequest::from(&message);
+        let res = client.send_message(&request).await;
 
         // Debug the error if there is one
         if res.is_err() {
@@ -264,21 +308,21 @@ mod tests {
         // Create a proper OpenAIResponse that matches the structure we expect to deserialize
         let mock_response = OpenAIResponse {
             id: "mock-id".to_string(),
-            object: "chat.completion".to_string(),
-            created: 1234567890,
+            created_at: 1234567890,
             model: "gpt-4.1-2025-04-14".to_string(),
             usage: OpenAIUsage {
-                prompt_tokens: 5,
-                completion_tokens: 10,
+                input_tokens: 5,
+                output_tokens: 10,
                 total_tokens: 15,
             },
-            choices: vec![OpenAIChoice {
-                message: OpenAIChoiceMessage {
-                    role: "assistant".to_string(),
-                    content: "Hi there!".to_string(),
-                },
-                finish_reason: Some("stop".to_string()),
-                index: 0,
+            output: vec![OpenAIOutput::Message {
+                id: "msg_id".into(),
+                status: "completed".into(),
+                role: "assistant".into(),
+                content: vec![OpenAIContent {
+                    r#type: "output_text".into(),
+                    text: Some("Hi there!".into()),
+                }],
             }],
         };
 
@@ -293,7 +337,8 @@ mod tests {
             max_tokens: Some(1024),
             message: "Hello!".to_owned(),
         };
-        let res = mock_client.send_message(&message).await;
+        let request = ChatRequest::from(&message);
+        let res = mock_client.send_message(&request).await;
 
         // Debug the error if there is one
         if res.is_err() {

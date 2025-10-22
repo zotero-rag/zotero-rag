@@ -7,7 +7,7 @@ use arrow_array::{self, RecordBatch, RecordBatchIterator, StringArray};
 use arrow_schema::Schema;
 use lancedb::embeddings::EmbeddingDefinition;
 use rag::capabilities::ModelProviders;
-use rag::llm::base::{ApiClient, CompletionApiResponse, UserMessage};
+use rag::llm::base::{ApiClient, ChatRequest, CompletionApiResponse, UserMessage};
 use rag::llm::errors::LLMError;
 use rag::llm::factory::{LLMClientConfig, get_client_by_provider, get_client_with_config};
 use rag::vector::checkhealth::lancedb_health_check;
@@ -479,7 +479,7 @@ async fn run_query<O: Write, E: Write>(
                 message: get_extraction_prompt(&query_clone, &text),
             };
 
-            client.send_message(&message).await
+            client.send_message(&ChatRequest::from(&message)).await
         });
     });
 
@@ -535,7 +535,7 @@ async fn run_query<O: Write, E: Write>(
     };
 
     let final_draft_start = Instant::now();
-    let result = llm_client.send_message(&message).await;
+    let result = llm_client.send_message(&ChatRequest::from(&message)).await;
     let final_draft_duration = final_draft_start.elapsed();
     match result {
         Ok(response) => {
@@ -805,6 +805,7 @@ mod tests {
         let config = Config::default();
 
         Context {
+            state: Default::default(),
             config,
             args,
             out,
