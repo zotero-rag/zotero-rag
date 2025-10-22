@@ -1,3 +1,5 @@
+use crate::llm::tools::Tool;
+
 use super::errors::LLMError;
 use serde::{Deserialize, Serialize};
 
@@ -16,6 +18,22 @@ pub struct UserMessage {
     pub message: String,
 }
 
+/// Represents a request to the chat API, combining a user message with optional tools.
+pub struct ChatRequest<'a> {
+    pub message: &'a UserMessage,
+    pub tools: Option<&'a [Box<dyn Tool>]>,
+}
+
+/// Ergonomic conversion from a `UserMessage` to a `ChatRequest` without tools.
+impl<'a> From<&'a UserMessage> for ChatRequest<'a> {
+    fn from(message: &'a UserMessage) -> Self {
+        ChatRequest {
+            message,
+            tools: None,
+        }
+    }
+}
+
 /// A user-facing struct representing API responses, containing only information users
 /// would be interested in.
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -27,5 +45,8 @@ pub struct CompletionApiResponse {
 
 #[allow(async_fn_in_trait)]
 pub trait ApiClient {
-    async fn send_message(&self, message: &UserMessage) -> Result<CompletionApiResponse, LLMError>;
+    async fn send_message<'a>(
+        &self,
+        request: &ChatRequest<'a>,
+    ) -> Result<CompletionApiResponse, LLMError>;
 }

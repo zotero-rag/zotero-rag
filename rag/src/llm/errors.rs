@@ -13,8 +13,8 @@ pub enum LLMError {
     EnvError(#[from] std::env::VarError),
     #[error("Unknown error occurred: {0}")]
     GenericLLMError(String),
-    #[error("Other HTTP status code error")]
-    HttpStatusError,
+    #[error("Other HTTP status code error: {0}")]
+    HttpStatusError(String),
     #[error("Invalid LLM provider: {0}")]
     InvalidProviderError(String),
     #[error("Invalid request header value: {0}")]
@@ -39,7 +39,7 @@ impl From<reqwest::Error> for LLMError {
                 return LLMError::CredentialError(error.to_string());
             }
 
-            return LLMError::HttpStatusError;
+            return LLMError::HttpStatusError(error.to_string());
         } else if error.is_connect() {
             return LLMError::NetworkError;
         }

@@ -5,7 +5,7 @@ use std::env;
 use http::HeaderMap;
 use serde::{Deserialize, Serialize};
 
-use super::base::{ApiClient, ChatHistoryItem, CompletionApiResponse, UserMessage};
+use super::base::{ApiClient, ChatHistoryItem, CompletionApiResponse, UserMessage, ChatRequest};
 use super::errors::LLMError;
 use super::http_client::{HttpClient, ReqwestClient};
 
@@ -124,7 +124,12 @@ struct OpenRouterResponse {
 }
 
 impl<T: HttpClient> ApiClient for OpenRouterClient<T> {
-    async fn send_message(&self, message: &UserMessage) -> Result<CompletionApiResponse, LLMError> {
+    async fn send_message<'a>(
+        &self,
+        request: &ChatRequest<'a>,
+    ) -> Result<CompletionApiResponse, LLMError> {
+        // TODO: Implement tool support for OpenRouter
+        let message = request.message;
         // Use config if available, otherwise fall back to env vars
         let (api_key, model) = if let Some(ref config) = self.config {
             (config.api_key.clone(), config.model.clone())
@@ -177,7 +182,7 @@ mod tests {
     use dotenv::dotenv;
 
     use super::*;
-    use crate::llm::base::{ApiClient, UserMessage};
+    use crate::llm::base::{ApiClient, UserMessage, ChatRequest};
     use crate::llm::http_client::{MockHttpClient, ReqwestClient};
 
     #[tokio::test]
@@ -191,7 +196,8 @@ mod tests {
             message: "Hello!".to_owned(),
         };
 
-        let res = client.send_message(&message).await;
+        let request = ChatRequest::from(&message);
+        let res = client.send_message(&request).await;
 
         // Debug the error if there is one
         if res.is_err() {
@@ -242,7 +248,8 @@ mod tests {
             message: "Hello!".to_owned(),
         };
 
-        let res = mock_client.send_message(&message).await;
+        let request = ChatRequest::from(&message);
+        let res = mock_client.send_message(&request).await;
 
         // Debug the error if there is one
         if res.is_err() {

@@ -6,3 +6,4 @@ pub mod gemini;
 pub mod http_client;
 pub mod openai;
 pub mod openrouter;
+pub mod tools;

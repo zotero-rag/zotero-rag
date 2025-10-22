@@ -59,6 +59,7 @@ pub async fn main() {
     }
 
     let context = Context {
+        state: Default::default(),
         config,
         args,
         out: stdout(),
