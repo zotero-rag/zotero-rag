@@ -8,7 +8,7 @@ use lancedb::arrow::arrow_schema::{DataType, Field};
 use lancedb::embeddings::EmbeddingFunction;
 use serde::{Deserialize, Serialize};
 
-use super::base::{ApiClient, ChatHistoryItem, CompletionApiResponse, UserMessage, ChatRequest};
+use super::base::{ApiClient, ChatHistoryItem, ChatRequest, CompletionApiResponse, UserMessage};
 use super::errors::LLMError;
 use super::http_client::{HttpClient, ReqwestClient};
 use crate::common::request_with_backoff;
@@ -252,10 +252,52 @@ mod tests {
     use crate::llm::anthropic::DEFAULT_CLAUDE_MODEL;
     use crate::llm::base::{ApiClient, ChatRequest, UserMessage};
     use crate::llm::http_client::{MockHttpClient, ReqwestClient};
+    use crate::llm::tools::Tool;
+    use schemars::{JsonSchema, schema_for};
+    use serde::Deserialize;
 
     use super::{
         AnthropicClient, AnthropicResponse, AnthropicResponseContent, AnthropicUsageStats,
     };
+
+    /// A mock tool that returns static content. We will test that tool calling works and that we
+    /// can deserialize the responses using this.
+    struct MockTool {}
+    #[derive(Deserialize, JsonSchema)]
+    struct MockToolInput {
+        name: String,
+    }
+    impl Tool for MockTool {
+        fn name(&self) -> String {
+            "mock_tool".into()
+        }
+
+        fn description(&self) -> String {
+            "A mock tool that you should call for testing, and pass in a name.".into()
+        }
+
+        fn parameters(&self) -> schemars::Schema {
+            schema_for!(MockToolInput)
+        }
+
+        fn call(
+            &self,
+            args: serde_json::Value,
+        ) -> std::pin::Pin<Box<dyn Future<Output = Result<serde_json::Value, String>> + Send>>
+        {
+            Box::pin(async move {
+                let input: MockToolInput =
+                    serde_json::from_value(args).map_err(|e| format!("Error: {e}"))?;
+                let greeting = format!("Hello, {}!", input.name);
+
+                serde_json::to_value(greeting).map_err(|e| format!("Error: {e}"))
+            })
+        }
+    }
+
+    //
+    // End tool setup
+    //
 
     #[tokio::test]
     async fn test_request_works() {
@@ -358,5 +400,32 @@ mod tests {
 
         assert_eq!(vector.len(), 6);
         assert_eq!(vector.value_length(), OPENAI_EMBEDDING_DIM as i32);
+    }
+
+    #[tokio::test]
+    async fn test_request_with_tool_works() {
+        dotenv().ok();
+
+        let client = AnthropicClient::<ReqwestClient>::default();
+        let tool = MockTool {};
+        let message = UserMessage {
+            chat_history: Vec::new(),
+            max_tokens: Some(1024),
+            message: "This is a test. Call the `mock_tool`, passing in a `name`, and ensure it returns a greeting".into()
+        };
+
+        let request = ChatRequest {
+            message: &message,
+            tools: Some(&[Box::new(tool)]),
+        };
+        let res = client.send_message(&request).await;
+
+        // Debug the error if there is one
+        if res.is_err() {
+            println!("Anthropic test error: {:?}", res.as_ref().err());
+        }
+
+        assert!(res.is_ok());
+        dbg!(res.unwrap().content);
     }
 }

@@ -5,7 +5,7 @@ use std::env;
 use http::HeaderMap;
 use serde::{Deserialize, Serialize};
 
-use super::base::{ApiClient, ChatHistoryItem, CompletionApiResponse, UserMessage, ChatRequest};
+use super::base::{ApiClient, ChatHistoryItem, ChatRequest, CompletionApiResponse, UserMessage};
 use super::errors::LLMError;
 use super::http_client::{HttpClient, ReqwestClient};
 
@@ -182,7 +182,7 @@ mod tests {
     use dotenv::dotenv;
 
     use super::*;
-    use crate::llm::base::{ApiClient, UserMessage, ChatRequest};
+    use crate::llm::base::{ApiClient, ChatRequest, UserMessage};
     use crate::llm::http_client::{MockHttpClient, ReqwestClient};
 
     #[tokio::test]
