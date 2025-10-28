@@ -8,7 +8,7 @@ use lancedb::arrow::arrow_schema::{DataType, Field};
 use lancedb::embeddings::EmbeddingFunction;
 use serde::{Deserialize, Serialize};
 
-use super::base::{ApiClient, ChatHistoryItem, ChatRequest, CompletionApiResponse, UserMessage};
+use super::base::{ApiClient, ChatHistoryItem, ChatRequest, CompletionApiResponse};
 use super::errors::LLMError;
 use super::http_client::{HttpClient, ReqwestClient};
 use crate::common::request_with_backoff;
@@ -17,6 +17,7 @@ use crate::constants::{
     OPENAI_EMBEDDING_DIM,
 };
 use crate::embedding::openai::compute_openai_embeddings_sync;
+use crate::llm::tools::SerializedTool;
 const DEFAULT_CLAUDE_MODEL: &str = DEFAULT_ANTHROPIC_MODEL;
 
 /// A generic client class for now. We can add stuff here later if needed, for
@@ -64,34 +65,47 @@ where
 }
 
 /// Represents a request to the Anthropic API
-#[derive(Serialize, Deserialize)]
-struct AnthropicRequest {
+#[derive(Serialize)]
+struct AnthropicRequest<'a> {
     /// The model to use for the request (e.g., "claude-3-5-sonnet-20241022")
     model: String,
     /// The maximum number of tokens that can be generated in the response
     max_tokens: u32,
     /// The conversation history and current message
     messages: Vec<ChatHistoryItem>,
+    /// The tools passed in
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tools: Option<Vec<SerializedTool<'a>>>,
 }
 
-impl AnthropicRequest {
-    fn from_message(msg: UserMessage, model: String, max_tokens: u32) -> Self {
-        let mut messages = msg.chat_history;
+impl<'a> AnthropicRequest<'a> {
+    fn from_chat_request(req: &ChatRequest<'a>, model: String, max_tokens: u32) -> Self {
+        let mut messages = req.message.chat_history.clone();
         messages.push(ChatHistoryItem {
             role: "user".to_owned(),
-            content: msg.message,
+            content: req.message.message.clone(),
         });
+
+        let owned_tools: Option<Vec<SerializedTool>> = match req.tools {
+            None => None,
+            Some(iter) => Some(
+                iter.iter()
+                    .map(|f| SerializedTool(&**f))
+                    .collect::<Vec<SerializedTool>>(),
+            ),
+        };
 
         AnthropicRequest {
             model,
-            max_tokens: msg.max_tokens.unwrap_or(max_tokens),
+            max_tokens: req.message.max_tokens.unwrap_or(max_tokens),
             messages,
+            tools: owned_tools,
         }
     }
 }
 
 /// Token usage statistics returned by the Anthropic API
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 struct AnthropicUsageStats {
     /// Number of tokens in the input prompt
     input_tokens: u32,
@@ -99,17 +113,30 @@ struct AnthropicUsageStats {
     output_tokens: u32,
 }
 
-/// Content block in an Anthropic API response
-#[derive(Clone, Serialize, Deserialize)]
-struct AnthropicResponseContent {
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct AnthropicTextResponseContent {
     /// The text content from the model's response
     text: String,
-    /// The type of content (usually "text")
-    r#type: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct AnthropicToolUseResponseContent {
+    /// The tool being called
+    name: String,
+    /// The input to the tool. Note that all we can guarantee is that the keys are strings
+    input: serde_json::Map<String, serde_json::Value>,
+}
+
+/// Content block in an Anthropic API response
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(untagged)]
+enum AnthropicResponseContent {
+    Text(AnthropicTextResponseContent),
+    ToolCall(AnthropicToolUseResponseContent),
 }
 
 /// Response from the Anthropic API
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 struct AnthropicResponse {
     /// Unique identifier for the response
     id: String,
@@ -129,15 +156,14 @@ struct AnthropicResponse {
     content: Vec<AnthropicResponseContent>,
 }
 
-/// We can use hard-coded strings here; I think the resulting
-/// locality-of-behavior is worth the loss in pointless generality.
+/// We can use hard-coded strings here; the resulting locality-of-behavior is worth the loss in
+/// pointless generality.
 impl<T: HttpClient> ApiClient for AnthropicClient<T> {
     async fn send_message<'a>(
         &self,
         request: &ChatRequest<'a>,
     ) -> Result<CompletionApiResponse, LLMError> {
         // TODO: Implement tool support for Anthropic
-        let message = request.message;
         // Use config if available, otherwise fall back to env vars
         let (api_key, model, max_tokens) = if let Some(ref config) = self.config {
             (
@@ -158,7 +184,8 @@ impl<T: HttpClient> ApiClient for AnthropicClient<T> {
         headers.insert("anthropic-version", "2023-06-01".parse()?);
         headers.insert("content-type", "application/json".parse()?);
 
-        let req_body = AnthropicRequest::from_message(message.clone(), model, max_tokens);
+        // TODO: Fix here
+        let req_body = AnthropicRequest::from_chat_request(request, model, max_tokens);
         const MAX_RETRIES: usize = DEFAULT_MAX_RETRIES;
         let res = request_with_backoff(
             &self.client,
@@ -178,9 +205,15 @@ impl<T: HttpClient> ApiClient for AnthropicClient<T> {
 
             LLMError::DeserializationError(err.to_string())
         })?;
+        dbg!(&response);
+
+        let text_content = match &response.content[0] {
+            AnthropicResponseContent::Text(text) => text.text.clone(),
+            AnthropicResponseContent::ToolCall(tool) => format!("Tool {} called", tool.name),
+        };
 
         Ok(CompletionApiResponse {
-            content: response.content[0].text.clone(),
+            content: text_content,
             input_tokens: response.usage.input_tokens,
             output_tokens: response.usage.output_tokens,
         })
@@ -242,14 +275,14 @@ impl<T: HttpClient + Default + std::fmt::Debug> EmbeddingFunction for AnthropicC
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
 
     use arrow_array::Array;
     use dotenv::dotenv;
     use lancedb::embeddings::EmbeddingFunction;
 
     use crate::constants::OPENAI_EMBEDDING_DIM;
-    use crate::llm::anthropic::DEFAULT_CLAUDE_MODEL;
+    use crate::llm::anthropic::{AnthropicTextResponseContent, DEFAULT_CLAUDE_MODEL};
     use crate::llm::base::{ApiClient, ChatRequest, UserMessage};
     use crate::llm::http_client::{MockHttpClient, ReqwestClient};
     use crate::llm::tools::Tool;
@@ -262,7 +295,10 @@ mod tests {
 
     /// A mock tool that returns static content. We will test that tool calling works and that we
     /// can deserialize the responses using this.
-    struct MockTool {}
+    struct MockTool {
+        call_count: Arc<Mutex<usize>>,
+    }
+
     #[derive(Deserialize, JsonSchema)]
     struct MockToolInput {
         name: String,
@@ -280,11 +316,17 @@ mod tests {
             schema_for!(MockToolInput)
         }
 
+        fn schema_key(&self) -> String {
+            "input_schema".into()
+        }
+
         fn call(
-            &self,
+            &mut self,
             args: serde_json::Value,
         ) -> std::pin::Pin<Box<dyn Future<Output = Result<serde_json::Value, String>> + Send>>
         {
+            *self.call_count.lock().unwrap() += 1;
+
             Box::pin(async move {
                 let input: MockToolInput =
                     serde_json::from_value(args).map_err(|e| format!("Error: {e}"))?;
@@ -338,10 +380,11 @@ mod tests {
                 output_tokens: 13,
             },
             r#type: "message".to_string(),
-            content: vec![AnthropicResponseContent {
-                text: "Hi there! How can I help you today?".to_string(),
-                r#type: "text".to_string(),
-            }],
+            content: vec![AnthropicResponseContent::Text(
+                AnthropicTextResponseContent {
+                    text: "Hi there! How can I help you today?".to_string(),
+                },
+            )],
         };
 
         let mock_http_client = MockHttpClient::new(mock_response);
@@ -407,7 +450,10 @@ mod tests {
         dotenv().ok();
 
         let client = AnthropicClient::<ReqwestClient>::default();
-        let tool = MockTool {};
+        let call_count = Arc::new(Mutex::new(0));
+        let tool = MockTool {
+            call_count: Arc::clone(&call_count),
+        };
         let message = UserMessage {
             chat_history: Vec::new(),
             max_tokens: Some(1024),
@@ -426,6 +472,7 @@ mod tests {
         }
 
         assert!(res.is_ok());
-        dbg!(res.unwrap().content);
+        dbg!(&res);
+        assert!(call_count.lock().unwrap().eq(&(1 as usize)));
     }
 }
