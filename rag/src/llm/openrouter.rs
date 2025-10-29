@@ -1,4 +1,5 @@
 use crate::common::request_with_backoff;
+use crate::llm::base::{ChatHistoryContent, ContentType};
 use std::collections::HashMap;
 use std::env;
 
@@ -61,7 +62,7 @@ impl OpenRouterRequest {
         let mut messages = msg.chat_history;
         messages.push(ChatHistoryItem {
             role: "user".to_owned(),
-            content: msg.message,
+            content: vec![ChatHistoryContent::Text(msg.message.clone())],
         });
 
         OpenRouterRequest { model, messages }
@@ -126,7 +127,7 @@ struct OpenRouterResponse {
 impl<T: HttpClient> ApiClient for OpenRouterClient<T> {
     async fn send_message<'a>(
         &self,
-        request: &ChatRequest<'a>,
+        request: &'a mut ChatRequest<'a>,
     ) -> Result<CompletionApiResponse, LLMError> {
         // TODO: Implement tool support for OpenRouter
         let message = request.message;
@@ -151,7 +152,7 @@ impl<T: HttpClient> ApiClient for OpenRouterClient<T> {
             &self.client,
             "https://openrouter.ai/api/v1/chat/completions",
             &headers,
-            req_body,
+            &req_body,
             MAX_RETRIES,
         )
         .await?;
@@ -170,7 +171,7 @@ impl<T: HttpClient> ApiClient for OpenRouterClient<T> {
         })?;
 
         Ok(CompletionApiResponse {
-            content: choice.message.content,
+            content: vec![ContentType::Text(choice.message.content)],
             input_tokens: response.usage.prompt_tokens,
             output_tokens: response.usage.completion_tokens,
         })
@@ -196,8 +197,8 @@ mod tests {
             message: "Hello!".to_owned(),
         };
 
-        let request = ChatRequest::from(&message);
-        let res = client.send_message(&request).await;
+        let mut request = ChatRequest::from(&message);
+        let res = client.send_message(&mut request).await;
 
         // Debug the error if there is one
         if res.is_err() {
@@ -248,8 +249,8 @@ mod tests {
             message: "Hello!".to_owned(),
         };
 
-        let request = ChatRequest::from(&message);
-        let res = mock_client.send_message(&request).await;
+        let mut request = ChatRequest::from(&message);
+        let res = mock_client.send_message(&mut request).await;
 
         // Debug the error if there is one
         if res.is_err() {

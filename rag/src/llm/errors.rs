@@ -21,6 +21,8 @@ pub enum LLMError {
     InvalidHeaderError(#[from] InvalidHeaderValue),
     #[error("LanceDB Error: {0}")]
     LanceError(#[from] lancedb::Error),
+    #[error("Error calling a tool: {0}")]
+    ToolCallError(String),
     #[error("A network connectivity error occurred")]
     NetworkError,
     #[error("Request timed out")]
