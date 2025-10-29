@@ -14,6 +14,7 @@ use crate::constants::{
     DEFAULT_GEMINI_EMBEDDING_MODEL, DEFAULT_GEMINI_MODEL, DEFAULT_MAX_CONCURRENT_REQUESTS,
     DEFAULT_MAX_RETRIES, GEMINI_EMBEDDING_DIM,
 };
+use crate::llm::base::{ChatHistoryContent, ContentType};
 
 use super::base::{ApiClient, ChatRequest, CompletionApiResponse, UserMessage};
 use super::errors::LLMError;
@@ -62,7 +63,7 @@ async fn call_gemini_embedding_api(
     let request_body = GeminiEmbeddingRequest::from_text(text);
 
     let res =
-        request_with_backoff(client, &url, &headers, request_body, DEFAULT_MAX_RETRIES).await?;
+        request_with_backoff(client, &url, &headers, &request_body, DEFAULT_MAX_RETRIES).await?;
     let body = res.text().await?;
     let json: serde_json::Value = serde_json::from_str(&body)?;
     let parsed: GeminiEmbeddingResponse = serde_json::from_value(json).map_err(|e| {
@@ -244,11 +245,18 @@ impl From<&UserMessage> for GeminiRequestBody {
         let mut contents: Vec<GeminiContent> = msg
             .chat_history
             .iter()
-            .map(|c| GeminiContent {
-                role: map_role(&c.role),
-                parts: vec![GeminiPart {
-                    text: c.content.clone(),
-                }],
+            .map(|c| {
+                let content = c.content[0].clone();
+
+                GeminiContent {
+                    role: map_role(&c.role),
+                    parts: vec![GeminiPart {
+                        text: match content {
+                            ChatHistoryContent::Text(s) => s,
+                            _ => "".into(),
+                        },
+                    }],
+                }
             })
             .collect();
 
@@ -314,7 +322,7 @@ struct GeminiResponseBody {
 impl<T: HttpClient> ApiClient for GeminiClient<T> {
     async fn send_message<'a>(
         &self,
-        request: &ChatRequest<'a>,
+        request: &'a mut ChatRequest<'a>,
     ) -> Result<CompletionApiResponse, LLMError> {
         // TODO: Implement tool support for Gemini
         let message = request.message;
@@ -332,8 +340,9 @@ impl<T: HttpClient> ApiClient for GeminiClient<T> {
             model
         );
 
-        let res = request_with_backoff(&self.client, &url, &headers, req_body, DEFAULT_MAX_RETRIES)
-            .await?;
+        let res =
+            request_with_backoff(&self.client, &url, &headers, &req_body, DEFAULT_MAX_RETRIES)
+                .await?;
 
         let body = res.text().await?;
         let json: serde_json::Value = match serde_json::from_str(&body) {
@@ -360,7 +369,7 @@ impl<T: HttpClient> ApiClient for GeminiClient<T> {
             .join("");
 
         Ok(CompletionApiResponse {
-            content: content_text,
+            content: vec![ContentType::Text(content_text)],
             input_tokens: response.usage_metadata.prompt_token_count,
             output_tokens: response.usage_metadata.candidates_token_count,
         })
@@ -498,8 +507,8 @@ mod tests {
             }],
             max_tokens: Some(256),
         };
-        let request = ChatRequest::from(&message);
-        let res = client.send_message(&request).await;
+        let mut request = ChatRequest::from(&message);
+        let res = client.send_message(&mut request).await;
         assert!(res.is_ok());
         let res = res.unwrap();
         assert_eq!(res.content, "Hello from Gemini!");
@@ -584,8 +593,8 @@ mod tests {
             max_tokens: Some(1024),
             message: "Hello!".to_owned(),
         };
-        let request = ChatRequest::from(&message);
-        let res = client.send_message(&request).await;
+        let mut request = ChatRequest::from(&message);
+        let res = client.send_message(&mut request).await;
 
         // Debug the error if there is one
         if res.is_err() {

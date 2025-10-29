@@ -14,6 +14,7 @@ use super::http_client::{HttpClient, ReqwestClient};
 use crate::common::request_with_backoff;
 use crate::constants::{DEFAULT_MAX_RETRIES, DEFAULT_OPENAI_MODEL, OPENAI_EMBEDDING_DIM};
 use crate::embedding::openai::compute_openai_embeddings_sync;
+use crate::llm::base::{ChatHistoryContent, ContentType};
 
 /// A client for OpenAI's chat completions API
 #[derive(Debug, Clone)]
@@ -77,7 +78,7 @@ impl OpenAIRequest {
         let mut messages = msg.chat_history.clone();
         messages.push(ChatHistoryItem {
             role: "user".to_owned(),
-            content: msg.message.clone(),
+            content: vec![ChatHistoryContent::Text(msg.message.clone())],
         });
 
         OpenAIRequest {
@@ -133,7 +134,7 @@ struct OpenAIResponse {
 impl<T: HttpClient> ApiClient for OpenAIClient<T> {
     async fn send_message<'a>(
         &self,
-        request: &ChatRequest<'a>,
+        request: &'a mut ChatRequest<'a>,
     ) -> Result<CompletionApiResponse, super::errors::LLMError> {
         // TODO: Implement tool support for OpenAI
         let message = request.message;
@@ -165,7 +166,7 @@ impl<T: HttpClient> ApiClient for OpenAIClient<T> {
             &self.client,
             "https://api.openai.com/v1/responses",
             &headers,
-            req_body,
+            &req_body,
             MAX_RETRIES,
         )
         .await?;
@@ -206,7 +207,7 @@ impl<T: HttpClient> ApiClient for OpenAIClient<T> {
             ))?;
 
         Ok(CompletionApiResponse {
-            content: first_text_output.clone(),
+            content: vec![ContentType::Text(first_text_output.clone())],
             input_tokens: response.usage.input_tokens,
             output_tokens: response.usage.output_tokens,
         })
@@ -289,8 +290,8 @@ mod tests {
             max_tokens: Some(1024),
             message: "Hello!".to_owned(),
         };
-        let request = ChatRequest::from(&message);
-        let res = client.send_message(&request).await;
+        let mut request = ChatRequest::from(&message);
+        let res = client.send_message(&mut request).await;
 
         // Debug the error if there is one
         if res.is_err() {
@@ -337,8 +338,8 @@ mod tests {
             max_tokens: Some(1024),
             message: "Hello!".to_owned(),
         };
-        let request = ChatRequest::from(&message);
-        let res = mock_client.send_message(&request).await;
+        let mut request = ChatRequest::from(&message);
+        let res = mock_client.send_message(&mut request).await;
 
         // Debug the error if there is one
         if res.is_err() {

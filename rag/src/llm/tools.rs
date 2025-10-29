@@ -30,7 +30,8 @@ pub trait Tool: Send + Sync {
     fn call(&mut self, args: Value) -> Pin<Box<dyn Future<Output = Result<Value, String>> + Send>>;
 }
 
-pub struct SerializedTool<'a>(pub &'a dyn Tool);
+/// A newtype wrapper struct that lets us add a blanket implementation of `Serialize` to all tools.
+pub struct SerializedTool<'a>(pub &'a mut dyn Tool);
 
 impl<'a> Serialize for SerializedTool<'a> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>

@@ -29,7 +29,7 @@ pub async fn request_with_backoff<T: HttpClient>(
     client: &T,
     url: &str,
     headers: &HeaderMap,
-    request: impl Serialize + Sync + Send,
+    request: &(impl Serialize + Sync + Send),
     max_retries: usize,
 ) -> Result<Response, LLMError> {
     let mut attempt = 0;
