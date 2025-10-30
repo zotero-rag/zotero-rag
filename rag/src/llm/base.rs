@@ -55,7 +55,7 @@ pub struct UserMessage {
 /// Represents a request to the chat API, combining a user message with optional tools.
 pub struct ChatRequest<'a> {
     pub message: &'a UserMessage,
-    pub tools: Option<&'a mut [Box<dyn Tool>]>,
+    pub tools: Option<&'a [Box<dyn Tool>]>,
 }
 
 /// Ergonomic conversion from a `UserMessage` to a `ChatRequest` without tools.
@@ -70,9 +70,9 @@ impl<'a> From<&'a UserMessage> for ChatRequest<'a> {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct ToolUseStats {
-    tool_name: String,
-    tool_args: serde_json::Value,
-    tool_result: serde_json::Value,
+    pub tool_name: String,
+    pub tool_args: serde_json::Value,
+    pub tool_result: serde_json::Value,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
