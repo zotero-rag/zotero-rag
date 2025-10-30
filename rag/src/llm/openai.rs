@@ -273,7 +273,7 @@ impl<T: HttpClient + Default + Debug> EmbeddingFunction for OpenAIClient<T> {
 mod tests {
     use super::{OpenAIClient, OpenAIContent, OpenAIOutput, OpenAIResponse, OpenAIUsage};
     use crate::constants::OPENAI_EMBEDDING_DIM;
-    use crate::llm::base::{ApiClient, ChatRequest, UserMessage};
+    use crate::llm::base::{ApiClient, ChatRequest, ContentType, UserMessage};
     use crate::llm::http_client::{MockHttpClient, ReqwestClient};
     use arrow_array::Array;
     use dotenv::dotenv;
@@ -348,7 +348,12 @@ mod tests {
 
         assert!(res.is_ok());
         let res = res.unwrap();
-        assert_eq!(res.content, "Hi there!");
+        assert_eq!(res.content.len(), 1);
+        if let ContentType::Text(text) = &res.content[0] {
+            assert_eq!(text, "Hi there!");
+        } else {
+            panic!("Expected Text content type");
+        }
         assert_eq!(res.input_tokens, 5);
         assert_eq!(res.output_tokens, 10);
     }

@@ -1,5 +1,4 @@
 use std::borrow::Cow;
-use std::collections::HashMap;
 use std::env;
 use std::sync::Arc;
 
@@ -427,7 +426,7 @@ impl<T: HttpClient> ApiClient for AnthropicClient<T> {
         headers.insert("content-type", "application/json".parse()?);
 
         let req_body = AnthropicRequest::from_chat_request(request, model, max_tokens);
-        let response = send_anthropic_request(&self.client, &headers, &req_body).await?;
+        let mut response = send_anthropic_request(&self.client, &headers, &req_body).await?;
 
         let mut has_tool_calls: bool = response
             .content
@@ -453,11 +452,39 @@ impl<T: HttpClient> ApiClient for AnthropicClient<T> {
             )
             .await?;
 
-            let response = send_anthropic_request(&self.client, &headers, &req_body).await?;
+            // Create a new request body with the updated chat history
+            let updated_req_body = AnthropicRequest {
+                model: req_body.model.clone(),
+                max_tokens: req_body.max_tokens,
+                messages: chat_history.clone(),
+                tools: req_body.tools.clone(),
+            };
+
+            response = send_anthropic_request(&self.client, &headers, &updated_req_body).await?;
+
+            // Append the new response to chat history
+            chat_history.push(AnthropicChatHistoryItem {
+                role: "assistant".into(),
+                content: response.content.clone(),
+            });
+
             has_tool_calls = response
                 .content
                 .iter()
                 .any(|c| matches!(c, AnthropicResponseContent::ToolCall { .. }));
+        }
+
+        // Process the final response (which has no tool calls) to extract text content
+        for content in &response.content {
+            match content {
+                AnthropicResponseContent::PlainText(s) => {
+                    contents.push(ContentType::Text(s.clone()))
+                }
+                AnthropicResponseContent::Text(text_content) => {
+                    contents.push(ContentType::Text(text_content.text.clone()));
+                }
+                _ => {}
+            }
         }
 
         Ok(CompletionApiResponse {
@@ -663,11 +690,12 @@ mod tests {
         assert_eq!(res.input_tokens, 9);
         assert_eq!(res.output_tokens, 13);
 
-        let content = res.content[0];
-        matches!(
-            content,
-            ContentType::Text("Hi there! How can I help you today?".into())
-        );
+        let content = &res.content[0];
+        if let ContentType::Text(text) = content {
+            assert_eq!(text, "Hi there! How can I help you today?");
+        } else {
+            panic!("Expected Text content type");
+        }
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 1)]

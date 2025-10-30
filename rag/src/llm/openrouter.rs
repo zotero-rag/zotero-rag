@@ -262,6 +262,11 @@ mod tests {
         let res = res.unwrap();
         assert_eq!(res.input_tokens, 14);
         assert_eq!(res.output_tokens, 163);
-        assert_eq!(res.content, "Hi there! How can I help you today?");
+        assert_eq!(res.content.len(), 1);
+        if let ContentType::Text(text) = &res.content[0] {
+            assert_eq!(text, "Hi there! How can I help you today?");
+        } else {
+            panic!("Expected Text content type");
+        }
     }
 }

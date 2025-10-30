@@ -503,7 +503,7 @@ mod tests {
             message: "foo".into(),
             chat_history: vec![ChatHistoryItem {
                 role: "assistant".into(),
-                content: "Prior".into(),
+                content: vec![ChatHistoryContent::Text("Prior".into())],
             }],
             max_tokens: Some(256),
         };
@@ -511,7 +511,12 @@ mod tests {
         let res = client.send_message(&mut request).await;
         assert!(res.is_ok());
         let res = res.unwrap();
-        assert_eq!(res.content, "Hello from Gemini!");
+        assert_eq!(res.content.len(), 1);
+        if let ContentType::Text(text) = &res.content[0] {
+            assert_eq!(text, "Hello from Gemini!");
+        } else {
+            panic!("Expected Text content type");
+        }
         assert_eq!(res.input_tokens, 7);
         assert_eq!(res.output_tokens, 11);
     }
