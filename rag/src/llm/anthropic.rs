@@ -161,14 +161,11 @@ struct AnthropicRequest<'a> {
 }
 
 fn get_owned_tools<'a>(tools: Option<&'a [Box<dyn Tool>]>) -> Option<Vec<SerializedTool<'a>>> {
-    let owned_tools: Option<Vec<SerializedTool>> = match tools.as_ref() {
-        None => None,
-        Some(iter) => Some(
-            iter.iter()
-                .map(|f| SerializedTool(&**f))
-                .collect::<Vec<SerializedTool>>(),
-        ),
-    };
+    let owned_tools: Option<Vec<SerializedTool>> = tools.as_ref().map(|iter| {
+        iter.iter()
+            .map(|f| SerializedTool(&**f))
+            .collect::<Vec<SerializedTool>>()
+    });
 
     owned_tools
 }
@@ -286,6 +283,21 @@ struct AnthropicResponse {
     content: Vec<AnthropicResponseContent>,
 }
 
+/// Send an API request to Anthropic.
+///
+/// This function takes references to a client, a set of headers, and an Anthropic-specific
+/// request body, and sends a request with exponential backoff. This acts as a helper function so
+/// that the calling code can be easier to follow.
+///
+/// # Arguments:
+///
+/// * `client`: An `HttpClient` implementation.
+/// * `headers`: A set of headers to pass.
+/// * `req`: The request body to send
+///
+/// # Returns
+///
+/// The Anthropic-specific response.
 async fn send_anthropic_request<'a>(
     client: &impl HttpClient,
     headers: &HeaderMap,
@@ -312,21 +324,33 @@ async fn send_anthropic_request<'a>(
     Ok(response)
 }
 
+/// Process tool calls in a single response from the Anthropic API.
+///
+/// This function processes tool calls in a single response from the Anthropic API, modifying the
+/// `chat_history` with results as it proceeds. This function also accepts a mutable reference to a
+/// vector of `ContentType`, which gets filled with text responses from the model and processed tool
+/// calls and results.
+///
+/// # Arguments:
+///
+/// * `chat_history`: A list of Anthropic-specific chat history items, to be passed back to the API
+///   after the tool calls are processed.
+/// * `new_contents`: A list that should be populated with the model responses and tool uses.
+/// * `response`: The API response to process.
+/// * `tools`: A reference to a list of owned tools.
 async fn process_tool_calls<'a>(
     chat_history: &mut Vec<AnthropicChatHistoryItem>,
-    new_contents: &mut Vec<AnthropicResponseContent>,
+    new_contents: &mut Vec<ContentType>,
     response: &AnthropicResponse,
     tools: &Vec<SerializedTool<'a>>,
 ) -> Result<(), LLMError> {
     for content in &response.content {
         match content {
             AnthropicResponseContent::PlainText(s) => {
-                new_contents.push(AnthropicResponseContent::PlainText(s.clone()))
+                new_contents.push(ContentType::Text(s.clone()))
             }
             AnthropicResponseContent::Text(text_content) => {
-                new_contents.push(AnthropicResponseContent::PlainText(
-                    text_content.text.clone(),
-                ));
+                new_contents.push(ContentType::Text(text_content.text.clone()));
             }
             AnthropicResponseContent::ToolResult(tool_result) => {
                 // This is invalid, but technically we can recover by just ignoring it--so
@@ -337,36 +361,34 @@ async fn process_tool_calls<'a>(
                 );
             }
             AnthropicResponseContent::ToolCall(tool_call) => {
-                new_contents.push(AnthropicResponseContent::ToolCall(
-                    AnthropicToolUseResponseContent {
-                        id: tool_call.id.clone(),
-                        r#type: "tool_use".into(),
-                        name: tool_call.name.clone(),
-                        input: tool_call.input.clone(),
-                    },
-                ));
-
                 let tool_call_id = tool_call.id.clone();
-                let called_tool = tools.iter().find(|tool| tool.0.name() == tool_call.name).ok_or_else(
-                                || {
-                                    LLMError::ToolCallError(format!(
-                                "Tool {} was called, but it does not exist in the passed list of tools.",
-                                tool_call.name
-                            ))
-                                },
-                            )?;
+                let called_tool = tools.iter().find(|tool| tool.0.name() == tool_call.name)
+                    .ok_or_else(|| {
+                        LLMError::ToolCallError(format!(
+                            "Tool {} was called, but it does not exist in the passed list of tools.",
+                            tool_call.name
+                        ))
+                    }
+                )?;
 
-                let tool_result = called_tool.0.call(tool_call.input.clone().into()).await;
+                let tool_result = match called_tool.0.call(tool_call.input.clone().into()).await {
+                    Ok(res) => res,
+                    Err(e) => Value::String(format!("Error calling tool: {e}")),
+                };
+
+                new_contents.push(ContentType::ToolCall(ToolUseStats {
+                    tool_name: tool_call.name.clone(),
+                    tool_args: serde_json::Value::from(tool_call.input.clone()),
+                    tool_result: tool_result.clone(),
+                }));
+
                 chat_history.push(AnthropicChatHistoryItem {
                     role: "user".into(),
                     content: vec![AnthropicResponseContent::ToolResult(
                         AnthropicToolUseResult {
                             r#type: "tool_result".into(),
                             tool_use_id: tool_call_id,
-                            content: match tool_result {
-                                Ok(res) => res,
-                                Err(e) => Value::String(format!("Error calling tool: {e}")),
-                            },
+                            content: tool_result,
                         },
                     )],
                 });
@@ -377,14 +399,13 @@ async fn process_tool_calls<'a>(
     Ok(())
 }
 
-/// We can use hard-coded strings here; the resulting locality-of-behavior is worth the loss in
-/// pointless generality.
 impl<T: HttpClient> ApiClient for AnthropicClient<T> {
+    /// Send a request to the Anthropic API, processing tool calls as necessary. Returns a final
+    /// response after all tool calls are processed and sent back to the API.
     async fn send_message<'a>(
         &self,
         request: &'a mut ChatRequest<'a>,
     ) -> Result<CompletionApiResponse, LLMError> {
-        // TODO: Implement tool support for Anthropic
         // Use config if available, otherwise fall back to env vars
         let (api_key, model, max_tokens) = if let Some(ref config) = self.config {
             (
@@ -421,7 +442,7 @@ impl<T: HttpClient> ApiClient for AnthropicClient<T> {
             content: response.content.clone(),
         });
 
-        let mut contents: Vec<AnthropicResponseContent> = Vec::new();
+        let mut contents: Vec<ContentType> = Vec::new();
 
         while has_tool_calls {
             process_tool_calls(
@@ -439,40 +460,8 @@ impl<T: HttpClient> ApiClient for AnthropicClient<T> {
                 .any(|c| matches!(c, AnthropicResponseContent::ToolCall { .. }));
         }
 
-        let mut ret_contents: Vec<ContentType> = Vec::new();
-        let mut tool_calls: HashMap<String, (String, serde_json::Value)> = HashMap::new();
-        for content in contents {
-            match content {
-                AnthropicResponseContent::PlainText(text) => {
-                    ret_contents.push(ContentType::Text(text));
-                }
-                AnthropicResponseContent::Text(content) => {
-                    ret_contents.push(ContentType::Text(content.text));
-                }
-                AnthropicResponseContent::ToolCall(call) => {
-                    // Ensure that we have a key
-                    tool_calls.insert(call.id, (call.name, serde_json::Value::from(call.input)));
-                }
-                AnthropicResponseContent::ToolResult(res) => {
-                    let (tool_name, tool_args) =
-                        tool_calls
-                            .get(&res.tool_use_id)
-                            .ok_or(LLMError::ToolCallError(format!(
-                                "Failed to find corresponding tool call for result with ID {}",
-                                res.tool_use_id
-                            )))?;
-
-                    ret_contents.push(ContentType::ToolCall(ToolUseStats {
-                        tool_name: tool_name.clone(),
-                        tool_args: tool_args.clone(),
-                        tool_result: res.content,
-                    }));
-                }
-            }
-        }
-
         Ok(CompletionApiResponse {
-            content: ret_contents,
+            content: contents,
             input_tokens: response.usage.input_tokens,
             output_tokens: response.usage.output_tokens,
         })
