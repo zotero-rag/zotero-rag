@@ -27,11 +27,12 @@ pub trait Tool: Send + Sync {
     fn schema_key(&self) -> String;
 
     /// The function to call when the tool is invoked.
-    fn call(&mut self, args: Value) -> Pin<Box<dyn Future<Output = Result<Value, String>> + Send>>;
+    fn call(&self, args: Value) -> Pin<Box<dyn Future<Output = Result<Value, String>> + Send>>;
 }
 
 /// A newtype wrapper struct that lets us add a blanket implementation of `Serialize` to all tools.
-pub struct SerializedTool<'a>(pub &'a mut dyn Tool);
+#[derive(Clone)]
+pub struct SerializedTool<'a>(pub &'a dyn Tool);
 
 impl<'a> Serialize for SerializedTool<'a> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>

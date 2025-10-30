@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::collections::HashMap;
 use std::env;
 use std::sync::Arc;
 
@@ -7,6 +8,7 @@ use http::HeaderMap;
 use lancedb::arrow::arrow_schema::{DataType, Field};
 use lancedb::embeddings::EmbeddingFunction;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use super::base::{ApiClient, ChatHistoryItem, ChatRequest, CompletionApiResponse};
 use super::errors::LLMError;
@@ -17,8 +19,8 @@ use crate::constants::{
     OPENAI_EMBEDDING_DIM,
 };
 use crate::embedding::openai::compute_openai_embeddings_sync;
-use crate::llm::base::{ChatHistoryContent, ContentType};
-use crate::llm::tools::SerializedTool;
+use crate::llm::base::{ChatHistoryContent, ContentType, ToolUseStats};
+use crate::llm::tools::{SerializedTool, Tool};
 const DEFAULT_CLAUDE_MODEL: &str = DEFAULT_ANTHROPIC_MODEL;
 
 /// A generic client class for now. We can add stuff here later if needed, for
@@ -158,6 +160,19 @@ struct AnthropicRequest<'a> {
     tools: Option<Vec<SerializedTool<'a>>>,
 }
 
+fn get_owned_tools<'a>(tools: Option<&'a [Box<dyn Tool>]>) -> Option<Vec<SerializedTool<'a>>> {
+    let owned_tools: Option<Vec<SerializedTool>> = match tools.as_ref() {
+        None => None,
+        Some(iter) => Some(
+            iter.iter()
+                .map(|f| SerializedTool(&**f))
+                .collect::<Vec<SerializedTool>>(),
+        ),
+    };
+
+    owned_tools
+}
+
 impl<'a> AnthropicRequest<'a> {
     fn from_chat_request(req: &'a mut ChatRequest<'a>, model: String, max_tokens: u32) -> Self {
         let mut messages = req
@@ -172,15 +187,7 @@ impl<'a> AnthropicRequest<'a> {
             content: vec![req.message.message.clone().into()],
         });
 
-        let owned_tools: Option<Vec<SerializedTool>> = match req.tools.as_mut() {
-            None => None,
-            Some(iter) => Some(
-                iter.iter_mut()
-                    .map(|f| SerializedTool(&mut **f))
-                    .collect::<Vec<SerializedTool>>(),
-            ),
-        };
-
+        let owned_tools: Option<Vec<SerializedTool>> = get_owned_tools(req.tools);
         AnthropicRequest {
             model,
             max_tokens: req.message.max_tokens.unwrap_or(max_tokens),
@@ -279,6 +286,97 @@ struct AnthropicResponse {
     content: Vec<AnthropicResponseContent>,
 }
 
+async fn send_anthropic_request<'a>(
+    client: &impl HttpClient,
+    headers: &HeaderMap,
+    req: &AnthropicRequest<'a>,
+) -> Result<AnthropicResponse, LLMError> {
+    const MAX_RETRIES: usize = DEFAULT_MAX_RETRIES;
+    let res = request_with_backoff(
+        client,
+        "https://api.anthropic.com/v1/messages",
+        headers,
+        req,
+        MAX_RETRIES,
+    )
+    .await?;
+
+    let body = res.text().await?;
+    let json: serde_json::Value = serde_json::from_str(&body)?;
+    let response: AnthropicResponse = serde_json::from_value(json.clone()).map_err(|err| {
+        eprintln!("Failed to deserialize Anthropic response: we got the response {json}");
+
+        LLMError::DeserializationError(err.to_string())
+    })?;
+
+    Ok(response)
+}
+
+async fn process_tool_calls<'a>(
+    chat_history: &mut Vec<AnthropicChatHistoryItem>,
+    new_contents: &mut Vec<AnthropicResponseContent>,
+    response: &AnthropicResponse,
+    tools: &Vec<SerializedTool<'a>>,
+) -> Result<(), LLMError> {
+    for content in &response.content {
+        match content {
+            AnthropicResponseContent::PlainText(s) => {
+                new_contents.push(AnthropicResponseContent::PlainText(s.clone()))
+            }
+            AnthropicResponseContent::Text(text_content) => {
+                new_contents.push(AnthropicResponseContent::PlainText(
+                    text_content.text.clone(),
+                ));
+            }
+            AnthropicResponseContent::ToolResult(tool_result) => {
+                // This is invalid, but technically we can recover by just ignoring it--so
+                // we will.
+                log::warn!(
+                    "Got a tool result from the API response. This is not expected, and will be ignored. Tool result: {:#?}",
+                    tool_result
+                );
+            }
+            AnthropicResponseContent::ToolCall(tool_call) => {
+                new_contents.push(AnthropicResponseContent::ToolCall(
+                    AnthropicToolUseResponseContent {
+                        id: tool_call.id.clone(),
+                        r#type: "tool_use".into(),
+                        name: tool_call.name.clone(),
+                        input: tool_call.input.clone(),
+                    },
+                ));
+
+                let tool_call_id = tool_call.id.clone();
+                let called_tool = tools.iter().find(|tool| tool.0.name() == tool_call.name).ok_or_else(
+                                || {
+                                    LLMError::ToolCallError(format!(
+                                "Tool {} was called, but it does not exist in the passed list of tools.",
+                                tool_call.name
+                            ))
+                                },
+                            )?;
+
+                let tool_result = called_tool.0.call(tool_call.input.clone().into()).await;
+                chat_history.push(AnthropicChatHistoryItem {
+                    role: "user".into(),
+                    content: vec![AnthropicResponseContent::ToolResult(
+                        AnthropicToolUseResult {
+                            r#type: "tool_result".into(),
+                            tool_use_id: tool_call_id,
+                            content: match tool_result {
+                                Ok(res) => res,
+                                Err(e) => Value::String(format!("Error calling tool: {e}")),
+                            },
+                        },
+                    )],
+                });
+            }
+        }
+    }
+
+    Ok(())
+}
+
 /// We can use hard-coded strings here; the resulting locality-of-behavior is worth the loss in
 /// pointless generality.
 impl<T: HttpClient> ApiClient for AnthropicClient<T> {
@@ -307,88 +405,74 @@ impl<T: HttpClient> ApiClient for AnthropicClient<T> {
         headers.insert("anthropic-version", "2023-06-01".parse()?);
         headers.insert("content-type", "application/json".parse()?);
 
-        let mut req_body = AnthropicRequest::from_chat_request(request, model, max_tokens);
-        const MAX_RETRIES: usize = DEFAULT_MAX_RETRIES;
-        let res = request_with_backoff(
-            &self.client,
-            "https://api.anthropic.com/v1/messages",
-            &headers,
-            &req_body,
-            MAX_RETRIES,
-        )
-        .await?;
+        let req_body = AnthropicRequest::from_chat_request(request, model, max_tokens);
+        let response = send_anthropic_request(&self.client, &headers, &req_body).await?;
 
-        // Get the response body as text first for debugging
-        let body = res.text().await?;
-
-        let json: serde_json::Value = serde_json::from_str(&body)?;
-        let response: AnthropicResponse = serde_json::from_value(json.clone()).map_err(|err| {
-            eprintln!("Failed to deserialize Anthropic response: we got the response {json}");
-
-            LLMError::DeserializationError(err.to_string())
-        })?;
-
-        let has_tool_calls: bool = response
+        let mut has_tool_calls: bool = response
             .content
             .iter()
             .any(|c| matches!(c, AnthropicResponseContent::ToolCall { .. }));
 
-        let mut contents: Vec<ContentType> = Vec::new();
         let mut chat_history: Vec<AnthropicChatHistoryItem> = req_body.messages.clone();
 
+        // Append the contents
+        chat_history.push(AnthropicChatHistoryItem {
+            role: "assistant".into(),
+            content: response.content.clone(),
+        });
+
+        let mut contents: Vec<AnthropicResponseContent> = Vec::new();
+
         while has_tool_calls {
-            // Append the contents
-            chat_history.push(AnthropicChatHistoryItem {
-                role: "assistant".into(),
-                content: response.content.clone(),
-            });
+            process_tool_calls(
+                &mut chat_history,
+                &mut contents,
+                &response,
+                req_body.tools.as_ref().unwrap(),
+            )
+            .await?;
 
-            for content in &response.content {
-                match content {
-                    AnthropicResponseContent::PlainText(s) => {
-                        contents.push(ContentType::Text(s.clone()))
-                    }
-                    AnthropicResponseContent::Text(text_content) => {
-                        contents.push(ContentType::Text(text_content.text.clone()));
-                    }
-                    AnthropicResponseContent::ToolCall(tool_call) => {
-                        let tool_call_id = tool_call.id.clone();
-                        // TODO: Process the tool call
-                        let tools = req_body.tools.as_mut().ok_or_else(|| {
-                            LLMError::ToolCallError(format!(
-                                "Tool {} was called, but no tools were passed to the request.",
-                                tool_call.name
-                            ))
-                        })?;
+            let response = send_anthropic_request(&self.client, &headers, &req_body).await?;
+            has_tool_calls = response
+                .content
+                .iter()
+                .any(|c| matches!(c, AnthropicResponseContent::ToolCall { .. }));
+        }
 
-                        let called_tool =
-                            tools.iter_mut().find(|tool| tool.0.name() == tool_call.name).ok_or_else(
-                                || {
-                                    LLMError::ToolCallError(format!(
-                                "Tool {} was called, but it does not exist in the passed list of tools.",
-                                tool_call.name
-                            ))
-                                },
-                            )?;
+        let mut ret_contents: Vec<ContentType> = Vec::new();
+        let mut tool_calls: HashMap<String, (String, serde_json::Value)> = HashMap::new();
+        for content in contents {
+            match content {
+                AnthropicResponseContent::PlainText(text) => {
+                    ret_contents.push(ContentType::Text(text));
+                }
+                AnthropicResponseContent::Text(content) => {
+                    ret_contents.push(ContentType::Text(content.text));
+                }
+                AnthropicResponseContent::ToolCall(call) => {
+                    // Ensure that we have a key
+                    tool_calls.insert(call.id, (call.name, serde_json::Value::from(call.input)));
+                }
+                AnthropicResponseContent::ToolResult(res) => {
+                    let (tool_name, tool_args) =
+                        tool_calls
+                            .get(&res.tool_use_id)
+                            .ok_or(LLMError::ToolCallError(format!(
+                                "Failed to find corresponding tool call for result with ID {}",
+                                res.tool_use_id
+                            )))?;
 
-                        let tool_result = called_tool.0.call(tool_call.input.clone().into()).await;
-
-                        break;
-                    }
-                    AnthropicResponseContent::ToolResult(tool_result) => {
-                        // This is invalid, but technically we can recover by just ignoring it--so
-                        // we will.
-                        log::warn!(
-                            "Got a tool result from the API response. This is not expected, and will be ignored. Tool result: {:#?}",
-                            tool_result
-                        );
-                    }
+                    ret_contents.push(ContentType::ToolCall(ToolUseStats {
+                        tool_name: tool_name.clone(),
+                        tool_args: tool_args.clone(),
+                        tool_result: res.content,
+                    }));
                 }
             }
         }
 
         Ok(CompletionApiResponse {
-            content: contents,
+            content: ret_contents,
             input_tokens: response.usage.input_tokens,
             output_tokens: response.usage.output_tokens,
         })
@@ -497,7 +581,7 @@ mod tests {
         }
 
         fn call(
-            &mut self,
+            &self,
             args: serde_json::Value,
         ) -> std::pin::Pin<Box<dyn Future<Output = Result<serde_json::Value, String>> + Send>>
         {
@@ -633,7 +717,7 @@ mod tests {
 
         let client = AnthropicClient::<ReqwestClient>::default();
         let call_count = Arc::new(Mutex::new(0));
-        let mut tool = MockTool {
+        let tool = MockTool {
             call_count: Arc::clone(&call_count),
         };
         let message = UserMessage {
