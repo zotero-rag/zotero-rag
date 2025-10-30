@@ -130,7 +130,7 @@ mod tests {
         let headers = HeaderMap::new();
         let request = json!({"test": "data"});
 
-        let result = request_with_backoff(&client, "http://test.com", &headers, request, 3).await;
+        let result = request_with_backoff(&client, "http://test.com", &headers, &request, 3).await;
 
         assert!(result.is_ok());
         let response = result.unwrap();
@@ -147,7 +147,7 @@ mod tests {
         let headers = HeaderMap::new();
         let request = json!({"test": "data"});
 
-        let result = request_with_backoff(&client, "http://test.com", &headers, request, 2).await;
+        let result = request_with_backoff(&client, "http://test.com", &headers, &request, 2).await;
 
         assert!(result.is_err());
 
