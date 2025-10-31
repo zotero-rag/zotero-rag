@@ -165,9 +165,9 @@ where
     Ok(())
 }
 
-/// A mock tool that returns static content. We will test that tool calling works and that we
-/// can deserialize the responses using this.
 #[cfg(test)]
+/// Test utilities for tool calling. This contains a `MockTool` that tests in this crate use to
+/// check that tool calling works correctly.
 pub(crate) mod test_utils {
     use schemars::{JsonSchema, schema_for};
     use serde::Deserialize;
@@ -175,11 +175,14 @@ pub(crate) mod test_utils {
     use super::Tool;
     use std::sync::{Arc, Mutex};
 
+    /// A mock tool that returns static content. We will test that tool calling works and that we
+    /// can deserialize the responses using this.
     pub(crate) struct MockTool {
         pub call_count: Arc<Mutex<usize>>,
         pub schema_key: String,
     }
 
+    /// The tool is simple and greets a user with a name; this is that input.
     #[derive(Deserialize, JsonSchema)]
     pub(crate) struct MockToolInput {
         name: String,
