@@ -667,7 +667,7 @@ mod tests {
 
         let mut request = ChatRequest {
             message: &message,
-            tools: Some(&mut [Box::new(tool)]),
+            tools: Some(&[Box::new(tool)]),
         };
         let res = client.send_message(&mut request).await;
 
@@ -678,6 +678,6 @@ mod tests {
 
         assert!(res.is_ok());
         dbg!(&res);
-        assert!(call_count.lock().unwrap().eq(&(1 as usize)));
+        assert!(call_count.lock().unwrap().eq(&1_usize));
     }
 }
