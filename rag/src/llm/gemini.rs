@@ -645,9 +645,12 @@ impl<T: HttpClient + Default + std::fmt::Debug> EmbeddingFunction for GeminiClie
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex;
+
     use super::*;
     use crate::llm::base::{ApiClient, ChatHistoryItem, ChatRequest, UserMessage};
     use crate::llm::http_client::MockHttpClient;
+    use crate::llm::tools::test_utils::MockTool;
     use arrow_array::Array;
     use dotenv::dotenv;
     use lancedb::embeddings::EmbeddingFunction;
@@ -780,6 +783,35 @@ mod tests {
             message: "Hello!".to_owned(),
         };
         let mut request = ChatRequest::from(&message);
+        let res = client.send_message(&mut request).await;
+
+        // Debug the error if there is one
+        if res.is_err() {
+            println!("Gemini test error: {:?}", res.as_ref().err());
+        }
+
+        assert!(res.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_request_works_with_tools() {
+        dotenv().ok();
+
+        let client = GeminiClient::<ReqwestClient>::default();
+        let call_count = Arc::new(Mutex::new(0));
+        let tool = MockTool {
+            call_count: Arc::clone(&call_count),
+        };
+        let message = UserMessage {
+            chat_history: Vec::new(),
+            max_tokens: Some(1024),
+            message: "Hello!".to_owned(),
+        };
+        let mut request = ChatRequest {
+            message: &message,
+            tools: Some(&[Box::new(tool)]),
+        };
+
         let res = client.send_message(&mut request).await;
 
         // Debug the error if there is one
