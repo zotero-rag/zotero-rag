@@ -14,9 +14,10 @@ use crate::constants::{
     DEFAULT_GEMINI_EMBEDDING_MODEL, DEFAULT_GEMINI_MODEL, DEFAULT_MAX_CONCURRENT_REQUESTS,
     DEFAULT_MAX_RETRIES, GEMINI_EMBEDDING_DIM,
 };
-use crate::llm::base::{ChatHistoryContent, ContentType};
+use crate::llm::base::{ChatHistoryContent, ChatHistoryItem, ContentType, ToolCallRequest};
+use crate::llm::tools::{get_owned_tools, process_tool_calls, SerializedTool};
 
-use super::base::{ApiClient, ChatRequest, CompletionApiResponse, UserMessage};
+use super::base::{ApiClient, ChatRequest, CompletionApiResponse};
 use super::errors::LLMError;
 use super::http_client::{HttpClient, ReqwestClient};
 
@@ -231,6 +232,25 @@ struct GeminiContent {
     parts: Vec<GeminiPart>,
 }
 
+impl From<ChatHistoryItem> for GeminiContent {
+    fn from(value: ChatHistoryItem) -> Self {
+        Self {
+            role: value.role,
+            parts: value.content.into_iter().map(|c| {
+                match c {
+                    ChatHistoryContent::Text(text) => GeminiPart::Text { text },
+                    ChatHistoryContent::ToolCallRequest(tool_call) => GeminiPart::FunctionCall { function_call: GeminiFunctionCall {
+                        id: tool_call.id,
+                        name: tool_call.tool_name,
+                        args: tool_call.args
+                    }},
+                    ChatHistoryContent::ToolCallResponse(tool_res) => GeminiPart::FunctionResult { function_response: GeminiFunctionResult { id: tool_res.id, name: tool_res.tool_name, response: tool_res.result } }
+                }
+            }).collect::<Vec<_>>()
+        }
+    }
+}
+
 /// Thinking config in case reasoning models are used
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -257,24 +277,32 @@ struct GeminiGenerationConfig {
     thinking_config: Option<GeminiThinkingConfig>,
 }
 
-/// The request body for text generation
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
-struct GeminiRequestBody {
+struct GeminiToolDeclaration<'a> {
+    function_declarations: Vec<SerializedTool<'a>>,
+}
+
+/// The request body for text generation
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct GeminiRequestBody<'a> {
     contents: Vec<GeminiContent>,
     #[serde(skip_serializing_if = "Option::is_none")]
     generation_config: Option<GeminiGenerationConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tools: Option<GeminiToolDeclaration<'a>>,
 }
 
-impl From<&UserMessage> for GeminiRequestBody {
-    fn from(msg: &UserMessage) -> Self {
-        let model_max = msg.max_tokens.or_else(|| {
+impl<'a> GeminiRequestBody<'a> {
+    fn from_chat_request(req: &'a mut ChatRequest<'a>) -> Self {
+        let model_max = req.message.max_tokens.or_else(|| {
             env::var("GEMINI_MAX_TOKENS")
                 .ok()
                 .and_then(|s| s.parse().ok())
         });
-
-        let mut contents: Vec<GeminiContent> = msg
+        let mut contents: Vec<GeminiContent> = req
+            .message
             .chat_history
             .iter()
             .map(|c| {
@@ -295,9 +323,11 @@ impl From<&UserMessage> for GeminiRequestBody {
         contents.push(GeminiContent {
             role: "user".to_string(),
             parts: vec![GeminiPart::Text {
-                text: msg.message.clone(),
+                text: req.message.message.clone(),
             }],
         });
+
+        let owned_tools: Option<Vec<SerializedTool>> = get_owned_tools(req.tools);
 
         GeminiRequestBody {
             contents,
@@ -312,6 +342,12 @@ impl From<&UserMessage> for GeminiRequestBody {
                     thinking_budget: Some(1024),
                 }),
             }),
+            tools: match owned_tools {
+                None => None,
+                Some(tools) => Some(GeminiToolDeclaration {
+                    function_declarations: tools,
+                }),
+            },
         }
     }
 }
@@ -323,6 +359,38 @@ fn map_role(role: &str) -> String {
         "assistant" => "model".into(),
         _ => "user".into(),
     }
+}
+
+async fn send_gemini_generation_request<'a>(
+    client: &impl HttpClient,
+    headers: &HeaderMap,
+    req: &GeminiRequestBody<'a>,
+    model: &str,
+) -> Result<(GeminiResponseCandidate, GeminiUsageMetadata), LLMError> {
+    let url = format!(
+        "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent",
+        model
+    );
+
+    let res = request_with_backoff(client, &url, headers, req, DEFAULT_MAX_RETRIES).await?;
+
+    let body = res.text().await?;
+    let json: serde_json::Value = match serde_json::from_str(&body) {
+        Ok(json) => json,
+        Err(_) => return Err(LLMError::DeserializationError(body)),
+    };
+
+    let response: GeminiResponseBody = match serde_json::from_value(json) {
+        Ok(response) => response,
+        Err(_) => return Err(LLMError::DeserializationError(body)),
+    };
+    let first_candidate = response
+                        .candidates
+                        .first()
+                        .ok_or_else(|| LLMError::GenericLLMError("No candidates in Gemini response".into()))?;
+
+
+    Ok((first_candidate.clone(), response.usage_metadata))
 }
 
 /// Usage metadata received from the Gemini text generation response.
@@ -351,62 +419,121 @@ struct GeminiResponseBody {
     usage_metadata: GeminiUsageMetadata,
 }
 
+/// Convert Gemini response content into provider-agnostic `ChatHistoryContent` items.
+///
+/// Tool results should never appear in API responses; if encountered, they are ignored
+/// with a warning.
+fn map_response_to_chat_contents(contents: &[GeminiPart]) -> Vec<ChatHistoryContent> {
+    contents.iter().filter_map(|c| {
+        match c {
+            GeminiPart::Text{text} => Some(ChatHistoryContent::Text(text.clone())),
+            GeminiPart::FunctionCall{function_call: fc} => 
+                Some(ChatHistoryContent::ToolCallRequest(ToolCallRequest {
+                    id: fc.id.clone(),
+                    tool_name: fc.name.clone(),
+                    args: fc.args.clone()
+                })),
+            _ => {
+                log::warn!(
+                    "Got a tool result from the API response. This is not expected, and will be ignored."
+                );
+
+                None
+            }
+        }
+    }).collect::<Vec<_>>()
+}
+
+
 impl<T: HttpClient> ApiClient for GeminiClient<T> {
     async fn send_message<'a>(
         &self,
         request: &'a mut ChatRequest<'a>,
     ) -> Result<CompletionApiResponse, LLMError> {
         // TODO: Implement tool support for Gemini
-        let message = request.message;
         let key = get_gemini_api_key()?;
-        let model = env::var("GEMINI_MODEL").unwrap_or_else(|_| DEFAULT_GEMINI_MODEL.to_string());
+        let model = match &self.config {
+            None => env::var("GEMINI_MODEL").unwrap_or_else(|_| DEFAULT_GEMINI_MODEL.to_string()),
+            Some(config) => config.model.clone(),
+        };
 
         let mut headers = HeaderMap::new();
         headers.insert("content-type", "application/json".parse()?);
         headers.insert("x-goog-api-key", key.parse()?);
 
-        let req_body: GeminiRequestBody = message.into();
+        let req_body = GeminiRequestBody::from_chat_request(request);
 
-        let url = format!(
-            "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent",
-            model
-        );
+        let (mut response, mut usage) =
+            send_gemini_generation_request(&self.client, &headers, &req_body, &model).await?;
 
-        let res =
-            request_with_backoff(&self.client, &url, &headers, &req_body, DEFAULT_MAX_RETRIES)
-                .await?;
-
-        let body = res.text().await?;
-        let json: serde_json::Value = match serde_json::from_str(&body) {
-            Ok(json) => json,
-            Err(_) => return Err(LLMError::DeserializationError(body)),
-        };
-
-        let response: GeminiResponseBody = match serde_json::from_value(json) {
-            Ok(response) => response,
-            Err(_) => return Err(LLMError::DeserializationError(body)),
-        };
-
-        let first = response
-            .candidates
-            .first()
-            .ok_or_else(|| LLMError::GenericLLMError("No candidates in Gemini response".into()))?;
-
-        let content_text = first
+        let mut has_tool_calls: bool = response
             .content
             .parts
             .iter()
-            .filter_map(|p| match p {
-                GeminiPart::Text { text } => Some(text.clone()),
-                _ => None,
-            })
-            .collect::<Vec<_>>()
-            .join("");
+            .any(|c| matches!(c, GeminiPart::FunctionCall { .. }));
 
+        // Append the contents
+        let mut chat_history: Vec<GeminiContent> = req_body.contents.clone();
+        chat_history.push(GeminiContent {
+            role: "assistant".into(),
+            parts: response.content.parts.clone()
+        });
+
+
+        let mut chat_history: Vec<GeminiContent> = req_body.contents.clone();
+        let mut contents: Vec<ContentType> = Vec::new();
+
+        while has_tool_calls {
+            let converted_contents = map_response_to_chat_contents(&response.content.parts);
+
+            // `unwrap` is likely to be safe here since tool calls exist
+            let owned_tools = req_body.tools.as_ref().unwrap();
+            process_tool_calls(
+                &mut chat_history,
+                &mut contents,
+                &converted_contents,
+                &owned_tools.function_declarations
+            )
+            .await?;
+
+            // Create a new request body with the updated chat history
+            let updated_req_body = GeminiRequestBody {
+                generation_config: req_body.generation_config.clone(),
+                contents: chat_history.clone(),
+                tools: req_body.tools.clone(),
+            };
+
+            (response, usage) = send_gemini_generation_request(&self.client, &headers, &updated_req_body, &model).await?;
+
+            // Append the new response to chat history
+            chat_history.push(GeminiContent {
+                role: "assistant".into(),
+                parts: response.content.parts.clone()
+            });
+
+            has_tool_calls = response
+                .content
+                .parts
+                .iter()
+                .any(|c| matches!(c, GeminiPart::FunctionCall { .. }));
+
+        }
+
+        // Process the final response (which has no tool calls) to extract text content
+        for content in &response.content.parts {
+            match content {
+                GeminiPart::Text{text} => {
+                    contents.push(ContentType::Text(text.clone()))
+                }
+                _ => {}
+            }
+        }
+
+        // TODO: Check if this metadata includes tool use
         Ok(CompletionApiResponse {
-            content: vec![ContentType::Text(content_text)],
-            input_tokens: response.usage_metadata.prompt_token_count,
-            output_tokens: response.usage_metadata.candidates_token_count,
+            content: contents,
+            input_tokens: usage.prompt_token_count,
+            output_tokens: usage.candidates_token_count,
         })
     }
 }
