@@ -103,11 +103,13 @@ embedding_dims = 3072
 reranker = "rerank-2.5"
 embedding_model = "voyage-3-large"
 embedding_dims = 2048
+api_key = "..."
 
 [cohere]
 reranker = "rerank-v3.5"
 embedding_model = "embed-v4.0"
 embedding_dims = 1536
+api_key = "..."
 
 [openrouter]
 api_key = "..."

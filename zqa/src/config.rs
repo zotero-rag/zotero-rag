@@ -42,11 +42,13 @@ use thiserror::Error;
 /// reranker = "rerank-2.5"
 /// embedding_model = "voyage-3-large"
 /// embedding_dims = 2048
+///api_key = "..."
 ///
 /// [cohere]
 /// reranker = "rerank-v3.5"
 /// embedding_model = "embed-v4.0"
 /// embedding_dims = 1536
+/// api_key = "..."
 ///
 /// [openrouter]
 /// api_key = "..."
@@ -374,7 +376,9 @@ impl From<OpenAIConfig> for rag::config::OpenAIConfig {
             api_key: config
                 .api_key
                 .or_else(|| env::var("OPENAI_API_KEY").ok())
-                .expect("OpenAI API key not found. Please set it in your config file or as OPENAI_API_KEY."),
+                .expect(
+                "OpenAI API key not found. Please set it in your config file or as OPENAI_API_KEY.",
+            ),
             model: config.model,
             max_tokens: config.max_tokens,
             embedding_model: config
@@ -442,7 +446,9 @@ impl From<CohereConfig> for rag::config::CohereConfig {
             api_key: config
                 .api_key
                 .or_else(|| env::var("COHERE_API_KEY").ok())
-                .expect("Cohere API key not found. Please set it in your config file or as COHERE_API_KEY."),
+                .expect(
+                "Cohere API key not found. Please set it in your config file or as COHERE_API_KEY.",
+            ),
             embedding_model: config
                 .embedding_model
                 .unwrap_or_else(|| COHERE_EMBEDDING_MODEL.to_string()),
