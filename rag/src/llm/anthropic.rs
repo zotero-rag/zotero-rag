@@ -7,7 +7,6 @@ use http::HeaderMap;
 use lancedb::arrow::arrow_schema::{DataType, Field};
 use lancedb::embeddings::EmbeddingFunction;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
 use super::base::{ApiClient, ChatHistoryItem, ChatRequest, CompletionApiResponse};
 use super::errors::LLMError;
@@ -18,8 +17,8 @@ use crate::constants::{
     OPENAI_EMBEDDING_DIM,
 };
 use crate::embedding::openai::compute_openai_embeddings_sync;
-use crate::llm::base::{ChatHistoryContent, ContentType, ToolUseStats};
-use crate::llm::tools::{SerializedTool, Tool};
+use crate::llm::base::{ChatHistoryContent, ContentType, ToolCallRequest};
+use crate::llm::tools::{SerializedTool, get_owned_tools, process_tool_calls};
 const DEFAULT_CLAUDE_MODEL: &str = DEFAULT_ANTHROPIC_MODEL;
 
 /// A generic client class for now. We can add stuff here later if needed, for
@@ -63,48 +62,6 @@ where
         source: Arc<dyn arrow_array::Array>,
     ) -> Result<Arc<dyn arrow_array::Array>, LLMError> {
         compute_openai_embeddings_sync(source)
-    }
-}
-
-impl From<ChatHistoryContent> for AnthropicResponseContent {
-    fn from(value: ChatHistoryContent) -> Self {
-        match value {
-            ChatHistoryContent::Text(s) => Self::PlainText(s),
-            ChatHistoryContent::ToolCallRequest(req) => {
-                Self::ToolCall(AnthropicToolUseResponseContent {
-                    id: req.id,
-                    r#type: "tool_use".into(),
-                    name: req.tool_name,
-                    input: serde_json::Value::as_object(&req.args).unwrap().clone(),
-                })
-            }
-            ChatHistoryContent::ToolCallResponse(res) => Self::ToolResult(AnthropicToolUseResult {
-                r#type: "tool_result".into(),
-                tool_use_id: res.id,
-                content: res.result,
-            }),
-        }
-    }
-}
-
-impl From<&ChatHistoryContent> for AnthropicResponseContent {
-    fn from(value: &ChatHistoryContent) -> Self {
-        match value {
-            ChatHistoryContent::Text(s) => Self::PlainText(s.clone()),
-            ChatHistoryContent::ToolCallRequest(req) => {
-                Self::ToolCall(AnthropicToolUseResponseContent {
-                    id: req.id.clone(),
-                    r#type: "tool_use".into(),
-                    name: req.tool_name.clone(),
-                    input: serde_json::Value::as_object(&req.args).unwrap().clone(),
-                })
-            }
-            ChatHistoryContent::ToolCallResponse(res) => Self::ToolResult(AnthropicToolUseResult {
-                r#type: "tool_result".into(),
-                tool_use_id: res.id.clone(),
-                content: res.result.clone(),
-            }),
-        }
     }
 }
 
@@ -157,16 +114,6 @@ struct AnthropicRequest<'a> {
     /// The tools passed in
     #[serde(skip_serializing_if = "Option::is_none")]
     tools: Option<Vec<SerializedTool<'a>>>,
-}
-
-fn get_owned_tools<'a>(tools: Option<&'a [Box<dyn Tool>]>) -> Option<Vec<SerializedTool<'a>>> {
-    let owned_tools: Option<Vec<SerializedTool>> = tools.as_ref().map(|iter| {
-        iter.iter()
-            .map(|f| SerializedTool(&**f))
-            .collect::<Vec<SerializedTool>>()
-    });
-
-    owned_tools
 }
 
 impl<'a> AnthropicRequest<'a> {
@@ -222,15 +169,6 @@ struct AnthropicTextResponseContent {
     text: String,
 }
 
-impl From<String> for AnthropicResponseContent {
-    fn from(value: String) -> Self {
-        Self::Text(AnthropicTextResponseContent {
-            r#type: "text".into(),
-            text: value,
-        })
-    }
-}
-
 /// A part of an Anthropic API response denoting a tool call (Anthropic uses the term "tool use" or
 /// "function call"). This is *not* the struct containing the *result* of that tool: that is
 /// `AnthropicToolUseResult`. Note that this struct is also used as part of
@@ -259,6 +197,36 @@ enum AnthropicResponseContent {
     ToolCall(AnthropicToolUseResponseContent),
     /// Only used in the chat history; this can never be in the response from the API.
     ToolResult(AnthropicToolUseResult),
+}
+
+impl From<ChatHistoryContent> for AnthropicResponseContent {
+    fn from(value: ChatHistoryContent) -> Self {
+        match value {
+            ChatHistoryContent::Text(s) => Self::PlainText(s),
+            ChatHistoryContent::ToolCallRequest(req) => {
+                Self::ToolCall(AnthropicToolUseResponseContent {
+                    id: req.id,
+                    r#type: "tool_use".into(),
+                    name: req.tool_name,
+                    input: serde_json::Value::as_object(&req.args).unwrap().clone(),
+                })
+            }
+            ChatHistoryContent::ToolCallResponse(res) => Self::ToolResult(AnthropicToolUseResult {
+                r#type: "tool_result".into(),
+                tool_use_id: res.id,
+                content: res.result,
+            }),
+        }
+    }
+}
+
+impl From<String> for AnthropicResponseContent {
+    fn from(value: String) -> Self {
+        Self::Text(AnthropicTextResponseContent {
+            r#type: "text".into(),
+            text: value,
+        })
+    }
 }
 
 /// Response from the Anthropic API
@@ -323,79 +291,31 @@ async fn send_anthropic_request<'a>(
     Ok(response)
 }
 
-/// Process tool calls in a single response from the Anthropic API.
+/// Convert Anthropic response content into provider-agnostic `ChatHistoryContent` items.
 ///
-/// This function processes tool calls in a single response from the Anthropic API, modifying the
-/// `chat_history` with results as it proceeds. This function also accepts a mutable reference to a
-/// vector of `ContentType`, which gets filled with text responses from the model and processed tool
-/// calls and results.
-///
-/// # Arguments:
-///
-/// * `chat_history`: A list of Anthropic-specific chat history items, to be passed back to the API
-///   after the tool calls are processed.
-/// * `new_contents`: A list that should be populated with the model responses and tool uses.
-/// * `response`: The API response to process.
-/// * `tools`: A reference to a list of owned tools.
-async fn process_tool_calls<'a>(
-    chat_history: &mut Vec<AnthropicChatHistoryItem>,
-    new_contents: &mut Vec<ContentType>,
-    response: &AnthropicResponse,
-    tools: &Vec<SerializedTool<'a>>,
-) -> Result<(), LLMError> {
-    for content in &response.content {
-        match content {
-            AnthropicResponseContent::PlainText(s) => {
-                new_contents.push(ContentType::Text(s.clone()))
-            }
-            AnthropicResponseContent::Text(text_content) => {
-                new_contents.push(ContentType::Text(text_content.text.clone()));
-            }
-            AnthropicResponseContent::ToolResult(tool_result) => {
-                // This is invalid, but technically we can recover by just ignoring it--so
-                // we will.
-                log::warn!(
-                    "Got a tool result from the API response. This is not expected, and will be ignored. Tool result: {:#?}",
-                    tool_result
-                );
-            }
-            AnthropicResponseContent::ToolCall(tool_call) => {
-                let tool_call_id = tool_call.id.clone();
-                let called_tool = tools.iter().find(|tool| tool.0.name() == tool_call.name)
-                    .ok_or_else(|| {
-                        LLMError::ToolCallError(format!(
-                            "Tool {} was called, but it does not exist in the passed list of tools.",
-                            tool_call.name
-                        ))
-                    }
-                )?;
-
-                let tool_result = match called_tool.0.call(tool_call.input.clone().into()).await {
-                    Ok(res) => res,
-                    Err(e) => Value::String(format!("Error calling tool: {e}")),
-                };
-
-                new_contents.push(ContentType::ToolCall(ToolUseStats {
-                    tool_name: tool_call.name.clone(),
-                    tool_args: serde_json::Value::from(tool_call.input.clone()),
-                    tool_result: tool_result.clone(),
+/// Tool results should never appear in Anthropic API responses; if encountered, they are ignored
+/// with a warning.
+fn map_response_to_chat_contents(contents: &[AnthropicResponseContent]) -> Vec<ChatHistoryContent> {
+    let mut out = Vec::new();
+    for c in contents {
+        match c {
+            AnthropicResponseContent::PlainText(s) => out.push(ChatHistoryContent::Text(s.clone())),
+            AnthropicResponseContent::Text(t) => out.push(ChatHistoryContent::Text(t.text.clone())),
+            AnthropicResponseContent::ToolCall(tc) => {
+                out.push(ChatHistoryContent::ToolCallRequest(ToolCallRequest {
+                    id: tc.id.clone(),
+                    tool_name: tc.name.clone(),
+                    args: serde_json::Value::from(tc.input.clone()),
                 }));
-
-                chat_history.push(AnthropicChatHistoryItem {
-                    role: "user".into(),
-                    content: vec![AnthropicResponseContent::ToolResult(
-                        AnthropicToolUseResult {
-                            r#type: "tool_result".into(),
-                            tool_use_id: tool_call_id,
-                            content: tool_result,
-                        },
-                    )],
-                });
+            }
+            AnthropicResponseContent::ToolResult(_) => {
+                log::warn!(
+                    "Got a tool result from the API response. This is not expected, and will be ignored."
+                );
             }
         }
     }
-
-    Ok(())
+    out
 }
 
 impl<T: HttpClient> ApiClient for AnthropicClient<T> {
@@ -444,10 +364,11 @@ impl<T: HttpClient> ApiClient for AnthropicClient<T> {
         let mut contents: Vec<ContentType> = Vec::new();
 
         while has_tool_calls {
+            let converted_contents = map_response_to_chat_contents(&response.content);
             process_tool_calls(
                 &mut chat_history,
                 &mut contents,
-                &response,
+                &converted_contents,
                 req_body.tools.as_ref().unwrap(),
             )
             .await?;
