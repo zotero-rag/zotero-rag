@@ -177,6 +177,7 @@ pub(crate) mod test_utils {
 
     pub(crate) struct MockTool {
         pub call_count: Arc<Mutex<usize>>,
+        pub schema_key: String,
     }
 
     #[derive(Deserialize, JsonSchema)]
@@ -198,7 +199,7 @@ pub(crate) mod test_utils {
         }
 
         fn schema_key(&self) -> String {
-            "input_schema".into()
+            self.schema_key.clone()
         }
 
         fn call(
