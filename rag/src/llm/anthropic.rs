@@ -472,72 +472,21 @@ impl<T: HttpClient + Default + std::fmt::Debug> EmbeddingFunction for AnthropicC
 
 #[cfg(test)]
 mod tests {
-    use std::future::Future;
     use std::sync::{Arc, Mutex};
 
     use arrow_array::Array;
     use dotenv::dotenv;
     use lancedb::embeddings::EmbeddingFunction;
-    use schemars::{JsonSchema, schema_for};
-    use serde::Deserialize;
 
     use crate::constants::OPENAI_EMBEDDING_DIM;
     use crate::llm::anthropic::{AnthropicTextResponseContent, DEFAULT_CLAUDE_MODEL};
     use crate::llm::base::{ApiClient, ChatRequest, ContentType, UserMessage};
     use crate::llm::http_client::{MockHttpClient, ReqwestClient};
-    use crate::llm::tools::Tool;
+    use crate::llm::tools::test_utils::MockTool;
 
     use super::{
         AnthropicClient, AnthropicResponse, AnthropicResponseContent, AnthropicUsageStats,
     };
-
-    /// A mock tool that returns static content. We will test that tool calling works and that we
-    /// can deserialize the responses using this.
-    struct MockTool {
-        call_count: Arc<Mutex<usize>>,
-    }
-
-    #[derive(Deserialize, JsonSchema)]
-    struct MockToolInput {
-        name: String,
-    }
-    impl Tool for MockTool {
-        fn name(&self) -> String {
-            "mock_tool".into()
-        }
-
-        fn description(&self) -> String {
-            "A mock tool that you should call for testing, and pass in a name.".into()
-        }
-
-        fn parameters(&self) -> schemars::Schema {
-            schema_for!(MockToolInput)
-        }
-
-        fn schema_key(&self) -> String {
-            "input_schema".into()
-        }
-
-        fn call(
-            &self,
-            args: serde_json::Value,
-        ) -> std::pin::Pin<Box<dyn Future<Output = Result<serde_json::Value, String>> + Send>>
-        {
-            *self.call_count.lock().unwrap() += 1;
-
-            Box::pin(async move {
-                let input: MockToolInput =
-                    serde_json::from_value(args).map_err(|e| format!("Error: {e}"))?;
-                let greeting = format!("Hello, {}!", input.name);
-
-                serde_json::to_value(greeting).map_err(|e| format!("Error: {e}"))
-            })
-        }
-    }
-
-    //
-    // End tool setup
-    //
 
     #[tokio::test]
     async fn test_request_works() {

@@ -164,3 +164,57 @@ where
 
     Ok(())
 }
+
+/// A mock tool that returns static content. We will test that tool calling works and that we
+/// can deserialize the responses using this.
+#[cfg(test)]
+pub(crate) mod test_utils {
+    use schemars::{JsonSchema, schema_for};
+    use serde::Deserialize;
+
+    use super::Tool;
+    use std::sync::{Arc, Mutex};
+
+    pub(crate) struct MockTool {
+        pub call_count: Arc<Mutex<usize>>,
+    }
+
+    #[derive(Deserialize, JsonSchema)]
+    pub(crate) struct MockToolInput {
+        name: String,
+    }
+
+    impl Tool for MockTool {
+        fn name(&self) -> String {
+            "mock_tool".into()
+        }
+
+        fn description(&self) -> String {
+            "A mock tool that you should call for testing, and pass in a name.".into()
+        }
+
+        fn parameters(&self) -> schemars::Schema {
+            schema_for!(MockToolInput)
+        }
+
+        fn schema_key(&self) -> String {
+            "input_schema".into()
+        }
+
+        fn call(
+            &self,
+            args: serde_json::Value,
+        ) -> std::pin::Pin<Box<dyn Future<Output = Result<serde_json::Value, String>> + Send>>
+        {
+            *self.call_count.lock().unwrap() += 1;
+
+            Box::pin(async move {
+                let input: MockToolInput =
+                    serde_json::from_value(args).map_err(|e| format!("Error: {e}"))?;
+                let greeting = format!("Hello, {}!", input.name);
+
+                serde_json::to_value(greeting).map_err(|e| format!("Error: {e}"))
+            })
+        }
+    }
+}
