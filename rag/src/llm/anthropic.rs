@@ -408,6 +408,7 @@ impl<T: HttpClient> ApiClient for AnthropicClient<T> {
             }
         }
 
+        // TODO: Check if this metadata includes tool use
         Ok(CompletionApiResponse {
             content: contents,
             input_tokens: response.usage.input_tokens,
