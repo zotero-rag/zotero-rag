@@ -5,6 +5,11 @@ use serde_json::{Map, Value};
 use std::future::Future;
 use std::pin::Pin;
 
+use crate::llm::{
+    base::{ChatHistoryContent, ChatHistoryItem, ContentType, ToolCallResponse, ToolUseStats},
+    errors::LLMError,
+};
+
 /// A trait for tools that can be called by the LLM.
 pub trait Tool: Send + Sync {
     /// The name of the tool.
@@ -54,4 +59,108 @@ impl<'a> Serialize for SerializedTool<'a> {
         }
         map.end()
     }
+}
+
+/// Convert an optional slice of tools into serializable wrappers.
+///
+/// This helper takes an optional slice of boxed tools and produces an optional `Vec` of
+/// `SerializedTool` wrappers. The wrappers hold references to the original tools and provide a
+/// `Serialize` implementation suitable for provider request payloads. In general, `SerializedTool`
+/// is more ergonomic: you can directly `.clone()` it and it serializes to a JSON schema as
+/// expected by most providers.
+///
+/// # Arguments:
+///
+/// * `tools` - Optional slice of tools to expose to the model.
+///
+/// # Returns
+///
+/// `Some(Vec<SerializedTool>)` referencing the original tools, or `None` if no tools were
+/// provided.
+pub fn get_owned_tools<'a>(tools: Option<&'a [Box<dyn Tool>]>) -> Option<Vec<SerializedTool<'a>>> {
+    let owned_tools: Option<Vec<SerializedTool>> = tools.as_ref().map(|iter| {
+        iter.iter()
+            .map(|f| SerializedTool(&**f))
+            .collect::<Vec<SerializedTool>>()
+    });
+
+    owned_tools
+}
+
+/// Process tool calls in a single model response (provider‑agnostic).
+///
+/// This function consumes a slice of provider‑agnostic `ChatHistoryContent` that represents the
+/// model's latest message (text and/or tool call requests). It executes tool calls, appends the
+/// corresponding tool results to `chat_history` as user messages, and pushes user‑visible entries
+/// to `new_contents` (both text and tool call summaries).
+///
+/// # Arguments:
+///
+/// * `chat_history` - Mutable, provider‑specific chat history. Each element implements
+///   `From<ChatHistoryItem>` so the function can insert tool results in the provider's native type.
+/// * `new_contents` - Accumulates user‑facing `ContentType` items produced while processing.
+/// * `contents` - The model's latest message converted to `ChatHistoryContent` values.
+/// * `tools` - The available tools for invocation.
+///
+/// # Returns
+///
+/// `Ok(())` on success, or an `LLMError` if a tool dispatch fails.
+pub async fn process_tool_calls<'a, CHI>(
+    chat_history: &mut Vec<CHI>,
+    new_contents: &mut Vec<ContentType>,
+    contents: &[ChatHistoryContent],
+    tools: &[SerializedTool<'a>],
+) -> Result<(), LLMError>
+where
+    CHI: From<ChatHistoryItem>,
+{
+    for content in contents {
+        match content {
+            ChatHistoryContent::Text(s) => new_contents.push(ContentType::Text(s.clone())),
+            ChatHistoryContent::ToolCallResponse(tool_result) => {
+                // This is invalid, but technically we can recover by just ignoring it--so
+                // we will.
+                log::warn!(
+                    "Got a tool result from the API response. This is not expected, and will be ignored. Tool result: {:#?}",
+                    tool_result
+                );
+            }
+            ChatHistoryContent::ToolCallRequest(tool_call) => {
+                let tool_call_id = tool_call.id.clone();
+                let called_tool = tools.iter().find(|tool| tool.0.name() == tool_call.tool_name)
+                    .ok_or_else(|| {
+                        LLMError::ToolCallError(format!(
+                            "Tool {} was called, but it does not exist in the passed list of tools.",
+                            tool_call.tool_name
+                        ))
+                    }
+                )?;
+
+                let tool_result = match called_tool.0.call(tool_call.args.clone().into()).await {
+                    Ok(res) => res,
+                    Err(e) => Value::String(format!("Error calling tool: {e}")),
+                };
+
+                new_contents.push(ContentType::ToolCall(ToolUseStats {
+                    tool_name: tool_call.tool_name.clone(),
+                    tool_args: serde_json::Value::from(tool_call.args.clone()),
+                    tool_result: tool_result.clone(),
+                }));
+
+                chat_history.push(
+                    ChatHistoryItem {
+                        role: "user".into(),
+                        content: vec![ChatHistoryContent::ToolCallResponse(ToolCallResponse {
+                            id: tool_call_id,
+                            tool_name: tool_call.tool_name.clone(),
+                            result: tool_result,
+                        })],
+                    }
+                    .into(),
+                );
+            }
+        }
+    }
+
+    Ok(())
 }

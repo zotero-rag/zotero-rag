@@ -186,14 +186,46 @@ fn get_gemini_api_key() -> Result<String, LLMError> {
     }
 }
 
+/// A function (tool) call request from the model.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct GeminiFunctionCall {
+    /// A unique ID for the function call
+    id: String,
+    /// The name of the tool (function) to call
+    name: String,
+    /// The function parameters
+    args: serde_json::Value,
+}
+
+/// A result of a tool call, to be sent to the API.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct GeminiFunctionResult {
+    /// The ID corresponding to the tool call request
+    id: String,
+    /// The name of the function
+    name: String,
+    /// The function response in JSON format
+    response: serde_json::Value,
+}
+
 /// A content part in a request to the Gemini API
 #[derive(Serialize, Deserialize, Clone)]
-struct GeminiPart {
-    text: String,
+#[serde(rename_all = "camelCase", untagged)]
+enum GeminiPart {
+    Text {
+        text: String,
+    },
+    FunctionCall {
+        function_call: GeminiFunctionCall,
+    },
+    FunctionResult {
+        function_response: GeminiFunctionResult,
+    },
 }
 
 /// Content for requests to the Gemini API
 #[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
 struct GeminiContent {
     role: String,
     parts: Vec<GeminiPart>,
@@ -250,7 +282,7 @@ impl From<&UserMessage> for GeminiRequestBody {
 
                 GeminiContent {
                     role: map_role(&c.role),
-                    parts: vec![GeminiPart {
+                    parts: vec![GeminiPart::Text {
                         text: match content {
                             ChatHistoryContent::Text(s) => s,
                             _ => "".into(),
@@ -262,7 +294,7 @@ impl From<&UserMessage> for GeminiRequestBody {
 
         contents.push(GeminiContent {
             role: "user".to_string(),
-            parts: vec![GeminiPart {
+            parts: vec![GeminiPart::Text {
                 text: msg.message.clone(),
             }],
         });
@@ -364,7 +396,10 @@ impl<T: HttpClient> ApiClient for GeminiClient<T> {
             .content
             .parts
             .iter()
-            .map(|p| p.text.clone())
+            .filter_map(|p| match p {
+                GeminiPart::Text { text } => Some(text.clone()),
+                _ => None,
+            })
             .collect::<Vec<_>>()
             .join("");
 
@@ -398,7 +433,7 @@ impl GeminiEmbeddingRequest {
                 .ok()
                 .unwrap_or_else(|| DEFAULT_GEMINI_EMBEDDING_MODEL.to_string()),
             content: GeminiEmbeddingRequestContent {
-                parts: vec![GeminiPart { text }],
+                parts: vec![GeminiPart::Text { text }],
             },
         }
     }
@@ -479,7 +514,7 @@ mod tests {
             candidates: vec![GeminiResponseCandidate {
                 content: GeminiContent {
                     role: "model".into(),
-                    parts: vec![GeminiPart {
+                    parts: vec![GeminiPart::Text {
                         text: "Hello from Gemini!".into(),
                     }],
                 },
