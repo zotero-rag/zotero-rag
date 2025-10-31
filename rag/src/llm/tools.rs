@@ -136,14 +136,14 @@ where
                     }
                 )?;
 
-                let tool_result = match called_tool.0.call(tool_call.args.clone().into()).await {
+                let tool_result = match called_tool.0.call(tool_call.args.clone()).await {
                     Ok(res) => res,
                     Err(e) => Value::String(format!("Error calling tool: {e}")),
                 };
 
                 new_contents.push(ContentType::ToolCall(ToolUseStats {
                     tool_name: tool_call.tool_name.clone(),
-                    tool_args: serde_json::Value::from(tool_call.args.clone()),
+                    tool_args: tool_call.args.clone(),
                     tool_result: tool_result.clone(),
                 }));
 
