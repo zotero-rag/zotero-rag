@@ -806,7 +806,7 @@ mod tests {
         let message = UserMessage {
             chat_history: Vec::new(),
             max_tokens: Some(1024),
-            message: "Hello!".to_owned(),
+            message: "This is a test. Call the `mock_tool`, passing in a `name`, and ensure it returns a greeting".to_owned(),
         };
         let mut request = ChatRequest {
             message: &message,
