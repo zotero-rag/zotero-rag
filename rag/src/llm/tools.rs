@@ -2,8 +2,8 @@ use schemars::Schema;
 use serde::Serialize;
 use serde::ser::SerializeMap;
 use serde_json::{Map, Value};
+use std::future::Future;
 use std::pin::Pin;
-use std::{fmt, future::Future};
 
 use crate::llm::{
     base::{ChatHistoryContent, ChatHistoryItem, ContentType, ToolCallResponse, ToolUseStats},
