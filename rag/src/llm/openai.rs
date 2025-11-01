@@ -8,14 +8,14 @@ use lancedb::arrow::arrow_schema::DataType;
 use lancedb::embeddings::EmbeddingFunction;
 use serde::{Deserialize, Serialize};
 
-use super::base::{ApiClient, ChatHistoryItem, ChatRequest, CompletionApiResponse, UserMessage};
+use super::base::{ApiClient, ChatHistoryItem, ChatRequest, CompletionApiResponse};
 use super::errors::LLMError;
 use super::http_client::{HttpClient, ReqwestClient};
 use crate::common::request_with_backoff;
 use crate::constants::{DEFAULT_MAX_RETRIES, DEFAULT_OPENAI_MODEL, OPENAI_EMBEDDING_DIM};
 use crate::embedding::openai::compute_openai_embeddings_sync;
 use crate::llm::base::{ChatHistoryContent, ContentType, ToolCallResponse, ToolUseStats};
-use crate::llm::tools::{SerializedTool, get_owned_tools, process_tool_calls};
+use crate::llm::tools::{SerializedTool, get_owned_tools};
 
 /// A client for OpenAI's chat completions API
 #[derive(Debug, Clone)]
@@ -145,8 +145,7 @@ impl<'a> OpenAIRequest<'a> {
             .message
             .chat_history
             .iter()
-            .map(|f| <&ChatHistoryItem as Into<Vec<OpenAIChatHistoryItem>>>::into(f))
-            .flatten()
+            .flat_map(<&ChatHistoryItem as Into<Vec<OpenAIChatHistoryItem>>>::into)
             .collect::<Vec<_>>();
 
         messages.push(OpenAIChatHistoryItem {
@@ -211,7 +210,7 @@ struct OpenAIResponse {
     output: Vec<OpenAIOutput>,
 }
 
-pub async fn process_openai_tool_calls<'a>(
+async fn process_openai_tool_calls<'a>(
     chat_history: &mut Vec<OpenAIChatHistoryItem>,
     new_contents: &mut Vec<ContentType>,
     contents: &[OpenAIChatHistoryItem],
@@ -276,7 +275,7 @@ async fn send_openai_generation_request<'a>(
     let res = request_with_backoff(
         client,
         "https://api.openai.com/v1/responses",
-        &headers,
+        headers,
         &req,
         MAX_RETRIES,
     )
@@ -400,10 +399,11 @@ impl<T: HttpClient> ApiClient for OpenAIClient<T> {
         // Process the final response (which has no tool calls) to extract text content
         for content in &response.output {
             match content {
-                OpenAIOutput::Message { content, .. } => match content.first() {
-                    Some(ct) => contents.push(ContentType::Text(ct.text.clone().unwrap())),
-                    None => {}
-                },
+                OpenAIOutput::Message { content, .. } => {
+                    if let Some(ct) = content.first() {
+                        contents.push(ContentType::Text(ct.text.clone().unwrap()))
+                    }
+                }
                 OpenAIOutput::Reasoning { summary, .. } => {
                     contents.push(ContentType::Text(format!(
                         "<reasoning>{}</reasoning>",
