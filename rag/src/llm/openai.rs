@@ -1,3 +1,10 @@
+//! OpenAI client implementation.
+//!
+//! This module implements an OpenAI client using the Responses API, including
+//! support for tool calls and token usage reporting. It also implements the
+//! LanceDB `EmbeddingFunction` by delegating to the shared OpenAI embeddings
+//! implementation used across providers in this project.
+
 use std::borrow::Cow;
 use std::env;
 use std::fmt::Debug;
@@ -17,7 +24,7 @@ use crate::embedding::openai::compute_openai_embeddings_sync;
 use crate::llm::base::{ChatHistoryContent, ContentType, ToolCallResponse, ToolUseStats};
 use crate::llm::tools::{SerializedTool, get_owned_tools};
 
-/// A client for OpenAI's chat completions API
+/// A client for OpenAI's chat completions (Responses) API.
 #[derive(Debug, Clone)]
 pub struct OpenAIClient<T: HttpClient = ReqwestClient> {
     pub client: T,
@@ -34,8 +41,13 @@ impl<T> OpenAIClient<T>
 where
     T: HttpClient + Default,
 {
-    /// Creates a new OpenAIClient instance without configuration
-    /// (will fall back to environment variables)
+    /// Creates a new `OpenAIClient` instance without configuration.
+    ///
+    /// Uses environment variables for configuration.
+    ///
+    /// # Returns
+    ///
+    /// A client initialized with a default HTTP client and no config.
     pub fn new() -> Self {
         Self {
             client: T::default(),
@@ -43,7 +55,15 @@ where
         }
     }
 
-    /// Creates a new OpenAIClient instance with provided configuration
+    /// Creates a new `OpenAIClient` instance with provided configuration.
+    ///
+    /// # Arguments:
+    ///
+    /// * `config` - Client configuration including API key and model.
+    ///
+    /// # Returns
+    ///
+    /// A client initialized with a default HTTP client and the given config.
     pub fn with_config(config: crate::config::OpenAIConfig) -> Self {
         Self {
             client: T::default(),
@@ -51,7 +71,15 @@ where
         }
     }
 
-    /// Internal implementation for computing embeddings using shared logic
+    /// Internal implementation for computing embeddings using shared logic.
+    ///
+    /// # Arguments:
+    ///
+    /// * `source` - An Arrow array of strings to embed.
+    ///
+    /// # Returns
+    ///
+    /// An Arrow array of `FixedSizeList<Float32>` containing the embeddings.
     pub fn compute_embeddings_internal(
         &self,
         source: Arc<dyn arrow_array::Array>,
@@ -60,38 +88,48 @@ where
     }
 }
 
-// We add the OpenAI response contents as a flattened list when passing the input list to the
-// Responses API, so we do need to have a struct for this
+/// A tool call input item for the Responses API.
+///
+/// We add tool call requests as items in the flattened input list when
+/// constructing a request body for the Responses API.
 #[derive(Clone, Debug, Serialize)]
 struct OpenAIRequestToolCallInputItem {
+    /// The unique tool call ID.
     call_id: String,
-    // Always "function_call"
+    /// Always "function_call".
     r#type: String,
-    // The name of the function to call
+    /// The name of the function to call.
     name: String,
+    /// The arguments to the tool call.
     arguments: serde_json::Value,
 }
 
 #[derive(Clone, Debug, Serialize)]
 struct OpenAIRequestToolResultInputItem {
-    // Always "function_call_output"
+    /// Always "function_call_output".
     r#type: String,
+    /// The tool call ID this is a result for.
     call_id: String,
+    /// The tool output value.
     output: serde_json::Value,
 }
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(untagged)]
 enum OpenAIRequestInputItem {
+    /// A plain-text item.
     Text(String),
+    /// A tool call request.
     ToolCall(OpenAIRequestToolCallInputItem),
+    /// A tool call result payload.
     ToolResult(OpenAIRequestToolResultInputItem),
 }
 
 #[derive(Clone, Serialize)]
 struct OpenAIChatHistoryItem {
-    // Either "user" or "assistant"
+    /// Either "user" or "assistant".
     pub role: String,
+    /// The content item for this role.
     pub content: OpenAIRequestInputItem,
 }
 
@@ -127,11 +165,14 @@ impl From<&ChatHistoryItem> for Vec<OpenAIChatHistoryItem> {
 
 #[derive(Serialize)]
 struct OpenAIRequest<'a> {
+    /// The model to use for the request (e.g., "gpt-4.1").
     model: String,
 
+    /// The flattened chat history and current message.
     input: Vec<OpenAIChatHistoryItem>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Maximum tokens to generate in the response.
     max_output_tokens: Option<u32>,
 
     /// The tools passed in
@@ -140,6 +181,16 @@ struct OpenAIRequest<'a> {
 }
 
 impl<'a> OpenAIRequest<'a> {
+    /// Construct an `OpenAIRequest` from a provider-agnostic `ChatRequest`.
+    ///
+    /// # Arguments:
+    ///
+    /// * `req` - The chat request with history, message, and optional tools.
+    /// * `model` - The target OpenAI model identifier.
+    ///
+    /// # Returns
+    ///
+    /// A request payload suitable for the OpenAI Responses API.
     fn from_chat_request(req: &'a mut ChatRequest<'a>, model: String) -> Self {
         let mut messages = req
             .message
@@ -165,27 +216,34 @@ impl<'a> OpenAIRequest<'a> {
 
 #[derive(Serialize, Deserialize, Clone)]
 struct OpenAIUsage {
+    /// Number of tokens in the input prompt.
     input_tokens: u32,
+    /// Number of tokens in the generated response.
     output_tokens: u32,
+    /// Total token usage.
     total_tokens: u32,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
 struct OpenAIContent {
+    /// The content type key.
     r#type: String,
     #[serde(default)]
+    /// Message text, when present.
     text: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(tag = "type", rename_all = "lowercase")]
 enum OpenAIOutput {
+    /// A reasoning block with an optional summary.
     #[serde(rename = "reasoning")]
     Reasoning {
         id: String,
         #[serde(default)]
         summary: Vec<String>,
     },
+    /// A standard assistant message with text content.
     #[serde(rename = "message")]
     Message {
         id: String,
@@ -193,6 +251,7 @@ enum OpenAIOutput {
         content: Vec<OpenAIContent>,
         role: String,
     },
+    /// A function call request to invoke a tool.
     #[serde(rename = "function_call")]
     FunctionCall {
         call_id: String,
@@ -203,13 +262,33 @@ enum OpenAIOutput {
 
 #[derive(Serialize, Deserialize, Clone)]
 struct OpenAIResponse {
+    /// Unique identifier for the response.
     id: String,
+    /// Timestamp the response was created.
     created_at: u64,
+    /// The model that generated the response.
     model: String,
+    /// Token usage details.
     usage: OpenAIUsage,
+    /// The content parts produced by the model.
     output: Vec<OpenAIOutput>,
 }
 
+/// Process tool call outputs in an OpenAI response, updating chat history and
+/// collecting provider-agnostic content summaries.
+///
+/// Tool results appearing directly in the model response are ignored with a warning.
+///
+/// # Arguments:
+///
+/// * `chat_history` - The running chat history that will be appended to.
+/// * `new_contents` - The collection of normalized content to return to callers.
+/// * `contents` - The newly returned OpenAI chat items to process.
+/// * `tools` - The tools available for invocation.
+///
+/// # Returns
+///
+/// `Ok(())` if tool calls are processed successfully, otherwise an `LLMError`.
 async fn process_openai_tool_calls<'a>(
     chat_history: &mut Vec<OpenAIChatHistoryItem>,
     new_contents: &mut Vec<ContentType>,
@@ -266,6 +345,17 @@ async fn process_openai_tool_calls<'a>(
     Ok(())
 }
 
+/// Send a generation request to OpenAI's Responses API with retry/backoff.
+///
+/// # Arguments:
+///
+/// * `client` - The HTTP client implementation to use.
+/// * `headers` - The HTTP headers to include (auth, content-type).
+/// * `req` - The OpenAI-specific request body.
+///
+/// # Returns
+///
+/// The deserialized OpenAI response, or an `LLMError` on failure.
 async fn send_openai_generation_request<'a>(
     client: &impl HttpClient,
     headers: &HeaderMap,
@@ -296,6 +386,10 @@ async fn send_openai_generation_request<'a>(
     Ok(response)
 }
 
+/// Convert the OpenAI-specific response into OpenAI chat history items.
+///
+/// This is used to extend the chat history with assistant responses and
+/// function call requests before running tool execution.
 fn map_response_to_chat_history(response: &OpenAIResponse) -> Vec<OpenAIChatHistoryItem> {
     response
         .output
@@ -326,6 +420,8 @@ fn map_response_to_chat_history(response: &OpenAIResponse) -> Vec<OpenAIChatHist
 }
 
 impl<T: HttpClient> ApiClient for OpenAIClient<T> {
+    /// Send a request to the OpenAI Responses API, processing tool calls as necessary.
+    /// Returns a final response after all tool calls are processed and sent back.
     async fn send_message<'a>(
         &self,
         request: &'a mut ChatRequest<'a>,
