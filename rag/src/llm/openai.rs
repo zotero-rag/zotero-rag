@@ -279,6 +279,9 @@ struct OpenAIResponse {
 ///
 /// Tool results appearing directly in the model response are ignored with a warning.
 ///
+/// Because OpenAI's responses specifically are in a format where we cannot directly `impl
+/// From<ChatHistoryItem>`, we need a specialized version for this.
+///
 /// # Arguments:
 ///
 /// * `chat_history` - The running chat history that will be appended to.
