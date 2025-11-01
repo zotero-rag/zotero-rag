@@ -2,13 +2,19 @@ use schemars::Schema;
 use serde::Serialize;
 use serde::ser::SerializeMap;
 use serde_json::{Map, Value};
-use std::future::Future;
 use std::pin::Pin;
+use std::{fmt, future::Future};
 
 use crate::llm::{
     base::{ChatHistoryContent, ChatHistoryItem, ContentType, ToolCallResponse, ToolUseStats},
     errors::LLMError,
 };
+
+// Schema keys for common providers. Users of the `Tool` trait can now just use these constants
+// instead of looking up the API docs.
+pub const ANTHROPIC_SCHEMA_KEY: &str = "input_schema";
+pub const GEMINI_SCHEMA_KEY: &str = "parametersJsonSchema";
+pub const OPENAI_SCHEMA_KEY: &str = "parameters";
 
 /// A trait for tools that can be called by the LLM.
 pub trait Tool: Send + Sync {
@@ -177,6 +183,7 @@ pub(crate) mod test_utils {
 
     /// A mock tool that returns static content. We will test that tool calling works and that we
     /// can deserialize the responses using this.
+    #[derive(Debug)]
     pub(crate) struct MockTool {
         pub call_count: Arc<Mutex<usize>>,
         pub schema_key: String,
