@@ -106,38 +106,39 @@ impl From<&ChatHistoryItem> for AnthropicChatHistoryItem {
 #[derive(Serialize)]
 struct AnthropicRequest<'a> {
     /// The model to use for the request (e.g., "claude-3-5-sonnet-20241022")
-    model: String,
+    model: &'a str,
     /// The maximum number of tokens that can be generated in the response
     max_tokens: u32,
     /// The conversation history and current message
-    messages: Vec<AnthropicChatHistoryItem>,
+    messages: &'a [AnthropicChatHistoryItem],
     /// The tools passed in
     #[serde(skip_serializing_if = "Option::is_none")]
-    tools: Option<Vec<SerializedTool<'a>>>,
+    tools: Option<&'a [SerializedTool<'a>]>,
 }
 
-impl<'a> AnthropicRequest<'a> {
-    fn from_chat_request(req: &'a mut ChatRequest<'a>, model: String, max_tokens: u32) -> Self {
-        let mut messages = req
-            .message
-            .chat_history
-            .iter()
-            .map(|f| f.into())
-            .collect::<Vec<_>>();
+/// Helper to build messages and tools from a ChatRequest.
+/// Returns owned data that can then be borrowed by AnthropicRequest.
+fn build_anthropic_messages_and_tools<'a>(
+    req: &'a ChatRequest<'a>,
+) -> (
+    Vec<AnthropicChatHistoryItem>,
+    Option<Vec<SerializedTool<'a>>>,
+) {
+    let mut messages = req
+        .message
+        .chat_history
+        .iter()
+        .map(|f| f.into())
+        .collect::<Vec<_>>();
 
-        messages.push(AnthropicChatHistoryItem {
-            role: "user".to_owned(),
-            content: vec![req.message.message.clone().into()],
-        });
+    messages.push(AnthropicChatHistoryItem {
+        role: "user".to_owned(),
+        content: vec![req.message.message.clone().into()],
+    });
 
-        let owned_tools: Option<Vec<SerializedTool>> = get_owned_tools(req.tools);
-        AnthropicRequest {
-            model,
-            max_tokens: req.message.max_tokens.unwrap_or(max_tokens),
-            messages,
-            tools: owned_tools,
-        }
-    }
+    let owned_tools: Option<Vec<SerializedTool>> = get_owned_tools(req.tools);
+
+    (messages, owned_tools)
 }
 
 /// Token usage statistics returned by the Anthropic API
@@ -345,15 +346,24 @@ impl<T: HttpClient> ApiClient for AnthropicClient<T> {
         headers.insert("anthropic-version", "2023-06-01".parse()?);
         headers.insert("content-type", "application/json".parse()?);
 
-        let req_body = AnthropicRequest::from_chat_request(request, model, max_tokens);
+        // Build the initial messages and tools (owned)
+        let (mut chat_history, tools) = build_anthropic_messages_and_tools(request);
+        let max_tokens_to_use = request.message.max_tokens.unwrap_or(max_tokens);
+
+        // Create the initial request
+        let req_body = AnthropicRequest {
+            model: &model,
+            max_tokens: max_tokens_to_use,
+            messages: &chat_history,
+            tools: tools.as_deref(),
+        };
+
         let mut response = send_anthropic_request(&self.client, &headers, &req_body).await?;
 
         let mut has_tool_calls: bool = response
             .content
             .iter()
             .any(|c| matches!(c, AnthropicResponseContent::ToolCall { .. }));
-
-        let mut chat_history: Vec<AnthropicChatHistoryItem> = req_body.messages.clone();
 
         // Append the contents
         chat_history.push(AnthropicChatHistoryItem {
@@ -369,16 +379,16 @@ impl<T: HttpClient> ApiClient for AnthropicClient<T> {
                 &mut chat_history,
                 &mut contents,
                 &converted_contents,
-                req_body.tools.as_ref().unwrap(),
+                tools.as_ref().unwrap(),
             )
             .await?;
 
-            // Create a new request body with the updated chat history
+            // Create a new request borrowing the updated chat history
             let updated_req_body = AnthropicRequest {
-                model: req_body.model.clone(),
-                max_tokens: req_body.max_tokens,
-                messages: chat_history.clone(),
-                tools: req_body.tools.clone(),
+                model: &model,
+                max_tokens: max_tokens_to_use,
+                messages: &chat_history,
+                tools: tools.as_deref(),
             };
 
             response = send_anthropic_request(&self.client, &headers, &updated_req_body).await?;

@@ -217,10 +217,10 @@ impl From<&ChatHistoryItem> for Vec<OpenAIRequestInput> {
 #[derive(Serialize)]
 struct OpenAIRequest<'a> {
     /// The model to use for the request (e.g., "gpt-4.1").
-    model: String,
+    model: &'a str,
 
     /// The flattened chat history and current message.
-    input: Vec<OpenAIRequestInput>,
+    input: &'a [OpenAIRequestInput],
 
     #[serde(skip_serializing_if = "Option::is_none")]
     /// Maximum tokens to generate in the response.
@@ -228,43 +228,31 @@ struct OpenAIRequest<'a> {
 
     /// The tools passed in
     #[serde(skip_serializing_if = "Option::is_none")]
-    tools: Option<Vec<OpenAITool<'a>>>,
+    tools: Option<&'a [OpenAITool<'a>]>,
 }
 
-impl<'a> OpenAIRequest<'a> {
-    /// Construct an `OpenAIRequest` from a provider-agnostic `ChatRequest`.
-    ///
-    /// # Arguments:
-    ///
-    /// * `req` - The chat request with history, message, and optional tools.
-    /// * `model` - The target OpenAI model identifier.
-    ///
-    /// # Returns
-    ///
-    /// A request payload suitable for the OpenAI Responses API.
-    fn from_chat_request(req: &'a mut ChatRequest<'a>, model: String) -> Self {
-        let mut messages = req
-            .message
-            .chat_history
-            .iter()
-            .flat_map(<&ChatHistoryItem as Into<Vec<OpenAIRequestInput>>>::into)
-            .collect::<Vec<_>>();
+/// Helper to build messages and tools from a ChatRequest.
+/// Returns owned data that can then be borrowed by OpenAIRequest.
+fn build_openai_messages_and_tools<'a>(
+    req: &'a ChatRequest<'a>,
+) -> (Vec<OpenAIRequestInput>, Option<Vec<OpenAITool<'a>>>) {
+    let mut messages = req
+        .message
+        .chat_history
+        .iter()
+        .flat_map(<&ChatHistoryItem as Into<Vec<OpenAIRequestInput>>>::into)
+        .collect::<Vec<_>>();
 
-        messages.push(OpenAIRequestInput::Message(OpenAIChatHistoryItem {
-            role: "user".to_owned(),
-            r#type: "message".into(),
-            content: OpenAIRequestInputItem::Text(req.message.message.clone()),
-        }));
+    messages.push(OpenAIRequestInput::Message(OpenAIChatHistoryItem {
+        role: "user".to_owned(),
+        r#type: "message".into(),
+        content: OpenAIRequestInputItem::Text(req.message.message.clone()),
+    }));
 
-        let owned_tools: Option<Vec<OpenAITool>> = get_owned_tools(req.tools)
-            .map(wrap_tools_for_openai);
-        OpenAIRequest {
-            model,
-            input: messages,
-            max_output_tokens: req.message.max_tokens,
-            tools: owned_tools,
-        }
-    }
+    let owned_tools: Option<Vec<OpenAITool>> =
+        get_owned_tools(req.tools).map(wrap_tools_for_openai);
+
+    (messages, owned_tools)
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -414,9 +402,6 @@ async fn process_openai_tool_calls<'a>(
     Ok(())
 }
 
-// TODO: Refactor - for function results, there is no role; the top-level itself has the
-// call_id/output/etc.
-
 /// Send a generation request to OpenAI's Responses API with retry/backoff.
 ///
 /// # Arguments:
@@ -523,26 +508,33 @@ impl<T: HttpClient> ApiClient for OpenAIClient<T> {
         headers.insert("Authorization", format!("Bearer {api_key}").parse()?);
         headers.insert("content-type", "application/json".parse()?);
 
-        let req_body = OpenAIRequest::from_chat_request(request, model);
-        dbg!("a");
+        // Build owned versions of the initial messages and tools
+        let (mut chat_history, tools) = build_openai_messages_and_tools(request);
+        let max_output_tokens = request.message.max_tokens;
+
+        // Create the initial request
+        let req_body = OpenAIRequest {
+            model: &model,
+            input: &chat_history,
+            max_output_tokens,
+            tools: tools.as_deref(),
+        };
+
         let mut response =
             send_openai_generation_request(&self.client, &headers, &req_body).await?;
-        dbg!(&response);
 
         let mut has_tool_calls: bool = response
             .output
             .iter()
             .any(|c| matches!(c, OpenAIOutput::FunctionCall { .. }));
 
-        let mut chat_history: Vec<OpenAIRequestInput> = req_body.input.clone();
         let mut response_messages = map_response_to_chat_history(&response);
-
         chat_history.append(&mut response_messages);
         let mut contents: Vec<ContentType> = Vec::new();
 
         while has_tool_calls {
             let converted_contents = map_response_to_chat_history(&response);
-            let base_tools = unwrap_openai_tools(req_body.tools.as_ref().unwrap());
+            let base_tools = tools.as_ref().map(|t| unwrap_openai_tools(t)).unwrap();
             process_openai_tool_calls(
                 &mut chat_history,
                 &mut contents,
@@ -551,12 +543,12 @@ impl<T: HttpClient> ApiClient for OpenAIClient<T> {
             )
             .await?;
 
-            // Create a new request body with the updated chat history
+            // Create a new request borrowing the updated chat history
             let updated_req_body = OpenAIRequest {
-                model: req_body.model.clone(),
-                max_output_tokens: req_body.max_output_tokens,
-                input: chat_history.clone(),
-                tools: req_body.tools.clone(),
+                model: &model,
+                input: &chat_history,
+                max_output_tokens,
+                tools: tools.as_deref(),
             };
 
             response =
