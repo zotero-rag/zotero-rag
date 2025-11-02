@@ -21,7 +21,7 @@ use super::http_client::{HttpClient, ReqwestClient};
 use crate::common::request_with_backoff;
 use crate::constants::{DEFAULT_MAX_RETRIES, DEFAULT_OPENAI_MODEL, OPENAI_EMBEDDING_DIM};
 use crate::embedding::openai::compute_openai_embeddings_sync;
-use crate::llm::base::{ChatHistoryContent, ContentType, ToolCallResponse, ToolUseStats};
+use crate::llm::base::{ChatHistoryContent, ContentType, ToolUseStats};
 use crate::llm::tools::{SerializedTool, get_owned_tools};
 
 /// A client for OpenAI's chat completions (Responses) API.
@@ -121,8 +121,6 @@ enum OpenAIRequestInputItem {
     Text(String),
     /// A tool call request.
     ToolCall(OpenAIRequestToolCallInputItem),
-    /// A tool call result payload.
-    ToolResult(OpenAIRequestToolResultInputItem),
 }
 
 #[derive(Clone, Serialize)]
@@ -131,33 +129,44 @@ struct OpenAIChatHistoryItem {
     pub role: String,
     /// The content item for this role.
     pub content: OpenAIRequestInputItem,
+    /// Always "message".
+    pub r#type: String,
 }
 
-impl From<&ChatHistoryItem> for Vec<OpenAIChatHistoryItem> {
-    fn from(value: &ChatHistoryItem) -> Vec<OpenAIChatHistoryItem> {
+#[derive(Clone, Serialize)]
+#[serde(untagged)]
+enum OpenAIRequestInput {
+    Message(OpenAIChatHistoryItem),
+    FunctionCall(OpenAIRequestToolCallInputItem),
+    ToolResult(OpenAIRequestToolResultInputItem),
+}
+
+impl From<&ChatHistoryItem> for Vec<OpenAIRequestInput> {
+    fn from(value: &ChatHistoryItem) -> Vec<OpenAIRequestInput> {
         value
             .content
             .iter()
-            .map(|c| OpenAIChatHistoryItem {
-                role: value.role.clone(),
-                content: match c {
-                    ChatHistoryContent::Text(s) => OpenAIRequestInputItem::Text(s.clone()),
-                    ChatHistoryContent::ToolCallResponse(res) => {
-                        OpenAIRequestInputItem::ToolResult(OpenAIRequestToolResultInputItem {
-                            call_id: res.id.clone(),
-                            output: res.result.clone(),
-                            r#type: "function_call_output".into(),
-                        })
-                    }
-                    ChatHistoryContent::ToolCallRequest(req) => {
-                        OpenAIRequestInputItem::ToolCall(OpenAIRequestToolCallInputItem {
-                            call_id: req.id.clone(),
-                            r#type: "function_call".into(),
-                            name: req.tool_name.clone(),
-                            arguments: req.args.clone(),
-                        })
-                    }
-                },
+            .map(|c| match c {
+                ChatHistoryContent::Text(s) => OpenAIRequestInput::Message(OpenAIChatHistoryItem {
+                    role: value.role.clone(),
+                    r#type: "message".into(),
+                    content: OpenAIRequestInputItem::Text(s.clone()),
+                }),
+                ChatHistoryContent::ToolCallRequest(req) => {
+                    OpenAIRequestInput::FunctionCall(OpenAIRequestToolCallInputItem {
+                        call_id: req.id.clone(),
+                        r#type: "function_call".into(),
+                        name: req.tool_name.clone(),
+                        arguments: req.args.clone(),
+                    })
+                }
+                ChatHistoryContent::ToolCallResponse(res) => {
+                    OpenAIRequestInput::ToolResult(OpenAIRequestToolResultInputItem {
+                        call_id: res.id.clone(),
+                        r#type: "function_call_output".into(),
+                        output: res.result.clone(),
+                    })
+                }
             })
             .collect::<Vec<_>>()
     }
@@ -169,7 +178,7 @@ struct OpenAIRequest<'a> {
     model: String,
 
     /// The flattened chat history and current message.
-    input: Vec<OpenAIChatHistoryItem>,
+    input: Vec<OpenAIRequestInput>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     /// Maximum tokens to generate in the response.
@@ -196,13 +205,14 @@ impl<'a> OpenAIRequest<'a> {
             .message
             .chat_history
             .iter()
-            .flat_map(<&ChatHistoryItem as Into<Vec<OpenAIChatHistoryItem>>>::into)
+            .flat_map(<&ChatHistoryItem as Into<Vec<OpenAIRequestInput>>>::into)
             .collect::<Vec<_>>();
 
-        messages.push(OpenAIChatHistoryItem {
+        messages.push(OpenAIRequestInput::Message(OpenAIChatHistoryItem {
             role: "user".to_owned(),
+            r#type: "message".into(),
             content: OpenAIRequestInputItem::Text(req.message.message.clone()),
-        });
+        }));
 
         let owned_tools: Option<Vec<SerializedTool>> = get_owned_tools(req.tools);
         OpenAIRequest {
@@ -214,7 +224,7 @@ impl<'a> OpenAIRequest<'a> {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 struct OpenAIUsage {
     /// Number of tokens in the input prompt.
     input_tokens: u32,
@@ -224,7 +234,7 @@ struct OpenAIUsage {
     total_tokens: u32,
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 struct OpenAIContent {
     /// The content type key.
     r#type: String,
@@ -233,7 +243,7 @@ struct OpenAIContent {
     text: Option<String>,
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(tag = "type", rename_all = "lowercase")]
 enum OpenAIOutput {
     /// A reasoning block with an optional summary.
@@ -260,7 +270,7 @@ enum OpenAIOutput {
     },
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 struct OpenAIResponse {
     /// Unique identifier for the response.
     id: String,
@@ -293,60 +303,76 @@ struct OpenAIResponse {
 ///
 /// `Ok(())` if tool calls are processed successfully, otherwise an `LLMError`.
 async fn process_openai_tool_calls<'a>(
-    chat_history: &mut Vec<OpenAIChatHistoryItem>,
+    chat_history: &mut Vec<OpenAIRequestInput>,
     new_contents: &mut Vec<ContentType>,
-    contents: &[OpenAIChatHistoryItem],
+    contents: &[OpenAIRequestInput],
     tools: &[SerializedTool<'a>],
 ) -> Result<(), LLMError> {
     for content in contents {
-        match &content.content {
-            OpenAIRequestInputItem::Text(s) => new_contents.push(ContentType::Text(s.clone())),
-            OpenAIRequestInputItem::ToolResult(tool_result) => {
+        match content {
+            OpenAIRequestInput::ToolResult(res_item) => {
                 // This is invalid, but technically we can recover by just ignoring it--so
                 // we will.
                 log::warn!(
                     "Got a tool result from the API response. This is not expected, and will be ignored. Tool result: {:#?}",
-                    tool_result
+                    res_item.output
                 );
             }
-            OpenAIRequestInputItem::ToolCall(tool_call) => {
+            OpenAIRequestInput::FunctionCall(tool_call) => {
                 let tool_call_id = tool_call.call_id.clone();
                 let called_tool = tools.iter().find(|tool| tool.0.name() == tool_call.name)
-                    .ok_or_else(|| {
-                        LLMError::ToolCallError(format!(
-                            "Tool {} was called, but it does not exist in the passed list of tools.",
-                            tool_call.name
-                        ))
-                    }
-                )?;
+                .ok_or_else(|| {
+                    LLMError::ToolCallError(format!(
+                        "Tool {} was called, but it does not exist in the passed list of tools.",
+                        tool_call.name
+                    ))
+                })?;
 
-                let tool_result = match called_tool.0.call(tool_call.arguments.clone()).await {
+                // OpenAI returns arguments as a JSON string, so we need to parse it
+                let parsed_arguments = match &tool_call.arguments {
+                    serde_json::Value::String(s) => {
+                        serde_json::from_str(s).unwrap_or_else(|_| tool_call.arguments.clone())
+                    }
+                    other => other.clone(),
+                };
+
+                let tool_result = match called_tool.0.call(parsed_arguments.clone()).await {
                     Ok(res) => res,
                     Err(e) => serde_json::Value::String(format!("Error calling tool: {e}")),
                 };
 
                 new_contents.push(ContentType::ToolCall(ToolUseStats {
                     tool_name: tool_call.name.clone(),
-                    tool_args: tool_call.arguments.clone(),
+                    tool_args: parsed_arguments.clone(),
                     tool_result: tool_result.clone(),
                 }));
 
-                let mut new_items: Vec<OpenAIChatHistoryItem> = (&ChatHistoryItem {
-                    role: "user".into(),
-                    content: vec![ChatHistoryContent::ToolCallResponse(ToolCallResponse {
-                        id: tool_call_id,
-                        tool_name: tool_call.name.clone(),
-                        result: tool_result,
-                    })],
-                })
-                    .into();
-                chat_history.append(&mut new_items);
+                let new_items: OpenAIRequestInput =
+                    OpenAIRequestInput::ToolResult(OpenAIRequestToolResultInputItem {
+                        r#type: "function_call_output".into(),
+                        call_id: tool_call_id,
+                        output: tool_result,
+                    });
+                chat_history.push(new_items);
             }
+            OpenAIRequestInput::Message(chi) => match &chi.content {
+                OpenAIRequestInputItem::Text(s) => new_contents.push(ContentType::Text(s.clone())),
+                OpenAIRequestInputItem::ToolCall(tool_call) => {
+                    // This shouldn't happen with our new structure, but handle it for backwards compatibility
+                    log::warn!(
+                        "Got a tool call wrapped in a message. This is unexpected. Tool call: {}",
+                        tool_call.name
+                    );
+                }
+            },
         }
     }
 
     Ok(())
 }
+
+// TODO: Refactor - for function results, there is no role; the top-level itself has the
+// call_id/output/etc.
 
 /// Send a generation request to OpenAI's Responses API with retry/backoff.
 ///
@@ -365,6 +391,8 @@ async fn send_openai_generation_request<'a>(
     req: &OpenAIRequest<'a>,
 ) -> Result<OpenAIResponse, LLMError> {
     const MAX_RETRIES: usize = DEFAULT_MAX_RETRIES;
+    let d = serde_json::to_string_pretty(&req);
+    println!("{}", &d.unwrap());
     let res = request_with_backoff(
         client,
         "https://api.openai.com/v1/responses",
@@ -393,31 +421,33 @@ async fn send_openai_generation_request<'a>(
 ///
 /// This is used to extend the chat history with assistant responses and
 /// function call requests before running tool execution.
-fn map_response_to_chat_history(response: &OpenAIResponse) -> Vec<OpenAIChatHistoryItem> {
+fn map_response_to_chat_history(response: &OpenAIResponse) -> Vec<OpenAIRequestInput> {
     response
         .output
         .iter()
-        .map(|c| OpenAIChatHistoryItem {
-            role: "assistant".into(),
-            content: match c {
-                OpenAIOutput::Message { content, .. } => OpenAIRequestInputItem::Text(
-                    content.first().unwrap().text.clone().unwrap_or("".into()),
-                ),
-                OpenAIOutput::FunctionCall {
-                    call_id,
-                    name,
-                    arguments,
-                } => OpenAIRequestInputItem::ToolCall(OpenAIRequestToolCallInputItem {
+        .filter_map(|c| match c {
+            OpenAIOutput::Reasoning { .. } => None,
+            OpenAIOutput::Message { content, .. } => {
+                Some(OpenAIRequestInput::Message(OpenAIChatHistoryItem {
+                    role: "assistant".into(),
+                    r#type: "message".into(),
+                    content: OpenAIRequestInputItem::Text(
+                        content.first().unwrap().text.clone().unwrap_or("".into()),
+                    ),
+                }))
+            }
+            OpenAIOutput::FunctionCall {
+                call_id,
+                name,
+                arguments,
+            } => Some(OpenAIRequestInput::FunctionCall(
+                OpenAIRequestToolCallInputItem {
                     call_id: call_id.clone(),
                     r#type: "function_call".into(),
                     name: name.clone(),
                     arguments: arguments.clone(),
-                }),
-                OpenAIOutput::Reasoning { summary, .. } => OpenAIRequestInputItem::Text(format!(
-                    "<reasoning>{}</reasoning>",
-                    summary.join("\n")
-                )),
-            },
+                },
+            )),
         })
         .collect::<Vec<_>>()
 }
@@ -451,15 +481,17 @@ impl<T: HttpClient> ApiClient for OpenAIClient<T> {
         headers.insert("content-type", "application/json".parse()?);
 
         let req_body = OpenAIRequest::from_chat_request(request, model);
+        dbg!("a");
         let mut response =
             send_openai_generation_request(&self.client, &headers, &req_body).await?;
+        dbg!(&response);
 
         let mut has_tool_calls: bool = response
             .output
             .iter()
             .any(|c| matches!(c, OpenAIOutput::FunctionCall { .. }));
 
-        let mut chat_history: Vec<OpenAIChatHistoryItem> = req_body.input.clone();
+        let mut chat_history: Vec<OpenAIRequestInput> = req_body.input.clone();
         let mut response_messages = map_response_to_chat_history(&response);
 
         chat_history.append(&mut response_messages);
@@ -582,10 +614,12 @@ mod tests {
     use crate::constants::OPENAI_EMBEDDING_DIM;
     use crate::llm::base::{ApiClient, ChatRequest, ContentType, UserMessage};
     use crate::llm::http_client::{MockHttpClient, ReqwestClient};
+    use crate::llm::tools::OPENAI_SCHEMA_KEY;
+    use crate::llm::tools::test_utils::MockTool;
     use arrow_array::Array;
     use dotenv::dotenv;
     use lancedb::embeddings::EmbeddingFunction;
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
 
     #[tokio::test]
     async fn test_request_works() {
@@ -693,5 +727,37 @@ mod tests {
 
         assert_eq!(vector.len(), 6);
         assert_eq!(vector.value_length(), OPENAI_EMBEDDING_DIM as i32);
+    }
+
+    #[tokio::test]
+    async fn test_request_with_tool_works() {
+        dotenv().ok();
+
+        let client = OpenAIClient::<ReqwestClient>::default();
+        let call_count = Arc::new(Mutex::new(0));
+        let tool = MockTool {
+            call_count: Arc::clone(&call_count),
+            schema_key: OPENAI_SCHEMA_KEY.into(),
+        };
+        let message = UserMessage {
+            chat_history: Vec::new(),
+            max_tokens: Some(1024),
+            message: "This is a test. Call the `mock_tool`, passing in a `name`, and ensure it returns a greeting".into()
+        };
+
+        let mut request = ChatRequest {
+            message: &message,
+            tools: Some(&[Box::new(tool)]),
+        };
+        let res = client.send_message(&mut request).await;
+
+        // Debug the error if there is one
+        if res.is_err() {
+            println!("OpenAI test error: {:?}", res.as_ref().err());
+        }
+
+        dbg!(&res);
+        assert!(res.is_ok());
+        assert!(call_count.lock().unwrap().eq(&1_usize));
     }
 }
