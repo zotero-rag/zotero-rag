@@ -23,6 +23,7 @@ use crate::constants::{DEFAULT_MAX_RETRIES, DEFAULT_OPENAI_MODEL, OPENAI_EMBEDDI
 use crate::embedding::openai::compute_openai_embeddings_sync;
 use crate::llm::base::{ChatHistoryContent, ContentType, ToolUseStats};
 use crate::llm::tools::{SerializedTool, get_owned_tools};
+use serde_json::{Map, Value};
 
 /// A client for OpenAI's chat completions (Responses) API.
 #[derive(Debug, Clone)]
@@ -86,6 +87,47 @@ where
     ) -> Result<Arc<dyn arrow_array::Array>, LLMError> {
         compute_openai_embeddings_sync(source)
     }
+}
+
+/// OpenAI-specific tool wrapper that adds the `type` and `strict` fields
+/// required by OpenAI's API.
+#[derive(Clone)]
+pub struct OpenAITool<'a>(pub SerializedTool<'a>);
+
+impl<'a> Serialize for OpenAITool<'a> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeMap;
+
+        // Construct a map with OpenAI-specific fields
+        let mut obj = Map::new();
+        obj.insert("name".into(), Value::String(self.0.0.name()));
+        obj.insert("description".into(), Value::String(self.0.0.description()));
+        obj.insert("type".into(), Value::String("function".into()));
+        obj.insert("strict".into(), Value::Bool(false));
+
+        // Add the schema with the provider-specific key
+        obj.insert(self.0.0.schema_key(), self.0.0.parameters().into());
+
+        // Serialize the map
+        let mut map = serializer.serialize_map(Some(obj.len()))?;
+        for (k, v) in obj.iter() {
+            map.serialize_entry(k, v)?;
+        }
+        map.end()
+    }
+}
+
+/// Convert a Vec of SerializedTools into OpenAI-specific wrappers.
+fn wrap_tools_for_openai<'a>(tools: Vec<SerializedTool<'a>>) -> Vec<OpenAITool<'a>> {
+    tools.into_iter().map(OpenAITool).collect()
+}
+
+/// Extract the inner SerializedTools from OpenAI-specific wrappers.
+fn unwrap_openai_tools<'a>(tools: &[OpenAITool<'a>]) -> Vec<SerializedTool<'a>> {
+    tools.iter().map(|t| t.0.clone()).collect()
 }
 
 /// A tool call input item for the Responses API.
@@ -186,7 +228,7 @@ struct OpenAIRequest<'a> {
 
     /// The tools passed in
     #[serde(skip_serializing_if = "Option::is_none")]
-    tools: Option<Vec<SerializedTool<'a>>>,
+    tools: Option<Vec<OpenAITool<'a>>>,
 }
 
 impl<'a> OpenAIRequest<'a> {
@@ -214,7 +256,8 @@ impl<'a> OpenAIRequest<'a> {
             content: OpenAIRequestInputItem::Text(req.message.message.clone()),
         }));
 
-        let owned_tools: Option<Vec<SerializedTool>> = get_owned_tools(req.tools);
+        let owned_tools: Option<Vec<OpenAITool>> = get_owned_tools(req.tools)
+            .map(wrap_tools_for_openai);
         OpenAIRequest {
             model,
             input: messages,
@@ -499,11 +542,12 @@ impl<T: HttpClient> ApiClient for OpenAIClient<T> {
 
         while has_tool_calls {
             let converted_contents = map_response_to_chat_history(&response);
+            let base_tools = unwrap_openai_tools(req_body.tools.as_ref().unwrap());
             process_openai_tool_calls(
                 &mut chat_history,
                 &mut contents,
                 &converted_contents,
-                req_body.tools.as_ref().unwrap(),
+                &base_tools,
             )
             .await?;
 
