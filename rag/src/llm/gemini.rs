@@ -297,66 +297,72 @@ struct GeminiToolDeclaration<'a> {
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct GeminiRequestBody<'a> {
-    contents: Vec<GeminiContent>,
+    contents: &'a [GeminiContent],
     #[serde(skip_serializing_if = "Option::is_none")]
     generation_config: Option<GeminiGenerationConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    tools: Option<GeminiToolDeclaration<'a>>,
+    tools: Option<&'a GeminiToolDeclaration<'a>>,
 }
 
-impl<'a> GeminiRequestBody<'a> {
-    fn from_chat_request(req: &'a mut ChatRequest<'a>) -> Self {
-        let model_max = req.message.max_tokens.or_else(|| {
-            env::var("GEMINI_MAX_TOKENS")
-                .ok()
-                .and_then(|s| s.parse().ok())
-        });
-        let mut contents: Vec<GeminiContent> = req
-            .message
-            .chat_history
-            .iter()
-            .map(|c| {
-                let content = c.content[0].clone();
+/// Helper to build contents, config, and tools from a ChatRequest.
+/// Returns owned data that can then be borrowed by GeminiRequestBody.
+fn build_gemini_request_data<'a>(
+    req: &'a ChatRequest<'a>,
+) -> (
+    Vec<GeminiContent>,
+    Option<GeminiGenerationConfig>,
+    Option<GeminiToolDeclaration<'a>>,
+) {
+    let model_max = req.message.max_tokens.or_else(|| {
+        env::var("GEMINI_MAX_TOKENS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+    });
+    let mut contents: Vec<GeminiContent> = req
+        .message
+        .chat_history
+        .iter()
+        .map(|c| {
+            let content = c.content[0].clone();
 
-                GeminiContent {
-                    role: map_role(&c.role),
-                    parts: vec![GeminiPart::Text {
-                        text: match content {
-                            ChatHistoryContent::Text(s) => s,
-                            _ => "".into(),
-                        },
-                    }],
-                }
-            })
-            .collect();
+            GeminiContent {
+                role: map_role(&c.role),
+                parts: vec![GeminiPart::Text {
+                    text: match content {
+                        ChatHistoryContent::Text(s) => s,
+                        _ => "".into(),
+                    },
+                }],
+            }
+        })
+        .collect();
 
-        contents.push(GeminiContent {
-            role: "user".to_string(),
-            parts: vec![GeminiPart::Text {
-                text: req.message.message.clone(),
-            }],
-        });
+    contents.push(GeminiContent {
+        role: "user".to_string(),
+        parts: vec![GeminiPart::Text {
+            text: req.message.message.clone(),
+        }],
+    });
 
-        let owned_tools: Option<Vec<SerializedTool>> = get_owned_tools(req.tools);
+    let owned_tools: Option<Vec<SerializedTool>> = get_owned_tools(req.tools);
 
-        GeminiRequestBody {
-            contents,
-            generation_config: Some(GeminiGenerationConfig {
-                max_output_tokens: model_max,
-                // TODO: Make these configurable
-                temperature: Some(1.0),
-                top_k: Some(1),
-                top_p: Some(1.0),
-                thinking_config: Some(GeminiThinkingConfig {
-                    include_thoughts: Some(false),
-                    thinking_budget: Some(1024),
-                }),
-            }),
-            tools: owned_tools.map(|tools| GeminiToolDeclaration {
-                function_declarations: tools,
-            }),
-        }
-    }
+    let generation_config = Some(GeminiGenerationConfig {
+        max_output_tokens: model_max,
+        // TODO: Make these configurable
+        temperature: Some(1.0),
+        top_k: Some(1),
+        top_p: Some(1.0),
+        thinking_config: Some(GeminiThinkingConfig {
+            include_thoughts: Some(false),
+            thinking_budget: Some(1024),
+        }),
+    });
+
+    let tools = owned_tools.map(|tools| GeminiToolDeclaration {
+        function_declarations: tools,
+    });
+
+    (contents, generation_config, tools)
 }
 
 /// Helper function to change "assistant" roles to "model" for Gemini's API.
@@ -483,7 +489,15 @@ impl<T: HttpClient> ApiClient for GeminiClient<T> {
         headers.insert("content-type", "application/json".parse()?);
         headers.insert("x-goog-api-key", key.parse()?);
 
-        let req_body = GeminiRequestBody::from_chat_request(request);
+        // Build the initial contents, config, and tools (owned)
+        let (mut chat_history, generation_config, tools) = build_gemini_request_data(request);
+
+        // Create the initial request borrowing
+        let req_body = GeminiRequestBody {
+            contents: &chat_history,
+            generation_config: generation_config.clone(),
+            tools: tools.as_ref(),
+        };
 
         let (mut response, mut usage) =
             send_gemini_generation_request(&self.client, &headers, &req_body, &model).await?;
@@ -495,20 +509,18 @@ impl<T: HttpClient> ApiClient for GeminiClient<T> {
             .any(|c| matches!(c, GeminiPart::FunctionCall { .. }));
 
         // Append the contents
-        let mut chat_history: Vec<GeminiContent> = req_body.contents.clone();
         chat_history.push(GeminiContent {
             role: "assistant".into(),
             parts: response.content.parts.clone(),
         });
 
-        let mut chat_history: Vec<GeminiContent> = req_body.contents.clone();
         let mut contents: Vec<ContentType> = Vec::new();
 
         while has_tool_calls {
             let converted_contents = map_response_to_chat_contents(&response.content.parts);
 
             // `unwrap` is likely to be safe here since tool calls exist
-            let owned_tools = req_body.tools.as_ref().unwrap();
+            let owned_tools = tools.as_ref().unwrap();
             process_tool_calls(
                 &mut chat_history,
                 &mut contents,
@@ -517,11 +529,11 @@ impl<T: HttpClient> ApiClient for GeminiClient<T> {
             )
             .await?;
 
-            // Create a new request body with the updated chat history
+            // Create a new request borrowing the updated chat history
             let updated_req_body = GeminiRequestBody {
-                generation_config: req_body.generation_config.clone(),
-                contents: chat_history.clone(),
-                tools: req_body.tools.clone(),
+                generation_config: generation_config.clone(),
+                contents: &chat_history,
+                tools: tools.as_ref(),
             };
 
             (response, usage) =
