@@ -54,6 +54,9 @@ impl<'a> Serialize for SerializedTool<'a> {
         let mut obj = Map::new();
         obj.insert("name".into(), Value::String(self.0.name()));
         obj.insert("description".into(), Value::String(self.0.description()));
+        // TODO: Add these for OpenAI
+        obj.insert("strict".into(), Value::Bool(false));
+        obj.insert("type".into(), Value::String("function".into()));
 
         // This key varies by model provider
         obj.insert(self.0.schema_key(), self.0.parameters().into());
@@ -192,6 +195,7 @@ pub(crate) mod test_utils {
     /// The tool is simple and greets a user with a name; this is that input.
     #[derive(Deserialize, JsonSchema)]
     pub(crate) struct MockToolInput {
+        /// The name of the person to greet.
         name: String,
     }
 
