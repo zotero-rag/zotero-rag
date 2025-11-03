@@ -161,8 +161,6 @@ struct OpenAIRequestToolResultInputItem {
 enum OpenAIRequestInputItem {
     /// A plain-text item.
     Text(String),
-    /// A tool call request.
-    ToolCall(OpenAIRequestToolCallInputItem),
 }
 
 #[derive(Clone, Serialize)]
@@ -388,13 +386,6 @@ async fn process_openai_tool_calls<'a>(
             }
             OpenAIRequestInput::Message(chi) => match &chi.content {
                 OpenAIRequestInputItem::Text(s) => new_contents.push(ContentType::Text(s.clone())),
-                OpenAIRequestInputItem::ToolCall(tool_call) => {
-                    // This shouldn't happen with our new structure, but handle it for backwards compatibility
-                    log::warn!(
-                        "Got a tool call wrapped in a message. This is unexpected. Tool call: {}",
-                        tool_call.name
-                    );
-                }
             },
         }
     }
@@ -792,7 +783,6 @@ mod tests {
             println!("OpenAI test error: {:?}", res.as_ref().err());
         }
 
-        dbg!(&res);
         assert!(res.is_ok());
         assert!(call_count.lock().unwrap().eq(&1_usize));
     }
