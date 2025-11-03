@@ -636,7 +636,6 @@ mod tests {
             println!("Anthropic test error: {:?}", res.as_ref().err());
         }
 
-        dbg!(&res);
         assert!(res.is_ok());
         assert!(call_count.lock().unwrap().eq(&1_usize));
     }
