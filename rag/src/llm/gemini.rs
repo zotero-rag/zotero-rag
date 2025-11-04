@@ -215,12 +215,18 @@ struct GeminiFunctionResult {
 enum GeminiPart {
     Text {
         text: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        thought_signature: Option<String>,
     },
     FunctionCall {
         function_call: GeminiFunctionCall,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        thought_signature: Option<String>,
     },
     FunctionResult {
         function_response: GeminiFunctionResult,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        thought_signature: Option<String>,
     },
 }
 
@@ -240,13 +246,17 @@ impl From<ChatHistoryItem> for GeminiContent {
                 .content
                 .into_iter()
                 .map(|c| match c {
-                    ChatHistoryContent::Text(text) => GeminiPart::Text { text },
+                    ChatHistoryContent::Text(text) => GeminiPart::Text {
+                        text,
+                        thought_signature: None,
+                    },
                     ChatHistoryContent::ToolCallRequest(tool_call) => GeminiPart::FunctionCall {
                         function_call: GeminiFunctionCall {
                             id: tool_call.id,
                             name: tool_call.tool_name,
                             args: tool_call.args,
                         },
+                        thought_signature: None,
                     },
                     ChatHistoryContent::ToolCallResponse(tool_res) => GeminiPart::FunctionResult {
                         function_response: GeminiFunctionResult {
@@ -254,6 +264,7 @@ impl From<ChatHistoryItem> for GeminiContent {
                             name: tool_res.tool_name,
                             response: tool_res.result,
                         },
+                        thought_signature: None,
                     },
                 })
                 .collect::<Vec<_>>(),
@@ -330,6 +341,7 @@ fn build_gemini_request_data<'a>(
         role: "user".to_string(),
         parts: vec![GeminiPart::Text {
             text: req.message.message.clone(),
+            thought_signature: None,
         }],
     });
 
@@ -352,15 +364,6 @@ fn build_gemini_request_data<'a>(
     });
 
     (contents, generation_config, tools)
-}
-
-/// Helper function to change "assistant" roles to "model" for Gemini's API.
-fn map_role(role: &str) -> String {
-    match role {
-        // Gemini uses "model" instead of "assistant"
-        "assistant" => "model".into(),
-        _ => "user".into(),
-    }
 }
 
 /// Send a Gemini text generation request with retry/backoff and parse the response.
@@ -412,6 +415,14 @@ async fn send_gemini_generation_request<'a>(
     Ok((first_candidate.clone(), response.usage_metadata))
 }
 
+/// Token details by modality in usage metadata
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct GeminiTokenDetails {
+    modality: String,
+    token_count: u32,
+}
+
 /// Usage metadata received from the Gemini text generation response.
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -420,6 +431,8 @@ struct GeminiUsageMetadata {
     thoughts_token_count: u32,
     candidates_token_count: u32,
     total_token_count: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    prompt_tokens_details: Option<Vec<GeminiTokenDetails>>,
 }
 
 /// One of several response candidates.
@@ -445,8 +458,8 @@ struct GeminiResponseBody {
 fn map_response_to_chat_contents(contents: &[GeminiPart]) -> Vec<ChatHistoryContent> {
     contents.iter().filter_map(|c| {
         match c {
-            GeminiPart::Text{text} => Some(ChatHistoryContent::Text(text.clone())),
-            GeminiPart::FunctionCall{function_call: fc} => Some(ChatHistoryContent::ToolCallRequest(ToolCallRequest {
+            GeminiPart::Text{text, ..} => Some(ChatHistoryContent::Text(text.clone())),
+            GeminiPart::FunctionCall{function_call: fc, ..} => Some(ChatHistoryContent::ToolCallRequest(ToolCallRequest {
                     id: fc.id.clone(),
                     tool_name: fc.name.clone(),
                     args: fc.args.clone()
@@ -546,7 +559,7 @@ impl<T: HttpClient> ApiClient for GeminiClient<T> {
 
         // Process the final response (which has no tool calls) to extract text content
         for content in &response.content.parts {
-            if let GeminiPart::Text { text } = content {
+            if let GeminiPart::Text { text, .. } = content {
                 contents.push(ContentType::Text(text.clone()))
             }
         }
@@ -582,7 +595,10 @@ impl GeminiEmbeddingRequest {
                 .ok()
                 .unwrap_or_else(|| DEFAULT_GEMINI_EMBEDDING_MODEL.to_string()),
             content: GeminiEmbeddingRequestContent {
-                parts: vec![GeminiPart::Text { text }],
+                parts: vec![GeminiPart::Text {
+                    text,
+                    thought_signature: None,
+                }],
             },
         }
     }
@@ -668,6 +684,7 @@ mod tests {
                     role: "model".into(),
                     parts: vec![GeminiPart::Text {
                         text: "Hello from Gemini!".into(),
+                        thought_signature: None,
                     }],
                 },
                 finish_reason: "stop".into(),
@@ -677,6 +694,7 @@ mod tests {
                 candidates_token_count: 11,
                 total_token_count: 18,
                 thoughts_token_count: 0,
+                prompt_tokens_details: None,
             },
         };
 
