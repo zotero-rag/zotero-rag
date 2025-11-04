@@ -3,6 +3,10 @@ use crate::llm::tools::Tool;
 use super::errors::LLMError;
 use serde::{Deserialize, Serialize};
 
+/// A user-facing, generic, tool call request. This contains the tool name and the parameters
+/// passed to that tool. It also includes the tool call id, which most providers use to
+/// disambiguate each tool use response. Note that the *result* of the tool call is not stored
+/// here; that is the `ToolCallResponse` struct.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ToolCallRequest {
     /// Tool calls typically contain an ID. This ID is used in the corresponding response to signal
@@ -14,6 +18,9 @@ pub struct ToolCallRequest {
     pub args: serde_json::Value,
 }
 
+/// The user-facing version of a tool call result. This contains the id of the tool call request
+/// made by the model, the tool that was called, and the result. Notably, this does not contain the
+/// args passed to the tool; that is only present in `ToolCallRequest`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ToolCallResponse {
     /// Tool calls typically contain an ID. This ID matches the request for a specific tool call.
@@ -24,6 +31,12 @@ pub struct ToolCallResponse {
     pub result: serde_json::Value,
 }
 
+/// This enum specifies the main kinds of content that is passed between the servers and us,
+/// the client. It records a single piece of content in the *chat history*, so it includes
+/// an enum variant for tool call results as well. The type that is passed as a single *response*
+/// from the model is `ContentType`, which does not include that variant. `ContentType` also
+/// differs in that `ContentType::ToolCall` includes all the metadata for each tool call, while the
+/// variants here only contain what is pertinent to common API schemas.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ChatHistoryContent {
     Text(String),
@@ -68,13 +81,20 @@ impl<'a> From<&'a UserMessage> for ChatRequest<'a> {
     }
 }
 
+/// A structure dedicated to a single tool call. This contains the tool called, the arguments
+/// passed, and the result of that tool call. In the future, this may include additional
+/// information such as the number of tokens used in each tool call.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct ToolUseStats {
+    pub tool_call_id: String,
     pub tool_name: String,
     pub tool_args: serde_json::Value,
     pub tool_result: serde_json::Value,
 }
 
+/// A model response can contain multiple types of content, such as raw text and tool calls. This
+/// captures those variants. Specifically, this is different from `ChatHistoryContent`, which is
+/// more tailored to individual items in the chat history that is passed to providers.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(untagged)]
 pub enum ContentType {
@@ -97,6 +117,7 @@ pub struct CompletionApiResponse {
     pub output_tokens: u32,
 }
 
+/// A client that can interact with an LLM provider and get a response.
 #[allow(async_fn_in_trait)]
 pub trait ApiClient {
     async fn send_message<'a>(

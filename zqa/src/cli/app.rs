@@ -3,11 +3,12 @@ use crate::cli::prompts::{get_extraction_prompt, get_summarize_prompt};
 use crate::cli::readline::get_readline_config;
 use crate::utils::arrow::{DbFields, library_to_arrow, vector_search};
 use crate::utils::library::{ZoteroItem, ZoteroItemSet, get_new_library_items};
+use crate::utils::rag::SingleResponse;
 use arrow_array::{self, RecordBatch, RecordBatchIterator, StringArray};
 use arrow_schema::Schema;
 use lancedb::embeddings::EmbeddingDefinition;
 use rag::capabilities::ModelProviders;
-use rag::llm::base::{ApiClient, ChatRequest, CompletionApiResponse, UserMessage};
+use rag::llm::base::{ApiClient, ChatRequest, CompletionApiResponse, ContentType, UserMessage};
 use rag::llm::errors::LLMError;
 use rag::llm::factory::{LLMClientConfig, get_client_by_provider, get_client_with_config};
 use rag::vector::checkhealth::lancedb_health_check;
@@ -479,7 +480,7 @@ async fn run_query<O: Write, E: Write>(
                 message: get_extraction_prompt(&query_clone, &text),
             };
 
-            client.send_message(&ChatRequest::from(&message)).await
+            client.send_message(&mut ChatRequest::from(&message)).await
         });
     });
 
@@ -523,19 +524,40 @@ async fn run_query<O: Write, E: Write>(
 
     let search_results = ok_contents
         .iter()
-        .map(|res| format!("<search_result>{res}</search_result>"))
+        .map(|res| {
+            format!(
+                "<search_result>{}</search_result>",
+                SingleResponse::from(res)
+            )
+        })
         .collect::<Vec<_>>()
         .join("\n");
     log::debug!("Search results:\n{search_results}\n");
 
+    let texts = ok_contents
+        .iter()
+        .map(|v| {
+            v.iter()
+                .filter_map(|f| match f {
+                    ContentType::Text(s) => Some(s),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        })
+        .filter(|v| !v.is_empty())
+        .flatten() // We should only have one here anyway
+        .collect::<Vec<_>>();
+
     let message = UserMessage {
         chat_history: Vec::new(),
         max_tokens: None,
-        message: get_summarize_prompt(&query, ok_contents),
+        message: get_summarize_prompt(&query, texts),
     };
 
     let final_draft_start = Instant::now();
-    let result = llm_client.send_message(&ChatRequest::from(&message)).await;
+    let result = llm_client
+        .send_message(&mut ChatRequest::from(&message))
+        .await;
     let final_draft_duration = final_draft_start.elapsed();
     match result {
         Ok(response) => {
@@ -545,7 +567,7 @@ async fn run_query<O: Write, E: Write>(
             )?;
 
             writeln!(&mut ctx.out, "\n-----")?;
-            writeln!(&mut ctx.out, "{}", response.content)?;
+            writeln!(&mut ctx.out, "{}", SingleResponse::from(response.content))?;
 
             total_input_tokens += response.input_tokens;
             total_output_tokens += response.output_tokens;

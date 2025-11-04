@@ -58,7 +58,7 @@ reference format instead of APA.")
 /// # Returns
 ///
 /// * `prompt` - The prompt for answering the user query
-pub fn get_summarize_prompt(query: &str, excerpts: Vec<String>) -> String {
+pub fn get_summarize_prompt(query: &str, excerpts: Vec<&String>) -> String {
     let search_results = excerpts
         .iter()
         .map(|res| format!("<search_result>{res}</search_result>"))
