@@ -122,6 +122,6 @@ pub struct CompletionApiResponse {
 pub trait ApiClient {
     async fn send_message<'a>(
         &self,
-        request: &'a mut ChatRequest<'a>,
+        request: &'a ChatRequest<'a>,
     ) -> Result<CompletionApiResponse, LLMError>;
 }

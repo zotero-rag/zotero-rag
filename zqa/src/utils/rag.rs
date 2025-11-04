@@ -40,7 +40,7 @@ impl<'a> fmt::Display for SingleResponse<'a> {
         for part in self.parts.as_ref() {
             match part {
                 ContentType::Text(s) => {
-                    f.write_str(&s)?;
+                    f.write_str(s)?;
                     f.write_char('\n')?;
                 }
                 ContentType::ToolCall(stats) => {

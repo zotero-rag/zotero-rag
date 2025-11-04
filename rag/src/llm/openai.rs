@@ -411,8 +411,7 @@ async fn send_openai_generation_request<'a>(
     req: &OpenAIRequest<'a>,
 ) -> Result<OpenAIResponse, LLMError> {
     const MAX_RETRIES: usize = DEFAULT_MAX_RETRIES;
-    let d = serde_json::to_string_pretty(&req);
-    println!("{}", &d.unwrap());
+
     let res = request_with_backoff(
         client,
         "https://api.openai.com/v1/responses",
@@ -477,7 +476,7 @@ impl<T: HttpClient> ApiClient for OpenAIClient<T> {
     /// Returns a final response after all tool calls are processed and sent back.
     async fn send_message<'a>(
         &self,
-        request: &'a mut ChatRequest<'a>,
+        request: &'a ChatRequest<'a>,
     ) -> Result<CompletionApiResponse, super::errors::LLMError> {
         // Use config if available, otherwise fall back to env vars
         let (api_key, model, _) = if let Some(ref config) = self.config {

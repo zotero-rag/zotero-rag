@@ -480,7 +480,7 @@ async fn run_query<O: Write, E: Write>(
                 message: get_extraction_prompt(&query_clone, &text),
             };
 
-            client.send_message(&mut ChatRequest::from(&message)).await
+            client.send_message(&ChatRequest::from(&message)).await
         });
     });
 
@@ -555,9 +555,7 @@ async fn run_query<O: Write, E: Write>(
     };
 
     let final_draft_start = Instant::now();
-    let result = llm_client
-        .send_message(&mut ChatRequest::from(&message))
-        .await;
+    let result = llm_client.send_message(&ChatRequest::from(&message)).await;
     let final_draft_duration = final_draft_start.elapsed();
     match result {
         Ok(response) => {
