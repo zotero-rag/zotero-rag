@@ -513,8 +513,8 @@ mod tests {
             message: "Hello!".to_owned(),
         };
 
-        let mut request = ChatRequest::from(&message);
-        let res = client.send_message(&mut request).await;
+        let request = ChatRequest::from(&message);
+        let res = client.send_message(&request).await;
 
         // Debug the error if there is one
         if res.is_err() {
@@ -561,8 +561,8 @@ mod tests {
             message: "Hello!".to_owned(),
         };
 
-        let mut request = ChatRequest::from(&message);
-        let res = mock_client.send_message(&mut request).await;
+        let request = ChatRequest::from(&message);
+        let res = mock_client.send_message(&request).await;
 
         // Debug the error if there is one
         if res.is_err() {
@@ -629,11 +629,11 @@ mod tests {
             message: "This is a test. Call the `mock_tool`, passing in a `name`, and ensure it returns a greeting".into()
         };
 
-        let mut request = ChatRequest {
+        let request = ChatRequest {
             message: &message,
             tools: Some(&[Box::new(tool)]),
         };
-        let res = client.send_message(&mut request).await;
+        let res = client.send_message(&request).await;
 
         // Debug the error if there is one
         if res.is_err() {
