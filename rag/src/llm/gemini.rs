@@ -190,8 +190,9 @@ fn get_gemini_api_key() -> Result<String, LLMError> {
 /// A function (tool) call request from the model.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct GeminiFunctionCall {
-    /// A unique ID for the function call
-    id: String,
+    /// A unique ID for the function call (optional in responses)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    id: Option<String>,
     /// The name of the tool (function) to call
     name: String,
     /// The function parameters
@@ -201,8 +202,6 @@ struct GeminiFunctionCall {
 /// A result of a tool call, to be sent to the API.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct GeminiFunctionResult {
-    /// The ID corresponding to the tool call request
-    id: String,
     /// The name of the function
     name: String,
     /// The function response in JSON format
@@ -211,21 +210,23 @@ struct GeminiFunctionResult {
 
 /// A content part in a request to the Gemini API
 #[derive(Serialize, Deserialize, Clone)]
-#[serde(rename_all = "camelCase", untagged)]
+#[serde(untagged)]
 enum GeminiPart {
     Text {
         text: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(rename = "thoughtSignature", skip_serializing_if = "Option::is_none")]
         thought_signature: Option<String>,
     },
     FunctionCall {
+        #[serde(rename = "functionCall")]
         function_call: GeminiFunctionCall,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(rename = "thoughtSignature", skip_serializing_if = "Option::is_none")]
         thought_signature: Option<String>,
     },
     FunctionResult {
+        #[serde(rename = "functionResponse")]
         function_response: GeminiFunctionResult,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(rename = "thoughtSignature", skip_serializing_if = "Option::is_none")]
         thought_signature: Option<String>,
     },
 }
@@ -252,19 +253,27 @@ impl From<ChatHistoryItem> for GeminiContent {
                     },
                     ChatHistoryContent::ToolCallRequest(tool_call) => GeminiPart::FunctionCall {
                         function_call: GeminiFunctionCall {
-                            id: tool_call.id,
+                            id: Some(tool_call.id),
                             name: tool_call.tool_name,
                             args: tool_call.args,
                         },
                         thought_signature: None,
                     },
-                    ChatHistoryContent::ToolCallResponse(tool_res) => GeminiPart::FunctionResult {
-                        function_response: GeminiFunctionResult {
-                            id: tool_res.id,
-                            name: tool_res.tool_name,
-                            response: tool_res.result,
-                        },
-                        thought_signature: None,
+                    ChatHistoryContent::ToolCallResponse(tool_res) => {
+                        // Wrap the result in an object with a "result" field if it's not already an object
+                        let response = if tool_res.result.is_object() {
+                            tool_res.result
+                        } else {
+                            serde_json::json!({ "result": tool_res.result })
+                        };
+
+                        GeminiPart::FunctionResult {
+                            function_response: GeminiFunctionResult {
+                                name: tool_res.tool_name,
+                                response,
+                            },
+                            thought_signature: None,
+                        }
                     },
                 })
                 .collect::<Vec<_>>(),
@@ -428,7 +437,8 @@ struct GeminiTokenDetails {
 #[serde(rename_all = "camelCase")]
 struct GeminiUsageMetadata {
     prompt_token_count: u32,
-    thoughts_token_count: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    thoughts_token_count: Option<u32>,
     candidates_token_count: u32,
     total_token_count: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -456,11 +466,12 @@ struct GeminiResponseBody {
 /// Tool results should never appear in API responses; if encountered, they are ignored
 /// with a warning.
 fn map_response_to_chat_contents(contents: &[GeminiPart]) -> Vec<ChatHistoryContent> {
-    contents.iter().filter_map(|c| {
+    contents.iter().enumerate().filter_map(|(idx, c)| {
         match c {
             GeminiPart::Text{text, ..} => Some(ChatHistoryContent::Text(text.clone())),
             GeminiPart::FunctionCall{function_call: fc, ..} => Some(ChatHistoryContent::ToolCallRequest(ToolCallRequest {
-                    id: fc.id.clone(),
+                    // Generate an ID if not provided by the API
+                    id: fc.id.clone().unwrap_or_else(|| format!("{}_{}", fc.name, idx)),
                     tool_name: fc.name.clone(),
                     args: fc.args.clone()
                 })),
@@ -693,7 +704,7 @@ mod tests {
                 prompt_token_count: 7,
                 candidates_token_count: 11,
                 total_token_count: 18,
-                thoughts_token_count: 0,
+                thoughts_token_count: Some(0),
                 prompt_tokens_details: None,
             },
         };
@@ -712,8 +723,8 @@ mod tests {
             }],
             max_tokens: Some(256),
         };
-        let mut request = ChatRequest::from(&message);
-        let res = client.send_message(&mut request).await;
+        let request = ChatRequest::from(&message);
+        let res = client.send_message(&request).await;
         assert!(res.is_ok());
         let res = res.unwrap();
         assert_eq!(res.content.len(), 1);
@@ -803,8 +814,8 @@ mod tests {
             max_tokens: Some(1024),
             message: "Hello!".to_owned(),
         };
-        let mut request = ChatRequest::from(&message);
-        let res = client.send_message(&mut request).await;
+        let request = ChatRequest::from(&message);
+        let res = client.send_message(&request).await;
 
         // Debug the error if there is one
         if res.is_err() {
@@ -829,12 +840,12 @@ mod tests {
             max_tokens: Some(1024),
             message: "This is a test. Call the `mock_tool`, passing in a `name`, and ensure it returns a greeting".to_owned(),
         };
-        let mut request = ChatRequest {
+        let request = ChatRequest {
             message: &message,
             tools: Some(&[Box::new(tool)]),
         };
 
-        let res = client.send_message(&mut request).await;
+        let res = client.send_message(&request).await;
 
         // Debug the error if there is one
         if res.is_err() {

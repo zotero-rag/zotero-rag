@@ -84,7 +84,7 @@ impl<'a> From<&'a UserMessage> for ChatRequest<'a> {
 /// A structure dedicated to a single tool call. This contains the tool called, the arguments
 /// passed, and the result of that tool call. In the future, this may include additional
 /// information such as the number of tokens used in each tool call.
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct ToolUseStats {
     pub tool_call_id: String,
     pub tool_name: String,
@@ -95,7 +95,7 @@ pub struct ToolUseStats {
 /// A model response can contain multiple types of content, such as raw text and tool calls. This
 /// captures those variants. Specifically, this is different from `ChatHistoryContent`, which is
 /// more tailored to individual items in the chat history that is passed to providers.
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(untagged)]
 pub enum ContentType {
     Text(String),
