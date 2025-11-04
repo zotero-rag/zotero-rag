@@ -4,7 +4,7 @@ use zqa::common::setup_logger;
 
 use std::{env, fs};
 
-use rag::llm::base::{ApiClient, ChatRequest, UserMessage};
+use rag::llm::base::{ApiClient, ChatRequest, ContentType, UserMessage};
 use rag::llm::factory::{LLMClientConfig, get_client_with_config};
 use zqa::cli::prompts::get_extraction_prompt;
 use zqa::config::{AnthropicConfig, GeminiConfig, OpenAIConfig};
@@ -43,11 +43,19 @@ async fn run_extraction_test(client: rag::llm::factory::LLMClient, provider_name
         "Response content should not be empty"
     );
 
-    // Verify the response contains expected XML tags from the prompt format
-    assert!(
-        response.content.contains("<title>") || response.content.contains("<excerpt>"),
-        "Response should contain structured output with title or excerpt tags"
-    );
+    let content = response.content.first().unwrap();
+    match content {
+        ContentType::ToolCall(_) => {
+            panic!("failed assertion: content is a tool call");
+        }
+        ContentType::Text(s) => {
+            // Verify the response contains expected XML tags from the prompt format
+            assert!(
+                s.contains("<title>") || s.contains("<excerpt>"),
+                "Response should contain structured output with title or excerpt tags"
+            );
+        }
+    }
 
     println!(
         "{} extraction test passed. Token usage: input={}, output={}",
