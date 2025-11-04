@@ -18,7 +18,7 @@ pub enum LLMClient {
 impl ApiClient for LLMClient {
     async fn send_message<'a>(
         &self,
-        message: &'a mut ChatRequest<'a>,
+        message: &'a ChatRequest<'a>,
     ) -> Result<crate::llm::base::CompletionApiResponse, LLMError> {
         match self {
             LLMClient::Anthropic(client) => client.send_message(message).await,

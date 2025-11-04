@@ -326,7 +326,7 @@ impl<T: HttpClient> ApiClient for OpenRouterClient<T> {
     /// response after all tool calls are processed and sent back to the API.
     async fn send_message<'a>(
         &self,
-        request: &'a mut ChatRequest<'a>,
+        request: &'a ChatRequest<'a>,
     ) -> Result<CompletionApiResponse, LLMError> {
         // Use config if available, otherwise fall back to env vars
         let (api_key, model) = if let Some(ref config) = self.config {
@@ -394,7 +394,11 @@ impl<T: HttpClient> ApiClient for OpenRouterClient<T> {
                 &mut chat_history,
                 &mut contents,
                 &converted_contents,
-                tools.as_ref().unwrap(),
+                tools.as_ref().ok_or_else(|| {
+                    LLMError::ToolCallError(
+                        "Model returned tool calls, but no tools were provided.".to_string(),
+                    )
+                })?,
             )
             .await?;
 

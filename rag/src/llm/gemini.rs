@@ -322,19 +322,8 @@ fn build_gemini_request_data<'a>(
         .message
         .chat_history
         .iter()
-        .map(|c| {
-            let content = c.content[0].clone();
-
-            GeminiContent {
-                role: map_role(&c.role),
-                parts: vec![GeminiPart::Text {
-                    text: match content {
-                        ChatHistoryContent::Text(s) => s,
-                        _ => "".into(),
-                    },
-                }],
-            }
-        })
+        .cloned()
+        .map(Into::into)
         .collect();
 
     contents.push(GeminiContent {
@@ -476,9 +465,8 @@ fn map_response_to_chat_contents(contents: &[GeminiPart]) -> Vec<ChatHistoryCont
 impl<T: HttpClient> ApiClient for GeminiClient<T> {
     async fn send_message<'a>(
         &self,
-        request: &'a mut ChatRequest<'a>,
+        request: &'a ChatRequest<'a>,
     ) -> Result<CompletionApiResponse, LLMError> {
-        // TODO: Implement tool support for Gemini
         let key = get_gemini_api_key()?;
         let model = match &self.config {
             None => env::var("GEMINI_MODEL").unwrap_or_else(|_| DEFAULT_GEMINI_MODEL.to_string()),
@@ -519,8 +507,11 @@ impl<T: HttpClient> ApiClient for GeminiClient<T> {
         while has_tool_calls {
             let converted_contents = map_response_to_chat_contents(&response.content.parts);
 
-            // `unwrap` is likely to be safe here since tool calls exist
-            let owned_tools = tools.as_ref().unwrap();
+            let owned_tools = tools.as_ref().ok_or_else(|| {
+                LLMError::ToolCallError(
+                    "Model returned tool calls, but no tools were provided.".to_string(),
+                )
+            })?;
             process_tool_calls(
                 &mut chat_history,
                 &mut contents,
