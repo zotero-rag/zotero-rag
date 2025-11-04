@@ -274,7 +274,7 @@ impl From<ChatHistoryItem> for GeminiContent {
                             },
                             thought_signature: None,
                         }
-                    },
+                    }
                 })
                 .collect::<Vec<_>>(),
         }
