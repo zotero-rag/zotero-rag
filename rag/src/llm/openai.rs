@@ -371,6 +371,7 @@ async fn process_openai_tool_calls<'a>(
                 };
 
                 new_contents.push(ContentType::ToolCall(ToolUseStats {
+                    tool_call_id: tool_call.call_id.clone(),
                     tool_name: tool_call.name.clone(),
                     tool_args: parsed_arguments.clone(),
                     tool_result: tool_result.clone(),

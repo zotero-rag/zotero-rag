@@ -148,6 +148,7 @@ where
                 };
 
                 new_contents.push(ContentType::ToolCall(ToolUseStats {
+                    tool_call_id: tool_call.id.clone(),
                     tool_name: tool_call.tool_name.clone(),
                     tool_args: tool_call.args.clone(),
                     tool_result: tool_result.clone(),
