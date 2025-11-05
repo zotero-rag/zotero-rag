@@ -84,13 +84,11 @@ impl<'a> Serialize for SerializedTool<'a> {
 /// `Some(Vec<SerializedTool>)` referencing the original tools, or `None` if no tools were
 /// provided.
 pub fn get_owned_tools<'a>(tools: Option<&'a [Box<dyn Tool>]>) -> Option<Vec<SerializedTool<'a>>> {
-    let owned_tools: Option<Vec<SerializedTool>> = tools.as_ref().map(|iter| {
+    tools.as_ref().map(|iter| {
         iter.iter()
             .map(|f| SerializedTool(&**f))
             .collect::<Vec<SerializedTool>>()
-    });
-
-    owned_tools
+    })
 }
 
 /// Process tool calls in a single model response (provider‑agnostic).
