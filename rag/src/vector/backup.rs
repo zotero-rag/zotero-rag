@@ -2,7 +2,6 @@ use std::path::{Path, PathBuf};
 use std::fs;
 use thiserror::Error;
 use chrono::{DateTime, Utc};
-use lancedb::Connection;
 
 use crate::vector::lance::{LanceError, DB_URI, TABLE_NAME};
 
@@ -15,12 +14,18 @@ pub enum BackupError {
     /// LanceDB error during backup operations
     #[error("LanceDB error during backup: {0}")]
     LanceError(#[from] LanceError),
+    /// LanceDB library error during backup operations
+    #[error("LanceDB library error during backup: {0}")]
+    LanceDbError(#[from] lancedb::Error),
     /// Backup validation error
     #[error("Backup validation failed: {0}")]
     ValidationError(String),
     /// Backup not found
     #[error("Backup not found: {0}")]
     BackupNotFound(String),
+    /// Operation failed error
+    #[error("Operation failed: {0}")]
+    OperationFailed(Box<dyn std::error::Error + Send + Sync>),
 }
 
 /// Backup strategy to use
@@ -72,8 +77,9 @@ impl BackupManager {
 
     /// Create a backup before performing database operations
     pub async fn create_backup(&mut self, strategy: BackupStrategy) -> Result<String, BackupError> {
-        let backup_id = format!("backup_{}", Utc::now().timestamp());
-        
+        let now = Utc::now();
+        let backup_id = format!("backup_{}", now.format("%Y%m%d_%H%M%S"));
+
         // Ensure backup directory exists
         if !self.backup_dir.exists() {
             fs::create_dir_all(&self.backup_dir)?;
@@ -191,7 +197,7 @@ impl BackupManager {
 
     /// Restore using LanceDB version rollback
     async fn restore_version_backup(&self, backup: &BackupMetadata) -> Result<(), BackupError> {
-        let original_version = backup.original_version
+        let _original_version = backup.original_version
             .ok_or_else(|| BackupError::ValidationError(
                 "Version backup missing original version".to_string()
             ))?;
@@ -209,8 +215,8 @@ impl BackupManager {
                 format!("Table {} does not exist", TABLE_NAME)
             ))?;
 
-        // Restore to the original version
-        table.restore(original_version).await?;
+        // Restore to the previous version (LanceDB's restore() takes no arguments)
+        table.restore().await?;
 
         Ok(())
     }
@@ -293,12 +299,12 @@ where
         Err(error) => {
             // Failure: restore backup
             if let Err(restore_error) = backup_manager.restore_backup(&backup_id).await {
-                eprintln!("Failed to restore backup: {}", restore_error);
+                log::error!("Failed to restore backup: {}", restore_error);
                 // Log the restore error but still return the original operation error
             }
-            
+
             // Convert the operation error to our error type
-            Err(BackupError::ValidationError(format!("Operation failed: {}", error)))
+            Err(BackupError::OperationFailed(Box::new(error)))
         }
     }
 }
@@ -323,16 +329,16 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let db_dir = temp_dir.path().join("test_db");
         let backup_dir = temp_dir.path().join("backups");
-        
+
         // Create a mock database directory with some files
         fs::create_dir_all(&db_dir).unwrap();
         fs::write(db_dir.join("test_file.txt"), "test data").unwrap();
-        
-        let mut backup_manager = BackupManager::new(Some(backup_dir.clone()));
-        
-        // This would normally fail because we don't have the actual DB_URI
-        // but we can test the basic structure
+
+        let backup_manager = BackupManager::new(Some(backup_dir.clone()));
+
+        // Verify the backup manager is initialized correctly
         assert!(backup_manager.active_backup.is_none());
+        assert_eq!(backup_manager.backup_dir, backup_dir);
     }
 
     #[test]

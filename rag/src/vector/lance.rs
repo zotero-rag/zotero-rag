@@ -457,11 +457,13 @@ pub async fn insert_records_with_backup(
     backup_strategy: BackupStrategy,
 ) -> Result<Connection, LanceError> {
     let mut backup_manager = BackupManager::new(None);
-    
+
     // Create backup before operation
-    let backup_id = backup_manager.create_backup(backup_strategy).await
+    let backup_id = backup_manager
+        .create_backup(backup_strategy)
+        .await
         .map_err(|e| LanceError::Other(Box::new(e)))?;
-    
+
     // Attempt the operation
     match insert_records(data, merge_on, embedding_params).await {
         Ok(connection) => {
@@ -471,14 +473,17 @@ pub async fn insert_records_with_backup(
                 // Continue despite cleanup failure
             }
             Ok(connection)
-        },
+        }
         Err(error) => {
             // Failure: restore backup
             if let Err(restore_error) = backup_manager.restore_backup(&backup_id).await {
                 log::error!("Failed to restore backup {}: {}", backup_id, restore_error);
                 return Err(LanceError::Other(Box::new(restore_error)));
             }
-            log::info!("Successfully restored backup {} after failed operation", backup_id);
+            log::info!(
+                "Successfully restored backup {} after failed operation",
+                backup_id
+            );
             Err(error)
         }
     }
@@ -502,11 +507,13 @@ pub async fn delete_rows_with_backup(
     backup_strategy: BackupStrategy,
 ) -> Result<(), LanceError> {
     let mut backup_manager = BackupManager::new(None);
-    
+
     // Create backup before operation
-    let backup_id = backup_manager.create_backup(backup_strategy).await
+    let backup_id = backup_manager
+        .create_backup(backup_strategy)
+        .await
         .map_err(|e| LanceError::Other(Box::new(e)))?;
-    
+
     // Attempt the operation
     match delete_rows(rows, key, embedding_name).await {
         Ok(()) => {
@@ -516,14 +523,17 @@ pub async fn delete_rows_with_backup(
                 // Continue despite cleanup failure
             }
             Ok(())
-        },
+        }
         Err(error) => {
             // Failure: restore backup
             if let Err(restore_error) = backup_manager.restore_backup(&backup_id).await {
                 log::error!("Failed to restore backup {}: {}", backup_id, restore_error);
                 return Err(LanceError::Other(Box::new(restore_error)));
             }
-            log::info!("Successfully restored backup {} after failed operation", backup_id);
+            log::info!(
+                "Successfully restored backup {} after failed operation",
+                backup_id
+            );
             Err(error)
         }
     }
@@ -545,11 +555,13 @@ pub async fn create_or_update_indexes_with_backup(
     backup_strategy: BackupStrategy,
 ) -> Result<(), LanceError> {
     let mut backup_manager = BackupManager::new(None);
-    
+
     // Create backup before operation
-    let backup_id = backup_manager.create_backup(backup_strategy).await
+    let backup_id = backup_manager
+        .create_backup(backup_strategy)
+        .await
         .map_err(|e| LanceError::Other(Box::new(e)))?;
-    
+
     // Attempt the operation
     match create_or_update_indexes(text_col, embedding_col).await {
         Ok(()) => {
@@ -559,14 +571,17 @@ pub async fn create_or_update_indexes_with_backup(
                 // Continue despite cleanup failure
             }
             Ok(())
-        },
+        }
         Err(error) => {
             // Failure: restore backup
             if let Err(restore_error) = backup_manager.restore_backup(&backup_id).await {
                 log::error!("Failed to restore backup {}: {}", backup_id, restore_error);
                 return Err(LanceError::Other(Box::new(restore_error)));
             }
-            log::info!("Successfully restored backup {} after failed operation", backup_id);
+            log::info!(
+                "Successfully restored backup {} after failed operation",
+                backup_id
+            );
             Err(error)
         }
     }
