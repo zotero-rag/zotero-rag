@@ -1,7 +1,7 @@
 use crate::capabilities::EmbeddingProviders;
 use crate::embedding::voyage::VoyageAIClient;
 use crate::llm::{anthropic::AnthropicClient, http_client::ReqwestClient, openai::OpenAIClient};
-use crate::vector::backup::{BackupManager, BackupStrategy};
+use crate::vector::backup::{BackupError, BackupManager, BackupStrategy, with_backup};
 use crate::vector::checkhealth::get_zero_vectors;
 use lancedb::table::OptimizeOptions;
 use tantivy::tokenizer::Language;
@@ -455,38 +455,11 @@ pub async fn insert_records_with_backup(
     merge_on: Option<&[&str]>,
     embedding_params: EmbeddingDefinition,
     backup_strategy: BackupStrategy,
-) -> Result<Connection, LanceError> {
-    let mut backup_manager = BackupManager::new(None);
-
-    // Create backup before operation
-    let backup_id = backup_manager
-        .create_backup(backup_strategy)
-        .await
-        .map_err(|e| LanceError::Other(Box::new(e)))?;
-
-    // Attempt the operation
-    match insert_records(data, merge_on, embedding_params).await {
-        Ok(connection) => {
-            // Success: cleanup backup
-            if let Err(e) = backup_manager.cleanup_backup(&backup_id).await {
-                log::warn!("Failed to cleanup backup {}: {}", backup_id, e);
-                // Continue despite cleanup failure
-            }
-            Ok(connection)
-        }
-        Err(error) => {
-            // Failure: restore backup
-            if let Err(restore_error) = backup_manager.restore_backup(&backup_id).await {
-                log::error!("Failed to restore backup {}: {}", backup_id, restore_error);
-                return Err(LanceError::Other(Box::new(restore_error)));
-            }
-            log::info!(
-                "Successfully restored backup {} after failed operation",
-                backup_id
-            );
-            Err(error)
-        }
-    }
+) -> Result<Connection, BackupError> {
+    with_backup(backup_strategy, async move {
+        insert_records(data, merge_on, embedding_params).await
+    })
+    .await
 }
 
 /// Delete rows with backup support. Creates a backup before the operation and
