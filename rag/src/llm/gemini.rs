@@ -354,7 +354,7 @@ fn build_gemini_request_data<'a>(
         }],
     });
 
-    let owned_tools: Option<Vec<SerializedTool>> = get_owned_tools(req.tools);
+    let owned_tools: Option<Vec<SerializedTool<'a>>> = get_owned_tools(req.tools);
 
     let generation_config = Some(GeminiGenerationConfig {
         max_output_tokens: model_max,

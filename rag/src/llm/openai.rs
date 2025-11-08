@@ -247,7 +247,7 @@ fn build_openai_messages_and_tools<'a>(
         content: OpenAIRequestInputItem::Text(req.message.message.clone()),
     }));
 
-    let owned_tools: Option<Vec<OpenAITool>> =
+    let owned_tools: Option<Vec<OpenAITool<'a>>> =
         get_owned_tools(req.tools).map(wrap_tools_for_openai);
 
     (messages, owned_tools)

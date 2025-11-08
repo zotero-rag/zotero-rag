@@ -174,7 +174,7 @@ fn build_openrouter_messages_and_tools<'a>(
         tool_call_id: None,
     });
 
-    let owned_tools: Option<Vec<SerializedTool>> = get_owned_tools(req.tools);
+    let owned_tools: Option<Vec<SerializedTool<'a>>> = get_owned_tools(req.tools);
 
     (messages, owned_tools)
 }

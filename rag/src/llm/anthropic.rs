@@ -136,7 +136,7 @@ fn build_anthropic_messages_and_tools<'a>(
         content: vec![req.message.message.clone().into()],
     });
 
-    let owned_tools: Option<Vec<SerializedTool>> = get_owned_tools(req.tools);
+    let owned_tools: Option<Vec<SerializedTool<'a>>> = get_owned_tools(req.tools);
 
     (messages, owned_tools)
 }

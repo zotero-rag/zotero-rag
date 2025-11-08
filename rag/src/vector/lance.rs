@@ -1,7 +1,7 @@
 use crate::capabilities::EmbeddingProviders;
 use crate::embedding::voyage::VoyageAIClient;
 use crate::llm::{anthropic::AnthropicClient, http_client::ReqwestClient, openai::OpenAIClient};
-use crate::vector::backup::{BackupError, BackupManager, BackupStrategy, with_backup};
+use crate::vector::backup::with_backup;
 use crate::vector::checkhealth::get_zero_vectors;
 use lancedb::table::OptimizeOptions;
 use tantivy::tokenizer::Language;
@@ -443,7 +443,6 @@ pub async fn insert_records(
 /// * `merge_on`: `None` if you want to create or overwrite the current database; otherwise, a
 ///   reference to an array of keys to merge on.
 /// * `embedding_params`: An `EmbeddingDefinition` object
-/// * `backup_strategy`: The backup strategy to use
 ///
 /// # Returns
 /// A Connection to the LanceDB database if successful
@@ -454,12 +453,8 @@ pub async fn insert_records_with_backup(
     data: RecordBatchIterator<IntoIter<Result<RecordBatch, ArrowError>>>,
     merge_on: Option<&[&str]>,
     embedding_params: EmbeddingDefinition,
-    backup_strategy: BackupStrategy,
-) -> Result<Connection, BackupError> {
-    with_backup(backup_strategy, async move {
-        insert_records(data, merge_on, embedding_params).await
-    })
-    .await
+) -> Result<Connection, LanceError> {
+    with_backup(async move { insert_records(data, merge_on, embedding_params).await }).await
 }
 
 /// Delete rows with backup support. Creates a backup before the operation and
@@ -469,7 +464,6 @@ pub async fn insert_records_with_backup(
 /// * `rows` - A `RecordBatch` of items to delete
 /// * `key` - The column to delete by
 /// * `embedding_name` - The embedding provider
-/// * `backup_strategy` - The backup strategy to use
 ///
 /// # Errors
 /// Returns a `LanceError` if backup creation, database operations, or restoration fails
@@ -477,39 +471,8 @@ pub async fn delete_rows_with_backup(
     rows: RecordBatch,
     key: &str,
     embedding_name: &str,
-    backup_strategy: BackupStrategy,
 ) -> Result<(), LanceError> {
-    let mut backup_manager = BackupManager::new(None);
-
-    // Create backup before operation
-    let backup_id = backup_manager
-        .create_backup(backup_strategy)
-        .await
-        .map_err(|e| LanceError::Other(Box::new(e)))?;
-
-    // Attempt the operation
-    match delete_rows(rows, key, embedding_name).await {
-        Ok(()) => {
-            // Success: cleanup backup
-            if let Err(e) = backup_manager.cleanup_backup(&backup_id).await {
-                log::warn!("Failed to cleanup backup {}: {}", backup_id, e);
-                // Continue despite cleanup failure
-            }
-            Ok(())
-        }
-        Err(error) => {
-            // Failure: restore backup
-            if let Err(restore_error) = backup_manager.restore_backup(&backup_id).await {
-                log::error!("Failed to restore backup {}: {}", backup_id, restore_error);
-                return Err(LanceError::Other(Box::new(restore_error)));
-            }
-            log::info!(
-                "Successfully restored backup {} after failed operation",
-                backup_id
-            );
-            Err(error)
-        }
-    }
+    with_backup(async move { delete_rows(rows, key, embedding_name).await }).await
 }
 
 /// Create or update indexes with backup support. Creates a backup before the operation and
@@ -518,46 +481,14 @@ pub async fn delete_rows_with_backup(
 /// # Arguments
 /// * `text_col` - The name of the column containing text
 /// * `embedding_col` - The name of the embedding column
-/// * `backup_strategy` - The backup strategy to use
 ///
 /// # Errors
 /// Returns a `LanceError` if backup creation, database operations, or restoration fails
 pub async fn create_or_update_indexes_with_backup(
     text_col: &str,
     embedding_col: &str,
-    backup_strategy: BackupStrategy,
 ) -> Result<(), LanceError> {
-    let mut backup_manager = BackupManager::new(None);
-
-    // Create backup before operation
-    let backup_id = backup_manager
-        .create_backup(backup_strategy)
-        .await
-        .map_err(|e| LanceError::Other(Box::new(e)))?;
-
-    // Attempt the operation
-    match create_or_update_indexes(text_col, embedding_col).await {
-        Ok(()) => {
-            // Success: cleanup backup
-            if let Err(e) = backup_manager.cleanup_backup(&backup_id).await {
-                log::warn!("Failed to cleanup backup {}: {}", backup_id, e);
-                // Continue despite cleanup failure
-            }
-            Ok(())
-        }
-        Err(error) => {
-            // Failure: restore backup
-            if let Err(restore_error) = backup_manager.restore_backup(&backup_id).await {
-                log::error!("Failed to restore backup {}: {}", backup_id, restore_error);
-                return Err(LanceError::Other(Box::new(restore_error)));
-            }
-            log::info!(
-                "Successfully restored backup {} after failed operation",
-                backup_id
-            );
-            Err(error)
-        }
-    }
+    with_backup(async move { create_or_update_indexes(text_col, embedding_col).await }).await
 }
 
 #[cfg(test)]
