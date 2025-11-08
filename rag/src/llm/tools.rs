@@ -87,7 +87,7 @@ pub fn get_owned_tools<'a>(tools: Option<&'a [Box<dyn Tool>]>) -> Option<Vec<Ser
     tools.as_ref().map(|iter| {
         iter.iter()
             .map(|f| SerializedTool(&**f))
-            .collect::<Vec<SerializedTool>>()
+            .collect::<Vec<SerializedTool<'a>>>()
     })
 }
 
