@@ -4902,7 +4902,6 @@ dependencies = [
  "arrow-array",
  "arrow-schema",
  "bytes",
- "chrono",
  "dotenv",
  "futures",
  "http 1.3.1",
