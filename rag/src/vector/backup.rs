@@ -27,12 +27,14 @@ pub(crate) struct BackupMetadata {
     pub original_version: Option<u64>,
 }
 
-/// Creates a backup using LanceDB's internal versioning mechanism.
 /// TODO: Refactor this to take in a `Connection` to reduce overhead of repeatedly connecting to
 /// the DB.
 ///
-/// This strategy records the current version of the LanceDB table, allowing
-/// for rollback to this specific version later.
+/// Creates a backup using LanceDB's internal versioning mechanism.
+///
+/// Warning: This function is currently not safe for concurrent use. Specifically, it is possible for
+/// another process/thread to modify the table between the time the backup is created and the time
+/// the operation is executed, resulting in data loss.
 pub(crate) async fn create_backup() -> Result<BackupMetadata, LanceError> {
     // Connect to the database to get current version
     let db = lancedb::connect(DB_URI)
@@ -133,12 +135,14 @@ where
     match operation.await {
         Ok(result) => Ok(result),
         Err(e) => {
-            // Failure: restore backup
+            // Failure: (attempt to) restore backup
             if let Err(restore_error) = restore_backup(&backup_metadata).await {
                 log::error!("Failed to restore backup: {}", restore_error);
 
-                // Log the restore error but still return the original operation error
-                return Err(LanceError::Other(Box::new(e)));
+                return Err(LanceError::InvalidStateError(format!(
+                    "Operation failed AND restore failed. Database may be in inconsistent state.\nOperation error: {}.\nRestore error: {}",
+                    e, restore_error
+                )));
             }
 
             Err(LanceError::Other(Box::new(e)))
