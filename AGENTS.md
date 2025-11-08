@@ -21,11 +21,6 @@ This is a Rust-based Zotero RAG QA System for answering questions from academic 
 - Bench (pdftools): `cargo bench -p pdftools`
 - Faster Linux linking: uses `mold` via `.cargo/config.toml` (install or remove the flag).
 
-### Environment Setup
-
-- Requires API keys for OpenAI and Anthropic
-- Use `.env` file for environment variables (dotenv crate is included)
-
 ## Coding Standards
 
 ### Rust Conventions
@@ -58,31 +53,17 @@ This is a Rust-based Zotero RAG QA System for answering questions from academic 
 ///
 /// Description
 ```
-In particular, there is no colon after `# Returns`.
+In particular, there is no colon after `# Returns`, but there is one after `# Arguments`. The exception to the no-colon rule is for when a return type is a tuple of at least three elements.
 
 ## PR Review
 
 - Assess that the PR code follows idiomatic Rust and the coding standards set above.
-- In general, bias for efficiency. However, there may be cases where some efficiency is traded off for readability or better UX; but this should be limited.
+- In general, bias for performance. However, there may be cases where some efficiency is traded off for readability or better UX; but this should be limited.
 - PRs should, generally speaking, contain tests for the code they add. This should be exempted in very limited situations where there is a good reason.
 - Minimize the use of emojis unless you need to strongly emphasize something; use standard Markdown instead.
-
-## Architecture Notes
-
-### Dependencies
-
-- **lancedb**: Vector database for embeddings
-- **reqwest**: HTTP client for API calls
-- **serde/serde_json**: JSON serialization
-- **tokio**: Async runtime
-- **arrow-schema/arrow-array**: Data schema handling
-
-### Current Status
-
-- PDF text extraction working
-- LLM clients (OpenAI/Anthropic) implemented
-- Vector embeddings with LanceDB functional
-- Components not yet integrated in `zqa` crate
+- Do not leave inline comments unless you have specific recommendations for improvements.
+- Do not leave inline comments to state that something has improved or is better than before.
+- Keep your overall comment concise. In a paragraph or two, describe the overall PR quality and the recommendations in your comments.
 
 ## Important Files
 
