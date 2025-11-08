@@ -454,7 +454,7 @@ pub async fn insert_records_with_backup(
     merge_on: Option<&[&str]>,
     embedding_params: EmbeddingDefinition,
 ) -> Result<Connection, LanceError> {
-    with_backup(async move { insert_records(data, merge_on, embedding_params).await }).await
+    with_backup(insert_records(data, merge_on, embedding_params)).await
 }
 
 /// Delete rows with backup support. Creates a backup before the operation and
@@ -472,7 +472,7 @@ pub async fn delete_rows_with_backup(
     key: &str,
     embedding_name: &str,
 ) -> Result<(), LanceError> {
-    with_backup(async move { delete_rows(rows, key, embedding_name).await }).await
+    with_backup(delete_rows(rows, key, embedding_name)).await
 }
 
 /// Create or update indexes with backup support. Creates a backup before the operation and
@@ -488,7 +488,7 @@ pub async fn create_or_update_indexes_with_backup(
     text_col: &str,
     embedding_col: &str,
 ) -> Result<(), LanceError> {
-    with_backup(async move { create_or_update_indexes(text_col, embedding_col).await }).await
+    with_backup(create_or_update_indexes(text_col, embedding_col)).await
 }
 
 #[cfg(test)]

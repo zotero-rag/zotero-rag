@@ -28,6 +28,8 @@ pub(crate) struct BackupMetadata {
 }
 
 /// Creates a backup using LanceDB's internal versioning mechanism.
+/// TODO: Refactor this to take in a `Connection` to reduce overhead of repeatedly connecting to
+/// the DB.
 ///
 /// This strategy records the current version of the LanceDB table, allowing
 /// for rollback to this specific version later.
@@ -170,7 +172,9 @@ mod tests {
 
         db.embedding_registry().register(
             "openai",
-            Arc::new(crate::llm::openai::OpenAIClient::<crate::llm::http_client::ReqwestClient>::default()),
+            Arc::new(crate::llm::openai::OpenAIClient::<
+                crate::llm::http_client::ReqwestClient,
+            >::default()),
         )?;
 
         db.create_table(TABLE_NAME, reader)
@@ -195,7 +199,9 @@ mod tests {
         // Register embedding function
         db.embedding_registry().register(
             "openai",
-            Arc::new(crate::llm::openai::OpenAIClient::<crate::llm::http_client::ReqwestClient>::default()),
+            Arc::new(crate::llm::openai::OpenAIClient::<
+                crate::llm::http_client::ReqwestClient,
+            >::default()),
         )?;
 
         let table = db.open_table(TABLE_NAME).execute().await?;
@@ -251,7 +257,10 @@ mod tests {
 
         // Add more data (creates new version and adds 2 more rows)
         let new_version = add_data_to_db().await.expect("Failed to add data");
-        assert!(new_version > initial_version, "New version should be higher");
+        assert!(
+            new_version > initial_version,
+            "New version should be higher"
+        );
 
         // Verify row count increased
         let table = db
@@ -351,10 +360,7 @@ mod tests {
             add_data_to_db().await.expect("Failed to add data");
 
             // Simulate a failure
-            Err::<(), _>(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                "Simulated failure",
-            ))
+            Err::<(), _>(std::io::Error::other("Simulated failure"))
         })
         .await;
 
@@ -384,13 +390,8 @@ mod tests {
         setup_test_db().await.expect("Failed to setup test db");
 
         let error_message = "Custom error message";
-        let result = with_backup(async {
-            Err::<(), _>(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                error_message,
-            ))
-        })
-        .await;
+        let result =
+            with_backup(async { Err::<(), _>(std::io::Error::other(error_message)) }).await;
 
         assert!(result.is_err());
         let err = result.unwrap_err();
