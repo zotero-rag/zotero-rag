@@ -562,7 +562,8 @@ mod tests {
         let request = ChatRequest {
             chat_history: Vec::new(),
             max_tokens: Some(1024),
-            message: "Hello!".to_owned(),
+            message: "Call the mock_tool function with the name parameter set to 'Alice'"
+                .to_owned(),
             tools: Some(&[Box::new(tool)]),
         };
 

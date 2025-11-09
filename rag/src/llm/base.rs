@@ -62,9 +62,7 @@ pub struct ChatHistoryItem {
     pub content: Vec<ChatHistoryContent>,
 }
 
-/// Represents a request to the chat API, combining a user message with optional tools. This crate
-/// distinguishes between a `UserMessage`, which contains the message itself, from a `ChatRequest`,
-/// which represents the actual request to the API.
+/// Represents a request to the chat API with optional tools.
 pub struct ChatRequest<'a> {
     /// The chat history
     pub chat_history: Vec<ChatHistoryItem>,
