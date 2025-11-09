@@ -1,3 +1,5 @@
+//! Common utility functions for the crate.
+
 use http::{HeaderMap, StatusCode};
 use reqwest::Response;
 use serde::Serialize;
@@ -5,6 +7,9 @@ use std::time::Duration;
 
 use crate::llm::{errors::LLMError, http_client::HttpClient};
 
+/// Calculate the backoff delay given an attempt number and a response. It assumes the response is
+/// a 429 Too Many Requests response with a "Retry-After" header. If the header is not present or
+/// cannot be parsed, it uses a default base backoff delay of 1000 milliseconds.
 fn calculate_backoff_delay(attempt: usize, response: &Response) -> Duration {
     if let Some(retry_after) = response.headers().get("retry-after") {
         if let Ok(wait_time_str) = retry_after.to_str() {
@@ -25,7 +30,11 @@ fn calculate_backoff_delay(attempt: usize, response: &Response) -> Duration {
     Duration::from_millis((base_delay + jitter).round() as u64)
 }
 
-pub async fn request_with_backoff<T: HttpClient>(
+/// Perform a request with exponential backoff. This allows for retries without overwhelming the
+/// server with too many requests. It retries up to `max_retries` times, with a delay of
+/// `2^attempt * base_delay` milliseconds, where `base_delay` is 1000 milliseconds by default. If
+/// the API returns a 429 Too Many Requests with a "Retry-After" header, that is respected instead.
+pub(crate) async fn request_with_backoff<T: HttpClient>(
     client: &T,
     url: &str,
     headers: &HeaderMap,

@@ -1,3 +1,6 @@
+//! User-facing structs and traits for working with LLMs, including tool calling support. Most
+//! structs used by the clients can be converted to/from the structs here.
+
 use crate::llm::tools::Tool;
 
 use super::errors::LLMError;
@@ -39,8 +42,11 @@ pub struct ToolCallResponse {
 /// variants here only contain what is pertinent to common API schemas.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ChatHistoryContent {
+    /// A plain-text message
     Text(String),
+    /// A tool call request
     ToolCallRequest(ToolCallRequest),
+    /// A tool call response
     ToolCallResponse(ToolCallResponse),
 }
 
@@ -56,29 +62,18 @@ pub struct ChatHistoryItem {
     pub content: Vec<ChatHistoryContent>,
 }
 
-/// A user-facing struct that does not carry API-specific information. Clients should
-/// convert from this to native message types.
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct UserMessage {
-    pub chat_history: Vec<ChatHistoryItem>,
-    pub max_tokens: Option<u32>,
-    pub message: String,
-}
-
-/// Represents a request to the chat API, combining a user message with optional tools.
+/// Represents a request to the chat API, combining a user message with optional tools. This crate
+/// distinguishes between a `UserMessage`, which contains the message itself, from a `ChatRequest`,
+/// which represents the actual request to the API.
 pub struct ChatRequest<'a> {
-    pub message: &'a UserMessage,
+    /// The chat history
+    pub chat_history: Vec<ChatHistoryItem>,
+    /// The maximum number of tokens to generate
+    pub max_tokens: Option<u32>,
+    /// The message to send
+    pub message: String,
+    /// The tools to use
     pub tools: Option<&'a [Box<dyn Tool>]>,
-}
-
-/// Ergonomic conversion from a `UserMessage` to a `ChatRequest` without tools.
-impl<'a> From<&'a UserMessage> for ChatRequest<'a> {
-    fn from(message: &'a UserMessage) -> Self {
-        ChatRequest {
-            message,
-            tools: None,
-        }
-    }
 }
 
 /// A structure dedicated to a single tool call. This contains the tool called, the arguments
@@ -86,9 +81,13 @@ impl<'a> From<&'a UserMessage> for ChatRequest<'a> {
 /// information such as the number of tokens used in each tool call.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct ToolUseStats {
+    /// The provider-specified ID for the tool call
     pub tool_call_id: String,
+    /// The name of the tool called
     pub tool_name: String,
+    /// The arguments passed to the tool
     pub tool_args: serde_json::Value,
+    /// The result of the tool call
     pub tool_result: serde_json::Value,
 }
 
@@ -98,7 +97,9 @@ pub struct ToolUseStats {
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(untagged)]
 pub enum ContentType {
+    /// A plain-text message
     Text(String),
+    /// A tool call
     ToolCall(ToolUseStats),
 }
 
@@ -108,18 +109,23 @@ impl Default for ContentType {
     }
 }
 
-/// A user-facing struct representing API responses, containing only information users
+/// A struct representing API responses, containing only information users
 /// would be interested in.
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct CompletionApiResponse {
+    /// The content of the response. Note that this is a *single* response from the API, which can
+    /// contain multiple types of content.
     pub content: Vec<ContentType>,
+    /// The number of tokens used in the input prompt
     pub input_tokens: u32,
+    /// The number of tokens used in the output
     pub output_tokens: u32,
 }
 
 /// A client that can interact with an LLM provider and get a response.
 #[allow(async_fn_in_trait)]
 pub trait ApiClient {
+    /// Send a request to the API and return the response.
     async fn send_message<'a>(
         &self,
         request: &'a ChatRequest<'a>,

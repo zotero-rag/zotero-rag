@@ -1,3 +1,5 @@
+//! Utilities for working with LanceDB.
+
 pub mod backup;
 pub mod checkhealth;
 pub mod doctor;

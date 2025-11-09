@@ -1,3 +1,7 @@
+//! Functions for working with LanceDB. This module includes all the functionality for using
+//! LanceDB's features, including connecting, inserting, querying, and deleting. For certain
+//! operations, variants with backup support are provided.
+
 use crate::capabilities::EmbeddingProviders;
 use crate::embedding::voyage::VoyageAIClient;
 use crate::llm::{anthropic::AnthropicClient, http_client::ReqwestClient, openai::OpenAIClient};
@@ -20,8 +24,12 @@ use lancedb::{
 use std::{fmt::Display, path::PathBuf, sync::Arc, time::Instant, vec::IntoIter};
 use thiserror::Error;
 
-// Maintainers: ensure that `DB_URI` begins with `TABLE_NAME`
+// NOTE: Maintainers: ensure that `DB_URI` begins with `TABLE_NAME`
+
+/// The URI for the LanceDB table. This is the default location for the table, and for now cannot
+/// be changed.
 pub const DB_URI: &str = "data/lancedb-table";
+/// The name of the table. This is the default table name, and for now cannot be changed.
 pub const TABLE_NAME: &str = "data";
 
 /// Errors that can occur when working with LanceDB

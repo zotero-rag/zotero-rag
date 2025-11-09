@@ -1,15 +1,24 @@
+//! A module describing the capabilities of each provider. This contains enums that show which
+//! providers exposed through this crate have which capabilities. Note that it is possible for a
+//! provider to not have all the capabilities listed here, if that API endpoint is not (yet) supported.
+
 /// Providers of models that can generate text. Clients for these providers should implement
 /// the `ApiClient` trait. Generally speaking, for this reason, these structs and all their trait
 /// implementations will be in the `llm/` directory.
 #[derive(Clone, Debug)]
 pub enum ModelProviders {
+    /// OpenAI model provider
     OpenAI,
+    /// Anthropic model provider
     Anthropic,
+    /// OpenRouter model provider
     OpenRouter,
+    /// Gemini model provider
     Gemini,
 }
 
 impl ModelProviders {
+    /// Returns the string representation of the provider.
     pub fn as_str(&self) -> &'static str {
         match self {
             ModelProviders::OpenAI => "openai",
@@ -19,6 +28,7 @@ impl ModelProviders {
         }
     }
 
+    /// Returns whether the provider is contained in the list of providers.
     pub fn contains(provider: &str) -> bool {
         [
             ModelProviders::OpenAI.as_str(),
@@ -39,14 +49,20 @@ impl ModelProviders {
 /// model instead.
 #[derive(Clone, Debug)]
 pub enum EmbeddingProviders {
+    /// Cohere embedding provider
     Cohere,
+    /// OpenAI embedding provider
     OpenAI,
+    /// Anthropic embedding provider, uses the OpenAI API (for now).
     Anthropic,
+    /// VoyageAI embedding provider
     VoyageAI,
+    /// Gemini embedding provider
     Gemini,
 }
 
 impl EmbeddingProviders {
+    /// Returns the string representation of the provider.
     pub fn as_str(&self) -> &'static str {
         match self {
             EmbeddingProviders::Cohere => "cohere",
@@ -57,6 +73,7 @@ impl EmbeddingProviders {
         }
     }
 
+    /// Returns whether the provider is contained in the list of providers.
     pub fn contains(provider: &str) -> bool {
         [
             EmbeddingProviders::Cohere.as_str(),
@@ -74,11 +91,14 @@ impl EmbeddingProviders {
 /// an embedding model, so it's likely you will find the structs in `embedding/`.
 #[derive(Clone, Debug)]
 pub enum RerankerProviders {
+    /// Cohere reranking provider
     Cohere,
+    /// VoyageAI reranking provider
     VoyageAI,
 }
 
 impl RerankerProviders {
+    /// Returns the string representation of the provider.
     pub fn as_str(&self) -> &'static str {
         match self {
             RerankerProviders::Cohere => "cohere",
@@ -86,6 +106,7 @@ impl RerankerProviders {
         }
     }
 
+    /// Returns whether the provider is contained in the list of providers.
     pub fn contains(provider: &str) -> bool {
         [
             RerankerProviders::Cohere.as_str(),

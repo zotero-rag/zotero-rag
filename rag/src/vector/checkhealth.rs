@@ -1,3 +1,6 @@
+//! Utilities for checking the health of the LanceDB database. This includes helpers to provide
+//! possible diagnostics for common issues.
+
 use crate::embedding::common::get_embedding_dims_by_provider;
 
 use super::lance::LanceError;

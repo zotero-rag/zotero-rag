@@ -1,3 +1,6 @@
+//! Functions, structs, and trait implementations for interacting with the OpenRouter API. This
+//! module includes support for text generation only.
+
 use crate::common::request_with_backoff;
 use crate::llm::base::{ChatHistoryContent, ContentType, ToolCallRequest};
 use crate::llm::tools::{SerializedTool, get_owned_tools, process_tool_calls};
@@ -17,7 +20,9 @@ const DEFAULT_MODEL: &str = "openai/gpt-4o";
 /// all the features OpenRouter supports.
 #[derive(Debug, Clone)]
 pub struct OpenRouterClient<T: HttpClient = ReqwestClient> {
+    /// The HTTP client. The generic parameter allows for mocking in tests.
     pub client: T,
+    /// Optional configuration for the OpenRouter client.
     pub config: Option<crate::config::OpenRouterConfig>,
 }
 
@@ -161,7 +166,6 @@ fn build_openrouter_messages_and_tools<'a>(
     req: &'a ChatRequest<'a>,
 ) -> (Vec<OpenRouterMessage>, Option<Vec<SerializedTool<'a>>>) {
     let mut messages: Vec<OpenRouterMessage> = req
-        .message
         .chat_history
         .iter()
         .flat_map(convert_to_openrouter_messages)
@@ -169,7 +173,7 @@ fn build_openrouter_messages_and_tools<'a>(
 
     messages.push(OpenRouterMessage {
         role: "user".to_owned(),
-        content: Some(req.message.message.clone()),
+        content: Some(req.message.clone()),
         tool_calls: None,
         tool_call_id: None,
     });
@@ -455,7 +459,7 @@ mod tests {
     use dotenv::dotenv;
 
     use super::*;
-    use crate::llm::base::{ApiClient, ChatRequest, UserMessage};
+    use crate::llm::base::{ApiClient, ChatRequest};
     use crate::llm::http_client::{MockHttpClient, ReqwestClient};
     use crate::llm::tools::test_utils::MockTool;
 
@@ -464,13 +468,13 @@ mod tests {
         dotenv().ok();
 
         let client = OpenRouterClient::<ReqwestClient>::default();
-        let message = UserMessage {
+        let request = ChatRequest {
             chat_history: Vec::new(),
             max_tokens: Some(1024),
             message: "Hello!".to_owned(),
+            tools: None,
         };
 
-        let request = ChatRequest::from(&message);
         let res = client.send_message(&request).await;
 
         // Debug the error if there is one
@@ -517,13 +521,13 @@ mod tests {
             config: None,
         };
 
-        let message = UserMessage {
+        let request = ChatRequest {
             chat_history: Vec::new(),
-            max_tokens: None,
+            max_tokens: Some(1024),
             message: "Hello!".to_owned(),
+            tools: None,
         };
 
-        let request = ChatRequest::from(&message);
         let res = mock_client.send_message(&request).await;
 
         // Debug the error if there is one
@@ -554,16 +558,14 @@ mod tests {
             call_count: Arc::clone(&call_count),
             schema_key: "parameters".into(),
         };
-        let message = UserMessage {
-            chat_history: Vec::new(),
-            max_tokens: Some(1024),
-            message: "Call the mock_tool function with the name parameter set to 'Alice'".into(),
-        };
 
         let request = ChatRequest {
-            message: &message,
+            chat_history: Vec::new(),
+            max_tokens: Some(1024),
+            message: "Hello!".to_owned(),
             tools: Some(&[Box::new(tool)]),
         };
+
         let res = client.send_message(&request).await;
 
         // Debug the error if there is one

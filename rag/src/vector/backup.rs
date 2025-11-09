@@ -1,3 +1,6 @@
+//! Utilities for performing operations with backups. The backup functionality exposes LanceDB's
+//! versioning mechanism.
+
 use std::future::Future;
 use thiserror::Error;
 

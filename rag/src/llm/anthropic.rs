@@ -1,3 +1,5 @@
+//! A module for interacting with Anthropic's API.
+
 use std::borrow::Cow;
 use std::env;
 use std::sync::Arc;
@@ -25,7 +27,9 @@ const DEFAULT_CLAUDE_MODEL: &str = DEFAULT_ANTHROPIC_MODEL;
 /// example, features like Anthropic's native RAG thing
 #[derive(Debug, Clone)]
 pub struct AnthropicClient<T: HttpClient = ReqwestClient> {
+    /// The HTTP client. The generic parameter allows for mocking in tests.
     pub client: T,
+    /// Optional configuration for the Anthropic client.
     pub config: Option<crate::config::AnthropicConfig>,
 }
 
@@ -125,7 +129,6 @@ fn build_anthropic_messages_and_tools<'a>(
     Option<Vec<SerializedTool<'a>>>,
 ) {
     let mut messages = req
-        .message
         .chat_history
         .iter()
         .map(|f| f.into())
@@ -133,7 +136,7 @@ fn build_anthropic_messages_and_tools<'a>(
 
     messages.push(AnthropicChatHistoryItem {
         role: "user".to_owned(),
-        content: vec![req.message.message.clone().into()],
+        content: vec![req.message.clone().into()],
     });
 
     let owned_tools: Option<Vec<SerializedTool<'a>>> = get_owned_tools(req.tools);
@@ -348,7 +351,7 @@ impl<T: HttpClient> ApiClient for AnthropicClient<T> {
 
         // Build the initial messages and tools (owned)
         let (mut chat_history, tools) = build_anthropic_messages_and_tools(request);
-        let max_tokens_to_use = request.message.max_tokens.unwrap_or(max_tokens);
+        let max_tokens_to_use = request.max_tokens.unwrap_or(max_tokens);
 
         // Create the initial request
         let req_body = AnthropicRequest {
@@ -494,7 +497,7 @@ mod tests {
 
     use crate::constants::OPENAI_EMBEDDING_DIM;
     use crate::llm::anthropic::{AnthropicTextResponseContent, DEFAULT_CLAUDE_MODEL};
-    use crate::llm::base::{ApiClient, ChatRequest, ContentType, UserMessage};
+    use crate::llm::base::{ApiClient, ChatRequest, ContentType};
     use crate::llm::http_client::{MockHttpClient, ReqwestClient};
     use crate::llm::tools::test_utils::MockTool;
 
@@ -507,13 +510,13 @@ mod tests {
         dotenv().ok();
 
         let client = AnthropicClient::<ReqwestClient>::default();
-        let message = UserMessage {
+        let request = ChatRequest {
             chat_history: Vec::new(),
             max_tokens: Some(1024),
             message: "Hello!".to_owned(),
+            tools: None,
         };
 
-        let request = ChatRequest::from(&message);
         let res = client.send_message(&request).await;
 
         // Debug the error if there is one
@@ -555,13 +558,13 @@ mod tests {
             config: None,
         };
 
-        let message = UserMessage {
+        let request = ChatRequest {
             chat_history: Vec::new(),
-            max_tokens: None,
+            max_tokens: Some(1024),
             message: "Hello!".to_owned(),
+            tools: None,
         };
 
-        let request = ChatRequest::from(&message);
         let res = mock_client.send_message(&request).await;
 
         // Debug the error if there is one
@@ -623,14 +626,10 @@ mod tests {
             call_count: Arc::clone(&call_count),
             schema_key: "input_schema".into(),
         };
-        let message = UserMessage {
+        let request = ChatRequest {
             chat_history: Vec::new(),
             max_tokens: Some(1024),
-            message: "This is a test. Call the `mock_tool`, passing in a `name`, and ensure it returns a greeting".into()
-        };
-
-        let request = ChatRequest {
-            message: &message,
+            message: "This is a test. Call the `mock_tool`, passing in a `name`, and ensure it returns a greeting".into(),
             tools: Some(&[Box::new(tool)]),
         };
         let res = client.send_message(&request).await;

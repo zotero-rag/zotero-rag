@@ -1,3 +1,7 @@
+//! This module provides the `Tool` trait and its implementations. This trait is used to define
+//! tools that can be called by the LLM. Tools are used to perform tasks such as summarizing
+//! conversations, generating text, and performing calculations.
+
 use schemars::Schema;
 use serde::Serialize;
 use serde::ser::SerializeMap;
@@ -10,13 +14,81 @@ use crate::llm::{
     errors::LLMError,
 };
 
-// Schema keys for common providers. Users of the `Tool` trait can now just use these constants
-// instead of looking up the API docs.
+/// The key for the input schema for tools passed to Anthropic. Use this key as the return
+/// value of the `schema_key` method in the `Tool` trait.
 pub const ANTHROPIC_SCHEMA_KEY: &str = "input_schema";
+/// The key for the input schema for tools passed to Gemini. Use this key as the return
+/// value of the `schema_key` method in the `Tool` trait.
 pub const GEMINI_SCHEMA_KEY: &str = "parametersJsonSchema";
+/// The key for the input schema for tools passed to OpenAI. Use this key as the return
+/// value of the `schema_key` method in the `Tool` trait.
 pub const OPENAI_SCHEMA_KEY: &str = "parameters";
 
-/// A trait for tools that can be called by the LLM.
+/// A trait for tools that can be called by the LLM. Implement this trait to create tools that can
+/// be passed to models.
+///
+/// # Example
+///
+/// ```rust
+///    /// A mock tool that returns a greeting when given a name. Note that this derives the
+///    /// `Debug` trait; this is useful for debugging.
+///    #[derive(Debug)]
+///    pub(crate) struct MockTool {
+///        pub call_count: Arc<Mutex<usize>>,
+///        pub schema_key: String,
+///    }
+///
+///    /// The tool is simple and greets a user with a name; this is that input. It is important
+///    /// that this derives the `JsonSchema` and `Deserialize` traits. The former is used to
+///    /// convert your input type to a JSON schema.
+///    #[derive(Deserialize, JsonSchema)]
+///    pub(crate) struct MockToolInput {
+///        /// The name of the person to greet.
+///        name: String,
+///    }
+///
+///    impl Tool for MockTool {
+///        /// The name of the tool. This is used to identify the tool when calling it.
+///        fn name(&self) -> String {
+///            "mock_tool".into()
+///        }
+///
+///        /// A description of the tool. This is used to provide more context to the user.
+///        fn description(&self) -> String {
+///            "A mock tool that you should call for testing, and pass in a name.".into()
+///        }
+///
+///        /// The JSON schema for the tool's arguments.
+///        fn parameters(&self) -> schemars::Schema {
+///            schema_for!(MockToolInput)
+///        }
+///
+///        /// The key used by the API to describe the tool's parameters. See the method's docs for
+///        /// more details.
+///        fn schema_key(&self) -> String {
+///            self.schema_key.clone()
+///        }
+///
+///        /// The function to call when the tool is invoked. Note that even if your function does
+///        /// not need to be async, you should still use `async move` to ensure that the function
+///        /// is properly `Send` and `Sync`.
+///        fn call(
+///            &self,
+///            args: serde_json::Value,
+///        ) -> std::pin::Pin<Box<dyn Future<Output = Result<serde_json::Value, String>> + Send>>
+///        {
+///            *self.call_count.lock().unwrap() += 1;
+///
+///            Box::pin(async move {
+///                let input: MockToolInput =
+///                    serde_json::from_value(args).map_err(|e| format!("Error: {e}"))?;
+///                let greeting = format!("Hello, {}!", input.name);
+///
+///                serde_json::to_value(greeting).map_err(|e| format!("Error: {e}"))
+///            })
+///        }
+///    }
+/// ```
 pub trait Tool: Send + Sync {
     /// The name of the tool.
     fn name(&self) -> String;
