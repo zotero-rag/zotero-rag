@@ -64,6 +64,7 @@ In particular, there is no colon after `# Returns`, but there is one after `# Ar
 - Do not leave inline comments unless you have specific recommendations for improvements.
 - Do not leave inline comments to state that something has improved or is better than before.
 - Keep your overall comment concise. In a paragraph or two, describe the overall PR quality and the recommendations in your comments.
+- If an inline comment you leave is pedantic or otherwise minor, prefix it with "nit: ", and keep it short, about one sentence.
 
 ## Important Files
 
