@@ -4,20 +4,23 @@
 //! functionality for connecting to LLMs, embedding data, and performing vector searches. It also
 //! supports tool calling for most LLM providers. The crate is built on top of LanceDB for its simplicity.
 
-#![deny(unused_must_use)]
-#![deny(unused_imports)]
-#![deny(unused_variables)]
-#![deny(dead_code)]
-#![deny(unreachable_code)]
-#![deny(unreachable_patterns)]
-#![deny(unsafe_code)]
-#![warn(warnings)]
-#![warn(missing_docs)]
-#![warn(unreachable_pub)]
-#![warn(unsafe_op_in_unsafe_fn)]
-#![warn(rust_2018_idioms)]
-#![warn(clippy::all)]
-#![warn(clippy::pedantic)]
+#![deny(
+    dead_code,
+    unreachable_code,
+    unreachable_patterns,
+    unsafe_code,
+    unused_imports,
+    unused_must_use,
+    unused_variables
+)]
+#![warn(
+    clippy::all,
+    clippy::pedantic,
+    missing_docs,
+    rust_2018_idioms,
+    unreachable_pub,
+    unsafe_op_in_unsafe_fn
+)]
 
 pub mod capabilities;
 pub(crate) mod common;
