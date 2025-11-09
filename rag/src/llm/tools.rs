@@ -30,6 +30,11 @@ pub const OPENAI_SCHEMA_KEY: &str = "parameters";
 /// # Example
 ///
 /// ```rust
+///    use schemars::{JsonSchema, schema_for};
+///    # use serde::Deserialize;
+///    # use std::sync::{Arc, Mutex};
+///    # use rag::llm::tools::Tool;
+///
 ///    /// A mock tool that returns a greeting when given a name. Note that this derives the
 ///    /// `Debug` trait; this is useful for debugging.
 ///    #[derive(Debug)]
