@@ -28,7 +28,9 @@ use serde_json::{Map, Value};
 /// A client for OpenAI's chat completions (Responses) API.
 #[derive(Debug, Clone)]
 pub struct OpenAIClient<T: HttpClient = ReqwestClient> {
+    /// The HTTP client. The generic parameter allows for mocking in tests.
     pub client: T,
+    /// Optional configuration for the OpenAI client.
     pub config: Option<crate::config::OpenAIConfig>,
 }
 
@@ -235,7 +237,6 @@ fn build_openai_messages_and_tools<'a>(
     req: &'a ChatRequest<'a>,
 ) -> (Vec<OpenAIRequestInput>, Option<Vec<OpenAITool<'a>>>) {
     let mut messages = req
-        .message
         .chat_history
         .iter()
         .flat_map(<&ChatHistoryItem as Into<Vec<OpenAIRequestInput>>>::into)
@@ -244,7 +245,7 @@ fn build_openai_messages_and_tools<'a>(
     messages.push(OpenAIRequestInput::Message(OpenAIChatHistoryItem {
         role: "user".to_owned(),
         r#type: "message".into(),
-        content: OpenAIRequestInputItem::Text(req.message.message.clone()),
+        content: OpenAIRequestInputItem::Text(req.message.clone()),
     }));
 
     let owned_tools: Option<Vec<OpenAITool<'a>>> =
@@ -501,7 +502,7 @@ impl<T: HttpClient> ApiClient for OpenAIClient<T> {
 
         // Build owned versions of the initial messages and tools
         let (mut chat_history, tools) = build_openai_messages_and_tools(request);
-        let max_output_tokens = request.message.max_tokens;
+        let max_output_tokens = request.max_tokens;
 
         // Create the initial request
         let req_body = OpenAIRequest {
@@ -639,7 +640,7 @@ impl<T: HttpClient + Default + Debug> EmbeddingFunction for OpenAIClient<T> {
 mod tests {
     use super::{OpenAIClient, OpenAIContent, OpenAIOutput, OpenAIResponse, OpenAIUsage};
     use crate::constants::OPENAI_EMBEDDING_DIM;
-    use crate::llm::base::{ApiClient, ChatRequest, ContentType, UserMessage};
+    use crate::llm::base::{ApiClient, ChatRequest, ContentType};
     use crate::llm::http_client::{MockHttpClient, ReqwestClient};
     use crate::llm::tools::OPENAI_SCHEMA_KEY;
     use crate::llm::tools::test_utils::MockTool;
@@ -653,12 +654,12 @@ mod tests {
         dotenv().ok();
 
         let client = OpenAIClient::<ReqwestClient>::default();
-        let message = UserMessage {
+        let request = ChatRequest {
             chat_history: Vec::new(),
             max_tokens: Some(1024),
             message: "Hello!".to_owned(),
+            tools: None,
         };
-        let request = ChatRequest::from(&message);
         let res = client.send_message(&request).await;
 
         // Debug the error if there is one
@@ -701,12 +702,12 @@ mod tests {
             config: None,
         };
 
-        let message = UserMessage {
+        let request = ChatRequest {
             chat_history: Vec::new(),
             max_tokens: Some(1024),
             message: "Hello!".to_owned(),
+            tools: None,
         };
-        let request = ChatRequest::from(&message);
         let res = mock_client.send_message(&request).await;
 
         // Debug the error if there is one
@@ -766,16 +767,13 @@ mod tests {
             call_count: Arc::clone(&call_count),
             schema_key: OPENAI_SCHEMA_KEY.into(),
         };
-        let message = UserMessage {
+        let request = ChatRequest {
             chat_history: Vec::new(),
             max_tokens: Some(1024),
-            message: "This is a test. Call the `mock_tool`, passing in a `name`, and ensure it returns a greeting".into()
-        };
-
-        let request = ChatRequest {
-            message: &message,
+            message: "This is a test. Call the `mock_tool`, passing in a `name`, and ensure it returns a greeting".into(),
             tools: Some(&[Box::new(tool)]),
         };
+
         let res = client.send_message(&request).await;
 
         // Debug the error if there is one

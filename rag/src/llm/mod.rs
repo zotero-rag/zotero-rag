@@ -1,3 +1,5 @@
+//! Structs, traits, and functions for working with LLMs.
+
 pub mod anthropic;
 pub mod base;
 pub mod errors;

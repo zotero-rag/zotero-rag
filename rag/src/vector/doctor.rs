@@ -1,3 +1,6 @@
+//! Similar to `rag::vector::checkhealth`, this provides utilities to aid end-users in
+//! troubleshooting issues, providing suggestions where possible.
+
 use std::io::Write;
 
 use crate::vector::{checkhealth::lancedb_health_check, lance::LanceError};

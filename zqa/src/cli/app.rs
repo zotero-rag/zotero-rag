@@ -8,7 +8,7 @@ use arrow_array::{self, RecordBatch, RecordBatchIterator, StringArray};
 use arrow_schema::Schema;
 use lancedb::embeddings::EmbeddingDefinition;
 use rag::capabilities::ModelProviders;
-use rag::llm::base::{ApiClient, ChatRequest, CompletionApiResponse, ContentType, UserMessage};
+use rag::llm::base::{ApiClient, ChatRequest, CompletionApiResponse, ContentType};
 use rag::llm::errors::LLMError;
 use rag::llm::factory::{LLMClientConfig, get_client_by_provider, get_client_with_config};
 use rag::vector::checkhealth::lancedb_health_check;
@@ -474,13 +474,14 @@ async fn run_query<O: Write, E: Write>(
         let query_clone = query.clone();
 
         set.spawn(async move {
-            let message = UserMessage {
+            let request = ChatRequest {
                 chat_history: Vec::new(),
                 max_tokens: None,
                 message: get_extraction_prompt(&query_clone, &text),
+                tools: None,
             };
 
-            client.send_message(&ChatRequest::from(&message)).await
+            client.send_message(&request).await
         });
     });
 
@@ -548,14 +549,15 @@ async fn run_query<O: Write, E: Write>(
         .flatten() // We should only have one here anyway
         .collect::<Vec<_>>();
 
-    let message = UserMessage {
+    let request = ChatRequest {
         chat_history: Vec::new(),
         max_tokens: None,
         message: get_summarize_prompt(&query, texts),
+        tools: None,
     };
 
     let final_draft_start = Instant::now();
-    let result = llm_client.send_message(&ChatRequest::from(&message)).await;
+    let result = llm_client.send_message(&request).await;
     let final_draft_duration = final_draft_start.elapsed();
     match result {
         Ok(response) => {

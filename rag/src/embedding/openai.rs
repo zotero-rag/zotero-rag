@@ -1,3 +1,7 @@
+//! Shared functionality for generating OpenAI embeddings. Presently, this is also used by the
+//! Anthropic client, but that will likely be changed, at which point this module will move to
+//! `llm`.
+
 use crate::constants::DEFAULT_OPENAI_EMBEDDING_MODEL;
 use crate::constants::{DEFAULT_MAX_CONCURRENT_REQUESTS, OPENAI_EMBEDDING_DIM};
 use crate::llm::errors::LLMError;

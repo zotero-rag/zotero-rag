@@ -1,3 +1,6 @@
+//! Structs, functions, and traits shared by embedding clients and other embedding-related code in
+//! this crate.
+
 use arrow_schema::{DataType, Field};
 use indicatif::ProgressBar;
 use reqwest::header::HeaderMap;
@@ -22,9 +25,12 @@ use crate::llm::gemini::GeminiClient;
 use crate::llm::http_client::{HttpClient, ReqwestClient};
 use crate::llm::openai::OpenAIClient;
 
+/// A struct containing information about texts that failed to embed.
 #[derive(serde::Serialize, serde::Deserialize)]
 pub struct FailedTexts {
+    /// The embedding provider that was used.
     pub embedding_provider: String,
+    /// The texts that failed to embed.
     pub texts: Vec<String>,
 }
 
@@ -105,9 +111,13 @@ pub fn get_embedding_provider_with_config(
 /// Configuration enum for embedding providers
 #[derive(Debug, Clone)]
 pub enum EmbeddingProviderConfig {
+    /// Configuration for OpenAI embedding provider
     OpenAI(crate::config::OpenAIConfig),
+    /// Configuration for VoyageAI embedding provider
     VoyageAI(crate::config::VoyageAIConfig),
+    /// Configuration for Gemini embedding provider
     Gemini(crate::config::GeminiConfig),
+    /// Configuration for Cohere embedding provider
     Cohere(crate::config::CohereConfig),
 }
 
@@ -117,6 +127,16 @@ pub enum EmbeddingProviderConfig {
 /// custom logic if they prefer (or if, for some reason, their struct's `AsRef<str>` is implemented
 /// with a different purpose, but the resulting string isn't useful for reranking purposes).
 pub trait Rerank<T: AsRef<str>> {
+    /// Rerank items using the provider.
+    ///
+    /// # Arguments:
+    ///
+    /// * `items` - The items to rerank.
+    /// * `query` - The query to rerank against.
+    ///
+    /// # Returns
+    ///
+    /// A vector of items reranked using the provider.
     fn rerank<'a>(
         &'a self,
         items: Vec<T>,
@@ -126,6 +146,15 @@ pub trait Rerank<T: AsRef<str>> {
         T: 'a;
 }
 
+/// A factory method for getting a reranking provider.
+///
+/// # Arguments:
+///
+/// * `provider` - The name of the provider to get.
+///
+/// # Returns
+///
+/// An `Arc<dyn Rerank<T>>` object, or an `LLMError` if the provider is not supported.
 pub fn get_reranking_provider<T: AsRef<str> + Send + Clone>(
     provider: &str,
 ) -> Result<Arc<dyn Rerank<T>>, LLMError> {
@@ -161,7 +190,9 @@ pub fn get_reranking_provider_with_config<T: AsRef<str> + Send + Clone>(
 /// Configuration enum for reranking providers
 #[derive(Debug, Clone)]
 pub enum RerankProviderConfig {
+    /// Configuration for VoyageAI reranking provider
     VoyageAI(crate::config::VoyageAIConfig),
+    /// Configuration for Cohere reranking provider
     Cohere(crate::config::CohereConfig),
 }
 
@@ -185,6 +216,7 @@ pub enum RerankProviderConfig {
 /// ```
 ///
 pub trait EmbeddingApiRequestTexts<T> {
+    /// Create an instance of `T` from a vector of texts.
     fn from_texts(texts: Vec<String>) -> T;
 }
 
@@ -193,7 +225,9 @@ pub trait EmbeddingApiRequestTexts<T> {
 /// pattern this repo uses is to have an untagged enum as the response struct that `serde`
 /// deserializes to.
 pub trait EmbeddingApiResponse {
+    /// The type of the successful response.
     type Success;
+    /// The type of the error response.
     type Error;
 
     /// Returns whether the request was successful.

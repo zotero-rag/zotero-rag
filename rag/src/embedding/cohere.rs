@@ -1,3 +1,6 @@
+//! Functions, structs, and trait implementations for interacting with the Cohere API. This module
+//! includes support for embedding only.
+
 use super::common::{EmbeddingApiRequestTexts, EmbeddingApiResponse};
 use crate::{
     capabilities::EmbeddingProviders,
@@ -14,9 +17,12 @@ use lancedb::embeddings::EmbeddingFunction;
 use crate::llm::errors::LLMError;
 use crate::llm::http_client::{HttpClient, ReqwestClient};
 
+/// A client for Cohere's embeddings API.
 #[derive(Debug, Clone)]
 pub struct CohereClient<T: HttpClient = ReqwestClient> {
+    /// The HTTP client. The generic parameter allows for mocking in tests.
     pub client: T,
+    /// Optional configuration for the Cohere client.
     pub config: Option<crate::config::CohereConfig>,
 }
 
@@ -47,7 +53,7 @@ where
         }
     }
 
-    pub fn compute_embeddings_internal(
+    fn compute_embeddings_internal(
         &self,
         source: Arc<dyn arrow_array::Array>,
     ) -> Result<Arc<dyn arrow_array::Array>, LLMError> {
@@ -99,31 +105,23 @@ impl EmbeddingApiRequestTexts<CohereEmbedRequest> for CohereEmbedRequest {
     }
 }
 
+/// The embeddings returned by the Cohere API.
 #[derive(Serialize, Deserialize)]
 pub struct CohereAIEmbeddings {
+    /// The embeddings, returned as a vector of floats for each text.
     float: Vec<Vec<f32>>,
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct CohereAISuccess {
-    embeddings: CohereAIEmbeddings,
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct CohereAIError {
-    message: String,
 }
 
 #[derive(Serialize, Deserialize)]
 #[serde(untagged)]
 enum CohereAIResponse {
-    Success(CohereAISuccess),
-    Error(CohereAIError),
+    Success(CohereAIEmbeddings),
+    Error(String),
 }
 
 impl EmbeddingApiResponse for CohereAIResponse {
-    type Success = CohereAISuccess;
-    type Error = CohereAIError;
+    type Success = CohereAIEmbeddings;
+    type Error = String;
 
     fn is_success(&self) -> bool {
         match self {
@@ -135,13 +133,13 @@ impl EmbeddingApiResponse for CohereAIResponse {
     fn get_embeddings(self) -> Option<Vec<Vec<f32>>> {
         match self {
             CohereAIResponse::Error(_) => None,
-            CohereAIResponse::Success(res) => Some(res.embeddings.float),
+            CohereAIResponse::Success(res) => Some(res.float),
         }
     }
 
     fn get_error_message(self) -> Option<String> {
         match self {
-            CohereAIResponse::Error(err) => Some(err.message),
+            CohereAIResponse::Error(err) => Some(err),
             CohereAIResponse::Success(_) => None,
         }
     }

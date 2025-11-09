@@ -1,3 +1,6 @@
+//! Functions, structs, and trait implementations for interacting with the VoyageAI API. This module
+//! includes support for both embedding only.
+
 use crate::{
     capabilities::EmbeddingProviders,
     constants::{DEFAULT_VOYAGE_RERANK_MODEL, VOYAGE_EMBEDDING_DIM, VOYAGE_EMBEDDING_MODEL},
@@ -18,7 +21,9 @@ use crate::llm::http_client::{HttpClient, ReqwestClient};
 /// A client for Voyage AI's embedding API.
 #[derive(Debug, Clone)]
 pub struct VoyageAIClient<T: HttpClient = ReqwestClient> {
+    /// The HTTP client. The generic parameter allows for mocking in tests.
     pub client: T,
+    /// Optional configuration for the VoyageAI client.
     pub config: Option<crate::config::VoyageAIConfig>,
 }
 
@@ -165,12 +170,6 @@ impl EmbeddingApiResponse for VoyageAIResponse {
             VoyageAIResponse::Success(_) => None,
         }
     }
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct FailedTexts {
-    pub embedding_provider: String,
-    pub texts: Vec<String>,
 }
 
 /// Implements the LanceDB EmbeddingFunction trait for VoyageAIClient. Since VoyageAI has the

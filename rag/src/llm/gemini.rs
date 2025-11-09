@@ -1,3 +1,6 @@
+//! Functions, structs, and trait implementations for interacting with the Gemini API. This module
+//! includes support for both text generation and embedding, and tool calling is supported.
+
 use futures::StreamExt;
 use std::borrow::Cow;
 use std::env;
@@ -24,7 +27,9 @@ use super::http_client::{HttpClient, ReqwestClient};
 /// A client for Google's Gemini APIs (chat + embeddings)
 #[derive(Debug, Clone)]
 pub struct GeminiClient<T: HttpClient = ReqwestClient> {
-    pub client: T,
+    /// The HTTP client. The generic parameter allows for mocking in tests.
+    pub(crate) client: T,
+    /// Optional configuration for the Gemini client.
     pub config: Option<crate::config::GeminiConfig>,
 }
 
@@ -333,23 +338,18 @@ fn build_gemini_request_data<'a>(
     Option<GeminiGenerationConfig>,
     Option<GeminiToolDeclaration<'a>>,
 ) {
-    let model_max = req.message.max_tokens.or_else(|| {
+    let model_max = req.max_tokens.or_else(|| {
         env::var("GEMINI_MAX_TOKENS")
             .ok()
             .and_then(|s| s.parse().ok())
     });
-    let mut contents: Vec<GeminiContent> = req
-        .message
-        .chat_history
-        .iter()
-        .cloned()
-        .map(Into::into)
-        .collect();
+    let mut contents: Vec<GeminiContent> =
+        req.chat_history.iter().cloned().map(Into::into).collect();
 
     contents.push(GeminiContent {
         role: "user".to_string(),
         parts: vec![GeminiPart::Text {
-            text: req.message.message.clone(),
+            text: req.message.clone(),
             thought_signature: None,
         }],
     });
@@ -678,7 +678,7 @@ mod tests {
     use std::sync::Mutex;
 
     use super::*;
-    use crate::llm::base::{ApiClient, ChatHistoryItem, ChatRequest, UserMessage};
+    use crate::llm::base::{ApiClient, ChatHistoryItem, ChatRequest};
     use crate::llm::http_client::MockHttpClient;
     use crate::llm::tools::test_utils::MockTool;
     use arrow_array::Array;
@@ -715,15 +715,15 @@ mod tests {
             config: None,
         };
 
-        let message = UserMessage {
+        let request = ChatRequest {
             message: "foo".into(),
             chat_history: vec![ChatHistoryItem {
                 role: "assistant".into(),
                 content: vec![ChatHistoryContent::Text("Prior".into())],
             }],
             max_tokens: Some(256),
+            tools: None,
         };
-        let request = ChatRequest::from(&message);
         let res = client.send_message(&request).await;
         assert!(res.is_ok());
         let res = res.unwrap();
@@ -809,12 +809,12 @@ mod tests {
         dotenv().ok();
 
         let client = GeminiClient::<ReqwestClient>::default();
-        let message = UserMessage {
+        let request = ChatRequest {
             chat_history: Vec::new(),
             max_tokens: Some(1024),
             message: "Hello!".to_owned(),
+            tools: None,
         };
-        let request = ChatRequest::from(&message);
         let res = client.send_message(&request).await;
 
         // Debug the error if there is one
@@ -835,13 +835,10 @@ mod tests {
             call_count: Arc::clone(&call_count),
             schema_key: "parametersJsonSchema".into(),
         };
-        let message = UserMessage {
+        let request = ChatRequest {
             chat_history: Vec::new(),
             max_tokens: Some(1024),
-            message: "This is a test. Call the `mock_tool`, passing in a `name`, and ensure it returns a greeting".to_owned(),
-        };
-        let request = ChatRequest {
-            message: &message,
+            message: "This is a test. Call the `mock_tool`, passing in a `name`, and ensure it returns a greeting".into(),
             tools: Some(&[Box::new(tool)]),
         };
 

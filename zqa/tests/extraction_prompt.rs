@@ -4,7 +4,7 @@ use zqa::common::setup_logger;
 
 use std::{env, fs};
 
-use rag::llm::base::{ApiClient, ChatRequest, ContentType, UserMessage};
+use rag::llm::base::{ApiClient, ChatRequest, ContentType};
 use rag::llm::factory::{LLMClientConfig, get_client_with_config};
 use zqa::cli::prompts::get_extraction_prompt;
 use zqa::config::{AnthropicConfig, GeminiConfig, OpenAIConfig};
@@ -19,13 +19,14 @@ async fn run_extraction_test(client: rag::llm::factory::LLMClient, provider_name
     let prompt = get_extraction_prompt(query, &pdf_text);
 
     // Create and send the message
-    let message = UserMessage {
+    let request = ChatRequest {
         chat_history: Vec::new(),
         max_tokens: None,
         message: prompt,
+        tools: None,
     };
 
-    let result = client.send_message(&ChatRequest::from(&message)).await;
+    let result = client.send_message(&request).await;
 
     // Verify the request succeeded
     assert!(
