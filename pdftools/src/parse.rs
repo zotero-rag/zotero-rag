@@ -1,3 +1,8 @@
+//! The core PDF parsing module. This includes the `PdfParser` struct, which is somewhat tuned for
+//! academic PDFs. In particular, it skips images and tables by default. This behavior might change
+//! later. The parser also handles common math symbols and converts them to their corresponding
+//! LaTeX equivalents.
+
 use core::str;
 use log;
 use std::error::Error;
@@ -26,7 +31,7 @@ enum PdfError {
 }
 
 impl std::fmt::Display for PdfError {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             PdfError::ContentError => write!(f, "Failed to get page content"),
             PdfError::FontNotFound => write!(f, "Font key not found in dictionary"),
