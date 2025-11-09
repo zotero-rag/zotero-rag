@@ -112,34 +112,43 @@ pub struct CohereAIEmbeddings {
     float: Vec<Vec<f32>>,
 }
 
+/// Represents a successful response from the Cohere embeddings API.
+#[derive(Serialize, Deserialize)]
+pub struct CohereAISuccess {
+    embeddings: CohereAIEmbeddings,
+}
+
+/// Represents an error response from the Cohere embeddings API.
+#[derive(Serialize, Deserialize)]
+pub struct CohereAIError {
+    message: String,
+}
+
 #[derive(Serialize, Deserialize)]
 #[serde(untagged)]
 enum CohereAIResponse {
-    Success(CohereAIEmbeddings),
-    Error(String),
+    Success(CohereAISuccess),
+    Error(CohereAIError),
 }
 
 impl EmbeddingApiResponse for CohereAIResponse {
-    type Success = CohereAIEmbeddings;
-    type Error = String;
+    type Success = CohereAISuccess;
+    type Error = CohereAIError;
 
     fn is_success(&self) -> bool {
-        match self {
-            CohereAIResponse::Success(_) => true,
-            CohereAIResponse::Error(_) => false,
-        }
+        matches!(self, Self::Success(_))
     }
 
     fn get_embeddings(self) -> Option<Vec<Vec<f32>>> {
         match self {
             CohereAIResponse::Error(_) => None,
-            CohereAIResponse::Success(res) => Some(res.float),
+            CohereAIResponse::Success(res) => Some(res.embeddings.float),
         }
     }
 
     fn get_error_message(self) -> Option<String> {
         match self {
-            CohereAIResponse::Error(err) => Some(err),
+            CohereAIResponse::Error(err) => Some(err.message),
             CohereAIResponse::Success(_) => None,
         }
     }
