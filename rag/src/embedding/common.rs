@@ -317,10 +317,7 @@ pub async fn compute_embeddings_async<
     embedding_dim: usize,
 ) -> Result<Arc<dyn arrow_array::Array>, LLMError> {
     let source_array = arrow_array::cast::as_string_array(&source);
-    let texts: Vec<Option<String>> = source_array
-        .iter()
-        .map(|s| s.map(str::to_owned))
-        .collect();
+    let texts: Vec<Option<String>> = source_array.iter().map(|s| s.map(str::to_owned)).collect();
 
     log::info!("Processing {} input texts.", texts.len());
     let bar = ProgressBar::new(texts.len().try_into().unwrap());

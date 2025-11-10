@@ -86,19 +86,13 @@ impl fmt::Display for HealthCheckResult {
                     writeln!(f, "\tSize: {size_str}")?;
                 }
                 Some(Err(e)) => {
-                    writeln!(
-                        f,
-                        "\t{RED}Error: Failed to calculate size: {e}{RESET}"
-                    )?;
+                    writeln!(f, "\t{RED}Error: Failed to calculate size: {e}{RESET}")?;
                 }
                 None => writeln!(f)?,
             }
         } else {
             writeln!(f, "{RED}✗ Database directory does not exist{RESET}")?;
-            writeln!(
-                f,
-                "{YELLOW}  → Subsequent checks will be skipped{RESET}"
-            )?;
+            writeln!(f, "{YELLOW}  → Subsequent checks will be skipped{RESET}")?;
             return Ok(());
         }
         writeln!(f)?;
@@ -110,17 +104,11 @@ impl fmt::Display for HealthCheckResult {
             }
             Some(Err(e)) => {
                 writeln!(f, "{RED}✗ Table is not accessible: {e}{RESET}")?;
-                writeln!(
-                    f,
-                    "{YELLOW}  → Subsequent checks will be skipped{RESET}"
-                )?;
+                writeln!(f, "{YELLOW}  → Subsequent checks will be skipped{RESET}")?;
                 return Ok(());
             }
             None => {
-                writeln!(
-                    f,
-                    "{YELLOW}⚠ Table accessibility check was skipped{RESET}"
-                )?;
+                writeln!(f, "{YELLOW}⚠ Table accessibility check was skipped{RESET}")?;
                 return Ok(());
             }
         }
@@ -146,8 +134,7 @@ impl fmt::Display for HealthCheckResult {
         // Check 4: Zero embeddings
         match &self.zero_embedding_items {
             Some(Ok(zero_batches)) => {
-                let total_zero_rows: usize =
-                    zero_batches.iter().map(RecordBatch::num_rows).sum();
+                let total_zero_rows: usize = zero_batches.iter().map(RecordBatch::num_rows).sum();
                 if total_zero_rows == 0 {
                     writeln!(f, "{GREEN}✓ No zero embeddings found{RESET}")?;
                 } else {
@@ -158,10 +145,7 @@ impl fmt::Display for HealthCheckResult {
                 }
             }
             Some(Err(e)) => {
-                writeln!(
-                    f,
-                    "{RED}✗ Failed to check zero embeddings: {e}{RESET}"
-                )?;
+                writeln!(f, "{RED}✗ Failed to check zero embeddings: {e}{RESET}")?;
             }
             None => {
                 writeln!(f, "{YELLOW}⚠ Zero embeddings check was skipped{RESET}")?;
@@ -194,16 +178,10 @@ impl fmt::Display for HealthCheckResult {
                 }
             }
             Some(Err(e)) => {
-                writeln!(
-                    f,
-                    "{RED}✗ Failed to get index information: {e}{RESET}"
-                )?;
+                writeln!(f, "{RED}✗ Failed to get index information: {e}{RESET}")?;
             }
             None => {
-                writeln!(
-                    f,
-                    "{YELLOW}⚠ Index information check was skipped{RESET}"
-                )?;
+                writeln!(f, "{YELLOW}⚠ Index information check was skipped{RESET}")?;
             }
         }
 

@@ -62,7 +62,8 @@ async fn call_gemini_embedding_api(
     headers.insert("content-type", "application/json".parse()?);
     headers.insert("x-goog-api-key", api_key.parse()?);
 
-    let url = format!("https://generativelanguage.googleapis.com/v1beta/models/{model}:embedContent");
+    let url =
+        format!("https://generativelanguage.googleapis.com/v1beta/models/{model}:embedContent");
     let request_body = GeminiEmbeddingRequest::from_text(text);
 
     let res =
@@ -408,7 +409,8 @@ async fn send_gemini_generation_request(
     req: &GeminiRequestBody<'_>,
     model: &str,
 ) -> Result<(GeminiResponseCandidate, GeminiUsageMetadata), LLMError> {
-    let url = format!("https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent");
+    let url =
+        format!("https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent");
 
     let res = request_with_backoff(client, &url, headers, req, DEFAULT_MAX_RETRIES).await?;
 

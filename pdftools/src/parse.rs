@@ -635,7 +635,11 @@ impl PdfParser {
     }
 }
 
-fn get_font<'a>(doc: &'a Document, page_id: (u32, u16), font_key: &str) -> Result<&'a str, PdfError> {
+fn get_font<'a>(
+    doc: &'a Document,
+    page_id: (u32, u16),
+    font_key: &str,
+) -> Result<&'a str, PdfError> {
     // Get the font dictionary for the page
     let fonts = doc
         .get_page_fonts(page_id)
