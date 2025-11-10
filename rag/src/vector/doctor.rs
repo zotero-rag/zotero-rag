@@ -15,8 +15,12 @@ const RESET: &str = "\x1b[0m";
 ///
 /// * `out`: A writer object, such as a file pointer or `stdout`.
 /// * `msg`: The message to write.
+///
+/// # Errors
+///
+/// Returns an error if writing to the output stream fails.
 fn help(out: &mut impl Write, msg: &str) -> Result<(), LanceError> {
-    writeln!(out, "{}help:{} {}", HELP, RESET, msg)?;
+    writeln!(out, "{HELP}help:{RESET} {msg}")?;
 
     Ok(())
 }
@@ -27,8 +31,12 @@ fn help(out: &mut impl Write, msg: &str) -> Result<(), LanceError> {
 ///
 /// * `out`: A writer object, such as a file pointer or `stdout`.
 /// * `msg`: The message to write.
+///
+/// # Errors
+///
+/// Returns an error if writing to the output stream fails.
 fn symptom(out: &mut impl Write, msg: &str) -> Result<(), LanceError> {
-    writeln!(out, "{}symptom:{} {}", SYMPTOM, RESET, msg)?;
+    writeln!(out, "{SYMPTOM}symptom:{RESET} {msg}")?;
 
     Ok(())
 }
@@ -52,6 +60,10 @@ fn symptom(out: &mut impl Write, msg: &str) -> Result<(), LanceError> {
 ///
 /// Nothing; errors if writing fails or if the health check is in an invalid state for some reason
 /// (an invalid state being one that is not expected, and is likely a bug).
+///
+/// # Errors
+///
+/// Returns an error if writing to the output stream fails or if the health check is in an invalid state.
 pub async fn doctor(embedding_provider: &str, stdout: &mut impl Write) -> Result<(), LanceError> {
     let healthcheck_results = lancedb_health_check(embedding_provider).await?;
 

@@ -7,8 +7,8 @@ use core::str;
 use log;
 use std::error::Error;
 
-use once_cell::sync::Lazy;
 use std::collections::HashMap;
+use std::sync::LazyLock;
 
 use lopdf::Document;
 
@@ -73,7 +73,7 @@ pub struct IterCodepoints<'a> {
     pos: usize,
 }
 
-impl<'a> Iterator for IterCodepoints<'a> {
+impl Iterator for IterCodepoints<'_> {
     type Item = u8;
 
     fn next(&mut self) -> Option<u8> {
@@ -118,7 +118,7 @@ fn font_transform(input: &str, transform: ByteTransformFn) -> String {
 
 /// A lazy-loaded hashmap storing conversions from math fonts to LaTeX code
 /// Handles most common math fonts, but does not yet support specialized math fonts.
-static FONT_TRANSFORMS: Lazy<HashMap<&'static str, ByteTransformFn>> = Lazy::new(|| {
+static FONT_TRANSFORMS: LazyLock<HashMap<&'static str, ByteTransformFn>> = LazyLock::new(|| {
     let mut m: HashMap<&'static str, ByteTransformFn> = HashMap::new();
 
     m.insert("CMMI5", from_cmmi);
@@ -151,7 +151,7 @@ static FONT_TRANSFORMS: Lazy<HashMap<&'static str, ByteTransformFn>> = Lazy::new
 /// A lazy-loaded hashmap of octal character replacements post-parsing.
 /// Some of these come across because of ligature support in fonts. This
 /// is not exhaustive, however.
-static OCTAL_REPLACEMENTS: Lazy<HashMap<&str, &str>> = Lazy::new(|| {
+static OCTAL_REPLACEMENTS: LazyLock<HashMap<&str, &str>> = LazyLock::new(|| {
     let mut m = HashMap::new();
     m.insert("\\050", "(");
     m.insert("\\051", ")");
@@ -201,6 +201,7 @@ impl PdfParser {
         self.find_next_unescaped(content, ch).is_some()
     }
 
+    #[allow(clippy::unused_self)]
     fn find_next_unescaped(&self, content: &str, ch: char) -> Option<usize> {
         let mut start_idx: usize = 0;
 
@@ -221,10 +222,10 @@ impl PdfParser {
 
             if escape_count % 2 == 0 {
                 return Some(idx);
-            } else {
-                // Continue searching after this escaped occurrence
-                start_idx = idx + 1;
             }
+
+            // Continue searching after this escaped occurrence
+            start_idx = idx + 1;
         }
     }
 
@@ -233,6 +234,7 @@ impl PdfParser {
     ///
     /// # Errors
     /// * `PdfError::InternalError` if `N` > number of words in `content[..pos]`
+    #[allow(clippy::unused_self)]
     fn get_params<'a, const N: usize>(
         &self,
         content: &'a str,
@@ -264,6 +266,7 @@ impl PdfParser {
     /// * `Some(idx)` where `idx` is the index of the space after the TJ where the image caption is
     ///   shown.
     /// * `None` if no image is detected.
+    #[allow(clippy::similar_names)]
     fn get_image_bounds(&self, content: &str, pos: usize) -> Option<usize> {
         let bt_idx = content[pos..].find("BT")? + pos;
         content[pos..bt_idx].find("/Im")?;
@@ -296,7 +299,6 @@ impl PdfParser {
             if y.abs() <= self.cur_font_size * self.cur_baselineskip {
                 // This is a line break, keep skipping.
                 tj_idx = next_tj_idx + tj_idx + 2;
-                continue;
             } else {
                 return Some(tj_idx + 2);
             }
@@ -336,10 +338,10 @@ impl PdfParser {
                     // If we've processed at least one BT and reached the end, return what we have
                     log::debug!("Could not find a BT, is the table at the end of the document?");
                     return Some((bt_idx, cur_pos));
-                } else {
-                    // Not a table
-                    return None;
                 }
+
+                // Not a table
+                return None;
             };
             let next_bt_pos = cur_pos + next_bt;
 
@@ -367,7 +369,6 @@ impl PdfParser {
             if distance < self.config.table_alignment_threshold {
                 bt_count += 1;
                 cur_pos = cur_td_idx;
-                continue;
             } else if bt_count > 0 {
                 // We've found the end of the table
                 return Some((bt_idx, next_bt_pos));
@@ -380,6 +381,7 @@ impl PdfParser {
 
     /// The actual PDF parser itself. Parses UTF-8 encoded code points in a best-effort manner,
     /// making reasonable assumptions along the way. Such assumptions are documented.
+    #[allow(clippy::too_many_lines)]
     fn parse_content(&mut self, doc: &Document, page_id: (u32, u16)) -> Result<String, PdfError> {
         let content = doc
             .get_page_content(page_id)
@@ -483,11 +485,11 @@ impl PdfParser {
                     .find("/F")
                     .ok_or(PdfError::ContentError)?;
                 let font_end_idx =
-                    content[cur_parse_idx + font_begin_idx..].find(" ").unwrap() + font_begin_idx;
+                    content[cur_parse_idx + font_begin_idx..].find(' ').unwrap() + font_begin_idx;
 
                 let font_id =
                     content[cur_parse_idx..][font_begin_idx + 1..font_end_idx].to_string();
-                self.cur_font = get_font(doc, page_id, font_id).unwrap_or("").to_string();
+                self.cur_font = get_font(doc, page_id, &font_id).unwrap_or("").to_string();
             }
 
             // We need to match the ] immediately preceding TJ with its [, but papers have references
@@ -578,6 +580,7 @@ impl PdfParser {
         while i > 0 {
             // Find the last index where the y position was equal to the y position recorded by
             // `y_history[i]`.
+            #[allow(clippy::float_cmp)]
             let j = (0..i).rev().find(|k| y_history[*k].0 == y_history[i].0);
 
             if j.is_none() {
@@ -632,7 +635,7 @@ impl PdfParser {
     }
 }
 
-fn get_font(doc: &Document, page_id: (u32, u16), font_key: String) -> Result<&str, PdfError> {
+fn get_font<'a>(doc: &'a Document, page_id: (u32, u16), font_key: &str) -> Result<&'a str, PdfError> {
     // Get the font dictionary for the page
     let fonts = doc
         .get_page_fonts(page_id)
@@ -678,10 +681,9 @@ pub fn extract_text(file_path: &str) -> Result<String, Box<dyn Error>> {
 
             parser
                 .parse_content(&doc, page_id)
-                .unwrap_or("".to_string())
+                .unwrap_or_else(|_| String::new())
         })
-        .collect::<Vec<_>>()
-        .join("");
+        .collect::<String>();
 
     Ok(content)
 }
@@ -690,7 +692,6 @@ pub fn extract_text(file_path: &str) -> Result<String, Box<dyn Error>> {
 mod tests {
     use std::env;
     use std::path::PathBuf;
-    use std::str::FromStr;
 
     use super::*;
 
@@ -730,7 +731,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
+    #[ignore = "Manual test for debugging PDF content"]
     fn test_pdf_content() {
         if env::var("CI").is_ok() {
             // Skip this test in CI environments
@@ -747,7 +748,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
+    #[ignore = "Manual test for debugging font properties"]
     fn test_font_properties() {
         if env::var("CI").is_ok() {
             // Skip this test in CI environments
@@ -822,7 +823,7 @@ mod tests {
         }
 
         let page_id = doc.page_iter().next().unwrap();
-        let font_name = get_font(&doc, page_id, String::from_str("F30").unwrap());
+        let font_name = get_font(&doc, page_id, "F30");
         assert!(font_name.is_ok());
         assert_eq!(font_name.unwrap(), "CMMI7");
     }

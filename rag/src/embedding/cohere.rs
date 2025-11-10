@@ -38,6 +38,7 @@ where
 {
     /// Creates a new CohereClient instance without configuration
     /// (will fall back to environment variables)
+    #[must_use]
     pub fn new() -> Self {
         Self {
             client: T::default(),
@@ -46,6 +47,7 @@ where
     }
 
     /// Creates a new CohereClient instance with provided configuration
+    #[must_use]
     pub fn with_config(config: crate::config::CohereConfig) -> Self {
         Self {
             client: T::default(),
@@ -155,7 +157,7 @@ impl EmbeddingApiResponse for CohereAIResponse {
 }
 
 impl<T: HttpClient + Default + Clone + std::fmt::Debug> EmbeddingFunction for CohereClient<T> {
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "Cohere"
     }
 

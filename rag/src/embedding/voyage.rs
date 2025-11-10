@@ -39,6 +39,7 @@ where
 {
     /// Creates a new VoyageAIClient instance without configuration
     /// (will fall back to environment variables)
+    #[must_use]
     pub fn new() -> Self {
         Self {
             client: T::default(),
@@ -47,6 +48,7 @@ where
     }
 
     /// Creates a new VoyageAIClient instance with provided configuration
+    #[must_use]
     pub fn with_config(config: crate::config::VoyageAIConfig) -> Self {
         Self {
             client: T::default(),
@@ -55,6 +57,17 @@ where
     }
 
     /// Internal method to compute embeddings that works with LLMError
+    ///
+    /// # Errors
+    ///
+    /// * `LLMError::EnvError` - If the VOYAGE_AI_API_KEY environment variable is not set
+    /// * `LLMError::TimeoutError` - If the HTTP request times out
+    /// * `LLMError::CredentialError` - If the API returns 401 or 403 status
+    /// * `LLMError::HttpStatusError` - If the API returns other unsuccessful HTTP status codes
+    /// * `LLMError::NetworkError` - If a network connectivity error occurs
+    /// * `LLMError::DeserializationError` - If the API response cannot be parsed
+    /// * `LLMError::InvalidHeaderError` - If header values cannot be parsed
+    /// * `LLMError::GenericLLMError` - If other HTTP errors occur or Arrow array creation fails
     pub fn compute_embeddings_internal(
         &self,
         source: Arc<dyn arrow_array::Array>,
@@ -176,7 +189,7 @@ impl EmbeddingApiResponse for VoyageAIResponse {
 /// highest token limit for their embedding model (32k instead of OpenAI's 8k), we prefer this
 /// instead.
 impl<T: HttpClient + Default + Clone + std::fmt::Debug> EmbeddingFunction for VoyageAIClient<T> {
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "Voyage AI"
     }
 

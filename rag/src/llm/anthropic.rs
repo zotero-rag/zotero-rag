@@ -45,6 +45,7 @@ where
 {
     /// Creates a new AnthropicClient instance without configuration
     /// (will fall back to environment variables)
+    #[must_use]
     pub fn new() -> Self {
         Self {
             client: T::default(),
@@ -53,6 +54,7 @@ where
     }
 
     /// Creates a new AnthropicClient instance with provided configuration
+    #[must_use]
     pub fn with_config(config: crate::config::AnthropicConfig) -> Self {
         Self {
             client: T::default(),
@@ -61,6 +63,16 @@ where
     }
 
     /// Internal implementation for computing embeddings using shared logic
+    ///
+    /// # Errors
+    ///
+    /// * `LLMError::EnvError` - If the OPENAI_API_KEY environment variable is not set
+    /// * `LLMError::TimeoutError` - If the HTTP request times out
+    /// * `LLMError::CredentialError` - If the API returns 401 or 403 status
+    /// * `LLMError::HttpStatusError` - If the API returns other unsuccessful HTTP status codes
+    /// * `LLMError::NetworkError` - If a network connectivity error occurs
+    /// * `LLMError::DeserializationError` - If the API response cannot be parsed
+    /// * `LLMError::GenericLLMError` - If other HTTP errors occur or Arrow array creation fails
     pub fn compute_embeddings_internal(
         &self,
         source: Arc<dyn arrow_array::Array>,
@@ -86,7 +98,7 @@ impl From<ChatHistoryItem> for AnthropicChatHistoryItem {
             content: value
                 .content
                 .into_iter()
-                .map(|f| f.into())
+                .map(Into::into)
                 .collect::<Vec<_>>(),
         }
     }
@@ -100,7 +112,7 @@ impl From<&ChatHistoryItem> for AnthropicChatHistoryItem {
                 .content
                 .clone()
                 .into_iter()
-                .map(|f| f.into())
+                .map(Into::into)
                 .collect::<Vec<_>>(),
         }
     }
@@ -131,7 +143,7 @@ fn build_anthropic_messages_and_tools<'a>(
     let mut messages = req
         .chat_history
         .iter()
-        .map(|f| f.into())
+        .map(Into::into)
         .collect::<Vec<_>>();
 
     messages.push(AnthropicChatHistoryItem {
@@ -269,10 +281,10 @@ struct AnthropicResponse {
 /// # Returns
 ///
 /// The Anthropic-specific response.
-async fn send_anthropic_request<'a>(
+async fn send_anthropic_request(
     client: &impl HttpClient,
     headers: &HeaderMap,
-    req: &AnthropicRequest<'a>,
+    req: &AnthropicRequest<'_>,
 ) -> Result<AnthropicResponse, LLMError> {
     const MAX_RETRIES: usize = DEFAULT_MAX_RETRIES;
     let res = request_with_backoff(
@@ -416,7 +428,7 @@ impl<T: HttpClient> ApiClient for AnthropicClient<T> {
         for content in &response.content {
             match content {
                 AnthropicResponseContent::PlainText(s) => {
-                    contents.push(ContentType::Text(s.clone()))
+                    contents.push(ContentType::Text(s.clone()));
                 }
                 AnthropicResponseContent::Text(text_content) => {
                     contents.push(ContentType::Text(text_content.text.clone()));
@@ -442,7 +454,7 @@ impl<T: HttpClient> ApiClient for AnthropicClient<T> {
 ///
 /// Maintainers should note that any updates here should also be reflected in OpenAIClient.
 impl<T: HttpClient + Default + std::fmt::Debug> EmbeddingFunction for AnthropicClient<T> {
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "Anthropic"
     }
 

@@ -4557,7 +4557,6 @@ dependencies = [
  "criterion",
  "log",
  "lopdf",
- "once_cell",
  "thiserror 1.0.69",
 ]
 

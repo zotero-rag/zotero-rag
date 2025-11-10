@@ -45,10 +45,10 @@ pub struct FailedTexts {
 /// # Returns
 ///
 /// The dimensions of the embedding provider.
+#[must_use]
 pub fn get_embedding_dims_by_provider(embedding_name: &str) -> u32 {
     match embedding_name {
-        "openai" => OPENAI_EMBEDDING_DIM,
-        "anthropic" => OPENAI_EMBEDDING_DIM,
+        "openai" | "anthropic" => OPENAI_EMBEDDING_DIM,
         "voyageai" => VOYAGE_EMBEDDING_DIM,
         "gemini" => GEMINI_EMBEDDING_DIM,
         "cohere" => COHERE_EMBEDDING_DIM,
@@ -67,12 +67,15 @@ pub fn get_embedding_dims_by_provider(embedding_name: &str) -> u32 {
 /// # Returns
 ///
 /// An thread-safe object that can compute query embeddings.
+///
+/// # Errors
+///
+/// Returns an error if the embedding provider name is not recognized.
 pub fn get_embedding_provider(
     embedding_name: &str,
 ) -> Result<Arc<dyn EmbeddingFunction>, LLMError> {
     match embedding_name {
-        "openai" => Ok(Arc::new(OpenAIClient::<ReqwestClient>::default())),
-        "anthropic" => Ok(Arc::new(OpenAIClient::<ReqwestClient>::default())),
+        "openai" | "anthropic" => Ok(Arc::new(OpenAIClient::<ReqwestClient>::default())),
         "voyageai" => Ok(Arc::new(VoyageAIClient::<ReqwestClient>::default())),
         "gemini" => Ok(Arc::new(GeminiClient::<ReqwestClient>::default())),
         "cohere" => Ok(Arc::new(CohereClient::<ReqwestClient>::default())),
@@ -89,6 +92,10 @@ pub fn get_embedding_provider(
 /// # Returns
 ///
 /// A thread-safe object that can compute query embeddings
+///
+/// # Errors
+///
+/// Returns an error if provider configuration is invalid or initialization fails.
 pub fn get_embedding_provider_with_config(
     config: EmbeddingProviderConfig,
 ) -> Result<Arc<dyn EmbeddingFunction>, LLMError> {
@@ -155,6 +162,10 @@ pub trait Rerank<T: AsRef<str>> {
 /// # Returns
 ///
 /// An `Arc<dyn Rerank<T>>` object, or an `LLMError` if the provider is not supported.
+///
+/// # Errors
+///
+/// Returns an error if the provider name is not recognized.
 pub fn get_reranking_provider<T: AsRef<str> + Send + Clone>(
     provider: &str,
 ) -> Result<Arc<dyn Rerank<T>>, LLMError> {
@@ -174,6 +185,10 @@ pub fn get_reranking_provider<T: AsRef<str> + Send + Clone>(
 /// # Returns
 ///
 /// A thread-safe object that can rerank items
+///
+/// # Errors
+///
+/// Returns an error if provider configuration is invalid or initialization fails.
 pub fn get_reranking_provider_with_config<T: AsRef<str> + Send + Clone>(
     config: RerankProviderConfig,
 ) -> Result<Arc<dyn Rerank<T>>, LLMError> {
@@ -276,7 +291,18 @@ pub trait EmbeddingApiResponse {
 /// # Returns
 ///
 /// If successful, an Arrow array containing the embeddings.
-#[allow(clippy::too_many_arguments)]
+///
+/// # Errors
+///
+/// * `LLMError::EnvError` - If the API key environment variable is not set
+/// * `LLMError::TimeoutError` - If the HTTP request times out
+/// * `LLMError::CredentialError` - If the API returns 401 or 403 status
+/// * `LLMError::HttpStatusError` - If the API returns other unsuccessful HTTP status codes
+/// * `LLMError::NetworkError` - If a network connectivity error occurs
+/// * `LLMError::DeserializationError` - If the API response cannot be parsed
+/// * `LLMError::InvalidHeaderError` - If header values cannot be parsed
+/// * `LLMError::GenericLLMError` - If other HTTP errors occur or Arrow array creation fails
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 pub async fn compute_embeddings_async<
     T: EmbeddingApiRequestTexts<T> + Serialize + Send + Sync + std::fmt::Debug,
     U: EmbeddingApiResponse + for<'de> Deserialize<'de>,
@@ -293,7 +319,7 @@ pub async fn compute_embeddings_async<
     let source_array = arrow_array::cast::as_string_array(&source);
     let texts: Vec<Option<String>> = source_array
         .iter()
-        .map(|s| s.map(|s| s.to_owned()))
+        .map(|s| s.map(str::to_owned))
         .collect();
 
     log::info!("Processing {} input texts.", texts.len());
