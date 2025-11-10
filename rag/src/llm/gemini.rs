@@ -62,10 +62,7 @@ async fn call_gemini_embedding_api(
     headers.insert("content-type", "application/json".parse()?);
     headers.insert("x-goog-api-key", api_key.parse()?);
 
-    let url = format!(
-        "https://generativelanguage.googleapis.com/v1beta/models/{}:embedContent",
-        model
-    );
+    let url = format!("https://generativelanguage.googleapis.com/v1beta/models/{model}:embedContent");
     let request_body = GeminiEmbeddingRequest::from_text(text);
 
     let res =
@@ -87,6 +84,7 @@ where
 {
     /// Creates a new GeminiClient instance without configuration
     /// (will fall back to environment variables)
+    #[must_use]
     pub fn new() -> Self {
         Self {
             client: T::default(),
@@ -95,6 +93,7 @@ where
     }
 
     /// Creates a new GeminiClient instance with provided configuration
+    #[must_use]
     pub fn with_config(config: crate::config::GeminiConfig) -> Self {
         Self {
             client: T::default(),
@@ -103,6 +102,16 @@ where
     }
 
     /// Internal method to compute embeddings that works with LLMError
+    ///
+    /// # Errors
+    ///
+    /// * `LLMError::EnvError` - If neither GEMINI_API_KEY nor GOOGLE_API_KEY environment variables are set
+    /// * `LLMError::TimeoutError` - If the HTTP request times out
+    /// * `LLMError::CredentialError` - If the API returns 401 or 403 status
+    /// * `LLMError::HttpStatusError` - If the API returns other unsuccessful HTTP status codes
+    /// * `LLMError::NetworkError` - If a network connectivity error occurs
+    /// * `LLMError::DeserializationError` - If the API response cannot be parsed
+    /// * `LLMError::GenericLLMError` - If other HTTP errors occur or Arrow array creation fails
     pub fn compute_embeddings_internal(
         &self,
         source: Arc<dyn arrow_array::Array>,
@@ -393,16 +402,13 @@ fn build_gemini_request_data<'a>(
 ///
 /// On success, returns the first `GeminiResponseCandidate` and the
 /// accompanying `GeminiUsageMetadata`.
-async fn send_gemini_generation_request<'a>(
+async fn send_gemini_generation_request(
     client: &impl HttpClient,
     headers: &HeaderMap,
-    req: &GeminiRequestBody<'a>,
+    req: &GeminiRequestBody<'_>,
     model: &str,
 ) -> Result<(GeminiResponseCandidate, GeminiUsageMetadata), LLMError> {
-    let url = format!(
-        "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent",
-        model
-    );
+    let url = format!("https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent");
 
     let res = request_with_backoff(client, &url, headers, req, DEFAULT_MAX_RETRIES).await?;
 
@@ -475,7 +481,7 @@ fn map_response_to_chat_contents(contents: &[GeminiPart]) -> Vec<ChatHistoryCont
                     tool_name: fc.name.clone(),
                     args: fc.args.clone()
                 })),
-            _ => {
+            GeminiPart::FunctionResult {..} => {
                 log::warn!(
                     "Got a tool result from the API response. This is not expected, and will be ignored."
                 );
@@ -571,7 +577,7 @@ impl<T: HttpClient> ApiClient for GeminiClient<T> {
         // Process the final response (which has no tool calls) to extract text content
         for content in &response.content.parts {
             if let GeminiPart::Text { text, .. } = content {
-                contents.push(ContentType::Text(text.clone()))
+                contents.push(ContentType::Text(text.clone()));
             }
         }
 
@@ -631,7 +637,7 @@ struct GeminiEmbeddingResponse {
 
 /// Implements the LanceDB EmbeddingFunction trait for Gemini client.
 impl<T: HttpClient + Default + std::fmt::Debug> EmbeddingFunction for GeminiClient<T> {
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "Gemini"
     }
 

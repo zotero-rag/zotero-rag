@@ -103,7 +103,7 @@ pub enum ContentType {
 
 impl Default for ContentType {
     fn default() -> Self {
-        Self::Text("".into())
+        Self::Text(String::new())
     }
 }
 

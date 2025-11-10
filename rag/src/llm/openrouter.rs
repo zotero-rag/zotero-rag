@@ -38,6 +38,7 @@ where
 {
     /// Creates a new OpenRouterClient instance without configuration
     /// (will fall back to environment variables)
+    #[must_use]
     pub fn new() -> Self {
         Self {
             client: T::default(),
@@ -46,6 +47,7 @@ where
     }
 
     /// Creates a new OpenRouterClient instance with provided configuration
+    #[must_use]
     pub fn with_config(config: crate::config::OpenRouterConfig) -> Self {
         Self {
             client: T::default(),
@@ -185,6 +187,7 @@ fn build_openrouter_messages_and_tools<'a>(
 
 /// Token usage statistics returned by the OpenRouter API
 #[derive(Clone, Serialize, Deserialize)]
+#[allow(clippy::struct_field_names)]
 struct OpenRouterUsageStats {
     /// Number of tokens in the input prompt
     prompt_tokens: u32,
@@ -273,10 +276,10 @@ struct OpenRouterResponse {
 /// # Returns
 ///
 /// The OpenRouter-specific response.
-async fn send_openrouter_request<'a>(
+async fn send_openrouter_request(
     client: &impl HttpClient,
     headers: &HeaderMap,
-    req: &OpenRouterRequest<'a>,
+    req: &OpenRouterRequest<'_>,
 ) -> Result<OpenRouterResponse, LLMError> {
     const MAX_RETRIES: usize = 3;
     let res = request_with_backoff(
@@ -379,8 +382,7 @@ impl<T: HttpClient> ApiClient for OpenRouterClient<T> {
             .message
             .tool_calls
             .as_ref()
-            .map(|tc| !tc.is_empty())
-            .unwrap_or(false);
+            .is_some_and(|tc| !tc.is_empty());
 
         // Append the assistant's response to chat history
         chat_history.push(OpenRouterMessage {
@@ -433,8 +435,7 @@ impl<T: HttpClient> ApiClient for OpenRouterClient<T> {
                 .message
                 .tool_calls
                 .as_ref()
-                .map(|tc| !tc.is_empty())
-                .unwrap_or(false);
+                .is_some_and(|tc| !tc.is_empty());
         }
 
         // Process the final response (which has no tool calls) to extract text content

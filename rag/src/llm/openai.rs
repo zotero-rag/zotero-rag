@@ -51,6 +51,7 @@ where
     /// # Returns
     ///
     /// A client initialized with a default HTTP client and no config.
+    #[must_use]
     pub fn new() -> Self {
         Self {
             client: T::default(),
@@ -67,6 +68,7 @@ where
     /// # Returns
     ///
     /// A client initialized with a default HTTP client and the given config.
+    #[must_use]
     pub fn with_config(config: crate::config::OpenAIConfig) -> Self {
         Self {
             client: T::default(),
@@ -83,6 +85,16 @@ where
     /// # Returns
     ///
     /// An Arrow array of `FixedSizeList<Float32>` containing the embeddings.
+    ///
+    /// # Errors
+    ///
+    /// * `LLMError::EnvError` - If the OPENAI_API_KEY environment variable is not set
+    /// * `LLMError::TimeoutError` - If the HTTP request times out
+    /// * `LLMError::CredentialError` - If the API returns 401 or 403 status
+    /// * `LLMError::HttpStatusError` - If the API returns other unsuccessful HTTP status codes
+    /// * `LLMError::NetworkError` - If a network connectivity error occurs
+    /// * `LLMError::DeserializationError` - If the API response cannot be parsed
+    /// * `LLMError::GenericLLMError` - If other HTTP errors occur or Arrow array creation fails
     pub fn compute_embeddings_internal(
         &self,
         source: Arc<dyn arrow_array::Array>,
@@ -96,7 +108,7 @@ where
 #[derive(Clone)]
 pub struct OpenAITool<'a>(pub SerializedTool<'a>);
 
-impl<'a> Serialize for OpenAITool<'a> {
+impl Serialize for OpenAITool<'_> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
@@ -115,7 +127,7 @@ impl<'a> Serialize for OpenAITool<'a> {
 
         // Serialize the map
         let mut map = serializer.serialize_map(Some(obj.len()))?;
-        for (k, v) in obj.iter() {
+        for (k, v) in &obj {
             map.serialize_entry(k, v)?;
         }
         map.end()
@@ -123,7 +135,7 @@ impl<'a> Serialize for OpenAITool<'a> {
 }
 
 /// Convert a Vec of SerializedTools into OpenAI-specific wrappers.
-fn wrap_tools_for_openai<'a>(tools: Vec<SerializedTool<'a>>) -> Vec<OpenAITool<'a>> {
+fn wrap_tools_for_openai(tools: Vec<SerializedTool<'_>>) -> Vec<OpenAITool<'_>> {
     tools.into_iter().map(OpenAITool).collect()
 }
 
@@ -255,6 +267,7 @@ fn build_openai_messages_and_tools<'a>(
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+#[allow(clippy::struct_field_names)]
 struct OpenAIUsage {
     /// Number of tokens in the input prompt.
     input_tokens: u32,
@@ -332,11 +345,11 @@ struct OpenAIResponse {
 /// # Returns
 ///
 /// `Ok(())` if tool calls are processed successfully, otherwise an `LLMError`.
-async fn process_openai_tool_calls<'a>(
+async fn process_openai_tool_calls(
     chat_history: &mut Vec<OpenAIRequestInput>,
     new_contents: &mut Vec<ContentType>,
     contents: &[OpenAIRequestInput],
-    tools: &[SerializedTool<'a>],
+    tools: &[SerializedTool<'_>],
 ) -> Result<(), LLMError> {
     for content in contents {
         match content {
@@ -406,10 +419,10 @@ async fn process_openai_tool_calls<'a>(
 /// # Returns
 ///
 /// The deserialized OpenAI response, or an `LLMError` on failure.
-async fn send_openai_generation_request<'a>(
+async fn send_openai_generation_request(
     client: &impl HttpClient,
     headers: &HeaderMap,
-    req: &OpenAIRequest<'a>,
+    req: &OpenAIRequest<'_>,
 ) -> Result<OpenAIResponse, LLMError> {
     const MAX_RETRIES: usize = DEFAULT_MAX_RETRIES;
 
@@ -452,7 +465,7 @@ fn map_response_to_chat_history(response: &OpenAIResponse) -> Vec<OpenAIRequestI
                     role: "assistant".into(),
                     r#type: "message".into(),
                     content: OpenAIRequestInputItem::Text(
-                        content.first().unwrap().text.clone().unwrap_or("".into()),
+                        content.first().unwrap().text.clone().unwrap_or_else(String::new),
                     ),
                 }))
             }
@@ -560,7 +573,7 @@ impl<T: HttpClient> ApiClient for OpenAIClient<T> {
             match content {
                 OpenAIOutput::Message { content, .. } => {
                     if let Some(ct) = content.first() {
-                        contents.push(ContentType::Text(ct.text.clone().unwrap()))
+                        contents.push(ContentType::Text(ct.text.clone().unwrap()));
                     }
                 }
                 OpenAIOutput::Reasoning { summary, .. } => {
@@ -569,7 +582,7 @@ impl<T: HttpClient> ApiClient for OpenAIClient<T> {
                         summary.join("\n")
                     )));
                 }
-                _ => {}
+                OpenAIOutput::FunctionCall { .. } => {}
             }
         }
 
@@ -587,7 +600,7 @@ impl<T: HttpClient> ApiClient for OpenAIClient<T> {
 ///
 /// Maintainers should note that any updates here should also be reflected in AnthropicClient.
 impl<T: HttpClient + Default + Debug> EmbeddingFunction for OpenAIClient<T> {
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "OpenAI"
     }
 
@@ -676,6 +689,7 @@ mod tests {
         dotenv().ok();
 
         // Create a proper OpenAIResponse that matches the structure we expect to deserialize
+        #[allow(clippy::unreadable_literal)]
         let mock_response = OpenAIResponse {
             id: "mock-id".to_string(),
             created_at: 1234567890,

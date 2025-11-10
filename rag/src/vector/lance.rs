@@ -111,6 +111,10 @@ pub async fn lancedb_exists() -> bool {
 ///
 /// * `text_col` - The name of the column containing text
 /// * `embedding_col` - The name of the embedding column
+///
+/// # Errors
+///
+/// Returns an error if the database connection fails, table operations fail, or index creation fails.
 pub async fn create_or_update_indexes(
     text_col: &str,
     embedding_col: &str,
@@ -239,6 +243,12 @@ async fn get_db_with_embeddings(embedding_name: &str) -> Result<Connection, Lanc
 /// * `rows` - A `RecordBatch` of items to delete
 /// * `key` - The column to delete by
 /// * `embedding_name` - The embedding provider
+///
+/// # Errors
+///
+/// * `LanceError::ConnectionError` - If the database connection fails
+/// * `LanceError::InvalidStateError` - If the table doesn't exist
+/// * `LanceError::ParameterError` - If the key column is not found in the rows
 pub async fn delete_rows(
     rows: RecordBatch,
     key: &str,
@@ -252,8 +262,7 @@ pub async fn delete_rows(
     let key_col = rows
         .column_by_name(key)
         .ok_or(LanceError::ParameterError(format!(
-            "Column '{}' does not exist.",
-            key
+            "Column '{key}' does not exist."
         )))?;
 
     // Avoid potentially deleting all rows
@@ -266,6 +275,7 @@ pub async fn delete_rows(
         .collect::<Vec<_>>()
         .chunks(100)
     {
+        #[allow(clippy::single_char_pattern)]
         let delete_pred = key_chunk
             .iter()
             .filter_map(|maybe_key| {
@@ -287,6 +297,12 @@ pub async fn delete_rows(
 /// # Arguments
 ///
 /// * `embedding_name` - The embedding provider to use for generating new embeddings
+///
+/// # Errors
+///
+/// * `LanceError::ConnectionError` - If the database connection fails
+/// * `LanceError::InvalidStateError` - If the table doesn't exist
+/// * `LanceError::Other` - If querying for zero vectors fails
 pub async fn get_zero_vector_records(embedding_name: &str) -> Result<Vec<RecordBatch>, LanceError> {
     let db = get_db_with_embeddings(embedding_name).await?;
     let table = db.open_table(TABLE_NAME).execute().await.map_err(|_| {
@@ -310,6 +326,12 @@ pub async fn get_zero_vector_records(embedding_name: &str) -> Result<Vec<RecordB
 ///
 /// # Returns
 /// * batches: A vector of Arrow `RecordBatch` objects containing the results.
+///
+/// # Errors
+///
+/// * `LanceError::ConnectionError` - If the database connection fails
+/// * `LanceError::InvalidStateError` - If the table doesn't exist
+/// * `LanceError::Other` - If the query execution fails
 pub async fn get_lancedb_items(
     embedding_name: &str,
     columns: Vec<String>,
@@ -343,6 +365,13 @@ pub async fn get_lancedb_items(
 ///
 /// # Returns
 /// * batches: A vector of Arrow `RecordBatch` objects containing the results.
+///
+/// # Errors
+///
+/// * `LanceError::ParameterError` - If the embedding provider is not recognized
+/// * `LanceError::ConnectionError` - If the database connection fails
+/// * `LanceError::InvalidStateError` - If the table doesn't exist or embedding provider not in registry
+/// * `LanceError::Other` - If embedding computation or query execution fails
 pub async fn vector_search(
     query: String,
     embedding_name: &str,

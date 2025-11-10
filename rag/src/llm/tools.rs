@@ -122,7 +122,7 @@ pub trait Tool: Send + Sync {
 #[derive(Clone)]
 pub struct SerializedTool<'a>(pub &'a dyn Tool);
 
-impl<'a> Serialize for SerializedTool<'a> {
+impl Serialize for SerializedTool<'_> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
@@ -137,7 +137,7 @@ impl<'a> Serialize for SerializedTool<'a> {
 
         // Serialize the map to get the tool's JSON schema description
         let mut map = serializer.serialize_map(Some(obj.len()))?;
-        for (k, v) in obj.iter() {
+        for (k, v) in &obj {
             map.serialize_entry(k, v)?;
         }
         map.end()
@@ -160,6 +160,7 @@ impl<'a> Serialize for SerializedTool<'a> {
 ///
 /// `Some(Vec<SerializedTool>)` referencing the original tools, or `None` if no tools were
 /// provided.
+#[must_use]
 pub fn get_owned_tools<'a>(tools: Option<&'a [Box<dyn Tool>]>) -> Option<Vec<SerializedTool<'a>>> {
     tools.as_ref().map(|iter| {
         iter.iter()
@@ -186,11 +187,15 @@ pub fn get_owned_tools<'a>(tools: Option<&'a [Box<dyn Tool>]>) -> Option<Vec<Ser
 /// # Returns
 ///
 /// `Ok(())` on success, or an `LLMError` if a tool dispatch fails.
-pub async fn process_tool_calls<'a, CHI>(
+///
+/// # Errors
+///
+/// Returns an error if a tool is called that does not exist in the provided list of tools.
+pub async fn process_tool_calls<CHI>(
     chat_history: &mut Vec<CHI>,
     new_contents: &mut Vec<ContentType>,
     contents: &[ChatHistoryContent],
-    tools: &[SerializedTool<'a>],
+    tools: &[SerializedTool<'_>],
 ) -> Result<(), LLMError>
 where
     CHI: From<ChatHistoryItem>,
@@ -202,8 +207,7 @@ where
                 // This is invalid, but technically we can recover by just ignoring it--so
                 // we will.
                 log::warn!(
-                    "Got a tool result from the API response. This is not expected, and will be ignored. Tool result: {:#?}",
-                    tool_result
+                    "Got a tool result from the API response. This is not expected, and will be ignored. Tool result: {tool_result:#?}"
                 );
             }
             ChatHistoryContent::ToolCallRequest(tool_call) => {

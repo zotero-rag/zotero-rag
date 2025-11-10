@@ -94,6 +94,16 @@ async fn get_openai_embedding(text: String) -> Result<Vec<f32>, LLMError> {
 
 /// Shared embedding computation logic for OpenAI embeddings
 /// This eliminates code duplication between OpenAI and Anthropic clients
+///
+/// # Errors
+///
+/// * `LLMError::EnvError` - If the OPENAI_API_KEY environment variable is not set
+/// * `LLMError::TimeoutError` - If the HTTP request times out
+/// * `LLMError::CredentialError` - If the API returns 401 or 403 status
+/// * `LLMError::HttpStatusError` - If the API returns other unsuccessful HTTP status codes
+/// * `LLMError::NetworkError` - If a network connectivity error occurs
+/// * `LLMError::DeserializationError` - If the API response cannot be parsed
+/// * `LLMError::GenericLLMError` - If other HTTP errors occur or Arrow array creation fails
 pub async fn compute_openai_embeddings_async(
     source: Arc<dyn arrow_array::Array>,
 ) -> Result<Arc<dyn arrow_array::Array>, LLMError> {
@@ -149,6 +159,16 @@ pub async fn compute_openai_embeddings_async(
 }
 
 /// Synchronous wrapper for embedding computation
+///
+/// # Errors
+///
+/// * `LLMError::EnvError` - If the OPENAI_API_KEY environment variable is not set
+/// * `LLMError::TimeoutError` - If the HTTP request times out
+/// * `LLMError::CredentialError` - If the API returns 401 or 403 status
+/// * `LLMError::HttpStatusError` - If the API returns other unsuccessful HTTP status codes
+/// * `LLMError::NetworkError` - If a network connectivity error occurs
+/// * `LLMError::DeserializationError` - If the API response cannot be parsed
+/// * `LLMError::GenericLLMError` - If other HTTP errors occur or Arrow array creation fails
 pub fn compute_openai_embeddings_sync(
     source: Arc<dyn arrow_array::Array>,
 ) -> Result<Arc<dyn arrow_array::Array>, LLMError> {

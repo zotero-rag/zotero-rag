@@ -72,32 +72,32 @@ fn format_file_size(bytes: u64) -> String {
 }
 
 impl fmt::Display for HealthCheckResult {
+    #[allow(clippy::too_many_lines)]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, "LanceDB Health Check Results")?;
         writeln!(f, "===============================")?;
 
         // Check 1: Directory existence and size
         if self.directory_exists {
-            writeln!(f, "{}✓ Database directory exists{}", GREEN, RESET)?;
+            writeln!(f, "{GREEN}✓ Database directory exists{RESET}")?;
             match &self.directory_size {
                 Some(Ok(size)) => {
-                    writeln!(f, "\tSize: {}", format_file_size(*size))?;
+                    let size_str = format_file_size(*size);
+                    writeln!(f, "\tSize: {size_str}")?;
                 }
                 Some(Err(e)) => {
                     writeln!(
                         f,
-                        "\t{}Error: Failed to calculate size: {}{}",
-                        RED, e, RESET
+                        "\t{RED}Error: Failed to calculate size: {e}{RESET}"
                     )?;
                 }
                 None => writeln!(f)?,
             }
         } else {
-            writeln!(f, "{}✗ Database directory does not exist{}", RED, RESET)?;
+            writeln!(f, "{RED}✗ Database directory does not exist{RESET}")?;
             writeln!(
                 f,
-                "{}  → Subsequent checks will be skipped{}",
-                YELLOW, RESET
+                "{YELLOW}  → Subsequent checks will be skipped{RESET}"
             )?;
             return Ok(());
         }
@@ -106,22 +106,20 @@ impl fmt::Display for HealthCheckResult {
         // Check 2: Table accessibility
         match &self.table_accessible {
             Some(Ok(())) => {
-                writeln!(f, "{}✓ Table is accessible{}", GREEN, RESET)?;
+                writeln!(f, "{GREEN}✓ Table is accessible{RESET}")?;
             }
             Some(Err(e)) => {
-                writeln!(f, "{}✗ Table is not accessible: {}{}", RED, e, RESET)?;
+                writeln!(f, "{RED}✗ Table is not accessible: {e}{RESET}")?;
                 writeln!(
                     f,
-                    "{}  → Subsequent checks will be skipped{}",
-                    YELLOW, RESET
+                    "{YELLOW}  → Subsequent checks will be skipped{RESET}"
                 )?;
                 return Ok(());
             }
             None => {
                 writeln!(
                     f,
-                    "{}⚠ Table accessibility check was skipped{}",
-                    YELLOW, RESET
+                    "{YELLOW}⚠ Table accessibility check was skipped{RESET}"
                 )?;
                 return Ok(());
             }
@@ -131,16 +129,16 @@ impl fmt::Display for HealthCheckResult {
         match &self.num_rows {
             Some(Ok(count)) => {
                 if *count == 0 {
-                    writeln!(f, "{}⚠ Table has no rows{}", YELLOW, RESET)?;
+                    writeln!(f, "{YELLOW}⚠ Table has no rows{RESET}")?;
                 } else {
-                    writeln!(f, "\tTable has {} rows{}", count, RESET)?;
+                    writeln!(f, "\tTable has {count} rows{RESET}")?;
                 }
             }
             Some(Err(e)) => {
-                writeln!(f, "{}✗ Failed to get row count: {}{}", RED, e, RESET)?;
+                writeln!(f, "{RED}✗ Failed to get row count: {e}{RESET}")?;
             }
             None => {
-                writeln!(f, "{}⚠ Row count check was skipped{}", YELLOW, RESET)?;
+                writeln!(f, "{YELLOW}⚠ Row count check was skipped{RESET}")?;
             }
         }
         writeln!(f)?;
@@ -149,26 +147,24 @@ impl fmt::Display for HealthCheckResult {
         match &self.zero_embedding_items {
             Some(Ok(zero_batches)) => {
                 let total_zero_rows: usize =
-                    zero_batches.iter().map(|batch| batch.num_rows()).sum();
+                    zero_batches.iter().map(RecordBatch::num_rows).sum();
                 if total_zero_rows == 0 {
-                    writeln!(f, "{}✓ No zero embeddings found{}", GREEN, RESET)?;
+                    writeln!(f, "{GREEN}✓ No zero embeddings found{RESET}")?;
                 } else {
                     writeln!(
                         f,
-                        "{}⚠ Found {} rows with zero embeddings{}. Run /embed to fix.",
-                        YELLOW, total_zero_rows, RESET
+                        "{YELLOW}⚠ Found {total_zero_rows} rows with zero embeddings{RESET}. Run /embed to fix."
                     )?;
                 }
             }
             Some(Err(e)) => {
                 writeln!(
                     f,
-                    "{}✗ Failed to check zero embeddings: {}{}",
-                    RED, e, RESET
+                    "{RED}✗ Failed to check zero embeddings: {e}{RESET}"
                 )?;
             }
             None => {
-                writeln!(f, "{}⚠ Zero embeddings check was skipped{}", YELLOW, RESET)?;
+                writeln!(f, "{YELLOW}⚠ Zero embeddings check was skipped{RESET}")?;
             }
         }
         writeln!(f)?;
@@ -181,36 +177,32 @@ impl fmt::Display for HealthCheckResult {
                         if row_count > 10000 {
                             writeln!(
                                 f,
-                                "{}⚠ No indices found (may impact query performance){}",
-                                YELLOW, RESET
+                                "{YELLOW}⚠ No indices found (may impact query performance){RESET}"
                             )?;
                         } else {
                             writeln!(
                                 f,
-                                "{}✓ No indices found. This should not affect performance for your library size.{}",
-                                GREEN, RESET
+                                "{GREEN}✓ No indices found. This should not affect performance for your library size.{RESET}"
                             )?;
                         }
                     }
                 } else {
                     writeln!(f, "{}✓ Found {} index(es):{}", GREEN, indices.len(), RESET)?;
                     for (name, index_type) in indices {
-                        writeln!(f, "\t- {} ({})", name, index_type)?;
+                        writeln!(f, "\t- {name} ({index_type})")?;
                     }
                 }
             }
             Some(Err(e)) => {
                 writeln!(
                     f,
-                    "{}✗ Failed to get index information: {}{}",
-                    RED, e, RESET
+                    "{RED}✗ Failed to get index information: {e}{RESET}"
                 )?;
             }
             None => {
                 writeln!(
                     f,
-                    "{}⚠ Index information check was skipped{}",
-                    YELLOW, RESET
+                    "{YELLOW}⚠ Index information check was skipped{RESET}"
                 )?;
             }
         }
@@ -320,6 +312,11 @@ async fn check_indexes(tbl: &lancedb::table::Table) -> Result<Vec<(String, Strin
 /// # Returns:
 ///
 /// A `Result<HealthCheckResult, LanceError>` indicating success and whether issues were found
+///
+/// # Errors
+///
+/// * `LanceError::ParameterError` - If the embedding provider is not recognized
+/// * `LanceError::QueryError` - If querying for zero vectors or index information fails
 #[must_use = "This function has no side-effects, so you likely want to inspect this value."]
 pub async fn lancedb_health_check(
     embedding_provider: &str,
@@ -386,7 +383,7 @@ pub async fn lancedb_health_check(
             Ok(count) => Some(Ok(get_zero_vectors(&tbl, embedding_provider, *count).await?)),
             Err(e) => Some(Err(LanceError::QueryError(e.to_string()))),
         }
-    };
+    }
 
     Ok(result)
 }
@@ -409,7 +406,7 @@ mod tests {
 
         // Clean up any existing data
         let _ = std::fs::remove_dir_all(DB_URI);
-        let _ = std::fs::remove_dir_all(format!("rag/{}", DB_URI));
+        let _ = std::fs::remove_dir_all(format!("rag/{DB_URI}"));
 
         let result = lancedb_health_check("voyageai").await;
         assert!(result.is_ok());

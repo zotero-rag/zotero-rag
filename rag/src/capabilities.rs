@@ -19,6 +19,7 @@ pub enum ModelProviders {
 
 impl ModelProviders {
     /// Returns the string representation of the provider.
+    #[must_use]
     pub fn as_str(&self) -> &'static str {
         match self {
             ModelProviders::OpenAI => "openai",
@@ -29,6 +30,7 @@ impl ModelProviders {
     }
 
     /// Returns whether the provider is contained in the list of providers.
+    #[must_use]
     pub fn contains(provider: &str) -> bool {
         [
             ModelProviders::OpenAI.as_str(),
@@ -63,6 +65,7 @@ pub enum EmbeddingProviders {
 
 impl EmbeddingProviders {
     /// Returns the string representation of the provider.
+    #[must_use]
     pub fn as_str(&self) -> &'static str {
         match self {
             EmbeddingProviders::Cohere => "cohere",
@@ -74,6 +77,7 @@ impl EmbeddingProviders {
     }
 
     /// Returns whether the provider is contained in the list of providers.
+    #[must_use]
     pub fn contains(provider: &str) -> bool {
         [
             EmbeddingProviders::Cohere.as_str(),
@@ -99,6 +103,7 @@ pub enum RerankerProviders {
 
 impl RerankerProviders {
     /// Returns the string representation of the provider.
+    #[must_use]
     pub fn as_str(&self) -> &'static str {
         match self {
             RerankerProviders::Cohere => "cohere",
@@ -107,6 +112,7 @@ impl RerankerProviders {
     }
 
     /// Returns whether the provider is contained in the list of providers.
+    #[must_use]
     pub fn contains(provider: &str) -> bool {
         [
             RerankerProviders::Cohere.as_str(),

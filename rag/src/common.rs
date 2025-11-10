@@ -15,9 +15,9 @@ fn calculate_backoff_delay(attempt: usize, response: &Response) -> Duration {
         if let Ok(wait_time_str) = retry_after.to_str() {
             if let Ok(wait_time) = wait_time_str.parse::<u64>() {
                 return Duration::from_secs(wait_time);
-            } else {
-                log::warn!("Retry-After value {wait_time_str} could not be parsed as a u64");
             }
+
+            log::warn!("Retry-After value {wait_time_str} could not be parsed as a u64");
         } else {
             log::warn!("Retry-After value {retry_after:?} could not be converted to a string");
         }
@@ -27,6 +27,7 @@ fn calculate_backoff_delay(attempt: usize, response: &Response) -> Duration {
     let base_delay = 1000.0 * 2.0_f64.powi(attempt as i32);
     let jitter = base_delay * rand::random::<f64>();
 
+    #[allow(clippy::cast_sign_loss)]
     Duration::from_millis((base_delay + jitter).round() as u64)
 }
 

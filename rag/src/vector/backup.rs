@@ -106,6 +106,12 @@ pub(crate) async fn restore_backup(backup_metadata: &BackupMetadata) -> Result<(
 /// `BackupError` with details. In this case, logs are written at the WARN level explaining what
 /// stages failed.
 ///
+/// # Errors
+///
+/// * `LanceError::ConnectionError` - If creating a backup fails due to database connection issues
+/// * `LanceError::InvalidStateError` - If both the operation and backup restoration fail
+/// * `LanceError::Other` - If the operation fails (wrapping the operation's error)
+///
 /// # Examples
 ///
 /// ```
@@ -140,11 +146,10 @@ where
         Err(e) => {
             // Failure: (attempt to) restore backup
             if let Err(restore_error) = restore_backup(&backup_metadata).await {
-                log::error!("Failed to restore backup: {}", restore_error);
+                log::error!("Failed to restore backup: {restore_error}");
 
                 return Err(LanceError::InvalidStateError(format!(
-                    "Operation failed AND restore failed. Database may be in inconsistent state.\nOperation error: {}.\nRestore error: {}",
-                    e, restore_error
+                    "Operation failed AND restore failed. Database may be in inconsistent state.\nOperation error: {e}.\nRestore error: {restore_error}"
                 )));
             }
 
@@ -427,7 +432,7 @@ mod tests {
             original_version: Some(123),
         };
 
-        let debug_str = format!("{:?}", metadata);
+        let debug_str = format!("{metadata:?}");
 
         assert!(debug_str.contains("BackupMetadata"));
         assert!(debug_str.contains("123"));
