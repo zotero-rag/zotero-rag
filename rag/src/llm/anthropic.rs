@@ -140,11 +140,7 @@ fn build_anthropic_messages_and_tools<'a>(
     Vec<AnthropicChatHistoryItem>,
     Option<Vec<SerializedTool<'a>>>,
 ) {
-    let mut messages = req
-        .chat_history
-        .iter()
-        .map(Into::into)
-        .collect::<Vec<_>>();
+    let mut messages = req.chat_history.iter().map(Into::into).collect::<Vec<_>>();
 
     messages.push(AnthropicChatHistoryItem {
         role: "user".to_owned(),

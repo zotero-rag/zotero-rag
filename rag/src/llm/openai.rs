@@ -465,7 +465,12 @@ fn map_response_to_chat_history(response: &OpenAIResponse) -> Vec<OpenAIRequestI
                     role: "assistant".into(),
                     r#type: "message".into(),
                     content: OpenAIRequestInputItem::Text(
-                        content.first().unwrap().text.clone().unwrap_or_else(String::new),
+                        content
+                            .first()
+                            .unwrap()
+                            .text
+                            .clone()
+                            .unwrap_or_else(String::new),
                     ),
                 }))
             }
