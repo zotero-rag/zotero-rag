@@ -140,7 +140,7 @@ impl fmt::Display for HealthCheckResult {
                 } else {
                     writeln!(
                         f,
-                        "{YELLOW}⚠ Found {total_zero_rows} rows with zero embeddings{RESET}. Run /embed to fix."
+                        "{YELLOW}⚠ Found {total_zero_rows} rows with zero embeddings{RESET}. Run `/embed fix` to fix."
                     )?;
                 }
             }
