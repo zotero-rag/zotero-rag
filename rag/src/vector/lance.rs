@@ -3,7 +3,10 @@
 //! operations, variants with backup support are provided.
 
 use crate::capabilities::EmbeddingProviders;
+use crate::embedding::cohere::CohereClient;
+use crate::embedding::common::EmbeddingProviderConfig;
 use crate::embedding::voyage::VoyageAIClient;
+use crate::llm::gemini::GeminiClient;
 use crate::llm::{anthropic::AnthropicClient, http_client::ReqwestClient, openai::OpenAIClient};
 use crate::vector::backup::with_backup;
 use crate::vector::checkhealth::get_zero_vectors;
@@ -198,38 +201,39 @@ pub async fn db_statistics() -> Result<TableStatistics, LanceError> {
 ///
 /// # Returns
 /// - `db`: A `Connection` object to the Lance database.
-async fn get_db_with_embeddings(embedding_name: &str) -> Result<Connection, LanceError> {
-    if !(EmbeddingProviders::contains(embedding_name)) {
-        return Err(LanceError::ParameterError(format!(
-            "{embedding_name} is not a valid embedding."
-        )));
-    }
-
+async fn get_db_with_embeddings(
+    embedding_config: &EmbeddingProviderConfig,
+) -> Result<Connection, LanceError> {
     let db = connect(DB_URI)
         .execute()
         .await
         .map_err(|e| LanceError::ConnectionError(e.to_string()))?;
 
-    match embedding_name {
-        "anthropic" => {
-            db.embedding_registry().register(
-                EmbeddingProviders::Anthropic.as_str(),
-                Arc::new(AnthropicClient::<ReqwestClient>::default()),
-            )?;
-        }
-        "openai" => {
+    match embedding_config {
+        EmbeddingProviderConfig::OpenAI(cfg) => {
             db.embedding_registry().register(
                 EmbeddingProviders::OpenAI.as_str(),
-                Arc::new(OpenAIClient::<ReqwestClient>::default()),
+                Arc::new(OpenAIClient::<ReqwestClient>::with_config(cfg.clone())),
             )?;
         }
-        "voyageai" => {
+        EmbeddingProviderConfig::VoyageAI(cfg) => {
             db.embedding_registry().register(
                 EmbeddingProviders::VoyageAI.as_str(),
-                Arc::new(VoyageAIClient::<ReqwestClient>::default()),
+                Arc::new(VoyageAIClient::<ReqwestClient>::with_config(cfg.clone())),
             )?;
         }
-        _ => unreachable!("Unknown embedding provider {}", embedding_name),
+        EmbeddingProviderConfig::Gemini(cfg) => {
+            db.embedding_registry().register(
+                EmbeddingProviders::Gemini.as_str(),
+                Arc::new(GeminiClient::<ReqwestClient>::with_config(cfg.clone())),
+            )?;
+        }
+        EmbeddingProviderConfig::Cohere(cfg) => {
+            db.embedding_registry().register(
+                EmbeddingProviders::Cohere.as_str(),
+                Arc::new(CohereClient::<ReqwestClient>::with_config(cfg.clone())),
+            )?;
+        }
     }
 
     Ok(db)

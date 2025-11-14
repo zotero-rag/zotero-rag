@@ -2,10 +2,14 @@ use arrow_array::{ArrayRef, RecordBatch, StringArray, cast::AsArray};
 use arrow_schema;
 use std::sync::Arc;
 
-use crate::utils::library::{ZoteroItem, ZoteroItemSet};
+use crate::{
+    config::Config,
+    utils::library::{ZoteroItem, ZoteroItemSet},
+};
 use rag::{
     embedding::common::{
-        get_embedding_dims_by_provider, get_embedding_provider, get_reranking_provider,
+        EmbeddingProviderConfig, get_embedding_dims_by_provider, get_embedding_provider,
+        get_embedding_provider_with_config, get_reranking_provider,
     },
     llm::errors::LLMError,
     vector::lance::{LanceError, lancedb_exists, vector_search as rag_vector_search},
@@ -62,6 +66,8 @@ pub enum ArrowError {
     PathEncodingError,
     #[error("{0}")]
     PdfParsingError(String),
+    #[error("{0}")]
+    Other(String),
 }
 
 impl From<lancedb::Error> for ArrowError {
@@ -128,16 +134,16 @@ pub async fn get_schema(embedding_name: &str) -> arrow_schema::Schema {
 /// # Arguments:
 ///
 /// * `items` - The items to convert to a `RecordBatch`
-/// * `embedding_name` - The embedding provider
+/// * `embedding_config` - Configuration for the embedding provider to use when computing embeddings.
 ///
 /// # Returns
 ///
 /// A `RecordBatch` that can be used to interact with LanceDB.
 pub async fn library_to_arrow(
     items: Vec<ZoteroItem>,
-    embedding_name: &str,
+    embedding_config: EmbeddingProviderConfig,
 ) -> Result<RecordBatch, ArrowError> {
-    let schema = Arc::new(get_schema(embedding_name).await);
+    let schema = Arc::new(get_schema(embedding_config.provider_name()).await);
 
     // Convert ZoteroItemMetadata to Arrow arrays
     let library_keys = StringArray::from(
@@ -181,7 +187,7 @@ pub async fn library_to_arrow(
     ];
 
     if lancedb_exists().await {
-        let embedding_provider = get_embedding_provider(embedding_name)?;
+        let embedding_provider = get_embedding_provider_with_config(embedding_config)?;
         let query_vec = embedding_provider.compute_source_embeddings(Arc::new(pdf_texts))?;
         let query_vec = query_vec.as_fixed_size_list();
 
@@ -218,19 +224,25 @@ pub async fn library_to_arrow(
 ///
 /// # Arguments
 ///
-/// * `embedding_name` - The embedding used by the current DB.
+/// * `config` - Configuration containing embedding provider information.
 /// * `start_from` - An optional offset for the SQL query. Useful for debugging, pagination,
 ///   multi-threading, etc.
 /// * `limit` - Optional limit, meant to be used in conjunction with `start_from`.
 pub async fn full_library_to_arrow(
-    embedding_name: &str,
+    config: &Config,
     start_from: Option<usize>,
     limit: Option<usize>,
 ) -> Result<RecordBatch, ArrowError> {
-    let lib_items = parse_library(embedding_name, start_from, limit).await?;
+    let lib_items = parse_library(&config.embedding_provider, start_from, limit).await?;
     log::info!("Finished parsing library items.");
 
-    library_to_arrow(lib_items, embedding_name).await
+    library_to_arrow(
+        lib_items,
+        config.get_embedding_config().ok_or(ArrowError::Other(
+            "Failed to get embedding config from application config".to_string(),
+        ))?,
+    )
+    .await
 }
 
 /// From a `RecordBatch`, return all values from a specified column as a `Vec<String>`.

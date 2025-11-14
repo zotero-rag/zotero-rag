@@ -8,9 +8,10 @@ use arrow_array::{self, RecordBatch, RecordBatchIterator, StringArray};
 use arrow_schema::Schema;
 use lancedb::embeddings::EmbeddingDefinition;
 use rag::capabilities::ModelProviders;
+use rag::config::LLMClientConfig;
 use rag::llm::base::{ApiClient, ChatRequest, CompletionApiResponse, ContentType};
 use rag::llm::errors::LLMError;
-use rag::llm::factory::{LLMClientConfig, get_client_by_provider, get_client_with_config};
+use rag::llm::factory::{get_client_by_provider, get_client_with_config};
 use rag::vector::checkhealth::lancedb_health_check;
 use rag::vector::doctor::doctor as rag_doctor;
 use rag::vector::lance::{
@@ -190,8 +191,15 @@ async fn fix_zero_embeddings<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Res
         return Ok(());
     }
 
-    let nonempty_zero_subset_batch =
-        library_to_arrow(nonempty_zero_subset, &ctx.config.embedding_provider).await?;
+    let nonempty_zero_subset_batch = library_to_arrow(
+        nonempty_zero_subset,
+        ctx.config
+            .get_embedding_config()
+            .ok_or(CLIError::ArrowError(
+                "Could not get embedding config".into(),
+            ))?,
+    )
+    .await?;
 
     let batches = vec![Ok(nonempty_zero_subset_batch.clone())];
     let batch_iter =
@@ -308,7 +316,7 @@ async fn process<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Result<(), CLIE
         }
     }
 
-    let record_batch = full_library_to_arrow(&embedding_name, None, None).await?;
+    let record_batch = full_library_to_arrow(&ctx.config, None, None).await?;
     let schema = record_batch.schema();
     let batches = vec![Ok(record_batch.clone())];
     let batch_iter = RecordBatchIterator::new(batches.into_iter(), schema.clone());
