@@ -7,7 +7,7 @@ use crate::embedding::cohere::CohereClient;
 use crate::embedding::common::EmbeddingProviderConfig;
 use crate::embedding::voyage::VoyageAIClient;
 use crate::llm::gemini::GeminiClient;
-use crate::llm::{anthropic::AnthropicClient, http_client::ReqwestClient, openai::OpenAIClient};
+use crate::llm::{http_client::ReqwestClient, openai::OpenAIClient};
 use crate::vector::backup::with_backup;
 use crate::vector::checkhealth::get_zero_vectors;
 use lancedb::table::OptimizeOptions;
@@ -246,7 +246,7 @@ async fn get_db_with_embeddings(
 ///
 /// * `rows` - A `RecordBatch` of items to delete
 /// * `key` - The column to delete by
-/// * `embedding_name` - The embedding provider
+/// * `embedding_config` - The embedding provider configuration
 ///
 /// # Errors
 ///
@@ -256,9 +256,9 @@ async fn get_db_with_embeddings(
 pub async fn delete_rows(
     rows: RecordBatch,
     key: &str,
-    embedding_name: &str,
+    embedding_config: &EmbeddingProviderConfig,
 ) -> Result<(), LanceError> {
-    let db = get_db_with_embeddings(embedding_name).await?;
+    let db = get_db_with_embeddings(embedding_config).await?;
     let table = db.open_table(TABLE_NAME).execute().await.map_err(|_| {
         LanceError::InvalidStateError(format!("The table {TABLE_NAME} does not exist"))
     })?;
@@ -300,21 +300,23 @@ pub async fn delete_rows(
 ///
 /// # Arguments
 ///
-/// * `embedding_name` - The embedding provider to use for generating new embeddings
+/// * `embedding_config` - The embedding provider configuration
 ///
 /// # Errors
 ///
 /// * `LanceError::ConnectionError` - If the database connection fails
 /// * `LanceError::InvalidStateError` - If the table doesn't exist
 /// * `LanceError::Other` - If querying for zero vectors fails
-pub async fn get_zero_vector_records(embedding_name: &str) -> Result<Vec<RecordBatch>, LanceError> {
-    let db = get_db_with_embeddings(embedding_name).await?;
+pub async fn get_zero_vector_records(
+    embedding_config: &EmbeddingProviderConfig,
+) -> Result<Vec<RecordBatch>, LanceError> {
+    let db = get_db_with_embeddings(embedding_config).await?;
     let table = db.open_table(TABLE_NAME).execute().await.map_err(|_| {
         LanceError::InvalidStateError(format!("The table {TABLE_NAME} does not exist"))
     })?;
 
     // Get all records with zero embeddings
-    let zero_batches = get_zero_vectors(&table, embedding_name, 10000).await?;
+    let zero_batches = get_zero_vectors(&table, embedding_config.provider_name(), 10000).await?;
     Ok(zero_batches)
 }
 
@@ -324,7 +326,7 @@ pub async fn get_zero_vector_records(embedding_name: &str) -> Result<Vec<RecordB
 /// will receive fewer than 1024 rows, it is safe to assume only one element exists.
 ///
 /// # Arguments
-/// * embedding_name: The embedding method to use. Must be one of `EmbeddingProviders`.
+/// * embedding_config: The embedding provider configuration
 /// * columns: The set of columns to return. Typically, you do not want to include the full-text
 ///   column here.
 ///
@@ -337,10 +339,10 @@ pub async fn get_zero_vector_records(embedding_name: &str) -> Result<Vec<RecordB
 /// * `LanceError::InvalidStateError` - If the table doesn't exist
 /// * `LanceError::Other` - If the query execution fails
 pub async fn get_lancedb_items(
-    embedding_name: &str,
+    embedding_config: &EmbeddingProviderConfig,
     columns: Vec<String>,
 ) -> Result<Vec<RecordBatch>, LanceError> {
-    let db = get_db_with_embeddings(embedding_name).await?;
+    let db = get_db_with_embeddings(embedding_config).await?;
 
     let tbl = db.open_table(TABLE_NAME).execute().await.map_err(|_| {
         LanceError::InvalidStateError(format!("The table {TABLE_NAME} does not exist"))
@@ -365,7 +367,7 @@ pub async fn get_lancedb_items(
 ///
 /// # Arguments
 /// * query: The query string to search for
-/// * embedding_name: The embedding method to use. Must be one of `EmbeddingProviders`.
+/// * embedding_config: The embedding provider configuration
 ///
 /// # Returns
 /// * batches: A vector of Arrow `RecordBatch` objects containing the results.
@@ -378,10 +380,10 @@ pub async fn get_lancedb_items(
 /// * `LanceError::Other` - If embedding computation or query execution fails
 pub async fn vector_search(
     query: String,
-    embedding_name: &str,
+    embedding_config: &EmbeddingProviderConfig,
 ) -> Result<Vec<RecordBatch>, LanceError> {
     let start_time = Instant::now();
-    let db = get_db_with_embeddings(embedding_name).await?;
+    let db = get_db_with_embeddings(embedding_config).await?;
 
     let tbl = db.open_table(TABLE_NAME).execute().await.map_err(|_| {
         LanceError::InvalidStateError(format!("The table {TABLE_NAME} does not exist"))
@@ -389,12 +391,13 @@ pub async fn vector_search(
     log::debug!("Opening the DB and table took {:.1?}", start_time.elapsed());
 
     let start_time = Instant::now();
-    let embedding =
-        db.embedding_registry()
-            .get(embedding_name)
-            .ok_or(LanceError::InvalidStateError(format!(
-                "{embedding_name} is not in the database embedding registry"
-            )))?;
+    let embedding = db
+        .embedding_registry()
+        .get(embedding_config.provider_name())
+        .ok_or(LanceError::InvalidStateError(format!(
+            "{} is not in the database embedding registry",
+            embedding_config.provider_name()
+        )))?;
 
     let query_vec = embedding.compute_query_embeddings(Arc::new(StringArray::from(vec![query])))?;
     log::debug!("Computing embeddings took {:.1?}", start_time.elapsed());
@@ -434,6 +437,7 @@ pub async fn vector_search(
 ///   https://docs.rs/lancedb/latest/lancedb/index.html for an example of creating this.
 /// * `merge_on`: `None` if you want to create or overwrite the current database; otherwise, a
 ///   reference to an array of keys to merge on.
+/// * `embedding_config`: The embedding provider configuration
 /// * `embedding_params`: An `EmbeddingDefinition` object that contains the source column that has
 ///   the text data, the destination column name, and the embedding function to use.
 ///
@@ -445,9 +449,10 @@ pub async fn vector_search(
 pub async fn insert_records(
     data: RecordBatchIterator<IntoIter<Result<RecordBatch, ArrowError>>>,
     merge_on: Option<&[&str]>,
+    embedding_config: &EmbeddingProviderConfig,
     embedding_params: EmbeddingDefinition,
 ) -> Result<Connection, LanceError> {
-    let db = get_db_with_embeddings(&embedding_params.embedding_name).await?;
+    let db = get_db_with_embeddings(embedding_config).await?;
 
     if lancedb_exists().await && merge_on.is_some() {
         // Add rows if they don't already exist
@@ -483,6 +488,7 @@ pub async fn insert_records(
 /// * `data`: An Arrow `RecordBatchIterator` containing data
 /// * `merge_on`: `None` if you want to create or overwrite the current database; otherwise, a
 ///   reference to an array of keys to merge on.
+/// * `embedding_config`: The embedding provider configuration
 /// * `embedding_params`: An `EmbeddingDefinition` object
 ///
 /// # Returns
@@ -493,9 +499,16 @@ pub async fn insert_records(
 pub async fn insert_records_with_backup(
     data: RecordBatchIterator<IntoIter<Result<RecordBatch, ArrowError>>>,
     merge_on: Option<&[&str]>,
+    embedding_config: &EmbeddingProviderConfig,
     embedding_params: EmbeddingDefinition,
 ) -> Result<Connection, LanceError> {
-    with_backup(insert_records(data, merge_on, embedding_params)).await
+    with_backup(insert_records(
+        data,
+        merge_on,
+        embedding_config,
+        embedding_params,
+    ))
+    .await
 }
 
 /// Delete rows with backup support. Creates a backup before the operation and
@@ -504,16 +517,16 @@ pub async fn insert_records_with_backup(
 /// # Arguments
 /// * `rows` - A `RecordBatch` of items to delete
 /// * `key` - The column to delete by
-/// * `embedding_name` - The embedding provider
+/// * `embedding_config` - The embedding provider configuration
 ///
 /// # Errors
 /// Returns a `LanceError` if backup creation, database operations, or restoration fails
 pub async fn delete_rows_with_backup(
     rows: RecordBatch,
     key: &str,
-    embedding_name: &str,
+    embedding_config: &EmbeddingProviderConfig,
 ) -> Result<(), LanceError> {
-    with_backup(delete_rows(rows, key, embedding_name)).await
+    with_backup(delete_rows(rows, key, embedding_config)).await
 }
 
 /// Create or update indexes with backup support. Creates a backup before the operation and

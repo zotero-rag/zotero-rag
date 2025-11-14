@@ -7,7 +7,7 @@ use reqwest::header::HeaderMap;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::{
-    env, fs,
+    fs,
     future::Future,
     pin::Pin,
     time::{Duration, Instant},
@@ -287,8 +287,7 @@ pub trait EmbeddingApiResponse {
 ///   Array>`, since that is what LanceDB gives you; as such this is the "native" type. This might
 ///   be made more general via an extension trait in the future.
 /// * `api_url` - The embedding API endpoint.
-/// * `api_key_var` - The *environment variable* that contains the API key for the service. For
-///   security reasons, this function does not make it possible to directly pass in an API key.
+/// * `api_key` - The API key for the service.
 /// * `api_client` - The `HttpClient` trait implementation to use. For real use, you almost
 ///   certainly want a `ReqwestClient`; the trait allows for easy testing.
 /// * `embedding_provider` - An owned type containing the name of the embedding provider. This does
@@ -306,7 +305,6 @@ pub trait EmbeddingApiResponse {
 ///
 /// # Errors
 ///
-/// * `LLMError::EnvError` - If the API key environment variable is not set
 /// * `LLMError::TimeoutError` - If the HTTP request times out
 /// * `LLMError::CredentialError` - If the API returns 401 or 403 status
 /// * `LLMError::HttpStatusError` - If the API returns other unsuccessful HTTP status codes
@@ -321,7 +319,7 @@ pub async fn compute_embeddings_async<
 >(
     source: Arc<dyn arrow_array::Array>,
     api_url: &str,
-    api_key_var: &str,
+    api_key: &str,
     api_client: impl HttpClient,
     embedding_provider: String,
     batch_size: usize,
@@ -333,8 +331,6 @@ pub async fn compute_embeddings_async<
 
     log::info!("Processing {} input texts.", texts.len());
     let bar = ProgressBar::new(texts.len().try_into().unwrap());
-
-    let api_key = env::var(api_key_var)?;
 
     let mut all_embeddings: Vec<Vec<f32>> = Vec::new();
 

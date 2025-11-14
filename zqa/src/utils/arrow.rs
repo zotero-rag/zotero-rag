@@ -8,7 +8,7 @@ use crate::{
 };
 use rag::{
     embedding::common::{
-        EmbeddingProviderConfig, get_embedding_dims_by_provider, get_embedding_provider,
+        EmbeddingProviderConfig, get_embedding_dims_by_provider,
         get_embedding_provider_with_config, get_reranking_provider,
     },
     llm::errors::LLMError,
@@ -233,7 +233,14 @@ pub async fn full_library_to_arrow(
     start_from: Option<usize>,
     limit: Option<usize>,
 ) -> Result<RecordBatch, ArrowError> {
-    let lib_items = parse_library(&config.embedding_provider, start_from, limit).await?;
+    let lib_items = parse_library(
+        &config.get_embedding_config().ok_or(ArrowError::Other(
+            "Failed to get embedding config from application config".to_string(),
+        ))?,
+        start_from,
+        limit,
+    )
+    .await?;
     log::info!("Finished parsing library items.");
 
     library_to_arrow(
@@ -280,8 +287,8 @@ pub fn get_column_from_batch(batch: &RecordBatch, column: usize) -> Vec<String> 
 /// # Arguments
 ///
 /// * `query` - The query to search the LanceDB table for.
-/// * `embedding_name` - The embedding method to use. Must be one of `EmbeddingProviders`. Note
-///   that this must be the same embedding provider used when initially creating the database.
+/// * `embedding_config` - The embedding provider configuration. Note that this must be the same
+///   embedding provider used when initially creating the database.
 /// * `reranker` - The reranker provider to use.
 ///
 /// # Returns
@@ -291,10 +298,10 @@ pub fn get_column_from_batch(batch: &RecordBatch, column: usize) -> Vec<String> 
 /// unsuccessful for any reason.
 pub async fn vector_search(
     query: String,
-    embedding_name: &str,
+    embedding_config: &EmbeddingProviderConfig,
     reranker: String,
 ) -> Result<Vec<ZoteroItem>, ArrowError> {
-    let batches = rag_vector_search(query.clone(), embedding_name).await?;
+    let batches = rag_vector_search(query.clone(), embedding_config).await?;
 
     let items: ZoteroItemSet = batches.into();
     let items: Vec<ZoteroItem> = items.into();

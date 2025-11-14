@@ -100,6 +100,11 @@ async fn embed<O: Write, E: Write>(
     let db = insert_records(
         batch_iter,
         Some(&[DbFields::LibraryKey.as_ref()]),
+        &ctx.config
+            .get_embedding_config()
+            .ok_or(CLIError::ConfigError(
+                "Could not get embedding config".into(),
+            ))?,
         EmbeddingDefinition::new(
             &DbFields::PdfText.into(), // source column
             embedding_provider,
@@ -147,7 +152,10 @@ async fn fix_zero_embeddings<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Res
     }
 
     let zero_batches: Vec<RecordBatch> =
-        get_zero_vector_records(&ctx.config.embedding_provider).await?;
+        get_zero_vector_records(&ctx.config.get_embedding_config().ok_or(
+            CLIError::ConfigError("Could not get embedding config".into()),
+        )?)
+        .await?;
 
     if zero_batches.is_empty() {
         writeln!(ctx.out, "{}Done!{}", DIM_TEXT, RESET)?;
@@ -178,7 +186,11 @@ async fn fix_zero_embeddings<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Res
     delete_rows(
         zero_subset_batch,
         DbFields::LibraryKey.as_ref(),
-        &ctx.config.embedding_provider,
+        &ctx.config
+            .get_embedding_config()
+            .ok_or(CLIError::ConfigError(
+                "Could not get embedding config".into(),
+            ))?,
     )
     .await?;
 
@@ -208,6 +220,11 @@ async fn fix_zero_embeddings<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Res
     insert_records(
         batch_iter,
         Some(&[DbFields::LibraryKey.as_ref()]),
+        &ctx.config
+            .get_embedding_config()
+            .ok_or(CLIError::ConfigError(
+                "Could not get embedding config".into(),
+            ))?,
         EmbeddingDefinition::new(
             &DbFields::PdfText.into(), // source column
             &ctx.config.embedding_provider,
@@ -282,10 +299,13 @@ async fn doctor<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Result<(), CLIEr
 async fn process<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Result<(), CLIError> {
     const WARNING_THRESHOLD: usize = 100;
 
-    let embedding_name = ctx.config.embedding_provider.clone();
-
     let item_metadata = match lancedb_exists().await {
-        true => get_new_library_items(&embedding_name).await,
+        true => {
+            get_new_library_items(&ctx.config.get_embedding_config().ok_or(
+                CLIError::ConfigError("Could not get embedding config".into()),
+            )?)
+            .await
+        }
         false => parse_library_metadata(None, None),
     };
 
@@ -332,6 +352,11 @@ async fn process<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Result<(), CLIE
     let result = insert_records(
         batch_iter,
         Some(&[DbFields::LibraryKey.as_ref()]),
+        &ctx.config
+            .get_embedding_config()
+            .ok_or(CLIError::ConfigError(
+                "Could not get embedding config".into(),
+            ))?,
         EmbeddingDefinition::new(
             DbFields::PdfText.as_ref(), // source column
             embedding_provider,
@@ -391,7 +416,11 @@ async fn search_for_papers<O: Write, E: Write>(
     let vector_search_start = Instant::now();
     let search_results = vector_search(
         query.clone(),
-        &ctx.config.embedding_provider,
+        &ctx.config
+            .get_embedding_config()
+            .ok_or(CLIError::ConfigError(
+                "Could not get embedding config".into(),
+            ))?,
         ctx.config.reranker_provider.clone(),
     )
     .await?;
@@ -427,7 +456,11 @@ async fn run_query<O: Write, E: Write>(
     let vector_search_start = Instant::now();
     let search_results = vector_search(
         query.clone(),
-        &ctx.config.embedding_provider,
+        &ctx.config
+            .get_embedding_config()
+            .ok_or(CLIError::ConfigError(
+                "Could not get embedding config".into(),
+            ))?,
         ctx.config.reranker_provider.clone(),
     )
     .await?;

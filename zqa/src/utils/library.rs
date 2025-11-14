@@ -1,6 +1,7 @@
 use arrow_array::RecordBatch;
 use directories::UserDirs;
 use indicatif::ProgressBar;
+use rag::embedding::common::EmbeddingProviderConfig;
 use rag::vector::lance::{LanceError, get_lancedb_items, lancedb_exists};
 use rusqlite::Connection;
 use std::collections::HashSet;
@@ -168,16 +169,16 @@ impl From<Box<dyn std::error::Error>> for LibraryParsingError {
 ///
 /// # Arguments:
 ///
-/// * `embedding_name` - The embedding used by the current DB.
+/// * `embedding_config` - The embedding provider configuration for the configured LanceDB embedding.
 ///
 /// # Returns
 ///
 /// If successful, a list of `ZoteroItemMetadata` objects corresponding to new items.
 pub async fn get_new_library_items(
-    embedding_name: &str,
+    embedding_config: &EmbeddingProviderConfig,
 ) -> Result<Vec<ZoteroItemMetadata>, LibraryParsingError> {
     let db_items = get_lancedb_items(
-        embedding_name,
+        embedding_config,
         vec![
             DbFields::LibraryKey.into(),
             DbFields::Title.into(),
@@ -282,19 +283,19 @@ pub fn parse_library_metadata(
 ///
 /// # Arguments:
 ///
-/// * `embedding_name` - The embedding used by the current DB.
+/// * `embedding_config` - The embedding provider configuration for the configured LanceDB embedding.
 /// * `start_from` - An optional offset for the SQL query. Useful for debugging, pagination,
 ///   multi-threading, etc.
 /// * `limit` - Optional limit, meant to be used in conjunction with `start_from`.
 pub async fn parse_library(
-    embedding_name: &str,
+    embedding_config: &EmbeddingProviderConfig,
     start_from: Option<usize>,
     limit: Option<usize>,
 ) -> Result<Vec<ZoteroItem>, LibraryParsingError> {
     let start_time = Instant::now();
 
     let metadata = match lancedb_exists().await {
-        true => get_new_library_items(embedding_name).await?,
+        true => get_new_library_items(embedding_config).await?,
         false => parse_library_metadata(start_from, limit)?,
     };
 
