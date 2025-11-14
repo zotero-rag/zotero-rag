@@ -77,3 +77,16 @@ pub struct OpenRouterConfig {
     /// Model name (e.g., "anthropic/claude-sonnet-4.5")
     pub model: String,
 }
+
+/// Configuration for LLM clients
+#[derive(Debug, Clone)]
+pub enum LLMClientConfig {
+    /// Anthropic client configuration
+    Anthropic(crate::config::AnthropicConfig),
+    /// OpenAI client configuration
+    OpenAI(crate::config::OpenAIConfig),
+    /// OpenRouter client configuration
+    OpenRouter(crate::config::OpenRouterConfig),
+    /// Gemini client configuration
+    Gemini(crate::config::GeminiConfig),
+}

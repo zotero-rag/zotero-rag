@@ -1,5 +1,6 @@
 //! Factory methods for creating clients based on the provider name.
 
+use crate::config::LLMClientConfig;
 use crate::llm::anthropic::AnthropicClient;
 use crate::llm::base::{ApiClient, ChatRequest};
 use crate::llm::errors::LLMError;
@@ -48,19 +49,6 @@ pub fn get_client_by_provider(provider: &str) -> Result<LLMClient, LLMError> {
         "gemini" => Ok(LLMClient::Gemini(GeminiClient::new())),
         _ => Err(LLMError::InvalidProviderError(provider.to_string())),
     }
-}
-
-/// Configuration for LLM clients
-#[derive(Debug, Clone)]
-pub enum LLMClientConfig {
-    /// Anthropic client configuration
-    Anthropic(crate::config::AnthropicConfig),
-    /// OpenAI client configuration
-    OpenAI(crate::config::OpenAIConfig),
-    /// OpenRouter client configuration
-    OpenRouter(crate::config::OpenRouterConfig),
-    /// Gemini client configuration
-    Gemini(crate::config::GeminiConfig),
 }
 
 /// Returns an ApiClient implementation with provided configuration

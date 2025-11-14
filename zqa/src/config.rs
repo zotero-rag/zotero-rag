@@ -1,7 +1,9 @@
+use rag::config::LLMClientConfig;
 use rag::constants::{
     DEFAULT_ANTHROPIC_MAX_TOKENS, DEFAULT_MAX_CONCURRENT_REQUESTS, DEFAULT_MAX_RETRIES,
 };
 use rag::constants::{DEFAULT_OPENAI_EMBEDDING_MODEL, OPENAI_EMBEDDING_DIM};
+use rag::embedding::common::EmbeddingProviderConfig;
 use serde::{Deserialize, Serialize};
 use std::{env, num::ParseIntError, path::Path};
 use thiserror::Error;
@@ -99,6 +101,66 @@ pub struct Config {
     /// OpenRouter-specific configuration
     #[serde(default)]
     pub openrouter: Option<OpenRouterConfig>,
+}
+
+impl Config {
+    pub fn get_embedding_config(&self) -> Option<EmbeddingProviderConfig> {
+        match self.embedding_provider.as_str() {
+            "openai" => self
+                .openai
+                .as_ref()
+                .map(|cfg| EmbeddingProviderConfig::OpenAI(cfg.clone().into())),
+            "gemini" => self
+                .gemini
+                .as_ref()
+                .map(|cfg| EmbeddingProviderConfig::Gemini(cfg.clone().into())),
+            "voyageai" => self
+                .voyageai
+                .as_ref()
+                .map(|cfg| EmbeddingProviderConfig::VoyageAI(cfg.clone().into())),
+            "cohere" => self
+                .cohere
+                .as_ref()
+                .map(|cfg| EmbeddingProviderConfig::Cohere(cfg.clone().into())),
+            _ => None,
+        }
+    }
+
+    pub fn get_reranker_config(&self) -> Option<EmbeddingProviderConfig> {
+        match self.reranker_provider.as_str() {
+            "voyageai" => self
+                .voyageai
+                .as_ref()
+                .map(|cfg| EmbeddingProviderConfig::VoyageAI(cfg.clone().into())),
+            "cohere" => self
+                .cohere
+                .as_ref()
+                .map(|cfg| EmbeddingProviderConfig::Cohere(cfg.clone().into())),
+            _ => None,
+        }
+    }
+
+    pub fn get_generation_config(&self) -> Option<LLMClientConfig> {
+        match self.model_provider.as_str() {
+            "anthropic" => self
+                .anthropic
+                .as_ref()
+                .map(|cfg| LLMClientConfig::Anthropic(cfg.clone().into())),
+            "openai" => self
+                .openai
+                .as_ref()
+                .map(|cfg| LLMClientConfig::OpenAI(cfg.clone().into())),
+            "gemini" => self
+                .gemini
+                .as_ref()
+                .map(|cfg| LLMClientConfig::Gemini(cfg.clone().into())),
+            "openrouter" => self
+                .openrouter
+                .as_ref()
+                .map(|cfg| LLMClientConfig::OpenRouter(cfg.clone().into())),
+            _ => None,
+        }
+    }
 }
 
 /// Errors reading or parsing TOML

@@ -128,6 +128,18 @@ pub enum EmbeddingProviderConfig {
     Cohere(crate::config::CohereConfig),
 }
 
+impl EmbeddingProviderConfig {
+    /// Returns the name of the embedding provider.
+    pub fn provider_name(&self) -> &str {
+        match self {
+            EmbeddingProviderConfig::OpenAI(_) => "openai",
+            EmbeddingProviderConfig::VoyageAI(_) => "voyageai",
+            EmbeddingProviderConfig::Gemini(_) => "gemini",
+            EmbeddingProviderConfig::Cohere(_) => "cohere",
+        }
+    }
+}
+
 /// A trait indicating reranking capabilities. This is made generic since it is expected that users
 /// will pass in whatever type they convert `RecordBatch` to, as long as we can convert it into a
 /// string in a non-consuming way. A user may also choose to `map` their `Vec<RecordBatch>` with
