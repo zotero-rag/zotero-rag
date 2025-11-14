@@ -378,6 +378,7 @@ impl Config {
             voyage_config
                 .embedding_model
                 .replace_with_env("VOYAGE_AI_MODEL");
+            voyage_config.api_key.replace_with_env("VOYAGE_AI_API_KEY");
         }
 
         // Cohere options
@@ -387,6 +388,7 @@ impl Config {
             cohere_config
                 .embedding_model
                 .replace_with_env("COHERE_MODEL");
+            cohere_config.api_key.replace_with_env("COHERE_API_KEY");
         }
 
         // OpenRouter options

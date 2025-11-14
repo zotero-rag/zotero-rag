@@ -82,6 +82,11 @@ where
         const BATCH_SIZE: usize = 3;
         const WAIT_AFTER_REQUEST_S: u64 = 2;
 
+        let api_key = self.config.as_ref().map_or_else(
+            || env::var("VOYAGE_AI_API_KEY"),
+            |config| Ok(config.api_key.clone()),
+        )?;
+
         tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(compute_embeddings_async::<
                 VoyageAIRequest,
@@ -89,7 +94,7 @@ where
             >(
                 source,
                 "https://api.voyageai.com/v1/embeddings",
-                "VOYAGE_AI_API_KEY",
+                &api_key,
                 self.client.clone(),
                 EmbeddingProviders::VoyageAI.as_str().to_string(),
                 BATCH_SIZE,

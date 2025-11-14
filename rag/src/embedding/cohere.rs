@@ -65,6 +65,11 @@ where
         const BATCH_SIZE: usize = 30;
         const WAIT_AFTER_REQUEST_S: u64 = 1;
 
+        let api_key = self.config.as_ref().map_or_else(
+            || env::var("COHERE_API_KEY"),
+            |config| Ok(config.api_key.clone()),
+        )?;
+
         tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(compute_embeddings_async::<
                 CohereEmbedRequest,
@@ -72,7 +77,7 @@ where
             >(
                 source,
                 "https://api.cohere.com/v2/embed",
-                "COHERE_API_KEY",
+                &api_key,
                 self.client.clone(),
                 EmbeddingProviders::Cohere.as_str().to_string(),
                 BATCH_SIZE,

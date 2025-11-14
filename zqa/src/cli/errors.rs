@@ -20,6 +20,8 @@ pub enum CLIError {
     ReadlineError(String),
     #[error("LanceDB error: {0}")]
     LanceError(String),
+    #[error("Configuration error: {0}")]
+    ConfigError(String),
 }
 
 impl From<LanceError> for CLIError {

@@ -59,6 +59,7 @@ async fn get_openai_embedding(text: String) -> Result<Vec<f32>, LLMError> {
         data: Vec<EmbeddingResponseData>,
     }
 
+    // TODO: Fix this to use config
     let key = env::var("OPENAI_API_KEY")?;
     let model =
         env::var("OPENAI_EMBEDDING_MODEL").unwrap_or(DEFAULT_OPENAI_EMBEDDING_MODEL.to_string());
