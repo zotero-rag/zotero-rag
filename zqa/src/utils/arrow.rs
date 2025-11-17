@@ -331,7 +331,10 @@ mod tests {
         let _ = fs::remove_dir_all(format!("zqa/{}", TABLE_NAME));
         let _ = fs::remove_dir_all(format!("rag/{}", TABLE_NAME));
 
-        let record_batch = full_library_to_arrow("voyageai", Some(0), Some(5)).await;
+        let mut config = Config::default();
+        config.read_env().unwrap();
+
+        let record_batch = full_library_to_arrow(&config, Some(0), Some(5)).await;
         assert!(
             record_batch.is_ok(),
             "Failed to fetch library: {:?}",

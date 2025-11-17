@@ -463,7 +463,11 @@ mod tests {
 
     use super::*;
     use dotenv::dotenv;
-    use rag::vector::lance::TABLE_NAME;
+    use rag::{
+        config::VoyageAIConfig,
+        constants::{DEFAULT_VOYAGE_RERANK_MODEL, VOYAGE_EMBEDDING_DIM, VOYAGE_EMBEDDING_MODEL},
+        vector::lance::TABLE_NAME,
+    };
 
     #[test]
     fn test_library_fetching_works() {
@@ -516,7 +520,17 @@ mod tests {
         let _ = fs::remove_dir_all(format!("zqa/{}", TABLE_NAME));
         let _ = fs::remove_dir_all(format!("rag/{}", TABLE_NAME));
 
-        let items = parse_library("voyageai", Some(0), Some(5)).await;
+        let items = parse_library(
+            &EmbeddingProviderConfig::VoyageAI(VoyageAIConfig {
+                embedding_model: VOYAGE_EMBEDDING_MODEL.into(),
+                embedding_dims: VOYAGE_EMBEDDING_DIM as usize,
+                api_key: String::new(),
+                reranker: DEFAULT_VOYAGE_RERANK_MODEL.into(),
+            }),
+            Some(0),
+            Some(5),
+        )
+        .await;
         assert!(items.is_ok());
 
         // Two of the items in the toy library are HTML files, so we actually
