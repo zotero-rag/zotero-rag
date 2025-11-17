@@ -553,6 +553,14 @@ mod tests {
     use lancedb::query::ExecutableQuery;
     use serial_test::serial;
 
+    use crate::{
+        config::{OpenAIConfig, VoyageAIConfig},
+        constants::{
+            DEFAULT_OPENAI_EMBEDDING_MODEL, DEFAULT_OPENAI_MODEL, DEFAULT_VOYAGE_RERANK_MODEL,
+            OPENAI_EMBEDDING_DIM, VOYAGE_EMBEDDING_DIM, VOYAGE_EMBEDDING_MODEL,
+        },
+    };
+
     use super::*;
 
     #[tokio::test]
@@ -573,6 +581,13 @@ mod tests {
         let db = insert_records(
             reader,
             None,
+            &EmbeddingProviderConfig::OpenAI(OpenAIConfig {
+                api_key: String::new(),
+                model: DEFAULT_OPENAI_MODEL.into(),
+                max_tokens: 8192,
+                embedding_model: DEFAULT_OPENAI_EMBEDDING_MODEL.into(),
+                embedding_dims: OPENAI_EMBEDDING_DIM as usize,
+            }),
             EmbeddingDefinition::new(
                 "data_openai",      // source column
                 "openai",           // embedding name, either "openai" or "anthropic"
@@ -612,57 +627,6 @@ mod tests {
 
     #[tokio::test]
     #[serial]
-    async fn test_create_initial_table_with_anthropic() {
-        dotenv().ok();
-
-        let schema = arrow_schema::Schema::new(vec![arrow_schema::Field::new(
-            "data_anthropic",
-            arrow_schema::DataType::Utf8,
-            false,
-        )]);
-        let data = StringArray::from(vec!["Hello", "World"]);
-        let record_batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(data)]).unwrap();
-        let batches = vec![Ok(record_batch.clone())];
-        let reader = RecordBatchIterator::new(batches.into_iter(), record_batch.schema());
-
-        let db = insert_records(
-            reader,
-            None,
-            EmbeddingDefinition::new("data_anthropic", "anthropic", Some("embeddings")),
-        )
-        .await;
-
-        assert!(db.is_ok());
-        let db = db.unwrap();
-
-        let tbl_names = db.table_names().execute().await;
-        assert!(tbl_names.is_ok());
-        assert_eq!(tbl_names.unwrap(), vec![TABLE_NAME]);
-
-        let tbl = db.open_table(TABLE_NAME).execute().await;
-        assert!(tbl.is_ok());
-
-        let tbl = tbl.unwrap();
-        let tbl_values = tbl.query().execute().await;
-
-        assert!(tbl_values.is_ok());
-
-        let mut tbl_values = tbl_values.unwrap();
-        let row = tbl_values.next().await;
-
-        assert!(row.is_some());
-        let row = row.unwrap();
-
-        assert!(row.is_ok());
-        let row = row.unwrap();
-
-        for column in ["data_anthropic", "embeddings"] {
-            assert!(row.column_by_name(column).is_some());
-        }
-    }
-
-    #[tokio::test]
-    #[serial]
     async fn test_create_initial_table_with_voyage() {
         dotenv().ok();
 
@@ -679,6 +643,12 @@ mod tests {
         let db = insert_records(
             reader,
             None,
+            &EmbeddingProviderConfig::VoyageAI(VoyageAIConfig {
+                embedding_model: VOYAGE_EMBEDDING_MODEL.into(),
+                embedding_dims: VOYAGE_EMBEDDING_DIM as usize,
+                api_key: String::new(),
+                reranker: DEFAULT_VOYAGE_RERANK_MODEL.into(),
+            }),
             EmbeddingDefinition::new("data_voyage", "voyageai", Some("embeddings")),
         )
         .await;
@@ -730,6 +700,13 @@ mod tests {
         let db = insert_records(
             reader,
             None,
+            &EmbeddingProviderConfig::OpenAI(OpenAIConfig {
+                api_key: String::new(),
+                model: String::new(),
+                embedding_dims: OPENAI_EMBEDDING_DIM as usize,
+                embedding_model: DEFAULT_OPENAI_EMBEDDING_MODEL.into(),
+                max_tokens: 8192,
+            }),
             EmbeddingDefinition::new("data", "invalid", Some("embeddings")),
         )
         .await;
