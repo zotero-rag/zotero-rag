@@ -4,8 +4,9 @@ use zqa::common::setup_logger;
 
 use std::{env, fs};
 
+use rag::config::LLMClientConfig;
 use rag::llm::base::{ApiClient, ChatRequest, ContentType};
-use rag::llm::factory::{LLMClientConfig, get_client_with_config};
+use rag::llm::factory::get_client_with_config;
 use zqa::cli::prompts::get_extraction_prompt;
 use zqa::config::{AnthropicConfig, GeminiConfig, OpenAIConfig};
 

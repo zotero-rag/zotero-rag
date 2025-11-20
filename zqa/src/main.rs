@@ -58,6 +58,8 @@ pub async fn main() {
         return;
     }
 
+    log::debug!("Loaded configuration: {:#?}", config);
+
     let context = Context {
         state: Default::default(),
         config,
