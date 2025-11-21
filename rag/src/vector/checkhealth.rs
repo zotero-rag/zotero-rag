@@ -380,6 +380,7 @@ mod tests {
     use dotenv::dotenv;
     use lancedb::embeddings::EmbeddingDefinition;
     use serial_test::serial;
+    use std::env;
     use std::sync::Arc;
 
     #[tokio::test]
@@ -430,7 +431,7 @@ mod tests {
             &EmbeddingProviderConfig::VoyageAI(VoyageAIConfig {
                 embedding_model: VOYAGE_EMBEDDING_MODEL.into(),
                 embedding_dims: VOYAGE_EMBEDDING_DIM as usize,
-                api_key: String::new(),
+                api_key: env::var("VOYAGE_AI_API_KEY").unwrap_or_default(),
                 reranker: DEFAULT_VOYAGE_RERANK_MODEL.into(),
             }),
             EmbeddingDefinition::new("pdf_text", "voyageai", Some("embeddings")),

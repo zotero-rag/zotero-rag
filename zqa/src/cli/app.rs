@@ -865,7 +865,8 @@ mod tests {
         let err_buf: Vec<u8> = Vec::new();
         let err = Cursor::new(err_buf);
 
-        let config = Config::default();
+        let mut config = Config::default();
+        config.read_env().unwrap();
 
         Context {
             state: Default::default(),

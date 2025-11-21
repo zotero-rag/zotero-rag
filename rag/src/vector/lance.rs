@@ -547,6 +547,8 @@ pub async fn create_or_update_indexes_with_backup(
 
 #[cfg(test)]
 mod tests {
+    use std::env;
+
     use arrow_array::StringArray;
     use dotenv::dotenv;
     use futures::StreamExt;
@@ -582,7 +584,7 @@ mod tests {
             reader,
             None,
             &EmbeddingProviderConfig::OpenAI(OpenAIConfig {
-                api_key: String::new(),
+                api_key: env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY not set"),
                 model: DEFAULT_OPENAI_MODEL.into(),
                 max_tokens: 8192,
                 embedding_model: DEFAULT_OPENAI_EMBEDDING_MODEL.into(),

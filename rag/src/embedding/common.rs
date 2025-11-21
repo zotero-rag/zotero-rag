@@ -130,6 +130,7 @@ pub enum EmbeddingProviderConfig {
 
 impl EmbeddingProviderConfig {
     /// Returns the name of the embedding provider.
+    #[must_use]
     pub fn provider_name(&self) -> &str {
         match self {
             EmbeddingProviderConfig::OpenAI(_) => "openai",
