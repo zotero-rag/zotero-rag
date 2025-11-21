@@ -837,9 +837,12 @@ pub async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<(), CLIEr
 #[cfg(test)]
 mod tests {
     use crate::cli::app::{BATCH_ITER_FILE, checkhealth, embed, search_for_papers, stats};
-    use crate::config::Config;
+    use crate::config::{Config, VoyageAIConfig};
     use arrow_array::{RecordBatch, StringArray};
     use arrow_ipc::writer::FileWriter;
+    use rag::constants::{
+        DEFAULT_VOYAGE_EMBEDDING_MODEL, DEFAULT_VOYAGE_RERANK_MODEL, VOYAGE_EMBEDDING_DIM,
+    };
     use rag::vector::lance::DB_URI;
     use serial_test::serial;
     use std::fs::{self, File};
@@ -851,6 +854,21 @@ mod tests {
         cli::app::{process, run_query},
         common::{Args, Context},
     };
+
+    fn get_config() -> Config {
+        let mut config = Config {
+            voyageai: Some(VoyageAIConfig {
+                reranker: Some(DEFAULT_VOYAGE_RERANK_MODEL.into()),
+                embedding_model: Some(DEFAULT_VOYAGE_EMBEDDING_MODEL.into()),
+                embedding_dims: Some(VOYAGE_EMBEDDING_DIM as usize),
+                api_key: Some(String::new()),
+            }),
+            ..Default::default()
+        };
+
+        config.read_env().unwrap();
+        config
+    }
 
     /// Create a default `Context` object where the output and error streams are buffers that can
     /// be written into. This allows for the output to be easily inspected in tests.
@@ -865,8 +883,7 @@ mod tests {
         let err_buf: Vec<u8> = Vec::new();
         let err = Cursor::new(err_buf);
 
-        let mut config = Config::default();
-        config.read_env().unwrap();
+        let config = get_config();
 
         Context {
             state: Default::default(),
