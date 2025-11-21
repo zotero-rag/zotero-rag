@@ -316,14 +316,34 @@ pub async fn vector_search(
 mod tests {
     use std::fs;
 
-    use crate::common::setup_logger;
+    use crate::{common::setup_logger, config::VoyageAIConfig};
 
     use super::*;
     use arrow_array::RecordBatchIterator;
     use dotenv::dotenv;
-    use rag::vector::lance::TABLE_NAME;
+    use rag::{
+        constants::{
+            DEFAULT_VOYAGE_EMBEDDING_MODEL, DEFAULT_VOYAGE_RERANK_MODEL, VOYAGE_EMBEDDING_DIM,
+        },
+        vector::lance::TABLE_NAME,
+    };
 
-    #[tokio::test]
+    fn get_config() -> Config {
+        let mut config = Config {
+            voyageai: Some(VoyageAIConfig {
+                reranker: Some(DEFAULT_VOYAGE_RERANK_MODEL.into()),
+                embedding_model: Some(DEFAULT_VOYAGE_EMBEDDING_MODEL.into()),
+                embedding_dims: Some(VOYAGE_EMBEDDING_DIM as usize),
+                api_key: Some(String::new()),
+            }),
+            ..Default::default()
+        };
+
+        config.read_env().unwrap();
+        config
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_library_to_arrow_works() {
         dotenv().ok();
         let _ = setup_logger(log::LevelFilter::Info);
@@ -331,8 +351,7 @@ mod tests {
         let _ = fs::remove_dir_all(format!("zqa/{}", TABLE_NAME));
         let _ = fs::remove_dir_all(format!("rag/{}", TABLE_NAME));
 
-        let mut config = Config::default();
-        config.read_env().unwrap();
+        let config = get_config();
 
         let record_batch = full_library_to_arrow(&config, Some(0), Some(5)).await;
         assert!(

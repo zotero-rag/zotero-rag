@@ -3,7 +3,7 @@
 /// Default OpenAI model for chat completions
 pub const DEFAULT_OPENAI_MODEL: &str = "gpt-4.1-2025-04-14";
 
-/// Default Anthropic model for chat completions  
+/// Default Anthropic model for chat completions
 pub const DEFAULT_ANTHROPIC_MODEL: &str = "claude-sonnet-4-5";
 
 /// Default Gemini model for chat completions
@@ -47,3 +47,6 @@ pub const DEFAULT_COHERE_RERANK_MODEL: &str = "rerank-v3.5";
 
 /// Default Voyage AI rerank model
 pub const DEFAULT_VOYAGE_RERANK_MODEL: &str = "rerank-2.5";
+
+/// Default Voyage AI embedding model
+pub const DEFAULT_VOYAGE_EMBEDDING_MODEL: &str = "voyage-3-large";
