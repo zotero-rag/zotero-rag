@@ -38,7 +38,7 @@ async fn test_integration_works() {
             reranker: Some("rerank-2.5".into()),
             embedding_model: Some("voyage-3-large".into()),
             embedding_dims: Some(VOYAGE_EMBEDDING_DIM as usize),
-            api_key: Some(env::var("VOYAGE_AI_API_KEY").unwrap().into()),
+            api_key: Some(env::var("VOYAGE_AI_API_KEY").unwrap()),
         }),
     };
 
@@ -54,11 +54,7 @@ async fn test_integration_works() {
         batch_iter,
         None,
         &config.get_embedding_config().unwrap(),
-        EmbeddingDefinition::new(
-            "pdf_text",         // source column
-            "openai",           // embedding name, either "openai" or "anthropic"
-            Some("embeddings"), // dest column
-        ),
+        EmbeddingDefinition::new("pdf_text", "voyageai", Some("embeddings")),
     )
     .await;
 
