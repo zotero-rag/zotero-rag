@@ -50,14 +50,6 @@ pub async fn main() {
         env!("CARGO_PKG_VERSION")
     );
 
-    if args.tui {
-        let mut terminal = ratatui::init();
-        let _ = App::default().run(&mut terminal);
-        ratatui::restore();
-
-        return;
-    }
-
     log::debug!("Loaded configuration: {:#?}", config);
 
     let context = Context {

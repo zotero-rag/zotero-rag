@@ -21,7 +21,6 @@ tokio = "1.44.1"
 log = "0.4.27"
 indicatif = "0.17.11"
 lancedb = "0.21.3"
-ratatui = "0.29.0"
 crossterm = "0.29.0"
 clap = { version = "4.5.40", features = ["derive"] }
 rustyline = "16.0.0"
