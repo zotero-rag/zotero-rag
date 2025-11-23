@@ -3,7 +3,7 @@
 //! `llm`.
 
 use crate::constants::DEFAULT_OPENAI_EMBEDDING_MODEL;
-use crate::constants::{DEFAULT_MAX_CONCURRENT_REQUESTS, OPENAI_EMBEDDING_DIM};
+use crate::constants::{DEFAULT_MAX_CONCURRENT_REQUESTS, DEFAULT_OPENAI_EMBEDDING_DIM};
 use crate::llm::errors::LLMError;
 use arrow_array;
 use futures::StreamExt;
@@ -140,7 +140,7 @@ pub async fn compute_openai_embeddings_async(
 
     // Convert to Arrow FixedSizeListArray
     let embedding_dim = if embeddings.is_empty() {
-        OPENAI_EMBEDDING_DIM as usize // default for text-embedding-3-small
+        DEFAULT_OPENAI_EMBEDDING_DIM as usize // default for text-embedding-3-small
     } else {
         embeddings[0].len()
     };

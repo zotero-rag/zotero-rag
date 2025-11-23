@@ -2,7 +2,9 @@ use arrow_array::RecordBatchIterator;
 use dotenv::dotenv;
 use lancedb::embeddings::EmbeddingDefinition;
 use log::LevelFilter;
-use rag::constants::{DEFAULT_MAX_CONCURRENT_REQUESTS, DEFAULT_MAX_RETRIES, VOYAGE_EMBEDDING_DIM};
+use rag::constants::{
+    DEFAULT_MAX_CONCURRENT_REQUESTS, DEFAULT_MAX_RETRIES, DEFAULT_VOYAGE_EMBEDDING_DIM,
+};
 use rag::vector::lance::insert_records;
 use std::env;
 use zqa::common::setup_logger;
@@ -30,14 +32,14 @@ async fn test_integration_works() {
         cohere: None,
         openrouter: None,
         anthropic: Some(AnthropicConfig {
-            model: "claude-sonnet-4-5".into(),
+            model: Some("claude-sonnet-4-5".into()),
             api_key: env::var("ANTHROPIC_API_KEY").unwrap().into(),
             max_tokens: 8192,
         }),
         voyageai: Some(VoyageAIConfig {
             reranker: Some("rerank-2.5".into()),
             embedding_model: Some("voyage-3-large".into()),
-            embedding_dims: Some(VOYAGE_EMBEDDING_DIM as usize),
+            embedding_dims: Some(DEFAULT_VOYAGE_EMBEDDING_DIM as usize),
             api_key: Some(env::var("VOYAGE_AI_API_KEY").unwrap()),
         }),
     };

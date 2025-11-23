@@ -16,7 +16,8 @@ use std::{
 use lancedb::embeddings::EmbeddingFunction;
 
 use crate::constants::{
-    COHERE_EMBEDDING_DIM, GEMINI_EMBEDDING_DIM, OPENAI_EMBEDDING_DIM, VOYAGE_EMBEDDING_DIM,
+    DEFAULT_COHERE_EMBEDDING_DIM, DEFAULT_GEMINI_EMBEDDING_DIM, DEFAULT_OPENAI_EMBEDDING_DIM,
+    DEFAULT_VOYAGE_EMBEDDING_DIM,
 };
 use crate::embedding::cohere::CohereClient;
 use crate::embedding::voyage::VoyageAIClient;
@@ -48,10 +49,10 @@ pub struct FailedTexts {
 #[must_use]
 pub fn get_embedding_dims_by_provider(embedding_name: &str) -> u32 {
     match embedding_name {
-        "openai" | "anthropic" => OPENAI_EMBEDDING_DIM,
-        "voyageai" => VOYAGE_EMBEDDING_DIM,
-        "gemini" => GEMINI_EMBEDDING_DIM,
-        "cohere" => COHERE_EMBEDDING_DIM,
+        "openai" | "anthropic" => DEFAULT_OPENAI_EMBEDDING_DIM,
+        "voyageai" => DEFAULT_VOYAGE_EMBEDDING_DIM,
+        "gemini" => DEFAULT_GEMINI_EMBEDDING_DIM,
+        "cohere" => DEFAULT_COHERE_EMBEDDING_DIM,
         _ => panic!("Invalid embedding provider."),
     }
 }

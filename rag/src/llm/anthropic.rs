@@ -16,7 +16,7 @@ use super::http_client::{HttpClient, ReqwestClient};
 use crate::common::request_with_backoff;
 use crate::constants::{
     DEFAULT_ANTHROPIC_MAX_TOKENS, DEFAULT_ANTHROPIC_MODEL, DEFAULT_MAX_RETRIES,
-    OPENAI_EMBEDDING_DIM,
+    DEFAULT_OPENAI_EMBEDDING_DIM,
 };
 use crate::embedding::openai::compute_openai_embeddings_sync;
 use crate::llm::base::{ChatHistoryContent, ContentType, ToolCallRequest};
@@ -461,7 +461,7 @@ impl<T: HttpClient + Default + std::fmt::Debug> EmbeddingFunction for AnthropicC
     fn dest_type(&self) -> Result<Cow<'_, DataType>, lancedb::Error> {
         Ok(Cow::Owned(DataType::FixedSizeList(
             Arc::new(Field::new("item", DataType::Float32, true)),
-            OPENAI_EMBEDDING_DIM as i32, // text-embedding-3-small size
+            DEFAULT_OPENAI_EMBEDDING_DIM as i32, // text-embedding-3-small size
         )))
     }
 
@@ -503,7 +503,7 @@ mod tests {
     use dotenv::dotenv;
     use lancedb::embeddings::EmbeddingFunction;
 
-    use crate::constants::OPENAI_EMBEDDING_DIM;
+    use crate::constants::DEFAULT_OPENAI_EMBEDDING_DIM;
     use crate::llm::anthropic::{AnthropicTextResponseContent, DEFAULT_CLAUDE_MODEL};
     use crate::llm::base::{ApiClient, ChatRequest, ContentType};
     use crate::llm::http_client::{MockHttpClient, ReqwestClient};
@@ -621,7 +621,7 @@ mod tests {
         let vector = arrow_array::cast::as_fixed_size_list_array(&embeddings);
 
         assert_eq!(vector.len(), 6);
-        assert_eq!(vector.value_length(), OPENAI_EMBEDDING_DIM as i32);
+        assert_eq!(vector.value_length(), DEFAULT_OPENAI_EMBEDDING_DIM as i32);
     }
 
     #[tokio::test]

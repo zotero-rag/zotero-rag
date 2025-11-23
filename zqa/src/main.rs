@@ -1,10 +1,11 @@
-use std::io::{stderr, stdout};
+use std::io::{self, stderr, stdout};
 
 use clap::Parser;
 use dotenv::dotenv;
 use zqa::cli::app::cli;
 use zqa::common::{Args, Context, setup_logger};
 use zqa::config::Config;
+use zqa::state::check_or_create_first_run_file;
 
 #[tokio::main]
 pub async fn main() {
@@ -50,6 +51,30 @@ pub async fn main() {
     );
 
     log::debug!("Loaded configuration: {:#?}", config);
+
+    let _ = check_or_create_first_run_file().or_else(|e| {
+        println!("Error setting up. (R)etry, (I)gnore, (S)how error and ignore, or (Q)uit: ");
+
+        let mut input = String::new();
+        io::stdin()
+            .read_line(&mut input)
+            .expect("Failed to read input");
+
+        // Return whether this is a "first run". Most options are treated as if it is not a first run.
+        match input.trim().to_lowercase().as_str() {
+            "r" => check_or_create_first_run_file(),
+            "i" => Ok(false),
+            "s" => {
+                println!("{:?}", e);
+                Ok(false)
+            }
+            "q" => std::process::exit(1),
+            _ => {
+                println!("Invalid input");
+                std::process::exit(1);
+            }
+        }
+    });
 
     let context = Context {
         state: Default::default(),

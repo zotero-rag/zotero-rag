@@ -558,8 +558,9 @@ mod tests {
     use crate::{
         config::{OpenAIConfig, VoyageAIConfig},
         constants::{
-            DEFAULT_OPENAI_EMBEDDING_MODEL, DEFAULT_OPENAI_MODEL, DEFAULT_VOYAGE_RERANK_MODEL,
-            OPENAI_EMBEDDING_DIM, VOYAGE_EMBEDDING_DIM, VOYAGE_EMBEDDING_MODEL,
+            DEFAULT_OPENAI_EMBEDDING_DIM, DEFAULT_OPENAI_EMBEDDING_MODEL, DEFAULT_OPENAI_MODEL,
+            DEFAULT_VOYAGE_EMBEDDING_DIM, DEFAULT_VOYAGE_EMBEDDING_MODEL,
+            DEFAULT_VOYAGE_RERANK_MODEL,
         },
     };
 
@@ -588,7 +589,7 @@ mod tests {
                 model: DEFAULT_OPENAI_MODEL.into(),
                 max_tokens: 8192,
                 embedding_model: DEFAULT_OPENAI_EMBEDDING_MODEL.into(),
-                embedding_dims: OPENAI_EMBEDDING_DIM as usize,
+                embedding_dims: DEFAULT_OPENAI_EMBEDDING_DIM as usize,
             }),
             EmbeddingDefinition::new(
                 "data_openai",      // source column
@@ -646,8 +647,8 @@ mod tests {
             reader,
             None,
             &EmbeddingProviderConfig::VoyageAI(VoyageAIConfig {
-                embedding_model: VOYAGE_EMBEDDING_MODEL.into(),
-                embedding_dims: VOYAGE_EMBEDDING_DIM as usize,
+                embedding_model: DEFAULT_VOYAGE_EMBEDDING_MODEL.into(),
+                embedding_dims: DEFAULT_VOYAGE_EMBEDDING_DIM as usize,
                 api_key: String::new(),
                 reranker: DEFAULT_VOYAGE_RERANK_MODEL.into(),
             }),
@@ -705,7 +706,7 @@ mod tests {
             &EmbeddingProviderConfig::OpenAI(OpenAIConfig {
                 api_key: String::new(),
                 model: String::new(),
-                embedding_dims: OPENAI_EMBEDDING_DIM as usize,
+                embedding_dims: DEFAULT_OPENAI_EMBEDDING_DIM as usize,
                 embedding_model: DEFAULT_OPENAI_EMBEDDING_MODEL.into(),
                 max_tokens: 8192,
             }),

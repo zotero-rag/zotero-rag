@@ -370,9 +370,9 @@ pub async fn lancedb_health_check(
 mod tests {
     use super::lancedb_health_check;
     use crate::config::VoyageAIConfig;
+    use crate::constants::DEFAULT_VOYAGE_EMBEDDING_DIM;
+    use crate::constants::DEFAULT_VOYAGE_EMBEDDING_MODEL;
     use crate::constants::DEFAULT_VOYAGE_RERANK_MODEL;
-    use crate::constants::VOYAGE_EMBEDDING_DIM;
-    use crate::constants::VOYAGE_EMBEDDING_MODEL;
     use crate::embedding::common::EmbeddingProviderConfig;
     use crate::vector::lance::DB_URI;
     use crate::vector::lance::insert_records;
@@ -429,8 +429,8 @@ mod tests {
             reader,
             None,
             &EmbeddingProviderConfig::VoyageAI(VoyageAIConfig {
-                embedding_model: VOYAGE_EMBEDDING_MODEL.into(),
-                embedding_dims: VOYAGE_EMBEDDING_DIM as usize,
+                embedding_model: DEFAULT_VOYAGE_EMBEDDING_MODEL.into(),
+                embedding_dims: DEFAULT_VOYAGE_EMBEDDING_DIM as usize,
                 api_key: env::var("VOYAGE_AI_API_KEY").unwrap_or_default(),
                 reranker: DEFAULT_VOYAGE_RERANK_MODEL.into(),
             }),

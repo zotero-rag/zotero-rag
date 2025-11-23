@@ -465,7 +465,10 @@ mod tests {
     use dotenv::dotenv;
     use rag::{
         config::VoyageAIConfig,
-        constants::{DEFAULT_VOYAGE_RERANK_MODEL, VOYAGE_EMBEDDING_DIM, VOYAGE_EMBEDDING_MODEL},
+        constants::{
+            DEFAULT_VOYAGE_EMBEDDING_DIM, DEFAULT_VOYAGE_EMBEDDING_MODEL,
+            DEFAULT_VOYAGE_RERANK_MODEL,
+        },
         vector::lance::TABLE_NAME,
     };
 
@@ -522,8 +525,8 @@ mod tests {
 
         let items = parse_library(
             &EmbeddingProviderConfig::VoyageAI(VoyageAIConfig {
-                embedding_model: VOYAGE_EMBEDDING_MODEL.into(),
-                embedding_dims: VOYAGE_EMBEDDING_DIM as usize,
+                embedding_model: DEFAULT_VOYAGE_EMBEDDING_MODEL.into(),
+                embedding_dims: DEFAULT_VOYAGE_EMBEDDING_DIM as usize,
                 api_key: env::var("VOYAGE_AI_API_KEY").expect("VOYAGE_AI_API_KEY not set"),
                 reranker: DEFAULT_VOYAGE_RERANK_MODEL.into(),
             }),

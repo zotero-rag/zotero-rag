@@ -19,7 +19,7 @@ use super::base::{ApiClient, ChatHistoryItem, ChatRequest, CompletionApiResponse
 use super::errors::LLMError;
 use super::http_client::{HttpClient, ReqwestClient};
 use crate::common::request_with_backoff;
-use crate::constants::{DEFAULT_MAX_RETRIES, DEFAULT_OPENAI_MODEL, OPENAI_EMBEDDING_DIM};
+use crate::constants::{DEFAULT_MAX_RETRIES, DEFAULT_OPENAI_EMBEDDING_DIM, DEFAULT_OPENAI_MODEL};
 use crate::embedding::openai::compute_openai_embeddings_sync;
 use crate::llm::base::{ChatHistoryContent, ContentType, ToolUseStats};
 use crate::llm::tools::{SerializedTool, get_owned_tools};
@@ -620,7 +620,7 @@ impl<T: HttpClient + Default + Debug> EmbeddingFunction for OpenAIClient<T> {
                 DataType::Float32,
                 true,
             )),
-            OPENAI_EMBEDDING_DIM as i32, // text-embedding-3-small size
+            DEFAULT_OPENAI_EMBEDDING_DIM as i32, // text-embedding-3-small size
         )))
     }
 
@@ -657,7 +657,7 @@ impl<T: HttpClient + Default + Debug> EmbeddingFunction for OpenAIClient<T> {
 #[cfg(test)]
 mod tests {
     use super::{OpenAIClient, OpenAIContent, OpenAIOutput, OpenAIResponse, OpenAIUsage};
-    use crate::constants::OPENAI_EMBEDDING_DIM;
+    use crate::constants::DEFAULT_OPENAI_EMBEDDING_DIM;
     use crate::llm::base::{ApiClient, ChatRequest, ContentType};
     use crate::llm::http_client::{MockHttpClient, ReqwestClient};
     use crate::llm::tools::OPENAI_SCHEMA_KEY;
@@ -773,7 +773,7 @@ mod tests {
         let vector = arrow_array::cast::as_fixed_size_list_array(&embeddings);
 
         assert_eq!(vector.len(), 6);
-        assert_eq!(vector.value_length(), OPENAI_EMBEDDING_DIM as i32);
+        assert_eq!(vector.value_length(), DEFAULT_OPENAI_EMBEDDING_DIM as i32);
     }
 
     #[tokio::test]

@@ -3,7 +3,9 @@
 
 use crate::{
     capabilities::EmbeddingProviders,
-    constants::{DEFAULT_VOYAGE_RERANK_MODEL, VOYAGE_EMBEDDING_DIM, VOYAGE_EMBEDDING_MODEL},
+    constants::{
+        DEFAULT_VOYAGE_EMBEDDING_DIM, DEFAULT_VOYAGE_EMBEDDING_MODEL, DEFAULT_VOYAGE_RERANK_MODEL,
+    },
     embedding::common::{
         EmbeddingApiRequestTexts, EmbeddingApiResponse, Rerank, compute_embeddings_async,
     },
@@ -99,7 +101,7 @@ where
                 EmbeddingProviders::VoyageAI.as_str().to_string(),
                 BATCH_SIZE,
                 WAIT_AFTER_REQUEST_S,
-                VOYAGE_EMBEDDING_DIM as usize,
+                DEFAULT_VOYAGE_EMBEDDING_DIM as usize,
             ))
         })
     }
@@ -121,10 +123,10 @@ impl EmbeddingApiRequestTexts<VoyageAIRequest> for VoyageAIRequest {
     fn from_texts(texts: Vec<String>) -> Self {
         Self {
             input: texts,
-            model: VOYAGE_EMBEDDING_MODEL.to_string(),
+            model: DEFAULT_VOYAGE_EMBEDDING_MODEL.to_string(),
             input_type: None, // Directly convert to vector
             truncation: true,
-            output_dimension: VOYAGE_EMBEDDING_DIM, // Matryoshka embeddings
+            output_dimension: DEFAULT_VOYAGE_EMBEDDING_DIM, // Matryoshka embeddings
             output_dtype: "float".to_string(),
         }
     }
@@ -205,7 +207,7 @@ impl<T: HttpClient + Default + Clone + std::fmt::Debug> EmbeddingFunction for Vo
     fn dest_type(&self) -> Result<Cow<'_, DataType>, lancedb::Error> {
         Ok(Cow::Owned(DataType::FixedSizeList(
             Arc::new(Field::new("item", DataType::Float32, true)),
-            VOYAGE_EMBEDDING_DIM as i32,
+            DEFAULT_VOYAGE_EMBEDDING_DIM as i32,
         )))
     }
 
@@ -322,7 +324,7 @@ impl<T: HttpClient, U: AsRef<str> + Send + Clone> Rerank<U> for VoyageAIClient<T
 #[cfg(test)]
 mod tests {
     use crate::embedding::common::Rerank;
-    use crate::embedding::voyage::{VOYAGE_EMBEDDING_DIM, VoyageAIClient};
+    use crate::embedding::voyage::{DEFAULT_VOYAGE_EMBEDDING_DIM, VoyageAIClient};
     use crate::llm::http_client::ReqwestClient;
     use arrow_array::Array;
     use dotenv::dotenv;
@@ -355,7 +357,7 @@ mod tests {
         let vector = arrow_array::cast::as_fixed_size_list_array(&embeddings);
 
         assert_eq!(vector.len(), 6);
-        assert_eq!(vector.value_length(), VOYAGE_EMBEDDING_DIM as i32);
+        assert_eq!(vector.value_length(), DEFAULT_VOYAGE_EMBEDDING_DIM as i32);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 1)]

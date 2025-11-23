@@ -841,7 +841,7 @@ mod tests {
     use arrow_array::{RecordBatch, StringArray};
     use arrow_ipc::writer::FileWriter;
     use rag::constants::{
-        DEFAULT_VOYAGE_EMBEDDING_MODEL, DEFAULT_VOYAGE_RERANK_MODEL, VOYAGE_EMBEDDING_DIM,
+        DEFAULT_VOYAGE_EMBEDDING_DIM, DEFAULT_VOYAGE_EMBEDDING_MODEL, DEFAULT_VOYAGE_RERANK_MODEL,
     };
     use rag::vector::lance::DB_URI;
     use serial_test::serial;
@@ -860,7 +860,7 @@ mod tests {
             voyageai: Some(VoyageAIConfig {
                 reranker: Some(DEFAULT_VOYAGE_RERANK_MODEL.into()),
                 embedding_model: Some(DEFAULT_VOYAGE_EMBEDDING_MODEL.into()),
-                embedding_dims: Some(VOYAGE_EMBEDDING_DIM as usize),
+                embedding_dims: Some(DEFAULT_VOYAGE_EMBEDDING_DIM as usize),
                 api_key: Some(String::new()),
             }),
             ..Default::default()
