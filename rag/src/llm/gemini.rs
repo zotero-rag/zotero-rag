@@ -14,8 +14,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::common::request_with_backoff;
 use crate::constants::{
-    DEFAULT_GEMINI_EMBEDDING_MODEL, DEFAULT_GEMINI_MODEL, DEFAULT_MAX_CONCURRENT_REQUESTS,
-    DEFAULT_MAX_RETRIES, GEMINI_EMBEDDING_DIM,
+    DEFAULT_GEMINI_EMBEDDING_DIM, DEFAULT_GEMINI_EMBEDDING_MODEL, DEFAULT_GEMINI_MODEL,
+    DEFAULT_MAX_CONCURRENT_REQUESTS, DEFAULT_MAX_RETRIES,
 };
 use crate::llm::base::{ChatHistoryContent, ChatHistoryItem, ContentType, ToolCallRequest};
 use crate::llm::tools::{SerializedTool, get_owned_tools, process_tool_calls};
@@ -169,7 +169,7 @@ where
 
         // Convert to Arrow FixedSizeListArray
         let embedding_dim = if embeddings.is_empty() {
-            GEMINI_EMBEDDING_DIM as usize
+            DEFAULT_GEMINI_EMBEDDING_DIM as usize
         } else {
             embeddings[0].len()
         };
@@ -650,7 +650,7 @@ impl<T: HttpClient + Default + std::fmt::Debug> EmbeddingFunction for GeminiClie
     fn dest_type(&self) -> Result<Cow<'_, DataType>, lancedb::Error> {
         Ok(Cow::Owned(DataType::FixedSizeList(
             Arc::new(Field::new("item", DataType::Float32, true)),
-            GEMINI_EMBEDDING_DIM as i32,
+            DEFAULT_GEMINI_EMBEDDING_DIM as i32,
         )))
     }
 
@@ -809,7 +809,7 @@ mod tests {
         let vector = arrow_array::cast::as_fixed_size_list_array(&embeddings);
 
         assert_eq!(vector.len(), 6);
-        assert_eq!(vector.value_length(), GEMINI_EMBEDDING_DIM as i32);
+        assert_eq!(vector.value_length(), DEFAULT_GEMINI_EMBEDDING_DIM as i32);
     }
 
     #[tokio::test]

@@ -4,7 +4,9 @@
 use super::common::{EmbeddingApiRequestTexts, EmbeddingApiResponse};
 use crate::{
     capabilities::EmbeddingProviders,
-    constants::{COHERE_EMBEDDING_DIM, COHERE_EMBEDDING_MODEL, DEFAULT_COHERE_RERANK_MODEL},
+    constants::{
+        DEFAULT_COHERE_EMBEDDING_DIM, DEFAULT_COHERE_EMBEDDING_MODEL, DEFAULT_COHERE_RERANK_MODEL,
+    },
     embedding::common::{Rerank, compute_embeddings_async},
 };
 use http::HeaderMap;
@@ -82,7 +84,7 @@ where
                 EmbeddingProviders::Cohere.as_str().to_string(),
                 BATCH_SIZE,
                 WAIT_AFTER_REQUEST_S,
-                COHERE_EMBEDDING_DIM as usize,
+                DEFAULT_COHERE_EMBEDDING_DIM as usize,
             ))
         })
     }
@@ -104,9 +106,9 @@ impl EmbeddingApiRequestTexts<CohereEmbedRequest> for CohereEmbedRequest {
     fn from_texts(texts: Vec<String>) -> Self {
         Self {
             texts,
-            model: COHERE_EMBEDDING_MODEL.to_string(),
+            model: DEFAULT_COHERE_EMBEDDING_MODEL.to_string(),
             input_type: "search_document".into(),
-            output_dimension: COHERE_EMBEDDING_DIM,
+            output_dimension: DEFAULT_COHERE_EMBEDDING_DIM,
             embedding_types: Some(vec!["float".into()]),
         }
     }
@@ -173,7 +175,7 @@ impl<T: HttpClient + Default + Clone + std::fmt::Debug> EmbeddingFunction for Co
     fn dest_type(&self) -> Result<Cow<'_, DataType>, lancedb::Error> {
         Ok(Cow::Owned(DataType::FixedSizeList(
             Arc::new(Field::new("item", DataType::Float32, true)),
-            COHERE_EMBEDDING_DIM as i32,
+            DEFAULT_COHERE_EMBEDDING_DIM as i32,
         )))
     }
 
@@ -287,7 +289,7 @@ impl<T: HttpClient, U: AsRef<str> + Send + Clone> Rerank<U> for CohereClient<T> 
 
 #[cfg(test)]
 mod tests {
-    use super::{COHERE_EMBEDDING_DIM, CohereClient};
+    use super::{CohereClient, DEFAULT_COHERE_EMBEDDING_DIM};
     use crate::{embedding::common::Rerank, llm::http_client::ReqwestClient};
     use arrow_array::Array;
     use dotenv::dotenv;
@@ -320,7 +322,7 @@ mod tests {
         let vector = arrow_array::cast::as_fixed_size_list_array(&embeddings);
 
         assert_eq!(vector.len(), 6);
-        assert_eq!(vector.value_length(), COHERE_EMBEDDING_DIM as i32);
+        assert_eq!(vector.value_length(), DEFAULT_COHERE_EMBEDDING_DIM as i32);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 1)]

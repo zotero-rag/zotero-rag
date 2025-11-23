@@ -1,11 +1,18 @@
 use rag::config::LLMClientConfig;
 use rag::constants::{
-    DEFAULT_ANTHROPIC_MAX_TOKENS, DEFAULT_MAX_CONCURRENT_REQUESTS, DEFAULT_MAX_RETRIES,
+    DEFAULT_ANTHROPIC_MAX_TOKENS, DEFAULT_ANTHROPIC_MODEL, DEFAULT_COHERE_EMBEDDING_DIM,
+    DEFAULT_COHERE_EMBEDDING_MODEL, DEFAULT_COHERE_RERANK_MODEL, DEFAULT_GEMINI_EMBEDDING_DIM,
+    DEFAULT_GEMINI_EMBEDDING_MODEL, DEFAULT_GEMINI_MODEL, DEFAULT_MAX_CONCURRENT_REQUESTS,
+    DEFAULT_MAX_RETRIES, DEFAULT_OPENAI_MAX_TOKENS, DEFAULT_OPENAI_MODEL, DEFAULT_OPENROUTER_MODEL,
+    DEFAULT_VOYAGE_EMBEDDING_DIM, DEFAULT_VOYAGE_EMBEDDING_MODEL, DEFAULT_VOYAGE_RERANK_MODEL,
 };
-use rag::constants::{DEFAULT_OPENAI_EMBEDDING_MODEL, OPENAI_EMBEDDING_DIM};
+use rag::constants::{DEFAULT_OPENAI_EMBEDDING_DIM, DEFAULT_OPENAI_EMBEDDING_MODEL};
 use rag::embedding::common::EmbeddingProviderConfig;
 use serde::{Deserialize, Serialize};
+use std::fmt::Display;
+use std::path::PathBuf;
 use std::{env, num::ParseIntError, path::Path};
+use thiserror;
 use thiserror::Error;
 
 /// TOML config. Below is an example config with all the defaults. The TOML config is
@@ -104,225 +111,6 @@ pub struct Config {
 }
 
 impl Config {
-    pub fn get_embedding_config(&self) -> Option<EmbeddingProviderConfig> {
-        match self.embedding_provider.as_str() {
-            "openai" => self
-                .openai
-                .as_ref()
-                .map(|cfg| EmbeddingProviderConfig::OpenAI(cfg.clone().into())),
-            "gemini" => self
-                .gemini
-                .as_ref()
-                .map(|cfg| EmbeddingProviderConfig::Gemini(cfg.clone().into())),
-            "voyageai" => self
-                .voyageai
-                .as_ref()
-                .map(|cfg| EmbeddingProviderConfig::VoyageAI(cfg.clone().into())),
-            "cohere" => self
-                .cohere
-                .as_ref()
-                .map(|cfg| EmbeddingProviderConfig::Cohere(cfg.clone().into())),
-            _ => None,
-        }
-    }
-
-    pub fn get_reranker_config(&self) -> Option<EmbeddingProviderConfig> {
-        match self.reranker_provider.as_str() {
-            "voyageai" => self
-                .voyageai
-                .as_ref()
-                .map(|cfg| EmbeddingProviderConfig::VoyageAI(cfg.clone().into())),
-            "cohere" => self
-                .cohere
-                .as_ref()
-                .map(|cfg| EmbeddingProviderConfig::Cohere(cfg.clone().into())),
-            _ => None,
-        }
-    }
-
-    pub fn get_generation_config(&self) -> Option<LLMClientConfig> {
-        match self.model_provider.as_str() {
-            "anthropic" => self
-                .anthropic
-                .as_ref()
-                .map(|cfg| LLMClientConfig::Anthropic(cfg.clone().into())),
-            "openai" => self
-                .openai
-                .as_ref()
-                .map(|cfg| LLMClientConfig::OpenAI(cfg.clone().into())),
-            "gemini" => self
-                .gemini
-                .as_ref()
-                .map(|cfg| LLMClientConfig::Gemini(cfg.clone().into())),
-            "openrouter" => self
-                .openrouter
-                .as_ref()
-                .map(|cfg| LLMClientConfig::OpenRouter(cfg.clone().into())),
-            _ => None,
-        }
-    }
-}
-
-/// Errors reading or parsing TOML
-#[derive(Debug, Error)]
-pub enum ConfigError {
-    #[error("Failed to read config file: {0}")]
-    Io(#[from] std::io::Error),
-
-    #[error("Failed to parse TOML: {0}")]
-    Parse(#[from] toml::de::Error),
-
-    #[error("Failed to parse value: {0}")]
-    ParseField(#[from] ParseIntError),
-}
-
-/// Anthropic provider configuration
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct AnthropicConfig {
-    /// Model name (e.g., "claude-sonnet-4-5")
-    pub model: String,
-
-    /// API key
-    pub api_key: Option<String>,
-
-    /// Maximum tokens for generation
-    #[serde(default = "default_anthropic_max_tokens")]
-    pub max_tokens: u32,
-}
-
-/// OpenAI provider configuration
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct OpenAIConfig {
-    /// Model name (e.g., "gpt-5")
-    pub model: String,
-
-    /// API key
-    pub api_key: Option<String>,
-
-    /// Maximum tokens for generation
-    #[serde(default = "default_openai_max_tokens")]
-    pub max_tokens: u32,
-
-    /// Embedding model name
-    pub embedding_model: Option<String>,
-
-    /// Embedding dimensions
-    pub embedding_dims: Option<usize>,
-}
-
-/// Gemini provider configuration
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct GeminiConfig {
-    /// Model name (e.g., "gemini-2.5-pro")
-    pub model: String,
-
-    /// API key
-    pub api_key: Option<String>,
-
-    /// Embedding model name
-    pub embedding_model: Option<String>,
-
-    /// Embedding dimensions
-    pub embedding_dims: Option<usize>,
-}
-
-/// Voyage AI provider configuration
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct VoyageAIConfig {
-    /// Reranker model name
-    pub reranker: Option<String>,
-
-    /// Embedding model name
-    pub embedding_model: Option<String>,
-
-    /// Embedding dimensions
-    pub embedding_dims: Option<usize>,
-
-    /// API key
-    pub api_key: Option<String>,
-}
-
-/// Cohere provider configuration
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct CohereConfig {
-    /// Reranker model name
-    pub reranker: Option<String>,
-
-    /// Embedding model name
-    pub embedding_model: Option<String>,
-
-    /// Embedding dimensions
-    pub embedding_dims: Option<usize>,
-
-    /// API key
-    pub api_key: Option<String>,
-}
-
-/// OpenRouter configuration
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct OpenRouterConfig {
-    /// Generation model
-    pub model: Option<String>,
-
-    /// API key
-    pub api_key: Option<String>,
-}
-
-// Default value functions
-fn default_model_provider() -> String {
-    "anthropic".to_string()
-}
-
-fn default_embedding_provider() -> String {
-    "voyageai".to_string()
-}
-
-fn default_reranker_provider() -> String {
-    "voyageai".to_string()
-}
-
-fn default_max_concurrent_requests() -> usize {
-    DEFAULT_MAX_CONCURRENT_REQUESTS
-}
-
-fn default_max_retries() -> usize {
-    DEFAULT_MAX_RETRIES
-}
-
-fn default_anthropic_max_tokens() -> u32 {
-    DEFAULT_ANTHROPIC_MAX_TOKENS
-}
-
-fn default_openai_max_tokens() -> u32 {
-    8192
-}
-
-/// An extension trait for strings to be updated with a value from the environment.
-trait OverwriteFromEnv {
-    fn replace_with_env(&mut self, _var: &str)
-    where
-        Self: Sized,
-    {
-    }
-}
-
-impl OverwriteFromEnv for String {
-    fn replace_with_env(&mut self, var: &str) {
-        if let Ok(env_var) = env::var(var) {
-            *self = env_var;
-        }
-    }
-}
-
-impl OverwriteFromEnv for Option<String> {
-    fn replace_with_env(&mut self, var: &str) {
-        if let Ok(env_var) = env::var(var) {
-            *self = Some(env_var);
-        }
-    }
-}
-
-impl Config {
     /// Load configuration from a TOML file
     pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self, ConfigError> {
         let content = std::fs::read_to_string(path)?;
@@ -401,6 +189,288 @@ impl Config {
 
         Ok(())
     }
+
+    /// Get the embedding configuration based on the `embedding_provider` value.
+    pub fn get_embedding_config(&self) -> Option<EmbeddingProviderConfig> {
+        match self.embedding_provider.as_str() {
+            "openai" => self
+                .openai
+                .as_ref()
+                .map(|cfg| EmbeddingProviderConfig::OpenAI(cfg.clone().into())),
+            "gemini" => self
+                .gemini
+                .as_ref()
+                .map(|cfg| EmbeddingProviderConfig::Gemini(cfg.clone().into())),
+            "voyageai" => self
+                .voyageai
+                .as_ref()
+                .map(|cfg| EmbeddingProviderConfig::VoyageAI(cfg.clone().into())),
+            "cohere" => self
+                .cohere
+                .as_ref()
+                .map(|cfg| EmbeddingProviderConfig::Cohere(cfg.clone().into())),
+            _ => None,
+        }
+    }
+
+    pub fn get_reranker_config(&self) -> Option<EmbeddingProviderConfig> {
+        match self.reranker_provider.as_str() {
+            "voyageai" => self
+                .voyageai
+                .as_ref()
+                .map(|cfg| EmbeddingProviderConfig::VoyageAI(cfg.clone().into())),
+            "cohere" => self
+                .cohere
+                .as_ref()
+                .map(|cfg| EmbeddingProviderConfig::Cohere(cfg.clone().into())),
+            _ => None,
+        }
+    }
+
+    pub fn get_generation_config(&self) -> Option<LLMClientConfig> {
+        match self.model_provider.as_str() {
+            "anthropic" => self
+                .anthropic
+                .as_ref()
+                .map(|cfg| LLMClientConfig::Anthropic(cfg.clone().into())),
+            "openai" => self
+                .openai
+                .as_ref()
+                .map(|cfg| LLMClientConfig::OpenAI(cfg.clone().into())),
+            "gemini" => self
+                .gemini
+                .as_ref()
+                .map(|cfg| LLMClientConfig::Gemini(cfg.clone().into())),
+            "openrouter" => self
+                .openrouter
+                .as_ref()
+                .map(|cfg| LLMClientConfig::OpenRouter(cfg.clone().into())),
+            _ => None,
+        }
+    }
+}
+
+/// Errors reading or parsing TOML
+#[derive(Debug, Error)]
+pub enum ConfigError {
+    #[error("Failed to read config file: {0}")]
+    Io(#[from] std::io::Error),
+
+    #[error("Failed to parse TOML: {0}")]
+    Parse(#[from] toml::de::Error),
+
+    #[error("Failed to parse value: {0}")]
+    ParseField(#[from] ParseIntError),
+}
+
+/// Anthropic provider configuration
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct AnthropicConfig {
+    /// Model name (e.g., "claude-sonnet-4-5")
+    pub model: Option<String>,
+
+    /// API key
+    pub api_key: Option<String>,
+
+    /// Maximum tokens for generation
+    #[serde(default = "default_anthropic_max_tokens")]
+    pub max_tokens: u32,
+}
+
+impl Default for AnthropicConfig {
+    fn default() -> Self {
+        Self {
+            model: Some(DEFAULT_ANTHROPIC_MODEL.into()),
+            max_tokens: DEFAULT_ANTHROPIC_MAX_TOKENS,
+            api_key: None,
+        }
+    }
+}
+
+/// OpenAI provider configuration
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct OpenAIConfig {
+    /// Model name (e.g., "gpt-5")
+    pub model: Option<String>,
+
+    /// API key
+    pub api_key: Option<String>,
+
+    /// Maximum tokens for generation
+    #[serde(default = "default_openai_max_tokens")]
+    pub max_tokens: u32,
+
+    /// Embedding model name
+    pub embedding_model: Option<String>,
+
+    /// Embedding dimensions
+    pub embedding_dims: Option<usize>,
+}
+
+impl Default for OpenAIConfig {
+    fn default() -> Self {
+        Self {
+            model: Some(DEFAULT_OPENAI_MODEL.into()),
+            max_tokens: DEFAULT_OPENAI_MAX_TOKENS,
+            embedding_model: Some(DEFAULT_OPENAI_EMBEDDING_MODEL.into()),
+            embedding_dims: Some(DEFAULT_OPENAI_EMBEDDING_DIM as usize),
+            api_key: None,
+        }
+    }
+}
+
+/// Gemini provider configuration
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct GeminiConfig {
+    /// Model name (e.g., "gemini-2.5-pro")
+    pub model: Option<String>,
+
+    /// API key
+    pub api_key: Option<String>,
+
+    /// Embedding model name
+    pub embedding_model: Option<String>,
+
+    /// Embedding dimensions
+    pub embedding_dims: Option<usize>,
+}
+
+impl Default for GeminiConfig {
+    fn default() -> Self {
+        Self {
+            model: Some(DEFAULT_GEMINI_MODEL.into()),
+            embedding_model: Some(DEFAULT_GEMINI_EMBEDDING_MODEL.into()),
+            embedding_dims: Some(DEFAULT_GEMINI_EMBEDDING_DIM as usize),
+            api_key: None,
+        }
+    }
+}
+
+/// Voyage AI provider configuration
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct VoyageAIConfig {
+    /// Reranker model name
+    pub reranker: Option<String>,
+
+    /// Embedding model name
+    pub embedding_model: Option<String>,
+
+    /// Embedding dimensions
+    pub embedding_dims: Option<usize>,
+
+    /// API key
+    pub api_key: Option<String>,
+}
+
+impl Default for VoyageAIConfig {
+    fn default() -> Self {
+        Self {
+            reranker: Some(DEFAULT_VOYAGE_RERANK_MODEL.into()),
+            embedding_model: Some(DEFAULT_VOYAGE_EMBEDDING_MODEL.into()),
+            embedding_dims: Some(DEFAULT_VOYAGE_EMBEDDING_DIM as usize),
+            api_key: None,
+        }
+    }
+}
+
+/// Cohere provider configuration
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct CohereConfig {
+    /// Reranker model name
+    pub reranker: Option<String>,
+
+    /// Embedding model name
+    pub embedding_model: Option<String>,
+
+    /// Embedding dimensions
+    pub embedding_dims: Option<usize>,
+
+    /// API key
+    pub api_key: Option<String>,
+}
+
+impl Default for CohereConfig {
+    fn default() -> Self {
+        Self {
+            reranker: Some(DEFAULT_COHERE_RERANK_MODEL.into()),
+            embedding_model: Some(DEFAULT_COHERE_EMBEDDING_MODEL.into()),
+            embedding_dims: Some(DEFAULT_COHERE_EMBEDDING_DIM as usize),
+            api_key: None,
+        }
+    }
+}
+
+/// OpenRouter configuration
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct OpenRouterConfig {
+    /// Generation model
+    pub model: Option<String>,
+
+    /// API key
+    pub api_key: Option<String>,
+}
+
+impl Default for OpenRouterConfig {
+    fn default() -> Self {
+        Self {
+            model: Some(DEFAULT_OPENROUTER_MODEL.into()),
+            api_key: None,
+        }
+    }
+}
+
+// Default value functions
+fn default_model_provider() -> String {
+    "anthropic".to_string()
+}
+
+fn default_embedding_provider() -> String {
+    "voyageai".to_string()
+}
+
+fn default_reranker_provider() -> String {
+    "voyageai".to_string()
+}
+
+fn default_max_concurrent_requests() -> usize {
+    DEFAULT_MAX_CONCURRENT_REQUESTS
+}
+
+fn default_max_retries() -> usize {
+    DEFAULT_MAX_RETRIES
+}
+
+fn default_anthropic_max_tokens() -> u32 {
+    DEFAULT_ANTHROPIC_MAX_TOKENS
+}
+
+fn default_openai_max_tokens() -> u32 {
+    DEFAULT_OPENAI_MAX_TOKENS
+}
+
+/// An extension trait for strings to be updated with a value from the environment.
+trait OverwriteFromEnv {
+    fn replace_with_env(&mut self, _var: &str)
+    where
+        Self: Sized,
+    {
+    }
+}
+
+impl OverwriteFromEnv for String {
+    fn replace_with_env(&mut self, var: &str) {
+        if let Ok(env_var) = env::var(var) {
+            *self = env_var;
+        }
+    }
+}
+
+impl OverwriteFromEnv for Option<String> {
+    fn replace_with_env(&mut self, var: &str) {
+        if let Ok(env_var) = env::var(var) {
+            *self = Some(env_var);
+        }
+    }
 }
 
 impl Default for Config {
@@ -411,12 +481,12 @@ impl Default for Config {
             reranker_provider: default_reranker_provider(),
             max_concurrent_requests: default_max_concurrent_requests(),
             max_retries: default_max_retries(),
-            anthropic: None,
-            openai: None,
-            gemini: None,
-            voyageai: None,
-            cohere: None,
-            openrouter: None,
+            anthropic: Some(AnthropicConfig::default()),
+            openai: Some(OpenAIConfig::default()),
+            gemini: Some(GeminiConfig::default()),
+            voyageai: Some(VoyageAIConfig::default()),
+            cohere: Some(CohereConfig::default()),
+            openrouter: Some(OpenRouterConfig::default()),
         }
     }
 }
@@ -428,7 +498,7 @@ impl From<AnthropicConfig> for rag::config::AnthropicConfig {
             api_key: config
                 .api_key
                 .expect("Anthropic API key not found. Please set it in your config file or as ANTHROPIC_API_KEY."),
-            model: config.model,
+            model: config.model.unwrap_or(DEFAULT_ANTHROPIC_MODEL.into()),
             max_tokens: config.max_tokens,
         }
     }
@@ -443,21 +513,21 @@ impl From<OpenAIConfig> for rag::config::OpenAIConfig {
                 .expect(
                 "OpenAI API key not found. Please set it in your config file or as OPENAI_API_KEY.",
             ),
-            model: config.model,
+            model: config.model.unwrap_or(DEFAULT_OPENAI_MODEL.into()),
             max_tokens: config.max_tokens,
             embedding_model: config
                 .embedding_model
                 .unwrap_or_else(|| DEFAULT_OPENAI_EMBEDDING_MODEL.to_string()),
             embedding_dims: config
                 .embedding_dims
-                .unwrap_or(OPENAI_EMBEDDING_DIM as usize),
+                .unwrap_or(DEFAULT_OPENAI_EMBEDDING_DIM as usize),
         }
     }
 }
 
 impl From<GeminiConfig> for rag::config::GeminiConfig {
     fn from(config: GeminiConfig) -> Self {
-        use rag::constants::{DEFAULT_GEMINI_EMBEDDING_MODEL, GEMINI_EMBEDDING_DIM};
+        use rag::constants::{DEFAULT_GEMINI_EMBEDDING_DIM, DEFAULT_GEMINI_EMBEDDING_MODEL};
 
         Self {
             api_key: config
@@ -465,13 +535,13 @@ impl From<GeminiConfig> for rag::config::GeminiConfig {
                 .or_else(|| env::var("GEMINI_API_KEY").ok())
                 .or_else(|| env::var("GOOGLE_API_KEY").ok())
                 .expect("Gemini API key not found. Please set it in your config file or as GEMINI_API_KEY."),
-            model: config.model,
+            model: config.model.unwrap_or(DEFAULT_GEMINI_MODEL.into()),
             embedding_model: config
                 .embedding_model
                 .unwrap_or_else(|| DEFAULT_GEMINI_EMBEDDING_MODEL.to_string()),
             embedding_dims: config
                 .embedding_dims
-                .unwrap_or(GEMINI_EMBEDDING_DIM as usize),
+                .unwrap_or(DEFAULT_GEMINI_EMBEDDING_DIM as usize),
         }
     }
 }
@@ -479,7 +549,8 @@ impl From<GeminiConfig> for rag::config::GeminiConfig {
 impl From<VoyageAIConfig> for rag::config::VoyageAIConfig {
     fn from(config: VoyageAIConfig) -> Self {
         use rag::constants::{
-            DEFAULT_VOYAGE_RERANK_MODEL, VOYAGE_EMBEDDING_DIM, VOYAGE_EMBEDDING_MODEL,
+            DEFAULT_VOYAGE_EMBEDDING_DIM, DEFAULT_VOYAGE_EMBEDDING_MODEL,
+            DEFAULT_VOYAGE_RERANK_MODEL,
         };
 
         Self {
@@ -489,10 +560,10 @@ impl From<VoyageAIConfig> for rag::config::VoyageAIConfig {
                 .expect("Voyage API key not found. Please set it in your config file or as VOYAGE_AI_API_KEY."),
             embedding_model: config
                 .embedding_model
-                .unwrap_or_else(|| VOYAGE_EMBEDDING_MODEL.to_string()),
+                .unwrap_or_else(|| DEFAULT_VOYAGE_EMBEDDING_MODEL.to_string()),
             embedding_dims: config
                 .embedding_dims
-                .unwrap_or(VOYAGE_EMBEDDING_DIM as usize),
+                .unwrap_or(DEFAULT_VOYAGE_EMBEDDING_DIM as usize),
             reranker: config
                 .reranker
                 .unwrap_or_else(|| DEFAULT_VOYAGE_RERANK_MODEL.to_string()),
@@ -503,7 +574,8 @@ impl From<VoyageAIConfig> for rag::config::VoyageAIConfig {
 impl From<CohereConfig> for rag::config::CohereConfig {
     fn from(config: CohereConfig) -> Self {
         use rag::constants::{
-            COHERE_EMBEDDING_DIM, COHERE_EMBEDDING_MODEL, DEFAULT_COHERE_RERANK_MODEL,
+            DEFAULT_COHERE_EMBEDDING_DIM, DEFAULT_COHERE_EMBEDDING_MODEL,
+            DEFAULT_COHERE_RERANK_MODEL,
         };
 
         Self {
@@ -515,10 +587,10 @@ impl From<CohereConfig> for rag::config::CohereConfig {
             ),
             embedding_model: config
                 .embedding_model
-                .unwrap_or_else(|| COHERE_EMBEDDING_MODEL.to_string()),
+                .unwrap_or_else(|| DEFAULT_COHERE_EMBEDDING_MODEL.to_string()),
             embedding_dims: config
                 .embedding_dims
-                .unwrap_or(COHERE_EMBEDDING_DIM as usize),
+                .unwrap_or(DEFAULT_COHERE_EMBEDDING_DIM as usize),
             reranker: config
                 .reranker
                 .unwrap_or_else(|| DEFAULT_COHERE_RERANK_MODEL.to_string()),
@@ -578,8 +650,8 @@ mod tests {
         assert_eq!(config.max_retries, 3);
 
         let anthropic = config.anthropic.unwrap();
-        assert_eq!(anthropic.model, "claude-sonnet-4-5");
-        assert_eq!(anthropic.max_tokens, 64000);
+        assert_eq!(anthropic.model, Some("claude-sonnet-4-5".into()));
+        assert_eq!(anthropic.max_tokens, 64_000);
 
         let voyageai = config.voyageai.unwrap();
         assert_eq!(voyageai.reranker.unwrap(), "rerank-2.5");
@@ -597,4 +669,29 @@ mod tests {
         assert_eq!(config.embedding_provider, "voyageai"); // default
         assert_eq!(config.max_concurrent_requests, 5); // default
     }
+}
+
+/// An error that represents a failure to read the base user directory. This is only created
+/// when `directories::UserDirs::new` fails.
+#[derive(Debug, Error)]
+pub struct BaseDirError;
+
+impl Display for BaseDirError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Failed to read base directory.")
+    }
+}
+
+/// Get the config directory for the application.
+///
+/// # Returns
+///
+/// If successful, a `PathBuf` with the path to the config directory.
+///
+/// # Errors
+///
+/// A `BaseDirError` if `directories::UserDirs::new` fails.
+pub fn get_config_dir() -> Result<PathBuf, BaseDirError> {
+    let base_dir = directories::UserDirs::new().ok_or(BaseDirError)?;
+    Ok(base_dir.home_dir().join(".config").join("zqa"))
 }

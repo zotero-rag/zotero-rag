@@ -323,7 +323,8 @@ mod tests {
     use dotenv::dotenv;
     use rag::{
         constants::{
-            DEFAULT_VOYAGE_EMBEDDING_MODEL, DEFAULT_VOYAGE_RERANK_MODEL, VOYAGE_EMBEDDING_DIM,
+            DEFAULT_VOYAGE_EMBEDDING_DIM, DEFAULT_VOYAGE_EMBEDDING_MODEL,
+            DEFAULT_VOYAGE_RERANK_MODEL,
         },
         vector::lance::TABLE_NAME,
     };
@@ -333,7 +334,7 @@ mod tests {
             voyageai: Some(VoyageAIConfig {
                 reranker: Some(DEFAULT_VOYAGE_RERANK_MODEL.into()),
                 embedding_model: Some(DEFAULT_VOYAGE_EMBEDDING_MODEL.into()),
-                embedding_dims: Some(VOYAGE_EMBEDDING_DIM as usize),
+                embedding_dims: Some(DEFAULT_VOYAGE_EMBEDDING_DIM as usize),
                 api_key: Some(String::new()),
             }),
             ..Default::default()
