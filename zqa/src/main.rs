@@ -5,7 +5,6 @@ use dotenv::dotenv;
 use zqa::cli::app::cli;
 use zqa::common::{Args, Context, setup_logger};
 use zqa::config::Config;
-use zqa::ui::app::App;
 
 #[tokio::main]
 pub async fn main() {
