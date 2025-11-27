@@ -530,11 +530,9 @@ impl From<GeminiConfig> for rag::config::GeminiConfig {
         use rag::constants::{DEFAULT_GEMINI_EMBEDDING_DIM, DEFAULT_GEMINI_EMBEDDING_MODEL};
 
         Self {
-            api_key: config
-                .api_key
-                .or_else(|| env::var("GEMINI_API_KEY").ok())
-                .or_else(|| env::var("GOOGLE_API_KEY").ok())
-                .expect("Gemini API key not found. Please set it in your config file or as GEMINI_API_KEY."),
+            api_key: config.api_key.expect(
+                "Gemini API key not found. Please set it in your config file or as GEMINI_API_KEY.",
+            ),
             model: config.model.unwrap_or(DEFAULT_GEMINI_MODEL.into()),
             embedding_model: config
                 .embedding_model

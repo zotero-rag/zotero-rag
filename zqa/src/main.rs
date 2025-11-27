@@ -5,12 +5,9 @@ use dotenv::dotenv;
 use zqa::cli::app::cli;
 use zqa::common::{Args, Context, setup_logger};
 use zqa::config::Config;
-use zqa::state::check_or_create_first_run_file;
+use zqa::state::{check_or_create_first_run_file, oobe};
 
-#[tokio::main]
-pub async fn main() {
-    dotenv().ok();
-
+fn load_config() -> Config {
     // Load the configs in priority order: TOML < env < CLI args
     let mut config = Config::default();
     if let Some(xdg_config_dir) = directories::UserDirs::new() {
@@ -30,6 +27,14 @@ pub async fn main() {
     // Overwrite with env
     config.read_env().unwrap();
 
+    config
+}
+
+#[tokio::main]
+pub async fn main() {
+    dotenv().ok();
+
+    let mut config = load_config();
     let args = Args::parse();
 
     // Avoid RUST_LOG from interfering by not instantiating the logger if it's disabled.
@@ -52,29 +57,40 @@ pub async fn main() {
 
     log::debug!("Loaded configuration: {:#?}", config);
 
-    let _ = check_or_create_first_run_file().or_else(|e| {
-        println!("Error setting up. (R)etry, (I)gnore, (S)how error and ignore, or (Q)uit: ");
+    let is_first_run = check_or_create_first_run_file()
+        .or_else(|e| {
+            println!("Error setting up. (R)etry, (I)gnore, (S)how error and ignore, or (Q)uit: ");
 
-        let mut input = String::new();
-        io::stdin()
-            .read_line(&mut input)
-            .expect("Failed to read input");
+            let mut input = String::new();
+            io::stdin()
+                .read_line(&mut input)
+                .expect("Failed to read input");
 
-        // Return whether this is a "first run". Most options are treated as if it is not a first run.
-        match input.trim().to_lowercase().as_str() {
-            "r" => check_or_create_first_run_file(),
-            "i" => Ok(false),
-            "s" => {
-                println!("{:?}", e);
-                Ok(false)
+            // Return whether this is a "first run". Most options are treated as if it is not a first run.
+            match input.trim().to_lowercase().as_str() {
+                "r" => check_or_create_first_run_file(),
+                "i" => Ok(false),
+                "s" => {
+                    println!("{:?}", e);
+                    Ok(false)
+                }
+                "q" => std::process::exit(1),
+                _ => {
+                    println!("Invalid input");
+                    std::process::exit(1);
+                }
             }
-            "q" => std::process::exit(1),
-            _ => {
-                println!("Invalid input");
-                std::process::exit(1);
-            }
+        })
+        .unwrap();
+
+    if is_first_run {
+        if let Err(e) = oobe() {
+            eprintln!("Error during setup: {e}");
+        } else {
+            // Reload possibly different config from OOBE
+            config = load_config();
         }
-    });
+    }
 
     let context = Context {
         state: Default::default(),
