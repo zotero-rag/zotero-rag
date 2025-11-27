@@ -13,7 +13,7 @@ pub const DEFAULT_OPENAI_MODEL: &str = "gpt-5.1";
 pub const DEFAULT_OPENAI_MAX_TOKENS: u32 = 8192;
 
 /// OpenAI text-embedding-3-small dimension
-pub const DEFAULT_OPENAI_EMBEDDING_DIM: u32 = 3072;
+pub const DEFAULT_OPENAI_EMBEDDING_DIM: u32 = 1536;
 
 /// Default OpenAI embedding model
 pub const DEFAULT_OPENAI_EMBEDDING_MODEL: &str = "text-embedding-3-large";
