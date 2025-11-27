@@ -19,7 +19,7 @@ pub enum StateErrors {
     #[error("Failed to save first run information.")]
     FileWriteError,
     #[error("Serialization error: {0}")]
-    SerializationError(#[from] serde_json::Error),
+    SerializationError(#[from] toml::ser::Error),
     #[error("Other error: {0}")]
     Other(String),
 }
@@ -164,7 +164,7 @@ pub fn oobe() -> Result<(), StateErrors> {
 
     // TODO: Ideally we want to enable the password mode that some shells support.
     println!("Enter your model provider's API key: ");
-    let model_api_key = read_line();
+    let model_api_key = read_line().trim().to_string();
     println!();
 
     config.model_provider = match model_provider {
@@ -205,7 +205,7 @@ pub fn oobe() -> Result<(), StateErrors> {
     } else {
         println!("Enter your embedding provider's API key: ");
         println!();
-        read_line()
+        read_line().trim().to_string()
     };
 
     println!("What provider do you want to use for reranking results?");
@@ -237,7 +237,7 @@ pub fn oobe() -> Result<(), StateErrors> {
     } else {
         println!("Enter your reranker provider's API key: ");
         println!();
-        read_line()
+        read_line().trim().to_string()
     };
 
     // The 100k and 150k are somewhat napkin math-based, but pretty decent. In practice, embedding providers usually
@@ -310,14 +310,17 @@ pub fn oobe() -> Result<(), StateErrors> {
 
     let config_dir = get_config_dir()?;
     let config_path = config_dir.join("config.toml");
-    fs::write(config_path, serde_json::to_string_pretty(&config)?)?;
+    fs::write(config_path, toml::to_string_pretty(&config)?)?;
 
     println!("You've set up your config!");
     println!(
-        "{DIM_TEXT}You can change these values any time by editing ~/.config/zed/config.toml.\n"
+        "{DIM_TEXT}You can change these values any time by editing ~/.config/zqa/config.toml.\n"
     );
     println!(
-        "Next, you will likely want to set up your embeddings by typing /process in the prompt that follows. Note that this will take a while! If you don't have time, you can quit now, reopen the CLI later, and run it then.{RESET}"
+        "Next, you will likely want to set up your embeddings by typing /process in the prompt that follows. Note that this will take a while! If you don't have time, you can quit now, reopen the CLI later, and run it then.\n"
+    );
+    println!(
+        "Since your API keys are stored in plain-text, make sure to never commit ~/.config/zqa/config.toml without first deleting the keys. The recommended setup is to set the values in the TOML file blank and use .env files where you need them with the keys. As an additional security measure, consider running `chmod 600 ~/.config/zqa/config.toml`.{RESET}"
     );
     Ok(())
 }
