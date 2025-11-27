@@ -606,7 +606,7 @@ impl PdfParser {
                     0
                 };
 
-                additions.push((y_history[j + 1].1 - 1, "}"));
+                additions.push((y_history[j + 1].1.saturating_sub(1), "}"));
                 // TODO: Refine the below rule.
                 additions.push((
                     y_history[j].1 + offset,
