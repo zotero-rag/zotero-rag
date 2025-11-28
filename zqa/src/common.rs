@@ -37,12 +37,21 @@ pub struct Context<OutStream: Write, ErrStream: Write> {
     pub config: Config,
     /// CLI arguments passed
     pub args: Args,
-    /// Abstraction for stdout()
+    /// Abstraction for `stdout()`
     pub out: OutStream,
-    /// Abstraction for stderr()
+    /// Abstraction for `stderr()`
     pub err: ErrStream,
 }
 
+/// Initialize the `fern` logger.
+///
+/// # Arguments
+///
+/// * `log_level` - The log level to use.
+///
+/// # Errors
+///
+/// `log::SetLoggerError` if the logger could not be initialized.
 pub fn setup_logger(log_level: LevelFilter) -> Result<(), log::SetLoggerError> {
     // Set up logging via fern
     fern::Dispatch::new()
@@ -54,7 +63,7 @@ pub fn setup_logger(log_level: LevelFilter) -> Result<(), log::SetLoggerError> {
                 record.level(),
                 record.target(),
                 message
-            ))
+            ));
         })
         .level(log_level)
         .level_for("rustyline", log::LevelFilter::Off)

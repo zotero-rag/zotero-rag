@@ -18,7 +18,7 @@ pub(crate) struct SingleResponse<'a> {
 }
 
 /// Convenience so users can simply `.into()` as needed. This *moves* the value.
-impl<'a> From<Vec<ContentType>> for SingleResponse<'a> {
+impl From<Vec<ContentType>> for SingleResponse<'_> {
     fn from(value: Vec<ContentType>) -> Self {
         Self {
             parts: Cow::Owned(value),
@@ -35,7 +35,7 @@ impl<'a> From<&'a Vec<ContentType>> for SingleResponse<'a> {
     }
 }
 
-impl<'a> fmt::Display for SingleResponse<'a> {
+impl fmt::Display for SingleResponse<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         for part in self.parts.as_ref() {
             match part {
