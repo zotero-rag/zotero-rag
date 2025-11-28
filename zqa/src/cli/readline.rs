@@ -2,6 +2,7 @@ use std::{env, fs, path::PathBuf};
 
 use rustyline::{Config, EditMode};
 
+#[must_use]
 pub fn get_readline_config() -> Config {
     Config::builder().edit_mode(get_edit_mode()).build()
 }
@@ -17,12 +18,12 @@ pub fn get_readline_config() -> Config {
 /// The current edit mode (emacs or vi)
 fn get_edit_mode() -> EditMode {
     match env::consts::OS {
-        "windows" => EditMode::Emacs, // No standard on Windows
         "macos" => match get_editrc_edit_mode() {
             Some(mode) => mode,
             _ => get_inputrc_edit_mode(),
         },
         "linux" => get_inputrc_edit_mode(),
+        // No standard on Windows, so default to emacs; BSD not supported.
         _ => EditMode::Emacs,
     }
 }
@@ -68,7 +69,7 @@ fn get_editrc_edit_mode() -> Option<EditMode> {
                 let has_vi = contents
                     .lines()
                     .filter(|line| !line.starts_with('#'))
-                    .map(|line| line.trim())
+                    .map(str::trim)
                     .filter(|line| *line == "bind -v")
                     .count()
                     > 0;
@@ -128,7 +129,7 @@ fn get_inputrc_edit_mode() -> EditMode {
                 let has_vi = contents
                     .lines()
                     .filter(|line| !line.starts_with('#'))
-                    .map(|line| line.trim())
+                    .map(str::trim)
                     .filter(|line| *line == "set editing-mode vi" || *line == "set -o vi")
                     .count()
                     > 0;

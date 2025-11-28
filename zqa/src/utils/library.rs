@@ -6,8 +6,9 @@ use rag::vector::lance::{LanceError, get_lancedb_items, lancedb_exists};
 use rusqlite::Connection;
 use std::collections::HashSet;
 use std::env;
+use std::fmt::Write;
 use std::hash::Hash;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Instant;
@@ -31,9 +32,8 @@ fn get_lib_path() -> Option<PathBuf> {
 
         if assets_dir.exists() {
             return Some(assets_dir);
-        } else {
-            return None;
         }
+        return None;
     }
 
     match env::consts::OS {
@@ -138,7 +138,7 @@ impl From<Vec<RecordBatch>> for ZoteroItemSet {
 #[derive(Clone, Debug, Error)]
 pub enum LibraryParsingError {
     #[error("Library not found!")]
-    LibNotFoundError,
+    SqlError,
     #[error("LanceDB error when parsing library: {0}")]
     LanceDBError(String),
     #[error("PDF parsing error: {0}")]
@@ -147,7 +147,7 @@ pub enum LibraryParsingError {
 
 impl From<rusqlite::Error> for LibraryParsingError {
     fn from(_: rusqlite::Error) -> Self {
-        LibraryParsingError::LibNotFoundError
+        LibraryParsingError::SqlError
     }
 }
 
@@ -163,17 +163,23 @@ impl From<Box<dyn std::error::Error>> for LibraryParsingError {
     }
 }
 
-/// Assuming an existing LanceDB database exists, returns a list of items present in the Zotero
+/// Assuming an existing `LanceDB` database exists, returns a list of items present in the Zotero
 /// library but not in the database. The primary use case for this is to update the DB with new
 /// items. Note that this does not take into account removed items.
 ///
 /// # Arguments:
 ///
-/// * `embedding_config` - The embedding provider configuration for the configured LanceDB embedding.
+/// * `embedding_config` - The embedding provider configuration for the configured `LanceDB` embedding.
 ///
 /// # Returns
 ///
 /// If successful, a list of `ZoteroItemMetadata` objects corresponding to new items.
+///
+/// # Errors
+///
+/// * `LibraryParsingError::SqliteError` if the library path was not found, the query could not be prepared, or
+///   columns from the result set could not be parsed, or `query_map` fails.
+/// * `LibraryParsingError::LanceDBError` if fetching the rows from LanceDB fails.
 pub async fn get_new_library_items(
     embedding_config: &EmbeddingProviderConfig,
 ) -> Result<Vec<ZoteroItemMetadata>, LibraryParsingError> {
@@ -218,11 +224,16 @@ pub async fn get_new_library_items(
 
 /// Parses the Zotero library metadata. If successful, returns a list of metadata for each item.
 ///
-/// # Arguments:
+/// # Arguments
 ///
 /// * `start_from` - An optional offset for the SQL query. Useful for debugging, pagination,
 ///   multi-threading, etc.
 /// * `limit` - Optional limit, meant to be used in conjunction with `start_from`.
+///
+/// # Errors
+///
+/// * `LibraryParsingError::SqliteError` if the library path was not found, the query could not be prepared, or
+///   columns from the result set could not be parsed, or `query_map` fails.
 pub fn parse_library_metadata(
     start_from: Option<usize>,
     limit: Option<usize>,
@@ -247,11 +258,11 @@ pub fn parse_library_metadata(
 
         // Useful for debugging
         if let Some(limit_val) = limit {
-            query.push_str(&format!(" LIMIT {limit_val}"));
+            let _ = write!(query, " LIMIT {limit_val}");
         }
 
         if let Some(offset) = start_from {
-            query.push_str(&format!(" OFFSET {offset}"));
+            let _ = write!(query, " OFFSET {offset}");
         }
 
         let mut stmt = conn.prepare(&query)?;
@@ -269,24 +280,36 @@ pub fn parse_library_metadata(
                     file_path: path.join("storage").join(lib_key).join(filename),
                 })
             })?
-            .filter_map(|x| x.ok())
+            .filter_map(std::result::Result::ok)
             .collect();
 
         Ok(item_iter)
     } else {
-        Err(LibraryParsingError::LibNotFoundError)
+        Err(LibraryParsingError::SqlError)
     }
 }
 
 /// Parses the Zotero library, also parsing PDF files if they exist on disk. If not, we currently
 /// discard those items.
 ///
-/// # Arguments:
+/// # Arguments
 ///
-/// * `embedding_config` - The embedding provider configuration for the configured LanceDB embedding.
+/// * `embedding_config` - The embedding provider configuration for the configured `LanceDB` embedding.
 /// * `start_from` - An optional offset for the SQL query. Useful for debugging, pagination,
 ///   multi-threading, etc.
 /// * `limit` - Optional limit, meant to be used in conjunction with `start_from`.
+///
+/// # Errors
+///
+/// * `LibraryParsingError::LanceDBError` if fetching library metadata fails.
+/// * `LibraryParsingError::PdfParsingError` if an error reason statistics could not be updated.
+///
+/// # Panics
+///
+/// * If metadata could not be converted to a `u64`.
+/// * If a Mutex lock could not be acquired on the progress bar.
+/// * If the threads could not be joined.
+#[allow(clippy::too_many_lines)]
 pub async fn parse_library(
     embedding_config: &EmbeddingProviderConfig,
     start_from: Option<usize>,
@@ -294,9 +317,10 @@ pub async fn parse_library(
 ) -> Result<Vec<ZoteroItem>, LibraryParsingError> {
     let start_time = Instant::now();
 
-    let metadata = match lancedb_exists().await {
-        true => get_new_library_items(embedding_config).await?,
-        false => parse_library_metadata(start_from, limit)?,
+    let metadata = if lancedb_exists().await {
+        get_new_library_items(embedding_config).await?
+    } else {
+        parse_library_metadata(start_from, limit)?
     };
 
     if metadata.is_empty() {
@@ -325,6 +349,7 @@ pub async fn parse_library(
 
     // Keep track of how many were skipped, and for what reasons. Currently, we won't track the
     // actual items themselves.
+    #[allow(clippy::items_after_statements)]
     enum FailReason {
         NotPdf = 0,
         InvalidPath = 1,
@@ -348,25 +373,25 @@ pub async fn parse_library(
                         /* Handle each ZoteroItemMetadata item. This has all the info needed to
                          * actually figure out where the file is on disk and parse it--it's here
                          * that we integrate with `pdftools` to get text out of each PDF. */
-                        let path_str = match m.file_path.to_str() {
-                            Some(p) => p,
-                            None => {
-                                // Best not to try printing the file path here, give the user the
-                                // library key instead.
-                                log::warn!(
-                                    "Skipping item with invalid UTF-8 in path: {:?}",
-                                    m.library_key
-                                );
+                        let Some(path_str) = m.file_path.to_str() else {
+                            // Best not to try printing the file path here, give the user the
+                            // library key instead.
+                            log::warn!(
+                                "Skipping item with invalid UTF-8 in path: {:?}",
+                                m.library_key
+                            );
 
-                                let mut fail_map = fail_map_clone.lock().ok()?;
-                                fail_map[FailReason::InvalidPath as usize] += 1;
+                            let mut fail_map = fail_map_clone.lock().ok()?;
+                            fail_map[FailReason::InvalidPath as usize] += 1;
 
-                                return None;
-                            }
+                            return None;
                         };
 
                         // TODO: Handle other formats
-                        if !path_str.ends_with(".pdf") {
+                        if !Path::new(path_str)
+                            .extension()
+                            .is_some_and(|ext| ext.eq_ignore_ascii_case("pdf"))
+                        {
                             log::warn!("Path {path_str} is not a PDF file.");
 
                             let mut fail_map = fail_map_clone.lock().ok()?;
@@ -490,7 +515,7 @@ mod tests {
     /// function correctly handles CI instead, by removing the `#[ignore]` and adding a `FAKE_CI`
     /// variable to your `.env`. The value of this does not matter, it just has to exist.
     #[test]
-    #[ignore]
+    #[ignore = "This test is meant to be run locally only"]
     fn test_toy_library_loaded_in_ci() {
         dotenv().ok();
 
@@ -520,8 +545,8 @@ mod tests {
         dotenv().ok();
         let _ = setup_logger(log::LevelFilter::Info);
         let _ = fs::remove_dir_all(TABLE_NAME);
-        let _ = fs::remove_dir_all(format!("zqa/{}", TABLE_NAME));
-        let _ = fs::remove_dir_all(format!("rag/{}", TABLE_NAME));
+        let _ = fs::remove_dir_all(format!("zqa/{TABLE_NAME}"));
+        let _ = fs::remove_dir_all(format!("rag/{TABLE_NAME}"));
 
         let items = parse_library(
             &EmbeddingProviderConfig::VoyageAI(VoyageAIConfig {

@@ -46,7 +46,7 @@ impl From<io::Error> for StateErrors {
 ///
 /// `true` if this is the first run of the application (i.e., the `first_run` file does *not* exist); false otherwise.
 ///
-/// # Errors:
+/// # Errors
 ///
 /// * `StateErrors::DirectoryError` when the state dir could not be obtained.
 /// * `StateErrors::FileWriteError` if we do not have permissions to create the `first_run` file.
@@ -112,9 +112,8 @@ fn read_number(default: u8, bounds: (u8, u8)) -> u8 {
             Ok(num) => {
                 if bounds.0 <= num && num < bounds.1 {
                     return num;
-                } else {
-                    println!("Choice must be in [{}, {}).", bounds.0, bounds.1);
                 }
+                println!("Choice must be in [{}, {}).", bounds.0, bounds.1);
             }
             Err(_) => {
                 println!("Choice must be in [{}, {}).", bounds.0, bounds.1);
@@ -134,6 +133,11 @@ fn read_number(default: u8, bounds: (u8, u8)) -> u8 {
 ///
 /// * `StateErrors::DirectoryError` if we could not get the config directory.
 /// * `StateErrors::SerializationError` if serialization to JSON failed.
+///
+/// # Panics
+///
+/// If getting the config for the chosen provider fails.
+#[allow(clippy::too_many_lines)]
 pub fn oobe() -> Result<(), StateErrors> {
     // Here, we don't load the env because that's directory-specific.
     let mut config = Config::default();

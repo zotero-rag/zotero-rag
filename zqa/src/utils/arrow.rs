@@ -19,7 +19,7 @@ use super::library::{LibraryParsingError, parse_library};
 
 use thiserror::Error;
 
-/// An enum containing the fields stored by our application in LanceDB, in order. Implementations
+/// An enum containing the fields stored by our application in `LanceDB`, in order. Implementations
 /// `as_ref()` and `into()` are provided to convert this to `&str` and `String` respectively.
 pub(crate) enum DbFields {
     LibraryKey,
@@ -49,7 +49,7 @@ impl From<DbFields> for String {
 
 /// This name is a bit of a misnomer, in that this does not only represent errors from Arrow.
 /// However, the rationale behind naming it as such is that `arrow.rs` is the high-level interface
-/// for the application to LanceDB, PDF parsing, and other lower-level operations. As errors from
+/// for the application to `LanceDB`, PDF parsing, and other lower-level operations. As errors from
 /// those functions propagate, they are captured here. In general, this enum should not be used
 /// outside this file, except perhaps to `impl From<ArrowError>`.
 #[derive(Debug, Error)]
@@ -79,7 +79,7 @@ impl From<lancedb::Error> for ArrowError {
 impl From<LibraryParsingError> for ArrowError {
     fn from(value: LibraryParsingError) -> Self {
         match value {
-            LibraryParsingError::LibNotFoundError => Self::LibNotFoundError,
+            LibraryParsingError::SqlError => Self::LibNotFoundError,
             LibraryParsingError::LanceDBError(msg) => Self::LanceError(msg),
             LibraryParsingError::PdfParsingError(msg) => Self::PdfParsingError(msg),
         }
@@ -92,7 +92,7 @@ impl From<LanceError> for ArrowError {
     }
 }
 
-/// Get the schema for our LanceDB table. This is required for both getting library items and
+/// Get the schema for our `LanceDB` table. This is required for both getting library items and
 /// checkhealth.
 ///
 /// # Arguments:
@@ -136,9 +136,15 @@ pub async fn get_schema(embedding_name: &str) -> arrow_schema::Schema {
 /// * `items` - The items to convert to a `RecordBatch`
 /// * `embedding_config` - Configuration for the embedding provider to use when computing embeddings.
 ///
+/// # Errors
+///
+/// * `ArrowError::PathEncodingError` if a Zotero item's path is not valid Unicode.
+/// * `ArrowError::LLMError` if the embedding provider could not be obtained or embedding fails.
+/// * `ArrowError::ArrowSchemaError` if creating the final `RecordBatch` fails.
+///
 /// # Returns
 ///
-/// A `RecordBatch` that can be used to interact with LanceDB.
+/// A `RecordBatch` that can be used to interact with `LanceDB`.
 pub async fn library_to_arrow(
     items: Vec<ZoteroItem>,
     embedding_config: EmbeddingProviderConfig,
@@ -198,16 +204,16 @@ pub async fn library_to_arrow(
     Ok(record_batch)
 }
 
-/// Converts new Zotero library items to an Arrow RecordBatch.
+/// Converts new Zotero library items to an Arrow `RecordBatch`.
 ///
 /// This function parses the Zotero library using `parse_library()` and converts
-/// the resulting `ZoteroItemMetadata` entries into a structured Arrow RecordBatch.
-/// The RecordBatch contains the following columns:
-/// - library_key: The unique key for each item in the Zotero library
+/// the resulting `ZoteroItemMetadata` entries into a structured Arrow `RecordBatch`.
+/// The `RecordBatch` contains the following columns:
+/// - `library_key`: The unique key for each item in the Zotero library
 /// - title: The title of the paper/document
 /// - abstract: The abstract of the paper (optional)
 /// - notes: Any notes associated with the item (optional)
-/// - file_path: Path to the document file
+/// - `file_path`: Path to the document file
 ///
 /// # Returns
 ///
@@ -262,6 +268,7 @@ pub async fn full_library_to_arrow(
 /// # Returns
 ///
 /// A `Vec<String>` containing all the items in the specified column of the `RecordBatch`.
+#[must_use]
 pub fn get_column_from_batch(batch: &RecordBatch, column: usize) -> Vec<String> {
     let results = batch.column(column).as_string::<i32>();
 
@@ -286,7 +293,7 @@ pub fn get_column_from_batch(batch: &RecordBatch, column: usize) -> Vec<String> 
 ///
 /// # Arguments
 ///
-/// * `query` - The query to search the LanceDB table for.
+/// * `query` - The query to search the `LanceDB` table for.
 /// * `embedding_config` - The embedding provider configuration. Note that this must be the same
 ///   embedding provider used when initially creating the database.
 /// * `reranker` - The reranker provider to use.
@@ -296,6 +303,11 @@ pub fn get_column_from_batch(batch: &RecordBatch, column: usize) -> Vec<String> 
 /// A `Vec<ZoteroItem>` containing the resulting items from the Zotero library. Returns an
 /// `ArrowError` that wraps the underlying `LanceError` if the `rag` crate's `vector_search` is
 /// unsuccessful for any reason.
+///
+/// # Errors
+///
+/// * `ArrowError::LanceError` if vector search fails.
+/// * `ArrowError::LLMError` if the reranking provider could not be found or reranking fails.
 pub async fn vector_search(
     query: String,
     embedding_config: &EmbeddingProviderConfig,
@@ -349,8 +361,8 @@ mod tests {
         dotenv().ok();
         let _ = setup_logger(log::LevelFilter::Info);
         let _ = fs::remove_dir_all(TABLE_NAME);
-        let _ = fs::remove_dir_all(format!("zqa/{}", TABLE_NAME));
-        let _ = fs::remove_dir_all(format!("rag/{}", TABLE_NAME));
+        let _ = fs::remove_dir_all(format!("zqa/{TABLE_NAME}"));
+        let _ = fs::remove_dir_all(format!("rag/{TABLE_NAME}"));
 
         let config = get_config();
 

@@ -112,6 +112,10 @@ pub struct Config {
 
 impl Config {
     /// Load configuration from a TOML file
+    ///
+    /// # Errors
+    ///
+    /// * `ConfigError::ParseError` - If TOML parsing fails.
     pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self, ConfigError> {
         let content = std::fs::read_to_string(path)?;
         let config: Config = toml::from_str(&content)?;
@@ -119,6 +123,10 @@ impl Config {
     }
 
     /// Overwrite config from environment variables (higher priority)
+    ///
+    /// # Errors
+    ///
+    /// * `ConfigError::ParseFieldError` - If parsing a field as an integer fails.
     pub fn read_env(&mut self) -> Result<(), ConfigError> {
         // Main options
         // The model providers are not exposed as env options.
@@ -191,6 +199,7 @@ impl Config {
     }
 
     /// Get the embedding configuration based on the `embedding_provider` value.
+    #[must_use]
     pub fn get_embedding_config(&self) -> Option<EmbeddingProviderConfig> {
         match self.embedding_provider.as_str() {
             "openai" => self
@@ -213,6 +222,7 @@ impl Config {
         }
     }
 
+    #[must_use]
     pub fn get_reranker_config(&self) -> Option<EmbeddingProviderConfig> {
         match self.reranker_provider.as_str() {
             "voyageai" => self
@@ -227,6 +237,7 @@ impl Config {
         }
     }
 
+    #[must_use]
     pub fn get_generation_config(&self) -> Option<LLMClientConfig> {
         match self.model_provider.as_str() {
             "anthropic" => self
@@ -287,7 +298,7 @@ impl Default for AnthropicConfig {
     }
 }
 
-/// OpenAI provider configuration
+/// `OpenAI` provider configuration
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct OpenAIConfig {
     /// Model name (e.g., "gpt-5")
@@ -400,7 +411,7 @@ impl Default for CohereConfig {
     }
 }
 
-/// OpenRouter configuration
+/// `OpenRouter` configuration
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct OpenRouterConfig {
     /// Generation model

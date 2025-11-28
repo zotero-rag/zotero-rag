@@ -47,7 +47,7 @@ const RESET: &str = "\x1b[0m";
 
 /// Embed text from PDFs parsed, in case this step previously failed. This function reads
 /// the `BATCH_ITER_FILE` and uses the data in there to compute embeddings and write out
-/// the LanceDB table.
+/// the `LanceDB` table.
 ///
 /// # Arguments:
 ///
@@ -128,7 +128,7 @@ async fn embed<O: Write, E: Write>(
 }
 
 /// Fix the zero-embedding problem. In some error cases, we store zero-vectors as embeddings in
-/// LanceDB. This function fixes those errors by replacing them with "real" embeddings. Note that
+/// `LanceDB`. This function fixes those errors by replacing them with "real" embeddings. Note that
 /// there are cases where the embeddings are zeros not because there was an error, but because the
 /// extracted text was empty. This could be the result of a failed attempt to parse, or some other
 /// similar error. APIs like Voyage do accept empty strings, and simply return a zero vector.
@@ -140,13 +140,15 @@ async fn fix_zero_embeddings<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Res
     let healthcheck = lancedb_health_check(&ctx.config.embedding_provider).await?;
 
     if let Some(Ok(zero_items)) = healthcheck.zero_embedding_items {
-        let num_zeros: usize = zero_items.iter().map(|b| b.num_rows()).sum();
+        let num_zeros: usize = zero_items
+            .iter()
+            .map(arrow_array::RecordBatch::num_rows)
+            .sum();
 
         if num_zeros > 0 {
             writeln!(
                 ctx.out,
-                "{}Fixing {num_zeros} zero-embedding items.{}",
-                DIM_TEXT, RESET
+                "{DIM_TEXT}Fixing {num_zeros} zero-embedding items.{RESET}"
             )?;
         }
     }
@@ -158,7 +160,7 @@ async fn fix_zero_embeddings<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Res
         .await?;
 
     if zero_batches.is_empty() {
-        writeln!(ctx.out, "{}Done!{}", DIM_TEXT, RESET)?;
+        writeln!(ctx.out, "{DIM_TEXT}Done!{RESET}")?;
         return Ok(());
     }
 
@@ -238,7 +240,7 @@ async fn fix_zero_embeddings<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Res
     Ok(())
 }
 
-/// Performs comprehensive health checks on the LanceDB database and reports status
+/// Performs comprehensive health checks on the `LanceDB` database and reports status
 /// with colored output using ASCII escape codes.
 ///
 /// # Arguments:
@@ -268,11 +270,10 @@ async fn update_indices<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Result<(
     Ok(())
 }
 
-/// Runs health checks on the LanceDB database and provides helpful suggestions to the user on how
+/// Runs health checks on the `LanceDB` database and provides helpful suggestions to the user on how
 /// to fix any issues, if that is possible. Automatically attempt to fix issues found. Currently,
 /// only zero-embedding vectors can be fixed, since a lot of the other issues are possibly just DB
 /// corruption. Maybe we can diagnose that in the future.
-/// TODO: Currently assumes /index exists.
 ///
 /// # Arguments:
 ///
@@ -281,14 +282,14 @@ async fn update_indices<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Result<(
 async fn doctor<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Result<(), CLIError> {
     if let Err(e) = rag_doctor(&ctx.config.embedding_provider, &mut ctx.out).await {
         writeln!(ctx.err, "{e}")?;
-    };
+    }
 
     // Currently, we can really only fix the zero-embeddings issue
     return fix_zero_embeddings(ctx).await;
 }
 
 /// Process a user's Zotero library. This acts as one of the main functions provided by the CLI.
-/// This parses the library, extracts the text from each file, stores them in a LanceDB
+/// This parses the library, extracts the text from each file, stores them in a `LanceDB`
 /// table, and adds their embeddings. If the last step fails, the parsed texts are stored
 /// in `BATCH_ITER_FILE`.
 ///
@@ -299,15 +300,15 @@ async fn doctor<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Result<(), CLIEr
 async fn process<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Result<(), CLIError> {
     const WARNING_THRESHOLD: usize = 100;
 
-    let item_metadata = match lancedb_exists().await {
-        true => {
+    let item_metadata =
+        if lancedb_exists().await {
             get_new_library_items(&ctx.config.get_embedding_config().ok_or(
                 CLIError::ConfigError("Could not get embedding config".into()),
             )?)
             .await
-        }
-        false => parse_library_metadata(None, None),
-    };
+        } else {
+            parse_library_metadata(None, None)
+        };
 
     if let Err(parse_err) = item_metadata {
         writeln!(
@@ -430,11 +431,11 @@ async fn search_for_papers<O: Write, E: Write>(
         "{DIM_TEXT}Vector search completed in {vector_search_duration:.2?}{RESET}"
     )?;
 
-    search_results.iter().for_each(|item| {
+    for item in &search_results {
         writeln!(&mut ctx.out, "{}", item.metadata.title).unwrap_or_else(|_| {
             eprintln!("Could not write out search results.");
         });
-    });
+    }
     writeln!(&mut ctx.out)?;
 
     Ok(())
@@ -447,6 +448,7 @@ async fn search_for_papers<O: Write, E: Write>(
 ///
 /// * `ctx` - A `Context` object that contains CLI args and objects that implement
 ///   `std::io::Write` for `stdout` and `stderr`.
+#[allow(clippy::too_many_lines)]
 async fn run_query<O: Write, E: Write>(
     query: String,
     ctx: &mut Context<O, E>,
@@ -509,7 +511,7 @@ async fn run_query<O: Write, E: Write>(
     let mut set = JoinSet::new();
 
     let summarization_start = Instant::now();
-    search_results.iter().for_each(|item| {
+    for item in &search_results {
         let client = llm_client.clone();
         let text = item.text.clone();
         let query_clone = query.clone();
@@ -524,7 +526,7 @@ async fn run_query<O: Write, E: Write>(
 
             client.send_message(&request).await
         });
-    });
+    }
 
     let results: Vec<Result<CompletionApiResponse, LLMError>> = set.join_all().await;
     let summarization_duration = summarization_start.elapsed();
@@ -582,7 +584,7 @@ async fn run_query<O: Write, E: Write>(
             v.iter()
                 .filter_map(|f| match f {
                     ContentType::Text(s) => Some(s),
-                    _ => None,
+                    ContentType::ToolCall(_) => None,
                 })
                 .collect::<Vec<_>>()
         })
@@ -593,7 +595,7 @@ async fn run_query<O: Write, E: Write>(
     let request = ChatRequest {
         chat_history: Vec::new(),
         max_tokens: None,
-        message: get_summarize_prompt(&query, texts),
+        message: get_summarize_prompt(&query, &texts),
         tools: None,
     };
 
@@ -664,6 +666,17 @@ async fn stats<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Result<(), CLIErr
 ///
 /// * `ctx` - A `Context` object that contains CLI args and objects that implement
 ///   `std::io::Write` for `stdout` and `stderr`.
+///
+/// # Errors
+///
+/// * `CLIError::ReadlineError` - If we could not get the history file path, a `readline` editor could not be created,
+///   or the history could not be saved.
+/// * `CLIError::IOError` - If `writeln!` fails.
+///
+/// # Panics
+///
+/// Cannot happen; `unwrap()` is called on `strip_prefix` result after checking that the prefix exists.
+#[allow(clippy::too_many_lines)]
 pub async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<(), CLIError> {
     // First, get the path to the history file used by the `readline` implementation.
     let user_dirs = directories::UserDirs::new().ok_or(CLIError::ReadlineError(
@@ -773,6 +786,7 @@ pub async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<(), CLIEr
                         writeln!(&mut ctx.out)?;
 
                         // Check for a threshold to ensure this isn't an accidental Enter-hit.
+                        #[allow(clippy::items_after_statements)]
                         const MIN_QUERY_LENGTH: usize = 10;
 
                         if query.len() < MIN_QUERY_LENGTH {
@@ -794,8 +808,7 @@ pub async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<(), CLIEr
                             if let Err(e) = search_for_papers(search_term.into(), &mut ctx).await {
                                 writeln!(
                                     &mut ctx.err,
-                                    "Failed to perform a vector search. You may find relevant error messages below:\n\t{}",
-                                    e
+                                    "Failed to perform a vector search. You may find relevant error messages below:\n\t{e}"
                                 )?;
                             }
 
@@ -823,7 +836,6 @@ pub async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<(), CLIEr
             }
             Err(ReadlineError::Signal(rustyline::error::Signal::Resize)) => {
                 // Handle SIGWINCH; we should just rewrite the prompt and continue
-                continue;
             }
             _ => break,
         }
@@ -837,6 +849,7 @@ pub async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<(), CLIEr
 #[cfg(test)]
 mod tests {
     use crate::cli::app::{BATCH_ITER_FILE, checkhealth, embed, search_for_papers, stats};
+    use crate::common::State;
     use crate::config::{Config, VoyageAIConfig};
     use arrow_array::{RecordBatch, StringArray};
     use arrow_ipc::writer::FileWriter;
@@ -886,7 +899,7 @@ mod tests {
         let config = get_config();
 
         Context {
-            state: Default::default(),
+            state: State::default(),
             config,
             args,
             out,
@@ -900,7 +913,7 @@ mod tests {
         dotenv::dotenv().ok();
 
         // Clean up any existing data directories
-        let _ = std::fs::remove_dir_all(format!("rag/{}", DB_URI));
+        let _ = std::fs::remove_dir_all(format!("rag/{DB_URI}"));
         let _ = std::fs::remove_dir_all(DB_URI);
 
         let mut ctx = create_test_context();
@@ -944,7 +957,7 @@ mod tests {
         dotenv::dotenv().ok();
 
         // Clean up any existing data directories
-        let _ = std::fs::remove_dir_all(format!("rag/{}", DB_URI));
+        let _ = std::fs::remove_dir_all(format!("rag/{DB_URI}"));
         let _ = std::fs::remove_dir_all(DB_URI);
 
         let mut ctx = create_test_context();
@@ -975,8 +988,8 @@ mod tests {
         let mut setup_ctx = create_test_context();
 
         // Clean up any existing data directories
-        let _ = std::fs::remove_dir_all(format!("rag/{}", DB_URI));
-        let _ = std::fs::remove_dir_all(format!("zqa/{}", DB_URI));
+        let _ = std::fs::remove_dir_all(format!("rag/{DB_URI}"));
+        let _ = std::fs::remove_dir_all(format!("zqa/{DB_URI}"));
         let _ = std::fs::remove_dir_all(DB_URI);
 
         // `process` needs to be run before `search_for_papers`
@@ -1035,7 +1048,7 @@ mod tests {
         dotenv::dotenv().ok();
 
         // Clean up any existing data directories
-        let _ = std::fs::remove_dir_all(format!("rag/{}", DB_URI));
+        let _ = std::fs::remove_dir_all(format!("rag/{DB_URI}"));
         let _ = std::fs::remove_dir_all(DB_URI);
 
         let mut ctx = create_test_context();
@@ -1051,7 +1064,7 @@ mod tests {
         dotenv::dotenv().ok();
 
         // Clean up any existing data directories
-        let _ = std::fs::remove_dir_all(format!("rag/{}", DB_URI));
+        let _ = std::fs::remove_dir_all(format!("rag/{DB_URI}"));
         let _ = std::fs::remove_dir_all(DB_URI);
 
         // First create a database by running process
