@@ -137,8 +137,8 @@ impl From<Vec<RecordBatch>> for ZoteroItemSet {
 /// A general error struct for Zotero library parsing.
 #[derive(Clone, Debug, Error)]
 pub enum LibraryParsingError {
-    #[error("Library not found!")]
-    SqlError,
+    #[error("SQLite error: {0}")]
+    SqlError(String),
     #[error("LanceDB error when parsing library: {0}")]
     LanceDBError(String),
     #[error("PDF parsing error: {0}")]
@@ -146,8 +146,8 @@ pub enum LibraryParsingError {
 }
 
 impl From<rusqlite::Error> for LibraryParsingError {
-    fn from(_: rusqlite::Error) -> Self {
-        LibraryParsingError::SqlError
+    fn from(e: rusqlite::Error) -> Self {
+        LibraryParsingError::SqlError(e.to_string())
     }
 }
 
@@ -285,7 +285,9 @@ pub fn parse_library_metadata(
 
         Ok(item_iter)
     } else {
-        Err(LibraryParsingError::SqlError)
+        Err(LibraryParsingError::SqlError(
+            "Library not found!".to_string(),
+        ))
     }
 }
 

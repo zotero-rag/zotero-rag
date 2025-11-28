@@ -58,8 +58,8 @@ pub enum ArrowError {
     ArrowSchemaError(#[from] arrow_schema::ArrowError),
     #[error("LanceDB error: {0}")]
     LanceError(String),
-    #[error("Library not found")]
-    LibNotFoundError,
+    #[error("SQLite error: {0}")]
+    SqliteError(String),
     #[error(transparent)]
     LLMError(#[from] LLMError),
     #[error("Path contains invalid UTF-8 characters")]
@@ -79,7 +79,7 @@ impl From<lancedb::Error> for ArrowError {
 impl From<LibraryParsingError> for ArrowError {
     fn from(value: LibraryParsingError) -> Self {
         match value {
-            LibraryParsingError::SqlError => Self::LibNotFoundError,
+            LibraryParsingError::SqlError(msg) => Self::SqliteError(msg),
             LibraryParsingError::LanceDBError(msg) => Self::LanceError(msg),
             LibraryParsingError::PdfParsingError(msg) => Self::PdfParsingError(msg),
         }
