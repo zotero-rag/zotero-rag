@@ -13,6 +13,7 @@ String  -> Vec<u8> | s.into_bytes()
 &[u8]   -> String  | std::str::from_utf8(s).unwrap(), but don't**
 &[u8]   -> Vec<u8> | String::from_utf8(s).unwrap(), but don't**
 Vec<u8> -> &str    | &s if possible* else s.as_slice()
+&Vec<u8> -> &str   | std::str::from_utf8(s).unwrap(), but don't**
 Vec<u8> -> String  | std::str::from_utf8(&s).unwrap(), but don't**
 Vec<u8> -> &[u8]   | String::from_utf8(s).unwrap(), but don't**
 

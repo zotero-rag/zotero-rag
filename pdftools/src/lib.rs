@@ -4,7 +4,6 @@
 //! the parsed text may contain erroneous spaces.
 
 #![deny(
-    dead_code,
     unreachable_code,
     unreachable_patterns,
     unsafe_code,
