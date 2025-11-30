@@ -5,7 +5,6 @@
 //! supports tool calling for most LLM providers. The crate is built on top of LanceDB for its simplicity.
 
 #![deny(
-    dead_code,
     unreachable_code,
     unreachable_patterns,
     unsafe_code,
