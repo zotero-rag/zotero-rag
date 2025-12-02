@@ -168,6 +168,7 @@ type CMap = HashMap<String, String>;
 
 /// The type of encoding used by a font. Either `SIMPLE` (human-readable) or `CID_KEYED`
 /// (Unicode/glyph ID-encoded)
+#[derive(Debug)]
 enum FontEncoding {
     /// Human-readable, "simple" encoding. Under this encoding, each TJ block has contents that can
     /// be parsed as plain text.
@@ -221,10 +222,15 @@ impl PdfParser {
         Self {
             config,
             cur_font: String::new(),
+            cur_font_id: String::new(),
             cur_font_size: 12.0,   // Doesn't really matter
             cur_baselineskip: 1.2, // The pdflatex default
-            ..Default::default()
+            font_type: HashMap::new(),
         }
+    }
+
+    pub(crate) fn reset_font_cache(&mut self) {
+        self.font_type.clear();
     }
 
     fn with_default_config() -> Self {
@@ -292,7 +298,7 @@ impl PdfParser {
                     )
                     .unwrap();
 
-                    if ["/Type1", "/TrueType"].contains(&font_subtype) {
+                    if ["Type1", "TrueType"].contains(&font_subtype) {
                         FontEncoding::Simple
                     } else {
                         // Test 2: if the font has:
@@ -317,10 +323,10 @@ impl PdfParser {
                                 })?)
                                 .unwrap();
 
-                            if ["/WinAnsiEncoding", "/MacRomanEncoding"].contains(&font_encoding) {
+                            if ["WinAnsiEncoding", "MacRomanEncoding"].contains(&font_encoding) {
                                 FontEncoding::Simple
-                            } else if ["/Identity-H", "/Identity-V"].contains(&font_encoding)
-                                || font_encoding == "/Type0"
+                            } else if ["Identity-H", "Identity-V"].contains(&font_encoding)
+                                || font_encoding == "Type0"
                             {
                                 // Test 3: if the font has:
                                 //   /Subtype /Type0
@@ -758,7 +764,7 @@ impl PdfParser {
                     break;
                 }
 
-                let font_encoding = self.is_cid_keyed_font(doc, page_id, &font_id)?;
+                let font_encoding = self.is_cid_keyed_font(doc, page_id, &font_id).unwrap();
                 match font_encoding {
                     // If it's a simple font encoding, the only complications are with math fonts.
                     FontEncoding::Simple => {
@@ -981,9 +987,13 @@ pub fn extract_text(file_path: &str) -> Result<String, Box<dyn Error>> {
         .map(|(page_num, page_id)| {
             log::debug!("\tParsing page {} of {page_count}", page_num + 1);
 
-            parser
+            let parsed = parser
                 .parse_content(&doc, page_id)
-                .unwrap_or_else(|_| String::new())
+                .unwrap_or_else(|_| String::new());
+
+            parser.reset_font_cache();
+
+            parsed
         })
         .collect::<String>();
 
@@ -1018,7 +1028,7 @@ mod tests {
         for query in queries {
             assert!(
                 content.contains(*query),
-                "content of {file_name} did not contain '{query}'"
+                "content of {file_name} did not contain '{query}'\n\nContent was:\n{content}"
             );
         }
     }
@@ -1124,13 +1134,9 @@ mod tests {
         }
 
         let page_id = doc.page_iter().next().unwrap();
-        let font_map = get_font(&doc, page_id, "F30").unwrap();
-        let font_name = font_map.get("BaseFont").unwrap().as_name();
+        let font_name = get_font_name(&doc, page_id, "F30").unwrap();
 
-        assert!(font_name.is_ok());
-        let font_name = font_name.unwrap();
-
-        assert_eq!(str::from_utf8(font_name).unwrap(), "CMMI7");
+        assert_eq!(str::from_utf8(font_name.as_bytes()).unwrap(), "CMMI7");
     }
 
     #[test]
