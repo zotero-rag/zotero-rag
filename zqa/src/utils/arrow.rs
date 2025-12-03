@@ -317,6 +317,11 @@ pub async fn vector_search(
 
     let items: ZoteroItemSet = batches.into();
     let items: Vec<ZoteroItem> = items.into();
+    let items = items
+        .iter()
+        .filter(|item| !item.text.trim().is_empty())
+        .cloned()
+        .collect::<Vec<_>>();
 
     let rerank_provider = get_reranking_provider::<ZoteroItem>(&reranker)?;
     let items = rerank_provider.rerank(items, &query).await?;

@@ -115,25 +115,25 @@ impl EmbeddingApiRequestTexts<CohereEmbedRequest> for CohereEmbedRequest {
 }
 
 /// The embeddings returned by the Cohere API.
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct CohereAIEmbeddings {
     /// The embeddings, returned as a vector of floats for each text.
     float: Vec<Vec<f32>>,
 }
 
 /// Represents a successful response from the Cohere embeddings API.
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct CohereAISuccess {
     embeddings: CohereAIEmbeddings,
 }
 
 /// Represents an error response from the Cohere embeddings API.
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct CohereAIError {
     message: String,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 #[serde(untagged)]
 enum CohereAIResponse {
     Success(CohereAISuccess),

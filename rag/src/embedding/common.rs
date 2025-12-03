@@ -317,7 +317,7 @@ pub trait EmbeddingApiResponse {
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 pub async fn compute_embeddings_async<
     T: EmbeddingApiRequestTexts<T> + Serialize + Send + Sync + std::fmt::Debug,
-    U: EmbeddingApiResponse + for<'de> Deserialize<'de>,
+    U: EmbeddingApiResponse + for<'de> Deserialize<'de> + std::fmt::Debug,
 >(
     source: Arc<dyn arrow_array::Array>,
     api_url: &str,

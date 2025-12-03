@@ -132,19 +132,19 @@ impl EmbeddingApiRequestTexts<VoyageAIRequest> for VoyageAIRequest {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 struct VoyageAIEmbedding {
     object: String,
     embedding: Vec<f32>,
     index: u32,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 struct VoyageAIUsage {
     total_tokens: u32,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 struct VoyageAISuccess {
     object: String,
     data: Vec<VoyageAIEmbedding>,
@@ -152,12 +152,12 @@ struct VoyageAISuccess {
     usage: VoyageAIUsage,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 struct VoyageAIError {
     pub detail: String,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 #[serde(untagged)]
 enum VoyageAIResponse {
     Success(VoyageAISuccess),
@@ -241,7 +241,7 @@ impl<T: HttpClient + Default + Clone + std::fmt::Debug> EmbeddingFunction for Vo
     }
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Debug)]
 struct VoyageAIRerankRequest {
     query: String,
     documents: Vec<String>,
