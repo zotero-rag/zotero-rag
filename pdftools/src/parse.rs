@@ -418,7 +418,7 @@ impl PdfParser {
                                             .collect::<Result<_, _>>()?;
 
                                         mappings.insert(cid.to_string().to_lowercase(), unicode);
-                                    };
+                                    }
                                 }
 
                                 FontEncoding::CIDKeyed(mappings)
@@ -791,7 +791,7 @@ impl PdfParser {
                     break;
                 }
 
-                let font_encoding = self.is_cid_keyed_font(doc, page_id, &font_id).unwrap();
+                let font_encoding = self.is_cid_keyed_font(doc, page_id, &font_id)?;
                 match font_encoding {
                     // If it's a simple font encoding, the only complications are with math fonts.
                     FontEncoding::Simple => {
@@ -1169,7 +1169,7 @@ mod tests {
         let page_id = doc.page_iter().next().unwrap();
         let font_name = get_font_name(&doc, page_id, "F30").unwrap();
 
-        assert_eq!(str::from_utf8(font_name.as_bytes()).unwrap(), "CMMI7");
+        assert_eq!(font_name, "CMMI7");
     }
 
     #[test]
