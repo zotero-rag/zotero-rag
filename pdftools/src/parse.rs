@@ -4,6 +4,7 @@
 //! LaTeX equivalents.
 
 use log;
+use std::char::decode_utf16;
 use std::{error::Error, str};
 
 use std::collections::HashMap;
@@ -267,6 +268,7 @@ impl PdfParser {
     /// # Panics
     ///
     /// If any of the keys in the font dictionary are not valid UTF-8.
+    #[allow(clippy::too_many_lines)]
     fn is_cid_keyed_font(
         &mut self,
         doc: &Document,
@@ -275,7 +277,7 @@ impl PdfParser {
     ) -> Result<&FontEncoding, PdfError> {
         // Use the entry API to avoid borrow checker issues
         match self.font_type.entry((page_id, font_key.to_string())) {
-            Entry::Occupied(entry) => return Ok(entry.into_mut()),
+            Entry::Occupied(entry) => Ok(entry.into_mut()),
             Entry::Vacant(entry) => {
                 let font_obj = get_font(doc, page_id, font_key)?;
 
@@ -387,22 +389,36 @@ impl PdfParser {
                                 for line in lines {
                                     let parts: Vec<&str> = line.split_whitespace().collect();
                                     if parts.len() == 2 {
-                                        let cid = parts[0].trim_matches(&['<', '>']);
-                                        let unicode = u32::from_str_radix(
-                                            parts[1].trim_matches(&['<', '>']),
-                                            16,
-                                        )
-                                        .map_err(|e| {
-                                            PdfError::EncodingError(format!(
-                                                "Invalid Unicode value: {}",
-                                                e
-                                            ))
-                                        })?;
-                                        let unicode = unicode.to_be_bytes();
-                                        let unicode = String::from_utf8(unicode.to_vec()).unwrap();
+                                        let cid = parts[0].trim_matches(|c| c == '<' || c == '>');
 
-                                        mappings.insert(cid.to_string(), unicode);
-                                    }
+                                        // In some cases, `parts[1]` can have multiple Unicode code points. This is
+                                        // sometimes done to handle ligatures, among others. For example, the ligature
+                                        // `ff` is represented as two U+066 code points.
+                                        let code_units: Vec<u16> = parts[1]
+                                            .trim_matches(|c| c == '<' || c == '>')
+                                            .as_bytes()
+                                            .chunks_exact(4)
+                                            .map(|chunk| {
+                                                u16::from_str_radix(
+                                                    std::str::from_utf8(chunk).unwrap(),
+                                                    16,
+                                                )
+                                            })
+                                            .collect::<Result<_, _>>()
+                                            .map_err(|_| PdfError::InvalidUtf8)?;
+
+                                        let unicode: String = decode_utf16(code_units.into_iter())
+                                            .map(|r| {
+                                                r.map_err(|e| {
+                                                    PdfError::EncodingError(format!(
+                                                        "Invalid UTF-16: {e}"
+                                                    ))
+                                                })
+                                            })
+                                            .collect::<Result<_, _>>()?;
+
+                                        mappings.insert(cid.to_string().to_lowercase(), unicode);
+                                    };
                                 }
 
                                 FontEncoding::CIDKeyed(mappings)
@@ -750,14 +766,25 @@ impl PdfParser {
 
             /* Here's our strategy. We'll look for pairs of (), consuming words inside.
              * Then, we'll consume an integer. If that integer is less than SAME_WORD_THRESHOLD, the next
-             * chunk will be appended to the current word. Otherwise, we add a space. */
+             * chunk will be appended to the current word. Otherwise, we add a space.
+             *
+             * For CID-keyed fonts, the delimiters are <>, not (), but the remaining idea is quite similar. Here,
+             * we consume words inside the <> pair, and split them into 2-byte (4 hex character) chunks. We look those
+             * up in the font's CID map, and then convert them to the corresponding glyph.
+             */
+            let delimiters = if self.contains_unescaped(cur_content, '(') {
+                ('(', ')')
+            } else {
+                ('<', '>')
+            };
+
             // TODO: Handle paragraphs
-            while self.contains_unescaped(cur_content, '(') {
+            while self.contains_unescaped(cur_content, delimiters.0) {
                 let idx1 = self
-                    .find_next_unescaped(cur_content, '(')
+                    .find_next_unescaped(cur_content, delimiters.0)
                     .ok_or(PdfError::ContentError)?;
                 let idx2 = self
-                    .find_next_unescaped(cur_content, ')')
+                    .find_next_unescaped(cur_content, delimiters.1)
                     .ok_or(PdfError::ContentError)?;
 
                 if idx1 >= idx2 {
@@ -779,24 +806,27 @@ impl PdfParser {
                         let text = &cur_content[idx1 + 1..idx2];
                         let mut i = 0;
                         while i + 4 <= text.len() {
-                            let cid = &text[i..i + 4];
+                            let cid = &text[i..i + 4].to_lowercase();
                             if let Some(unicode) = cmap.get(cid) {
                                 parsed += unicode;
                             } else {
                                 // If CID not found in map, log warning and skip
-                                log::warn!("CID {} not found in ToUnicode CMap", cid);
+                                log::warn!("CID {cid} not found in ToUnicode CMap");
                             }
                             i += 4;
                         }
                     }
                 }
 
-                if !self.contains_unescaped(&cur_content[idx2..], '(') {
+                if !self.contains_unescaped(&cur_content[idx2..], delimiters.0) {
                     parsed += " ";
                     break;
                 }
 
-                let idx3 = self.find_next_unescaped(&cur_content[idx2..], '(').unwrap() + idx2;
+                let idx3 = self
+                    .find_next_unescaped(&cur_content[idx2..], delimiters.0)
+                    .unwrap()
+                    + idx2;
                 let spacing = cur_content[idx2 + 1..idx3]
                     .parse::<f32>()
                     .unwrap_or(self.config.same_word_threshold + 1.0)
@@ -1040,10 +1070,13 @@ mod tests {
 
         // Test 2: "ntk.pdf"
         check_pdf_contains("ntk.pdf", &["\\theta", "\\otimes", "\\sum", "\\mathbb{E}"]);
+
+        // Test 3: "ape.pdf", contains CID-keyed fonts
+        check_pdf_contains("ape.pdf", &["Manifold", "Dimension"]);
     }
 
     #[test]
-    #[ignore = "Manual test for debugging PDF content"]
+    // #[ignore = "Manual test for debugging PDF content"]
     fn test_pdf_content() {
         if env::var("CI").is_ok() {
             // Skip this test in CI environments
@@ -1060,7 +1093,7 @@ mod tests {
     }
 
     #[test]
-    // #[ignore = "Manual test for debugging font properties"]
+    #[ignore = "Manual test for debugging font properties"]
     fn test_font_properties() {
         if env::var("CI").is_ok() {
             // Skip this test in CI environments
