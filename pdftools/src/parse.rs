@@ -1071,8 +1071,8 @@ mod tests {
         // Test 2: "ntk.pdf"
         check_pdf_contains("ntk.pdf", &["\\theta", "\\otimes", "\\sum", "\\mathbb{E}"]);
 
-        // Test 3: "ape.pdf", contains CID-keyed fonts
-        check_pdf_contains("ape.pdf", &["Manifold", "Dimension"]);
+        // Test 3: "manifold.pdf", contains CID-keyed fonts
+        check_pdf_contains("manifold.pdf", &["Manifold", "Dimension"]);
     }
 
     #[test]
