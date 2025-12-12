@@ -17,7 +17,7 @@ use crate::math::{from_cmex, from_cmmi, from_cmsy, from_msbm};
 
 const ASCII_PLUS: u8 = b'+';
 const DEFAULT_SAME_WORD_THRESHOLD: f32 = 60.0;
-const DEFAULT_TABLE_EUCLIDEAN_THRESHOLD: f32 = 20.0;
+const DEFAULT_TABLE_EUCLIDEAN_THRESHOLD: f32 = 40.0;
 
 /// A wrapper for all PDF parsing errors
 #[derive(Debug, thiserror::Error)]
@@ -555,17 +555,48 @@ impl PdfParser {
     /// command after every `BT` starting from `pos`, using the Euclidean distance. If this
     /// distance is below a threshold, it is assumed that these are alignment efforts.
     ///
-    /// # Returns:
+    /// We do not need to keep a running track of where we are by adding the `Td` movements: from
+    /// the PDF Reference Manual, Section 7.2.3:
+    ///
+    /// >  Each time a text object begins, the current point is set to the origin of the page's
+    /// >  coordinate system.
+    ///
+    /// # Returns
+    ///
     /// * `Some((start_idx, end_idx))`, where `start_idx` is the index of the `BT` command where it is suspected that
     ///   the table begins, and `end_idx` is the index of the `ET` command where the table is suspected to end.
     /// * If no table is detected, returns `None`.
     fn get_table_bounds(&self, content: &str, pos: usize) -> Option<(usize, usize)> {
         let bt_idx = content[..pos].rfind("BT")?; // First `BT` we see
-        let prev_td = content[bt_idx..].find("Td")? + bt_idx; // The immediately following `Td`
+        let first_td_idx = content[..pos].rfind("Td")?;
 
-        let params_result = self.get_params::<2>(content, prev_td).ok();
-        let (first_x, first_y) = params_result
-            .and_then(|[x, y]| Some((x.parse::<f32>().ok()?, y.parse::<f32>().ok()?)))?;
+        // Collect all the `Td`s after the previous `BT` up to where we are. LaTeX is free to use a
+        // single BT..ET block for non-table and table content, so the table might start from one
+        // of the intermediate `Td`s.
+        let mut td_positions =
+            content[bt_idx..pos]
+                .split("Td")
+                .filter_map(|s| {
+                    let params_result = self.get_params::<2>(s, s.len() - 1).ok();
+
+                    Some(params_result.and_then(|[x, y]| {
+                        Some((x.parse::<f32>().ok()?, y.parse::<f32>().ok()?))
+                    })?)
+                })
+                .collect::<Vec<_>>();
+
+        if td_positions.is_empty() {
+            return None;
+        }
+
+        for i in 1..td_positions.len() {
+            td_positions[i] = (
+                td_positions[i].0 + td_positions[i - 1].0,
+                td_positions[i].1 + td_positions[i - 1].1,
+            );
+        }
+
+        let (first_x, first_y) = td_positions[td_positions.len() - 1];
 
         // Running position
         let mut cur_pos = pos;
@@ -579,6 +610,7 @@ impl PdfParser {
                 if bt_count > 0 {
                     // If we've processed at least one BT and reached the end, return what we have
                     log::debug!("Could not find a BT, is the table at the end of the document?");
+                    dbg!("0");
                     return Some((bt_idx, cur_pos));
                 }
 
@@ -596,7 +628,6 @@ impl PdfParser {
             // Calculate current alignment position
             let cur_td_idx = next_bt_pos + td_offset;
 
-            // Parse the x,y parameters using and_then for cleaner error handling
             let params_result = self.get_params::<2>(content, cur_td_idx).ok();
             let Some((cur_x, cur_y)) = params_result
                 .and_then(|[x, y]| Some((x.parse::<f32>().ok()?, y.parse::<f32>().ok()?)))
@@ -607,13 +638,15 @@ impl PdfParser {
             };
 
             let distance = ((cur_x - first_x).powi(2) + (cur_y - first_y).powi(2)).sqrt();
+            dbg!(&distance);
 
             if distance < self.config.table_alignment_threshold {
                 bt_count += 1;
                 cur_pos = cur_td_idx;
             } else if bt_count > 0 {
                 // We've found the end of the table
-                return Some((bt_idx, next_bt_pos));
+                dbg!("1");
+                return Some((first_td_idx + 3, next_bt_pos)); // +2 for "Td " length
             } else {
                 // Not a table
                 return None;
@@ -661,6 +694,8 @@ impl PdfParser {
                     && tbl_begin_idx < cur_parse_idx + tj_idx
                 {
                     // Skip over the table
+                    dbg!("a");
+                    dbg!(&content[tbl_begin_idx..tbl_end_idx]);
                     cur_parse_idx = tbl_end_idx;
 
                     // We've invalidated some indexes in the conditions above, so we
@@ -1084,7 +1119,7 @@ mod tests {
         }
 
         // NOTE: Maintainers: use this as a way to quickly get the UTF-8 content of raw PDF commands.
-        let path = PathBuf::from("assets").join("symbols.pdf");
+        let path = PathBuf::from("assets").join("subtables.pdf");
 
         let doc = Document::load(path).unwrap();
         let content = get_raw_content_stream(&doc, 0).unwrap();
@@ -1195,17 +1230,11 @@ mod tests {
         let parser = PdfParser::with_default_config();
 
         // The indices will not exactly line up, because "\n"s seem to be two separate characters. This is okay.
-        // Test 1: The first ET in this should be ignored.
         let first_et = content.find("ET").unwrap();
         assert_eq!(first_et, 342);
-        assert!(parser.get_table_bounds(&content, first_et).is_none());
-
-        // Test 2: The second ET should capture the table (excluding the caption).
-        let second_et = content[first_et + 1..].find("ET").unwrap() + first_et + 1;
-        assert_eq!(second_et, 471);
         assert_eq!(
-            parser.get_table_bounds(&content, second_et),
-            Some((412, 707))
+            parser.get_table_bounds(&content, first_et),
+            Some((305, 707))
         );
     }
 
@@ -1217,8 +1246,25 @@ mod tests {
         assert!(content.is_ok());
 
         let content = content.unwrap();
+        dbg!(&content);
         let tests = ["r1c1", "r1c2", "r2c1", "r2c2"];
         for text in tests {
+            assert!(!content.contains(text));
+        }
+    }
+
+    #[test]
+    fn test_subtables_are_ignored() {
+        let path = PathBuf::from("assets").join("subtables.pdf");
+        let content = extract_text(path.to_str().unwrap());
+
+        assert!(content.is_ok());
+
+        let content = content.unwrap();
+        dbg!(&content);
+        let tests = ["foo", "bar", "baz", "quux", "Caption"];
+        for text in tests {
+            dbg!(text);
             assert!(!content.contains(text));
         }
     }
