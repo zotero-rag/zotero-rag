@@ -52,4 +52,4 @@ pub const DEFAULT_VOYAGE_RERANK_MODEL: &str = "rerank-2.5";
 pub const DEFAULT_VOYAGE_EMBEDDING_MODEL: &str = "voyage-3-large";
 
 /// Default Voyage AI embedding dimension
-pub const DEFAULT_VOYAGE_EMBEDDING_DIM: u32 = 1024;
+pub const DEFAULT_VOYAGE_EMBEDDING_DIM: u32 = 2048;

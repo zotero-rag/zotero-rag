@@ -53,11 +53,14 @@ impl From<io::Error> for StateErrors {
 pub fn check_or_create_first_run_file() -> Result<bool, StateErrors> {
     let base_dir = directories::BaseDirs::new().ok_or(StateErrors::DirectoryError)?;
     let state_dir = base_dir.state_dir().ok_or(StateErrors::DirectoryError)?;
-    let first_run_file = state_dir.join("first_run");
+    let first_run_file = state_dir.join("zqa").join("first_run");
 
     if first_run_file.exists() {
         Ok(false)
     } else {
+        if !state_dir.join("zqa").exists() {
+            fs::create_dir(state_dir.join("zqa"))?;
+        }
         fs::File::create(&first_run_file)?;
         Ok(true)
     }
@@ -81,12 +84,16 @@ fn read_line() -> String {
 /// * `valid_set` - The valid set of characters.
 fn read_char(default: char, valid_set: &[char]) -> char {
     loop {
-        println!("> ");
+        print!("> ");
         let input = read_line();
-        let choice = input.chars().next().unwrap_or(default);
+        let choice = input.chars().next().unwrap_or(default).to_ascii_lowercase();
 
         if valid_set.contains(&choice) {
             return choice;
+        }
+
+        if choice == '\n' {
+            return default;
         }
     }
 }
@@ -152,7 +159,7 @@ pub fn oobe() -> Result<(), StateErrors> {
     println!("Would you like to set up your configuration?");
     println!("[Y]es");
     println!("(N)o");
-    let choice = read_char('n', &['y', 'n']);
+    let choice = read_char('y', &['y', 'n']);
 
     if choice == 'n' {
         return Ok(());
