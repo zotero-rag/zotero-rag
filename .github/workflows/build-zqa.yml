@@ -1,4 +1,6 @@
 name: Build zqa
+permissions:
+  contents: read
 
 on:
   push:

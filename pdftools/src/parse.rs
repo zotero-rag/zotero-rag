@@ -310,15 +310,10 @@ impl PdfParser {
                         //   /Encoding /WinAnsiEncoding
                         //   /Encoding /MacRomanEncoding
                         // it is likely a "simple" font.
-                        let font_encoding = font_obj.get("Encoding");
-                        if font_encoding.is_none() {
-                            log::warn!(
-                                "Could not determine font type for {font_key}, assuming simple. This may be wrong."
-                            );
-                            FontEncoding::Simple
-                        } else {
+                        let encoding = font_obj.get("Encoding");
+                        if let Some(font_encoding) = encoding {
                             let font_encoding =
-                                str::from_utf8(font_encoding.unwrap().as_name().map_err(|_| {
+                                str::from_utf8(font_encoding.as_name().map_err(|_| {
                                     PdfError::EncodingError(format!(
                                         "Expected font {font_key}'s Encoding key to be a `name`"
                                     ))
@@ -429,6 +424,11 @@ impl PdfParser {
                                 );
                                 FontEncoding::Simple
                             }
+                        } else {
+                            log::warn!(
+                                "Could not determine font type for {font_key}, assuming simple. This may be wrong."
+                            );
+                            FontEncoding::Simple
                         }
                     }
                 };
