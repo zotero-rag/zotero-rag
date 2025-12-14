@@ -1,4 +1,6 @@
 name: Coverage
+permissions:
+  contents: read
 
 on:
   workflow_dispatch:

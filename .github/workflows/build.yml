@@ -1,4 +1,6 @@
 name: Build pdftools and rag crates
+permissions:
+  contents: read
 
 on:
   push:
