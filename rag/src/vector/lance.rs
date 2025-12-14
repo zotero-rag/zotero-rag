@@ -454,7 +454,9 @@ pub async fn insert_records(
 ) -> Result<Connection, LanceError> {
     let db = get_db_with_embeddings(embedding_config).await?;
 
-    if lancedb_exists().await && merge_on.is_some() {
+    if lancedb_exists().await
+        && let Some(merge_on) = merge_on
+    {
         // Add rows if they don't already exist
         let tbl = db
             .open_table(TABLE_NAME)
@@ -462,7 +464,7 @@ pub async fn insert_records(
             .await
             .map_err(|e| LanceError::TableUpdateError(e.to_string()))?;
 
-        tbl.merge_insert(merge_on.unwrap())
+        tbl.merge_insert(merge_on)
             .when_not_matched_insert_all()
             .clone()
             .execute(Box::new(data))
