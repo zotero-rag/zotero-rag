@@ -547,6 +547,26 @@ impl PdfParser {
         }
     }
 
+    /// Checks for a font change command (`/F`) within a specified range of the content string
+    /// and updates the parser's current font state accordingly.
+    ///
+    /// This function searches for `/F` font resource references (e.g., `/F28`) within the
+    /// given range `[start_idx, end_idx)` of the content string. If a font change is detected,
+    /// it extracts the font ID, resolves the font name using the document's font dictionary,
+    /// and updates both `self.cur_font` and `self.cur_font_id`.
+    ///
+    /// # Arguments
+    ///
+    /// * `doc` - The `lopdf::Document` object containing font information
+    /// * `page_id` - The page ID where the font is referenced
+    /// * `content` - The PDF content stream as a string
+    /// * `start_idx` - The starting index of the range to search
+    /// * `end_idx` - The ending index of the range to search
+    ///
+    /// # Errors
+    ///
+    /// * `PdfError::ContentError` if the `/F` marker is found but the font ID cannot be properly extracted
+    /// * Propagates errors from `get_font_name` if the font cannot be resolved
     fn check_and_update_font(
         &mut self,
         doc: &Document,
@@ -1284,11 +1304,8 @@ mod tests {
     #[test]
     fn test_subtables_are_ignored() {
         let path = PathBuf::from("assets").join("subtables.pdf");
-        let content = extract_text(path.to_str().unwrap());
-
-        assert!(content.is_ok());
-
-        let content = content.unwrap();
+        let content = extract_text(path.to_str().unwrap())
+            .expect("Failed to extract content from subtables.pdf");
 
         // NOTE: This should also ignore "quux2" and "Caption", but it currently doesn't. This is
         // left to a future story, because the current implementation is already much better than
