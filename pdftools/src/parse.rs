@@ -552,15 +552,20 @@ impl PdfParser {
         doc: &Document,
         page_id: PageID,
         content: &str,
+        start_idx: usize,
+        end_idx: usize,
     ) -> Result<(), PdfError> {
-        if content.contains("/F") {
-            let font_begin_idx = content.find("/F").ok_or(PdfError::ContentError)?;
-            let font_end_idx = content[font_begin_idx..]
+        if content[start_idx..end_idx].contains("/F") {
+            let font_begin_idx = content[start_idx..end_idx]
+                .find("/F")
+                .ok_or(PdfError::ContentError)?;
+            let font_end_idx = content[start_idx + font_begin_idx..]
                 .find(' ')
                 .ok_or(PdfError::ContentError)?
                 + font_begin_idx;
 
-            let font_id = content[font_begin_idx + 1..font_end_idx].to_string();
+            let font_id = content[start_idx..][font_begin_idx + 1..font_end_idx].to_string();
+            dbg!(&font_id);
 
             self.cur_font = get_font_name(doc, page_id, &font_id)?.to_string();
             self.cur_font_id = font_id;
@@ -677,7 +682,7 @@ impl PdfParser {
                 bt_count += 1;
 
                 // Before we move, check if the font has changed
-                self.check_and_update_font(doc, page_id, &content[next_bt_pos..cur_td_idx])
+                self.check_and_update_font(doc, page_id, content, 0, content.len() - 1)
                     .ok()?;
 
                 cur_pos = cur_td_idx;
@@ -792,11 +797,7 @@ impl PdfParser {
                 .ok_or(PdfError::ContentError)?;
 
             // Check the font, if it has been set.
-            self.check_and_update_font(
-                doc,
-                page_id,
-                &content[cur_parse_idx..cur_parse_idx + end_idx],
-            )?;
+            self.check_and_update_font(doc, page_id, &content, cur_parse_idx, content.len() - 1)?;
 
             // We need to match the ] immediately preceding TJ with its [, but papers have references
             // that are written inside [], so a naive method doesn't work. Yes--right now, this doesn't
