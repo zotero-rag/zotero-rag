@@ -598,17 +598,15 @@ impl PdfParser {
         // Collect all the `Td`s after the previous `BT` up to where we are. LaTeX is free to use a
         // single BT..ET block for non-table and table content, so the table might start from one
         // of the intermediate `Td`s.
-        let mut td_positions =
-            content[bt_idx..pos]
-                .split("Td")
-                .filter_map(|s| {
-                    let params_result = self.get_params::<2>(s, s.len() - 1).ok();
+        let mut td_positions = content[bt_idx..pos]
+            .split("Td")
+            .filter_map(|s| {
+                let params_result = self.get_params::<2>(s, s.len() - 1).ok();
 
-                    Some(params_result.and_then(|[x, y]| {
-                        Some((x.parse::<f32>().ok()?, y.parse::<f32>().ok()?))
-                    })?)
-                })
-                .collect::<Vec<_>>();
+                params_result
+                    .and_then(|[x, y]| Some((x.parse::<f32>().ok()?, y.parse::<f32>().ok()?)))
+            })
+            .collect::<Vec<_>>();
 
         if td_positions.is_empty() {
             return None;
