@@ -585,7 +585,6 @@ impl PdfParser {
                 + font_begin_idx;
 
             let font_id = content[start_idx..][font_begin_idx + 1..font_end_idx].to_string();
-            dbg!(&font_id);
 
             self.cur_font = get_font_name(doc, page_id, &font_id)?.to_string();
             self.cur_font_id = font_id;
