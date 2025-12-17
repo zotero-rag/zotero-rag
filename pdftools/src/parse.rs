@@ -555,7 +555,10 @@ impl PdfParser {
     ) -> Result<(), PdfError> {
         if content.contains("/F") {
             let font_begin_idx = content.find("/F").ok_or(PdfError::ContentError)?;
-            let font_end_idx = content[font_begin_idx..].find(' ').unwrap() + font_begin_idx;
+            let font_end_idx = content[font_begin_idx..]
+                .find(' ')
+                .ok_or(PdfError::ContentError)?
+                + font_begin_idx;
 
             let font_id = content[font_begin_idx + 1..font_end_idx].to_string();
 
@@ -569,16 +572,23 @@ impl PdfParser {
     /// Given a string `content` and a position `pos`, look *around* `pos` and search for likely
     /// boundaries for a table. This function uses the heuristic that tables are likely to be
     /// near `ET` blocks, because tables typically have some graphics (lines for borders, etc.).
-    /// Under this assumption, this function looks for the first `Td` command after the *previous*
-    /// `BT` from `pos`, and compares the position described there to positions in the first `Td`
-    /// command after every `BT` starting from `pos`, using the Euclidean distance. If this
-    /// distance is below a threshold, it is assumed that these are alignment efforts.
+    /// Under this assumption, this function looks at `Td` commands starting from the *previous*
+    /// `BT` from `pos`, and compares the position described there to positions in subsequent `Td`
+    /// commands starting from `pos`, using the Euclidean distance. If this distance is below a
+    /// threshold, it is assumed that these are alignment efforts.
     ///
-    /// We do not need to keep a running track of where we are by adding the `Td` movements: from
-    /// the PDF Reference Manual, Section 7.2.3:
+    /// We need to use *all* the `Td`s from the previous `BT` since LaTeX can use one `BT`..`ET`
+    /// block for both non-table and table content.
+    ///
+    /// We do not need to keep a running track of where we are by adding the `Td` movements across
+    /// `BT`..`ET` blocks: from the PDF Reference Manual, Section 7.2.3:
     ///
     /// >  Each time a text object begins, the current point is set to the origin of the page's
     /// >  coordinate system.
+    ///
+    /// This function also updates the font accordingly, since it is possible for the font to
+    /// change within the bounds returned. Therefore, the core parsing method itself can safely
+    /// assume that `self.cur_font` is accurate if it skipped over the returned bounds.
     ///
     /// # Returns
     ///
@@ -601,10 +611,9 @@ impl PdfParser {
         let mut td_positions = content[bt_idx..pos]
             .split("Td")
             .filter_map(|s| {
-                let params_result = self.get_params::<2>(s, s.len() - 1).ok();
-
-                params_result
-                    .and_then(|[x, y]| Some((x.parse::<f32>().ok()?, y.parse::<f32>().ok()?)))
+                self.get_params::<2>(s, s.len() - 1)
+                    .ok()
+                    .and_then(|[x, y]| x.parse::<f32>().ok().zip(y.parse::<f32>().ok()))
             })
             .collect::<Vec<_>>();
 
@@ -612,6 +621,7 @@ impl PdfParser {
             return None;
         }
 
+        // Accumulate `Td`s, since these are movements
         for i in 1..td_positions.len() {
             td_positions[i] = (
                 td_positions[i].0 + td_positions[i - 1].0,
@@ -619,9 +629,11 @@ impl PdfParser {
             );
         }
 
+        // The "first" (x, y) is the accumulated movements so far; see the function's documentation
+        // pointing to Section 7.2.3 of the PDF reference manual for reasoning.
         let (first_x, first_y) = td_positions[td_positions.len() - 1];
 
-        // Running position
+        // Running position in `content`
         let mut cur_pos = pos;
 
         // How many `BT`s have we skipped?
@@ -632,7 +644,7 @@ impl PdfParser {
             let Some(next_bt) = content[cur_pos..].find("BT") else {
                 if bt_count > 0 {
                     // If we've processed at least one BT and reached the end, return what we have
-                    log::debug!("Could not find a BT, is the table at the end of the document?");
+                    log::debug!("Could not find a BT, is the table at the end of the page?");
                     return Some((bt_idx, cur_pos));
                 }
 
@@ -665,12 +677,13 @@ impl PdfParser {
                 bt_count += 1;
 
                 // Before we move, check if the font has changed
-                self.check_and_update_font(doc, page_id, content).ok()?;
+                self.check_and_update_font(doc, page_id, &content[next_bt_pos..cur_td_idx])
+                    .ok()?;
 
                 cur_pos = cur_td_idx;
             } else if bt_count > 0 {
                 // We've found the end of the table
-                return Some((first_td_idx + 3, next_bt_pos)); // +2 for "Td " length
+                return Some((first_td_idx + 3, next_bt_pos)); // +3 for "Td " length
             } else {
                 // Not a table
                 return None;
@@ -779,7 +792,11 @@ impl PdfParser {
                 .ok_or(PdfError::ContentError)?;
 
             // Check the font, if it has been set.
-            self.check_and_update_font(doc, page_id, &content[cur_parse_idx..])?;
+            self.check_and_update_font(
+                doc,
+                page_id,
+                &content[cur_parse_idx..cur_parse_idx + end_idx],
+            )?;
 
             // We need to match the ] immediately preceding TJ with its [, but papers have references
             // that are written inside [], so a naive method doesn't work. Yes--right now, this doesn't
@@ -1257,7 +1274,6 @@ mod tests {
         assert!(content.is_ok());
 
         let content = content.unwrap();
-        dbg!(&content);
         let tests = ["r1c1", "r1c2", "r2c1", "r2c2"];
         for text in tests {
             assert!(!content.contains(text));
@@ -1278,7 +1294,6 @@ mod tests {
         // the older version, where it failed to capture the entirety of the first subtable.
         let tests = ["foo", "bar", "baz", "quux1"];
         for text in tests {
-            dbg!(text);
             assert!(!content.contains(text));
         }
     }
