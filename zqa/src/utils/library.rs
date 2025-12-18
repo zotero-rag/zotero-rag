@@ -45,11 +45,12 @@ fn get_lib_path() -> Option<PathBuf> {
 }
 
 /// Metadata for items in the Zotero library.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct ZoteroItemMetadata {
     pub library_key: String,
     pub title: String,
     pub file_path: PathBuf,
+    pub authors: Option<Vec<String>>,
 }
 
 impl PartialEq for ZoteroItemMetadata {
@@ -122,6 +123,7 @@ impl From<Vec<RecordBatch>> for ZoteroItemSet {
                             library_key: lib_key,
                             title,
                             file_path: PathBuf::from(file_path),
+                            authors: None,
                         },
                         text,
                     })
@@ -207,6 +209,7 @@ pub async fn get_new_library_items(
                     library_key: key.clone(),
                     title: title.clone(),
                     file_path: PathBuf::from(path.clone()),
+                    authors: None,
                 })
                 .collect::<Vec<_>>()
         })
@@ -278,6 +281,7 @@ pub fn parse_library_metadata(
                     library_key: lib_key.clone(),
                     title: row.get(0)?,
                     file_path: path.join("storage").join(lib_key).join(filename),
+                    authors: None,
                 })
             })?
             .filter_map(std::result::Result::ok)
@@ -289,6 +293,101 @@ pub fn parse_library_metadata(
             "Library not found!".to_string(),
         ))
     }
+}
+
+/// Given a Zotero item, fetch the authors and fill them in-place.
+///
+/// # Arguments
+///
+/// * `item` - The item whose metadata needs to be filled in
+///
+/// # Returns
+///
+/// A unit type wrapped in a `Result`.
+fn get_authors_for_item(item: &mut ZoteroItem) -> Result<(), LibraryParsingError> {
+    if let Some(path) = get_lib_path() {
+        let conn = Connection::open(path.join("zotero.sqlite"))?;
+        let title = &item.metadata.title;
+
+        let query = format!(
+            "SELECT DISTINCT c.firstName, c.lastName
+            FROM items i
+            JOIN itemData id ON i.itemID = id.itemID
+            JOIN fields f ON id.fieldID = f.fieldID
+            JOIN itemDataValues idv ON id.valueID = idv.valueID
+            LEFT JOIN itemCreators ic ON i.itemID = ic.itemID
+            JOIN creators c ON ic.creatorID = c.creatorID
+            WHERE idv.value = '{title}'
+            AND f.fieldName = 'title'
+            ORDER BY ic.orderIndex
+        "
+        );
+
+        let mut stmt = conn.prepare(&query)?;
+        let item_iter: Vec<String> = stmt
+            .query_map([], |row| {
+                let first_name: String = row.get(0)?;
+                let last_name: String = row.get(1)?;
+
+                Ok(format!("{last_name}, {first_name}"))
+            })?
+            .filter_map(std::result::Result::ok)
+            .collect();
+
+        item.metadata.authors = Some(item_iter.clone());
+
+        Ok(())
+    } else {
+        Err(LibraryParsingError::SqlError(
+            "Library not found when fetching authors.".into(),
+        ))
+    }
+}
+
+/// Given a set of `items`, set the authors metadata in-place.
+///
+/// # Arguments
+///
+/// * `items` - The items whose metadata needs to be filled in.
+///
+/// # Returns
+///
+/// A `Result` describing if the operation was successful.
+///
+/// # Errors
+///
+/// * `LibraryParsingError::SqlError` if the operation failed for any items.
+pub fn get_authors(items: &mut [ZoteroItem]) -> Result<(), LibraryParsingError> {
+    let num_items = items.len();
+
+    let processed_items = std::thread::scope(|s| {
+        let handles: Vec<_> = items
+            .iter_mut()
+            .map(|item| s.spawn(move || get_authors_for_item(item)))
+            .collect();
+
+        let results = handles
+            .into_iter()
+            .map(|h| {
+                h.join().map_err(|_| {
+                    LibraryParsingError::SqlError("Failed to get authors for some items.".into())
+                })?
+            })
+            .filter_map(std::result::Result::ok)
+            .collect::<Vec<_>>();
+
+        results.len()
+    });
+
+    if num_items > processed_items {
+        let fail_count = num_items - processed_items;
+
+        return Err(LibraryParsingError::SqlError(format!(
+            "Failed to get authors for {fail_count}/{num_items} items."
+        )));
+    }
+
+    Ok(())
 }
 
 /// Parses the Zotero library, also parsing PDF files if they exist on disk. If not, we currently
@@ -565,8 +664,15 @@ mod tests {
 
         // Two of the items in the toy library are HTML files, so we actually
         // expect those to fail.
-        let items = items.unwrap();
+        let mut items = items.unwrap();
         assert!(!items.is_empty());
         assert!((0..=5).contains(&items.len()));
+
+        // Now fetch authors from the Zotero DB
+        let authors_result = get_authors(&mut items);
+        assert!(authors_result.is_ok());
+        for item in items {
+            assert!(item.metadata.authors.is_some());
+        }
     }
 }
