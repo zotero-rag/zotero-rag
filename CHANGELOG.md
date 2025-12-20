@@ -1,5 +1,5 @@
 # Change Log
 
-# v0.1.0b
+# v0.1.0-beta.1
 
-Initial non-alpha release!
+Initial beta release!

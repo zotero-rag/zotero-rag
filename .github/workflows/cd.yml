@@ -6,7 +6,6 @@ permissions:
 
 env:
   CICD_INTERMEDIATES_DIR: "_cicd-intermediates"
-  MSRV_FEATURES: "--all-features"
 
 on:
   workflow_dispatch:
@@ -27,10 +26,10 @@ jobs:
       id: crate_metadata
       run: |
         echo "name=zqa" | tee -a $GITHUB_OUTPUT
-        cargo metadata --no-deps --format-version 1 | jq -r '"version=" + .packages[0].version' | tee -a $GITHUB_OUTPUT
-        cargo metadata --no-deps --format-version 1 | jq -r '"maintainer=" + .packages[0].authors[0]' | tee -a $GITHUB_OUTPUT
-        cargo metadata --no-deps --format-version 1 | jq -r '"homepage=" + .packages[0].homepage' | tee -a $GITHUB_OUTPUT
-        cargo metadata --no-deps --format-version 1 | jq -r '"msrv=" + .packages[0].rust_version' | tee -a $GITHUB_OUTPUT
+        cargo metadata --no-deps --format-version 1 | jq -r '"version=" + (.packages[] | select(.name == "zqa")).version' | tee -a $GITHUB_OUTPUT
+        cargo metadata --no-deps --format-version 1 | jq -r '"maintainer=" + (.packages[] | select(.name == "zqa")).authors[0]' | tee -a $GITHUB_OUTPUT
+        cargo metadata --no-deps --format-version 1 | jq -r '"homepage=" + (.packages[] | select(.name == "zqa")).homepage' | tee -a $GITHUB_OUTPUT
+        cargo metadata --no-deps --format-version 1 | jq -r '"msrv=" + (.packages[] | select(.name == "zqa")).rust_version' | tee -a $GITHUB_OUTPUT
     outputs:
       name: ${{ steps.crate_metadata.outputs.name }}
       version: ${{ steps.crate_metadata.outputs.version }}
@@ -51,10 +50,8 @@ jobs:
       matrix:
         job:
           - { target: aarch64-unknown-linux-gnu   , os: blacksmith-8vcpu-ubuntu-2404-arm }
-          - { target: aarch64-unknown-linux-musl  , os: blacksmith-8vcpu-ubuntu-2404-arm }
           - { target: aarch64-apple-darwin        , os: macos-14                      }
           - { target: x86_64-unknown-linux-gnu    , os: blacksmith-8vcpu-ubuntu-2404 }
-          - { target: x86_64-unknown-linux-musl   , os: blacksmith-8vcpu-ubuntu-2404 }
     env:
       BUILD_CMD: cargo
       target: ${{ matrix.job.target }}
