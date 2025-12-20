@@ -1,8 +1,11 @@
 [package]
 name = "zqa"
+authors = ["Rahul Yedida <hello@ryedida.me>"]
+homepage = "https://github.com/zotero-rag/zotero-rag"
 description = "A QA and search program for your Zotero library."
-version = "0.1.0"
+version = "0.1.0-beta.1"
 edition = "2024"
+rust-version = "1.91"
 
 [dependencies]
 directories = "6.0.0"
