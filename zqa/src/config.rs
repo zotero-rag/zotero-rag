@@ -35,7 +35,7 @@ use thiserror::Error;
 /// max_tokens = 64000
 ///
 /// [openai]
-/// model = "gpt-5"
+/// model = "gpt-5.2"
 /// api_key = "sk-proj-..."
 /// max_tokens = 8192
 /// embedding_model = "text-embedding-3-small"
@@ -301,7 +301,7 @@ impl Default for AnthropicConfig {
 /// `OpenAI` provider configuration
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct OpenAIConfig {
-    /// Model name (e.g., "gpt-5")
+    /// Model name (e.g., "gpt-5.2")
     pub model: Option<String>,
 
     /// API key
@@ -640,7 +640,7 @@ mod tests {
             max_tokens = 64000
 
             [openai]
-            model = "gpt-5"
+            model = "gpt-5.2"
             api_key = "sk-proj-test"
             max_tokens = 8192
             embedding_model = "text-embedding-3-small"

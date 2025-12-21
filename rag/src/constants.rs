@@ -7,7 +7,7 @@ pub const DEFAULT_MAX_CONCURRENT_REQUESTS: usize = 5;
 pub const DEFAULT_MAX_RETRIES: usize = 3;
 
 /// Default OpenAI model for chat completions
-pub const DEFAULT_OPENAI_MODEL: &str = "gpt-5.1";
+pub const DEFAULT_OPENAI_MODEL: &str = "gpt-5.2-2025-12-11";
 
 /// Default OpenAI generation max tokens
 pub const DEFAULT_OPENAI_MAX_TOKENS: u32 = 8192;

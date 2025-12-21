@@ -121,7 +121,7 @@ impl From<&ChatHistoryItem> for AnthropicChatHistoryItem {
 /// Represents a request to the Anthropic API
 #[derive(Serialize)]
 struct AnthropicRequest<'a> {
-    /// The model to use for the request (e.g., "claude-3-5-sonnet-20241022")
+    /// The model to use for the request (e.g., "claude-4-5-sonnet")
     model: &'a str,
     /// The maximum number of tokens that can be generated in the response
     max_tokens: u32,

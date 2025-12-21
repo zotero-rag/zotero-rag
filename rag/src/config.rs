@@ -20,7 +20,7 @@ pub struct AnthropicConfig {
 pub struct OpenAIConfig {
     /// API key for OpenAI
     pub api_key: String,
-    /// Model name for generation (e.g., "gpt-4.1-2025-04-14")
+    /// Model name for generation (e.g., "gpt-5.2")
     pub model: String,
     /// Maximum tokens for generation
     pub max_tokens: u32,

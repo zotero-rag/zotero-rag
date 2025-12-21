@@ -228,7 +228,7 @@ impl From<&ChatHistoryItem> for Vec<OpenAIRequestInput> {
 
 #[derive(Serialize)]
 struct OpenAIRequest<'a> {
-    /// The model to use for the request (e.g., "gpt-4.1").
+    /// The model to use for the request (e.g., "gpt-5.2").
     model: &'a str,
 
     /// The flattened chat history and current message.
@@ -698,7 +698,7 @@ mod tests {
         let mock_response = OpenAIResponse {
             id: "mock-id".to_string(),
             created_at: 1234567890,
-            model: "gpt-4.1-2025-04-14".to_string(),
+            model: "gpt-5.2-2025-12-11".to_string(),
             usage: OpenAIUsage {
                 input_tokens: 5,
                 output_tokens: 10,

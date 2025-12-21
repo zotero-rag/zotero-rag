@@ -14,7 +14,7 @@ use super::base::{ApiClient, ChatHistoryItem, ChatRequest, CompletionApiResponse
 use super::errors::LLMError;
 use super::http_client::{HttpClient, ReqwestClient};
 
-const DEFAULT_MODEL: &str = "openai/gpt-4o";
+const DEFAULT_MODEL: &str = "anthropic/claude-sonnet-4.5";
 
 /// A generic client class for now. We can add stuff here later for
 /// all the features OpenRouter supports.
@@ -494,7 +494,7 @@ mod tests {
         // Create a proper OpenRouterResponse that matches the structure we expect to deserialize
         let mock_response = OpenRouterResponse {
             id: String::from("test"),
-            model: String::from("openai/gpt-3.5-turbo"),
+            model: String::from("openai/gpt-5.2"),
             provider: String::from("OpenAI"),
             object: String::from("chat.completion"),
             created: 1000,

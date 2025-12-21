@@ -87,7 +87,7 @@ api_key = "sk-ant-..."
 max_tokens = 64000
 
 [openai]
-model = "gpt-5"
+model = "gpt-5.2"
 api_key = "sk-proj-..."
 max_tokens = 8192
 embedding_model = "text-embedding-3-small"
@@ -121,7 +121,7 @@ model = "anthropic/claude-sonnet-4.5"
 Create a `.env` in the root of the project with the following structure:
 ```
 ANTHROPIC_API_KEY=
-ANTHROPIC_MODEL=claude-sonnet-4-20250514
+ANTHROPIC_MODEL=claude-sonnet-4-5
 OPENAI_API_KEY=
 OPENAI_EMBEDDING_MODEL=text-embedding-3-small
 OPENAI_MODEL=o4-mini-2025-04-16
@@ -140,7 +140,7 @@ OPENROUTER_API_KEY=
 MAX_CONCURRENT_REQUESTS=5
 ```
 
-The model choices and the maximum concurrent requests above are defaults, and you can omit them. By default, the app uses Anthropic for generation and Voyage AI for embedding. This is currently the recommended settings (and so you won't need an OpenAI API key set up). Note that Voyage AI embeddings are the only ones that are known to work in a real setting; it is quite unlikely for the OpenAI embeddings to work at this moment, because we do not perform any chunking. For `OPENAI_MODEL`, o4-mini is recommended, unless you have a Usage Tier 3 account--in which case you may prefer gpt-4.1.
+The model choices and the maximum concurrent requests above are defaults, and you can omit them. By default, the app uses Anthropic for generation and Voyage AI for embedding. This is currently the recommended settings (and so you won't need an OpenAI API key set up). Note that Voyage AI embeddings are the only ones that are known to work in a real setting; it is quite unlikely for the OpenAI embeddings to work at this moment, because we do not perform any chunking.
 
 You likely don't need _all_ of these set (or even mentioned) in your `.env` file: add just the ones you need, and defaults will be used for all the others. The exception to this is if you're _contributing_--in which case you will need _all_ of them set so that tests can run locally. Because the LLM space changes often, most tests are written without mocking so that any breaking changes caused by APIs changing is caught early.
 
