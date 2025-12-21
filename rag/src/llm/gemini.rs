@@ -17,7 +17,9 @@ use crate::constants::{
     DEFAULT_GEMINI_EMBEDDING_DIM, DEFAULT_GEMINI_EMBEDDING_MODEL, DEFAULT_GEMINI_MODEL,
     DEFAULT_MAX_CONCURRENT_REQUESTS, DEFAULT_MAX_RETRIES,
 };
-use crate::llm::base::{ChatHistoryContent, ChatHistoryItem, ContentType, ToolCallRequest};
+use crate::llm::base::{
+    ChatHistoryContent, ChatHistoryItem, ContentType, ToolCallRequest, USER_ROLE,
+};
 use crate::llm::tools::{SerializedTool, get_owned_tools, process_tool_calls};
 
 use super::base::{ApiClient, ChatRequest, CompletionApiResponse};
@@ -357,7 +359,7 @@ fn build_gemini_request_data<'a>(
         req.chat_history.iter().cloned().map(Into::into).collect();
 
     contents.push(GeminiContent {
-        role: "user".to_string(),
+        role: USER_ROLE.to_string(),
         parts: vec![GeminiPart::Text {
             text: req.message.clone(),
             thought_signature: None,

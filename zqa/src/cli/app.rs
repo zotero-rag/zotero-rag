@@ -9,7 +9,10 @@ use arrow_schema::Schema;
 use lancedb::embeddings::EmbeddingDefinition;
 use rag::capabilities::ModelProviders;
 use rag::config::LLMClientConfig;
-use rag::llm::base::{ApiClient, ChatRequest, CompletionApiResponse, ContentType};
+use rag::llm::base::{
+    ASSISTANT_ROLE, ApiClient, ChatHistoryContent, ChatHistoryItem, ChatRequest,
+    CompletionApiResponse, ContentType, USER_ROLE,
+};
 use rag::llm::errors::LLMError;
 use rag::llm::factory::{get_client_by_provider, get_client_with_config};
 use rag::vector::checkhealth::lancedb_health_check;
@@ -522,6 +525,8 @@ async fn run_query<O: Write, E: Write>(
         let metadata = item.metadata.clone();
 
         set.spawn(async move {
+            // TODO: Use `ctx.state` when we provide the model with tools to perform its own
+            // retrieval.
             let request = ChatRequest {
                 chat_history: Vec::new(),
                 max_tokens: None,
@@ -617,7 +622,7 @@ async fn run_query<O: Write, E: Write>(
         .collect::<Vec<_>>();
 
     let request = ChatRequest {
-        chat_history: Vec::new(),
+        chat_history: ctx.state.chat_history.clone(),
         max_tokens: None,
         message: get_summarize_prompt(&query, &texts),
         tools: None,
@@ -634,10 +639,26 @@ async fn run_query<O: Write, E: Write>(
             )?;
 
             writeln!(&mut ctx.out, "\n-----")?;
-            writeln!(&mut ctx.out, "{}", SingleResponse::from(response.content))?;
+            writeln!(
+                &mut ctx.out,
+                "{}",
+                SingleResponse::from(response.content.clone())
+            )?;
 
             total_input_tokens += response.input_tokens;
             total_output_tokens += response.output_tokens;
+
+            // Update state
+            ctx.state.chat_history.push(ChatHistoryItem {
+                role: USER_ROLE.into(),
+                content: vec![ChatHistoryContent::Text(query.clone())],
+            });
+            ctx.state.chat_history.push(ChatHistoryItem {
+                role: ASSISTANT_ROLE.into(),
+                content: vec![ChatHistoryContent::Text(
+                    SingleResponse::from(response.content).to_string(),
+                )],
+            });
         }
         Err(e) => {
             writeln!(

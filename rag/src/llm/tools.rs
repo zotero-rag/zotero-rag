@@ -10,7 +10,9 @@ use std::future::Future;
 use std::pin::Pin;
 
 use crate::llm::{
-    base::{ChatHistoryContent, ChatHistoryItem, ContentType, ToolCallResponse, ToolUseStats},
+    base::{
+        ChatHistoryContent, ChatHistoryItem, ContentType, ToolCallResponse, ToolUseStats, USER_ROLE,
+    },
     errors::LLMError,
 };
 
@@ -235,7 +237,7 @@ where
 
                 chat_history.push(
                     ChatHistoryItem {
-                        role: "user".into(),
+                        role: USER_ROLE.into(),
                         content: vec![ChatHistoryContent::ToolCallResponse(ToolCallResponse {
                             id: tool_call_id,
                             tool_name: tool_call.tool_name.clone(),

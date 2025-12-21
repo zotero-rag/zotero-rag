@@ -6,6 +6,11 @@ use crate::llm::tools::Tool;
 use super::errors::LLMError;
 use serde::{Deserialize, Serialize};
 
+/// The user role.
+pub const USER_ROLE: &str = "user";
+/// The assistant role.
+pub const ASSISTANT_ROLE: &str = "assistant";
+
 /// A user-facing, generic, tool call request. This contains the tool name and the parameters
 /// passed to that tool. It also includes the tool call id, which most providers use to
 /// disambiguate each tool use response. Note that the *result* of the tool call is not stored
@@ -55,7 +60,8 @@ pub enum ChatHistoryContent {
 /// is internally converted to provider-specific implementations.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct ChatHistoryItem {
-    /// Typically "user", "assistant", etc.
+    /// The chat role. Every supported provider has a "user" (`USER_ROLE`) and an "assistant"
+    /// (`ASSISTANT_ROLE`) role.
     pub role: String,
     /// The contents of this item. This is a `Vec` because some APIs expect tool call requests to
     /// be bundled together with the text preceding it.

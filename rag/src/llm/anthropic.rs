@@ -19,7 +19,7 @@ use crate::constants::{
     DEFAULT_OPENAI_EMBEDDING_DIM,
 };
 use crate::embedding::openai::compute_openai_embeddings_sync;
-use crate::llm::base::{ChatHistoryContent, ContentType, ToolCallRequest};
+use crate::llm::base::{ChatHistoryContent, ContentType, ToolCallRequest, USER_ROLE};
 use crate::llm::tools::{SerializedTool, get_owned_tools, process_tool_calls};
 const DEFAULT_CLAUDE_MODEL: &str = DEFAULT_ANTHROPIC_MODEL;
 
@@ -143,7 +143,7 @@ fn build_anthropic_messages_and_tools<'a>(
     let mut messages = req.chat_history.iter().map(Into::into).collect::<Vec<_>>();
 
     messages.push(AnthropicChatHistoryItem {
-        role: "user".to_owned(),
+        role: USER_ROLE.to_owned(),
         content: vec![req.message.clone().into()],
     });
 
