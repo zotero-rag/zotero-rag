@@ -307,16 +307,16 @@ pub fn parse_library_metadata(
 fn get_authors_for_item(item: &mut ZoteroItem) -> Result<(), LibraryParsingError> {
     if let Some(path) = get_lib_path() {
         let conn = Connection::open(path.join("zotero.sqlite"))?;
-        let title = &item.metadata.title;
+        let library_key = &item.metadata.library_key;
 
-        let query = "SELECT DISTINCT c.firstName, c.lastName
+        let query = "SELECT c.firstName, c.lastName
             FROM items i
             JOIN itemData id ON i.itemID = id.itemID
             JOIN fields f ON id.fieldID = f.fieldID
             JOIN itemDataValues idv ON id.valueID = idv.valueID
-            LEFT JOIN itemCreators ic ON i.itemID = ic.itemID
+            JOIN itemCreators ic ON i.itemID = ic.itemID
             JOIN creators c ON ic.creatorID = c.creatorID
-            WHERE idv.value = ?1
+            WHERE idv.key = ?1
             AND f.fieldName = 'title'
             ORDER BY ic.orderIndex
         "
@@ -324,7 +324,7 @@ fn get_authors_for_item(item: &mut ZoteroItem) -> Result<(), LibraryParsingError
 
         let mut stmt = conn.prepare(&query)?;
         let item_iter: Vec<String> = stmt
-            .query_map(rusqlite::params![title], |row| {
+            .query_map(rusqlite::params![library_key], |row| {
                 let first_name: String = row.get(0)?;
                 let last_name: String = row.get(1)?;
 
@@ -333,7 +333,7 @@ fn get_authors_for_item(item: &mut ZoteroItem) -> Result<(), LibraryParsingError
             .filter_map(std::result::Result::ok)
             .collect();
 
-        item.metadata.authors = Some(item_iter.clone());
+        item.metadata.authors = Some(item_iter);
 
         Ok(())
     } else {
@@ -357,33 +357,8 @@ fn get_authors_for_item(item: &mut ZoteroItem) -> Result<(), LibraryParsingError
 ///
 /// * `LibraryParsingError::SqlError` if the operation failed for any items.
 pub fn get_authors(items: &mut [ZoteroItem]) -> Result<(), LibraryParsingError> {
-    let num_items = items.len();
-
-    let processed_items = std::thread::scope(|s| {
-        let handles: Vec<_> = items
-            .iter_mut()
-            .map(|item| s.spawn(move || get_authors_for_item(item)))
-            .collect();
-
-        let results = handles
-            .into_iter()
-            .map(|h| {
-                h.join().map_err(|_| {
-                    LibraryParsingError::SqlError("Failed to get authors for some items.".into())
-                })?
-            })
-            .filter_map(std::result::Result::ok)
-            .collect::<Vec<_>>();
-
-        results.len()
-    });
-
-    if num_items > processed_items {
-        let fail_count = num_items - processed_items;
-
-        return Err(LibraryParsingError::SqlError(format!(
-            "Failed to get authors for {fail_count}/{num_items} items."
-        )));
+    for item in items {
+        get_authors_for_item(item)?;
     }
 
     Ok(())

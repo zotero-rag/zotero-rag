@@ -544,12 +544,12 @@ async fn run_query<O: Write, E: Write>(
         for (paper, summary_result) in search_results.iter().zip(results.iter()) {
             if let Ok(summary) = summary_result {
                 let title = &paper.metadata.title;
-                let summary_text = &summary
+                let summary_text = summary
                     .content
                     .iter()
                     .filter_map(|c| match c {
-                        ContentType::Text(text) => Some(text.clone()),
-                        _ => None,
+                        ContentType::Text(text) => Some(text.as_str()),
+                        ContentType::ToolCall(_) => None,
                     })
                     .collect::<String>();
 
@@ -914,7 +914,8 @@ mod tests {
     fn create_test_context() -> Context<Cursor<Vec<u8>>, Cursor<Vec<u8>>> {
         let args = Args {
             tui: false,
-            log_level: "none".into(),
+            print_summaries: false,
+            log_level: log::LevelFilter::Off,
         };
         let out_buf: Vec<u8> = Vec::new();
         let out = Cursor::new(out_buf);

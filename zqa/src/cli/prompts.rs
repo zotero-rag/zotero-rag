@@ -13,10 +13,10 @@ use crate::utils::library::ZoteroItemMetadata;
 /// * `prompt` - The prompt for extracting the relevant parts of the query.
 #[must_use]
 pub fn get_extraction_prompt(query: &str, pdf_text: &str, metadata: &ZoteroItemMetadata) -> String {
-    let authors = match metadata.authors.clone() {
-        Some(author_list) => author_list.join("; "),
-        None => "No author list provided; please infer from the text.".into(),
-    };
+    let authors = metadata.authors.as_ref().map_or_else(
+        || "No author list provided; please infer from the text.".into(),
+        |list| list.join("; "),
+    );
     let title = &metadata.title;
 
     format!("Given a question from a user and the full text from a research paper, extract the relevant

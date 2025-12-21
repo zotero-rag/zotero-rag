@@ -1,6 +1,7 @@
 use dotenv::dotenv;
 use log::LevelFilter;
 use zqa::common::setup_logger;
+use zqa::utils::library::ZoteroItemMetadata;
 
 use std::{env, fs};
 
@@ -17,7 +18,16 @@ async fn run_extraction_test(client: rag::llm::factory::LLMClient, provider_name
         .expect("Failed to read cached Zotero file.");
 
     // Get the extraction prompt
-    let prompt = get_extraction_prompt(query, &pdf_text);
+    let prompt = get_extraction_prompt(
+        query,
+        &pdf_text,
+        &ZoteroItemMetadata {
+            library_key: "5KWS383N".into(),
+            title: "Baydin et al. - 2018 - Online Learning Rate Adaptation with Hypergradient Descent.pdf".into(),
+            file_path: "assets/Zotero/storage/5KWS383N/.zotero-ft-cache".into(),
+            authors: None,
+        },
+    );
 
     // Create and send the message
     let request = ChatRequest {
