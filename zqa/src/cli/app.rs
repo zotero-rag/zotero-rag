@@ -2,7 +2,7 @@ use crate::cli::placeholder::PlaceholderText;
 use crate::cli::prompts::{get_extraction_prompt, get_summarize_prompt};
 use crate::cli::readline::get_readline_config;
 use crate::utils::arrow::{DbFields, library_to_arrow, vector_search};
-use crate::utils::library::{ZoteroItem, ZoteroItemSet, get_new_library_items};
+use crate::utils::library::{ZoteroItem, ZoteroItemSet, get_authors, get_new_library_items};
 use crate::utils::rag::SingleResponse;
 use arrow_array::{self, RecordBatch, RecordBatchIterator, StringArray};
 use arrow_schema::Schema;
@@ -415,7 +415,7 @@ async fn search_for_papers<O: Write, E: Write>(
     ctx: &mut Context<O, E>,
 ) -> Result<(), CLIError> {
     let vector_search_start = Instant::now();
-    let search_results = vector_search(
+    let mut search_results = vector_search(
         query.clone(),
         &ctx.config
             .get_embedding_config()
@@ -425,6 +425,8 @@ async fn search_for_papers<O: Write, E: Write>(
         ctx.config.reranker_provider.clone(),
     )
     .await?;
+    let _ = get_authors(&mut search_results);
+
     let vector_search_duration = vector_search_start.elapsed();
     writeln!(
         &mut ctx.err,
@@ -456,7 +458,7 @@ async fn run_query<O: Write, E: Write>(
     let model_provider = ctx.config.model_provider.clone();
 
     let vector_search_start = Instant::now();
-    let search_results = vector_search(
+    let mut search_results = vector_search(
         query.clone(),
         &ctx.config
             .get_embedding_config()
@@ -466,6 +468,8 @@ async fn run_query<O: Write, E: Write>(
         ctx.config.reranker_provider.clone(),
     )
     .await?;
+    let _ = get_authors(&mut search_results);
+
     let vector_search_duration = vector_search_start.elapsed();
     writeln!(
         &mut ctx.err,
@@ -515,12 +519,13 @@ async fn run_query<O: Write, E: Write>(
         let client = llm_client.clone();
         let text = item.text.clone();
         let query_clone = query.clone();
+        let metadata = item.metadata.clone();
 
         set.spawn(async move {
             let request = ChatRequest {
                 chat_history: Vec::new(),
                 max_tokens: None,
-                message: get_extraction_prompt(&query_clone, &text),
+                message: get_extraction_prompt(&query_clone, &text, &metadata),
                 tools: None,
             };
 
@@ -534,6 +539,25 @@ async fn run_query<O: Write, E: Write>(
         &mut ctx.err,
         "{DIM_TEXT}Summarization completed in {summarization_duration:.2?}{RESET}"
     )?;
+
+    if ctx.args.print_summaries && ctx.args.log_level >= log::LevelFilter::Info {
+        for (paper, summary_result) in search_results.iter().zip(results.iter()) {
+            if let Ok(summary) = summary_result {
+                let title = &paper.metadata.title;
+                let summary_text = &summary
+                    .content
+                    .iter()
+                    .filter_map(|c| match c {
+                        ContentType::Text(text) => Some(text.clone()),
+                        _ => None,
+                    })
+                    .collect::<String>();
+
+                log::info!("Paper: {title}");
+                log::info!("Summary: {summary_text}");
+            }
+        }
+    }
 
     let err_results = results
         .iter()

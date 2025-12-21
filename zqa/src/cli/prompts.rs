@@ -1,3 +1,5 @@
+use crate::utils::library::ZoteroItemMetadata;
+
 /// Get the "extraction" prompt, which extracts the relevant parts of a retrieved paper. This is
 /// the first step of the question-answering process.
 ///
@@ -10,7 +12,13 @@
 ///
 /// * `prompt` - The prompt for extracting the relevant parts of the query.
 #[must_use]
-pub fn get_extraction_prompt(query: &str, pdf_text: &str) -> String {
+pub fn get_extraction_prompt(query: &str, pdf_text: &str, metadata: &ZoteroItemMetadata) -> String {
+    let authors = match metadata.authors.clone() {
+        Some(author_list) => author_list.join("; "),
+        None => "No author list provided; please infer from the text.".into(),
+    };
+    let title = &metadata.title;
+
     format!("Given a question from a user and the full text from a research paper, extract the relevant
 parts that are suitable for answering the question. Wrap each relevant excerpt from the paper in
 <excerpt></excerpt> tags. Here are some guidelines:
@@ -25,11 +33,19 @@ Aside from this, do not modify the source text.
 3. You are encouraged to also cite excerpts from the paper that cite other papers, *if these excerpts
 are relevant*. In such cases, if the citation uses numbers, change the numbering to be an author-year
 format, preferably in the APA style. Write all your references at the end of your response, after a
-\"References:\" header.
+\"References:\" header. If the user specifically requests a different citation style such as
+MLA, you should use that instead.
 4. Some text from the paper's Appendix or Supplementary Material may be in this text. Do not use
 excerpts from this material.
 
 Here is the user query: <user_query>{query}</user_query>.
+
+Below is some information about the paper:
+<metadata>
+    <title>{title}</title>
+    <authors>{authors}</authors>
+</metadata>
+
 Below is the full text of the paper:
 
 <pdf_text>
