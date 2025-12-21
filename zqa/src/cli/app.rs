@@ -3,7 +3,7 @@ use crate::cli::prompts::{get_extraction_prompt, get_summarize_prompt};
 use crate::cli::readline::get_readline_config;
 use crate::utils::arrow::{DbFields, library_to_arrow, vector_search};
 use crate::utils::library::{ZoteroItem, ZoteroItemSet, get_authors, get_new_library_items};
-use crate::utils::rag::SingleResponse;
+use crate::utils::rag::ModelResponse;
 use arrow_array::{self, RecordBatch, RecordBatchIterator, StringArray};
 use arrow_schema::Schema;
 use lancedb::embeddings::EmbeddingDefinition;
@@ -549,15 +549,7 @@ async fn run_query<O: Write, E: Write>(
         for (paper, summary_result) in search_results.iter().zip(results.iter()) {
             if let Ok(summary) = summary_result {
                 let title = &paper.metadata.title;
-                let summary_text = summary
-                    .content
-                    .iter()
-                    .filter_map(|c| match c {
-                        ContentType::Text(text) => Some(text.as_str()),
-                        ContentType::ToolCall(_) => None,
-                    })
-                    .collect::<String>();
-
+                let summary_text = ModelResponse::from(&summary.content).to_string();
                 log::info!("Paper: {title}");
                 log::info!("Summary: {summary_text}");
             }
@@ -600,7 +592,7 @@ async fn run_query<O: Write, E: Write>(
         .map(|res| {
             format!(
                 "<search_result>{}</search_result>",
-                SingleResponse::from(res)
+                ModelResponse::from(res)
             )
         })
         .collect::<Vec<_>>()
@@ -642,7 +634,7 @@ async fn run_query<O: Write, E: Write>(
             writeln!(
                 &mut ctx.out,
                 "{}",
-                SingleResponse::from(response.content.clone())
+                ModelResponse::from(response.content.clone())
             )?;
 
             total_input_tokens += response.input_tokens;
@@ -656,7 +648,7 @@ async fn run_query<O: Write, E: Write>(
             ctx.state.chat_history.push(ChatHistoryItem {
                 role: ASSISTANT_ROLE.into(),
                 content: vec![ChatHistoryContent::Text(
-                    SingleResponse::from(response.content).to_string(),
+                    ModelResponse::from(response.content).to_string(),
                 )],
             });
         }
