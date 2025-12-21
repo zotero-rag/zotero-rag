@@ -316,13 +316,13 @@ fn get_authors_for_item(item: &mut ZoteroItem) -> Result<(), LibraryParsingError
             JOIN itemDataValues idv ON id.valueID = idv.valueID
             JOIN itemCreators ic ON i.itemID = ic.itemID
             JOIN creators c ON ic.creatorID = c.creatorID
-            WHERE idv.key = ?1
+            WHERE i.key = ?1
             AND f.fieldName = 'title'
             ORDER BY ic.orderIndex
         "
         .to_string();
 
-        let mut stmt = conn.prepare(&query)?;
+        let mut stmt = conn.prepare(&query).unwrap();
         let item_iter: Vec<String> = stmt
             .query_map(rusqlite::params![library_key], |row| {
                 let first_name: String = row.get(0)?;
