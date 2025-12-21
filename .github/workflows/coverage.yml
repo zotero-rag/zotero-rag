@@ -1,59 +1,59 @@
 name: Coverage
 permissions:
-    contents: read
+  contents: read
 
 on:
-    workflow_dispatch:
-    pull_request:
-        branches: ["master"]
+  workflow_dispatch:
+  pull_request:
+    branches: ["master"]
 
 jobs:
-    coverage:
-        runs-on: blacksmith-8vcpu-ubuntu-2404
+  coverage:
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - name: Dependencies
+        run: sudo apt install protobuf-compiler
+
+      - uses: rui314/setup-mold@v1
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+              ~/.cargo/bin/
+              ~/.cargo/registry/index/
+              ~/.cargo/registry/cache/
+              ~/.cargo/git/db/
+              target/
+          key: ${{ runner.os }}-cargo-tarpaulin-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Install Rust
+        run: rustup update stable
+
+      - name: Install cargo-tarpaulin
+        run: cargo install cargo-tarpaulin --force
+
+      - name: Generate code coverage
+        run: cargo tarpaulin --out lcov --output-dir . --timeout 300 --rustflags="-C opt-level=0" --exclude-files="zqa/tests/*"
         env:
-            CARGO_TERM_COLOR: always
-        steps:
-            - name: Dependencies
-              run: sudo apt install protobuf-compiler
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_KEY }}
+          VOYAGE_AI_API_KEY: ${{ secrets.VOYAGE_AI_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          COHERE_API_KEY: ${{ secrets.COHERE_API_KEY }}
+          OPENROUTER_MODEL: google/gemini-2.5-flash
+          ANTHROPIC_MODEL: claude-haiku-4-5-20251001
+          OPENAI_EMBEDDING_MODEL: text-embedding-3-small
+          MAX_CONCURRENT_REQUESTS: 5
 
-            - uses: rui314/setup-mold@v1
-
-            - uses: actions/checkout@v4
-
-            - uses: actions/cache@v4
-              with:
-                  path: |
-                      ~/.cargo/bin/
-                      ~/.cargo/registry/index/
-                      ~/.cargo/registry/cache/
-                      ~/.cargo/git/db/
-                      target/
-                  key: ${{ runner.os }}-cargo-tarpaulin-${{ hashFiles('**/Cargo.lock') }}
-
-            - name: Install Rust
-              run: rustup update stable
-
-            - name: Install cargo-tarpaulin
-              run: cargo install cargo-tarpaulin --force
-
-            - name: Generate code coverage
-              run: cargo tarpaulin --out lcov --output-dir . --timeout 300 --rustflags="-C opt-level=0" --exclude-files="zqa/tests/*"
-              env:
-                  ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_KEY }}
-                  VOYAGE_AI_API_KEY: ${{ secrets.VOYAGE_AI_API_KEY }}
-                  OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-                  OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-                  GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-                  COHERE_API_KEY: ${{ secrets.COHERE_API_KEY }}
-                  OPENROUTER_MODEL: google/gemini-2.5-flash
-                  ANTHROPIC_MODEL: claude-haiku-4-5-20251001
-                  OPENAI_EMBEDDING_MODEL: text-embedding-3-small
-                  MAX_CONCURRENT_REQUESTS: 5
-
-            - name: Upload coverage to Codecov
-              uses: codecov/codecov-action@v5
-              with:
-                  token: ${{ secrets.CODECOV_TOKEN }}
-                  slug: zotero-rag/zotero-rag
-                  files: lcov.info
-                  fail_ci_if_error: true
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          slug: zotero-rag/zotero-rag
+          files: lcov.info
+          fail_ci_if_error: true
