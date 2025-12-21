@@ -38,22 +38,28 @@ pub async fn main() {
     let args = Args::parse();
 
     // Avoid RUST_LOG from interfering by not instantiating the logger if it's disabled.
-    if args.log_level != "off" {
-        let log_level = match args.log_level.as_str() {
-            "debug" => log::LevelFilter::Debug,
-            "info" => log::LevelFilter::Info,
-            "warn" => log::LevelFilter::Warn,
-            "error" => log::LevelFilter::Error,
-            _ => log::LevelFilter::Off,
-        };
-        setup_logger(log_level).expect("Failed to set up logger.");
-    }
+    setup_logger(args.log_level).expect("Failed to set up logger.");
 
     log::debug!(
-        "You are running {} version {}.",
+        "You are running {} version {}. Log level: {}",
         env!("CARGO_CRATE_NAME"),
-        env!("CARGO_PKG_VERSION")
+        env!("CARGO_PKG_VERSION"),
+        args.log_level
     );
+
+    if args.log_level < log::LevelFilter::Info && args.print_summaries {
+        let warning = "`--print-summaries` requires `--log-level=info`. This will have no effect.";
+
+        if args.log_level >= log::LevelFilter::Warn {
+            log::warn!("{warning}");
+        } else {
+            const YELLOW: &str = "\x1b[33m";
+            const YELLOW_BOLD: &str = "\x1b[33;1m";
+            const RESET: &str = "\x1b[0m";
+
+            eprintln!("{YELLOW_BOLD}warn: {RESET}{YELLOW}{warning}{RESET}");
+        }
+    }
 
     log::debug!("Loaded configuration: {:#?}", config);
 

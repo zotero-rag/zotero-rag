@@ -309,23 +309,22 @@ fn get_authors_for_item(item: &mut ZoteroItem) -> Result<(), LibraryParsingError
         let conn = Connection::open(path.join("zotero.sqlite"))?;
         let title = &item.metadata.title;
 
-        let query = format!(
-            "SELECT DISTINCT c.firstName, c.lastName
+        let query = "SELECT DISTINCT c.firstName, c.lastName
             FROM items i
             JOIN itemData id ON i.itemID = id.itemID
             JOIN fields f ON id.fieldID = f.fieldID
             JOIN itemDataValues idv ON id.valueID = idv.valueID
             LEFT JOIN itemCreators ic ON i.itemID = ic.itemID
             JOIN creators c ON ic.creatorID = c.creatorID
-            WHERE idv.value = '{title}'
+            WHERE idv.value = ?1
             AND f.fieldName = 'title'
             ORDER BY ic.orderIndex
         "
-        );
+        .to_string();
 
         let mut stmt = conn.prepare(&query)?;
         let item_iter: Vec<String> = stmt
-            .query_map([], |row| {
+            .query_map(rusqlite::params![title], |row| {
                 let first_name: String = row.get(0)?;
                 let last_name: String = row.get(1)?;
 

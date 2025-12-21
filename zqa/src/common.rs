@@ -15,9 +15,15 @@ pub struct Args {
     #[arg(long, default_value_t = false)]
     pub tui: bool,
 
-    /// Log level
-    #[arg(long, default_value_t = String::from("off"))]
-    pub log_level: String,
+    /// Log level. Options: debug, info, warn, error, off (default)
+    #[arg(value_enum, long)]
+    pub log_level: log::LevelFilter,
+
+    /// Whether to also print out the extracted snippets of the retrieved papers. Note that these
+    /// are printed out at the INFO log level, so if the log level is unset or lower than INFO, this
+    /// effectively does nothing.
+    #[arg(short, long, default_value_t = false)]
+    pub print_summaries: bool,
 }
 
 /// The application state. This is embedded in the context, and all state variables are
