@@ -2,6 +2,7 @@ use std::io::{self, stderr, stdout};
 
 use clap::Parser;
 use dotenv::dotenv;
+#[cfg(not(tarpaulin))]
 use zqa::cli::app::cli;
 use zqa::common::{Args, Context, setup_logger};
 use zqa::config::Config;
@@ -106,6 +107,7 @@ pub async fn main() {
         err: stderr(),
     };
 
+    #[cfg(not(tarpaulin))]
     if let Err(e) = cli(context).await {
         eprintln!("Error: {e}");
     }
