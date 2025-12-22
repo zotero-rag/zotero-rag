@@ -1,11 +1,13 @@
 use crate::cli::placeholder::PlaceholderText;
 use crate::cli::prompts::{get_extraction_prompt, get_summarize_prompt};
 use crate::cli::readline::get_readline_config;
+use crate::state::{SavedChatHistory, save_conversation};
 use crate::utils::arrow::{DbFields, library_to_arrow, vector_search};
 use crate::utils::library::{ZoteroItem, ZoteroItemSet, get_authors, get_new_library_items};
 use crate::utils::rag::ModelResponse;
 use arrow_array::{self, RecordBatch, RecordBatchIterator, StringArray};
 use arrow_schema::Schema;
+use chrono::Local;
 use lancedb::embeddings::EmbeddingDefinition;
 use rag::capabilities::ModelProviders;
 use rag::config::LLMClientConfig;
@@ -29,7 +31,7 @@ use crate::common::Context;
 use crate::{full_library_to_arrow, utils::library::parse_library_metadata};
 use arrow_ipc::reader::FileReader;
 use arrow_ipc::writer::FileWriter;
-use std::sync::Arc;
+use std::sync::{Arc, atomic};
 use std::{
     fs::File,
     io::{self, Write},
@@ -655,6 +657,7 @@ async fn run_query<O: Write, E: Write>(
                     ModelResponse::from(response.content).to_string(),
                 )],
             });
+            ctx.state.dirty.store(true, atomic::Ordering::Relaxed);
         }
         Err(e) => {
             writeln!(
@@ -719,7 +722,7 @@ async fn stats<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Result<(), CLIErr
 /// Cannot happen; `unwrap()` is called on `strip_prefix` result after checking that the prefix exists.
 #[allow(clippy::too_many_lines)]
 #[allow(clippy::needless_continue)]
-pub async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<(), CLIError> {
+pub(crate) async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<(), CLIError> {
     // First, get the path to the history file used by the `readline` implementation.
     let user_dirs = directories::UserDirs::new().ok_or(CLIError::ReadlineError(
         "Could not get user directories".into(),
@@ -822,7 +825,20 @@ pub async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<(), CLIEr
                         }
                     }
                     "/quit" | "/exit" | "quit" | "exit" => {
-                        break;
+                        if ctx.state.dirty.load(atomic::Ordering::Relaxed) {
+                            let chat_history = Arc::clone(&ctx.state.chat_history);
+                            let history = chat_history.lock().unwrap();
+
+                            let conversation = SavedChatHistory {
+                                history: history.clone(),
+                                date: Local::now(),
+                                title: "Conversation on ".into(),
+                            };
+
+                            save_conversation(conversation)
+                                .expect("Failed to save conversation history");
+                        }
+                        std::process::exit(0);
                     }
                     query => {
                         writeln!(&mut ctx.out)?;

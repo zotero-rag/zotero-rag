@@ -14,7 +14,7 @@
 
 use std::{
     io::{self, stderr, stdout},
-    sync::Arc,
+    sync::{Arc, atomic},
 };
 
 use chrono::Local;
@@ -148,19 +148,22 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let chat_history = Arc::clone(&context.state.chat_history);
+    let history_modified = Arc::clone(&context.state.dirty);
 
     // It only makes sense to add the SIGINT handler here, since there's no conversation to be had
     // before this.
     let _ = ctrlc::set_handler(move || {
-        let history = chat_history.lock().unwrap();
+        if history_modified.load(atomic::Ordering::Relaxed) {
+            let history = chat_history.lock().unwrap();
 
-        let conversation = SavedChatHistory {
-            history: history.clone(),
-            date: Local::now(),
-            title: "Conversation on ".into(),
-        };
+            let conversation = SavedChatHistory {
+                history: history.clone(),
+                date: Local::now(),
+                title: "Conversation on ".into(),
+            };
 
-        save_conversation(conversation).expect("Failed to save conversation history");
+            save_conversation(conversation).expect("Failed to save conversation history");
+        }
         std::process::exit(0);
     });
 
