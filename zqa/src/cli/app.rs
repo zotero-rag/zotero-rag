@@ -702,7 +702,7 @@ async fn stats<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Result<(), CLIErr
 /// Cannot happen; `unwrap()` is called on `strip_prefix` result after checking that the prefix exists.
 #[allow(clippy::too_many_lines)]
 #[allow(clippy::needless_continue)]
-#[cfg(not(tarpaulin_include))]
+#[cfg(not(tarpaulin))]
 pub async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<(), CLIError> {
     // First, get the path to the history file used by the `readline` implementation.
     let user_dirs = directories::UserDirs::new().ok_or(CLIError::ReadlineError(

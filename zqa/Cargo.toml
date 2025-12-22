@@ -41,4 +41,4 @@ path = "src/main.rs"
 serial_test = "3.2.0"
 
 [lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ['cfg(tarpaulin_include)'] }
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(tarpaulin)'] }
