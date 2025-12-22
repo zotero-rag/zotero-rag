@@ -3,7 +3,10 @@ use fern;
 use humantime;
 use log::LevelFilter;
 use rag::llm::base::ChatHistoryItem;
-use std::io::Write;
+use std::{
+    io::Write,
+    sync::{Arc, Mutex},
+};
 
 use crate::config::Config;
 
@@ -31,7 +34,7 @@ pub struct Args {
 #[derive(Default)]
 pub struct State {
     /// The current conversation's chat history
-    pub chat_history: Vec<ChatHistoryItem>,
+    pub chat_history: Arc<Mutex<Vec<ChatHistoryItem>>>,
 }
 
 /// A structure that holds the application context, including CLI arguments and an writers

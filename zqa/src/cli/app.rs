@@ -613,8 +613,12 @@ async fn run_query<O: Write, E: Write>(
         .flatten() // We should only have one here anyway
         .collect::<Vec<_>>();
 
+    let chat_history = Arc::clone(&ctx.state.chat_history);
+    let mut history = chat_history
+        .lock()
+        .expect("Could not obtain lock on chat history.");
     let request = ChatRequest {
-        chat_history: ctx.state.chat_history.clone(),
+        chat_history: history.clone(),
         max_tokens: None,
         message: get_summarize_prompt(&query, &texts),
         tools: None,
@@ -641,11 +645,11 @@ async fn run_query<O: Write, E: Write>(
             total_output_tokens += response.output_tokens;
 
             // Update state
-            ctx.state.chat_history.push(ChatHistoryItem {
+            history.push(ChatHistoryItem {
                 role: USER_ROLE.into(),
                 content: vec![ChatHistoryContent::Text(query.clone())],
             });
-            ctx.state.chat_history.push(ChatHistoryItem {
+            history.push(ChatHistoryItem {
                 role: ASSISTANT_ROLE.into(),
                 content: vec![ChatHistoryContent::Text(
                     ModelResponse::from(response.content).to_string(),
