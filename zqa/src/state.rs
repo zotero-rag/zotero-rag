@@ -126,7 +126,7 @@ pub(crate) fn get_conversation_history() -> Result<Option<Vec<SavedChatHistory>>
 ///
 /// * `StateErrors::DirectoryError` when the state dir could not be obtained.
 /// * `StateError::FileWriteError` if the conversations directory could not be created.
-pub(crate) fn save_conversation(conversation: SavedChatHistory) -> Result<(), StateError> {
+pub(crate) fn save_conversation(conversation: &SavedChatHistory) -> Result<(), StateError> {
     let state_dir = get_state_dir()?;
     let conversations_dir = state_dir.join("conversations");
 

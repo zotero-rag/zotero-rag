@@ -616,15 +616,17 @@ async fn run_query<O: Write, E: Write>(
         .collect::<Vec<_>>();
 
     let chat_history = Arc::clone(&ctx.state.chat_history);
-    let mut history = chat_history
-        .lock()
-        .expect("Could not obtain lock on chat history.");
-    let request = ChatRequest {
-        chat_history: history.clone(),
-        max_tokens: None,
-        message: get_summarize_prompt(&query, &texts),
-        tools: None,
-    };
+    let request = {
+        let history = chat_history
+            .lock()
+            .expect("Could not obtain lock on chat history.");
+        ChatRequest {
+            chat_history: history.clone(),
+            max_tokens: None,
+            message: get_summarize_prompt(&query, &texts),
+            tools: None,
+        }
+    }; // Lock is dropped here
 
     let final_draft_start = Instant::now();
     let result = llm_client.send_message(&request).await;
@@ -646,7 +648,10 @@ async fn run_query<O: Write, E: Write>(
             total_input_tokens += response.input_tokens;
             total_output_tokens += response.output_tokens;
 
-            // Update state
+            // Update state - re-acquire lock
+            let mut history = chat_history
+                .lock()
+                .expect("Could not obtain lock on chat history.");
             history.push(ChatHistoryItem {
                 role: USER_ROLE.into(),
                 content: vec![ChatHistoryContent::Text(query.clone())],
@@ -835,7 +840,7 @@ pub(crate) async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<()
                                 title: "Conversation on ".into(),
                             };
 
-                            save_conversation(conversation)
+                            save_conversation(&conversation)
                                 .expect("Failed to save conversation history");
                         }
                         std::process::exit(0);

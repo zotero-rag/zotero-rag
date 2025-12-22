@@ -147,11 +147,11 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         err: stderr(),
     };
 
+    // It only makes sense to add the SIGINT handler here, since there's no conversation to be had
+    // before this.
     let chat_history = Arc::clone(&context.state.chat_history);
     let history_modified = Arc::clone(&context.state.dirty);
 
-    // It only makes sense to add the SIGINT handler here, since there's no conversation to be had
-    // before this.
     let _ = ctrlc::set_handler(move || {
         if history_modified.load(atomic::Ordering::Relaxed) {
             let history = chat_history.lock().unwrap();
@@ -162,7 +162,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 title: "Conversation on ".into(),
             };
 
-            save_conversation(conversation).expect("Failed to save conversation history");
+            save_conversation(&conversation).expect("Failed to save conversation history");
         }
         std::process::exit(0);
     });
