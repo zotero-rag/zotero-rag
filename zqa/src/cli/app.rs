@@ -31,7 +31,7 @@ use crate::common::Context;
 use crate::{full_library_to_arrow, utils::library::parse_library_metadata};
 use arrow_ipc::reader::FileReader;
 use arrow_ipc::writer::FileWriter;
-use std::sync::{Arc, atomic};
+use std::sync::{Arc, Mutex, atomic};
 use std::{
     fs::File,
     io::{self, Write},
@@ -626,7 +626,7 @@ async fn run_query<O: Write, E: Write>(
             message: get_summarize_prompt(&query, &texts),
             tools: None,
         }
-    }; // Lock is dropped here
+    };
 
     let final_draft_start = Instant::now();
     let result = llm_client.send_message(&request).await;
@@ -780,6 +780,10 @@ pub(crate) async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<()
                             &mut ctx.out,
                             "/search\t\tSearch for papers without summarizing them. Usage: /search <query>"
                         )?;
+                        writeln!(
+                            &mut ctx.out,
+                            "/new\t\tSave the current conversation and switch to a new one."
+                        )?;
                         writeln!(&mut ctx.out, "/index\t\tCreate or update indices.")?;
                         writeln!(
                             &mut ctx.out,
@@ -829,7 +833,7 @@ pub(crate) async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<()
                             writeln!(&mut ctx.err, "Failed to write statistics to buffer. {e}")?;
                         }
                     }
-                    "/quit" | "/exit" | "quit" | "exit" => {
+                    "/quit" | "/exit" | "quit" | "exit" | "/new" => {
                         if ctx.state.dirty.load(atomic::Ordering::Relaxed) {
                             let chat_history = Arc::clone(&ctx.state.chat_history);
                             let history = chat_history.lock().unwrap();
@@ -843,7 +847,13 @@ pub(crate) async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<()
                             save_conversation(&conversation)
                                 .expect("Failed to save conversation history");
                         }
-                        std::process::exit(0);
+
+                        if command == "/new" {
+                            ctx.state.dirty.store(false, atomic::Ordering::Relaxed);
+                            ctx.state.chat_history = Arc::new(Mutex::new(Vec::new()));
+                        } else {
+                            std::process::exit(0);
+                        }
                     }
                     query => {
                         writeln!(&mut ctx.out)?;
