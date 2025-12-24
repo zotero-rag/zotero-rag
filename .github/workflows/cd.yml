@@ -58,6 +58,8 @@ jobs:
       name: ${{ needs.crate_metadata.outputs.name }}
 
     steps:
+    - uses: rui314/setup-mold@v1
+
     - name: Checkout source code
       uses: actions/checkout@v6
       with:
