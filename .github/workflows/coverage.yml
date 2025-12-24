@@ -4,9 +4,8 @@ permissions:
 
 on:
   workflow_dispatch:
-    branches: ["master"]
   pull_request:
-    branches: [ "master" ]
+    branches: ["master"]
 
 jobs:
   coverage:
@@ -24,11 +23,11 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            target/
+              ~/.cargo/bin/
+              ~/.cargo/registry/index/
+              ~/.cargo/registry/cache/
+              ~/.cargo/git/db/
+              target/
           key: ${{ runner.os }}-cargo-tarpaulin-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Install Rust
@@ -38,7 +37,7 @@ jobs:
         run: cargo install cargo-tarpaulin --force
 
       - name: Generate code coverage
-        run: cargo tarpaulin --out lcov --output-dir . --timeout 300
+        run: cargo tarpaulin --out lcov --output-dir . --timeout 300 --rustflags="-C opt-level=0" --exclude-files 'zqa/tests/*'
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_KEY }}
           VOYAGE_AI_API_KEY: ${{ secrets.VOYAGE_AI_API_KEY }}
