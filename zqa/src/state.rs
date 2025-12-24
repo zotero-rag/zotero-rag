@@ -15,7 +15,7 @@ const DIM_TEXT: &str = "\x1b[2m";
 const RESET: &str = "\x1b[0m";
 
 /// Errors that can occur when interacting with the state directory.
-#[derive(Debug, Error)]
+#[derive(PartialEq, Debug, Error)]
 pub(crate) enum StateError {
     #[error("Failed to get home directory.")]
     DirectoryError,
@@ -74,7 +74,7 @@ pub(crate) fn get_state_dir() -> Result<PathBuf, StateError> {
 /// A chat history that is stored in the user's state directory. This wraps a
 /// `Vec<ChatHistoryItem>` under the hood, but also includes some metadata such as when the chat
 /// occurred.
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
 pub(crate) struct SavedChatHistory {
     /// The chat history
     pub(crate) history: Vec<ChatHistoryItem>,
@@ -439,4 +439,101 @@ pub(crate) fn oobe() -> Result<(), StateError> {
         "Since your API keys are stored in plain-text, make sure to never commit ~/.config/zqa/config.toml without first deleting the keys. The recommended setup is to set the values in the TOML file blank and use .env files where you need them with the keys. As an additional security measure, consider running `chmod 600 ~/.config/zqa/config.toml`.{RESET}"
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::Local;
+    use clap::builder::OsStr;
+    use rag::llm::base::{ChatHistoryContent, ChatHistoryItem, USER_ROLE};
+    use std::fs;
+    use std::path::Component;
+
+    use crate::state::{
+        SavedChatHistory, get_conversation_history, get_state_dir, save_conversation,
+    };
+
+    #[test]
+    fn test_get_state_dir() {
+        let state_dir = get_state_dir();
+
+        assert!(state_dir.is_ok());
+        let state_dir = state_dir.unwrap();
+
+        let mut components = state_dir.components();
+        assert!(components.next_back() == Some(Component::Normal(&OsStr::from("zqa"))));
+        assert!(components.next_back() == Some(Component::Normal(&OsStr::from("state"))));
+    }
+
+    #[test]
+    fn test_get_conversation_history() {
+        let state_dir = get_state_dir().unwrap();
+
+        if state_dir.exists() {
+            let _ = fs::remove_dir_all(state_dir);
+        }
+
+        assert_eq!(get_conversation_history(), Ok(None));
+    }
+
+    #[test]
+    fn test_save_conversation_creates_dirs() {
+        let state_dir = get_state_dir().unwrap();
+
+        if state_dir.exists() {
+            let _ = fs::remove_dir_all(state_dir);
+        }
+
+        let conversation = SavedChatHistory {
+            date: Local::now(),
+            title: "foo".into(),
+            history: vec![ChatHistoryItem {
+                role: USER_ROLE.into(),
+                content: vec![ChatHistoryContent::Text("Hello!".into())],
+            }],
+        };
+
+        let result = save_conversation(&conversation);
+        let state_dir = get_state_dir().unwrap();
+        assert!(result.is_ok());
+        assert!(state_dir.exists());
+    }
+
+    #[test]
+    fn test_get_conversation_history_works() {
+        let state_dir = get_state_dir().unwrap();
+
+        if state_dir.exists() {
+            let _ = fs::remove_dir_all(state_dir);
+        }
+
+        let conversation = SavedChatHistory {
+            date: Local::now(),
+            title: "foo".into(),
+            history: vec![ChatHistoryItem {
+                role: USER_ROLE.into(),
+                content: vec![ChatHistoryContent::Text("Hello!".into())],
+            }],
+        };
+
+        let result = save_conversation(&conversation);
+        assert!(result.is_ok());
+
+        let conversations = get_conversation_history();
+        assert!(conversations.is_ok());
+
+        let conversations = conversations.unwrap();
+        assert!(conversations.is_some());
+
+        let conversations = conversations.unwrap();
+        assert_eq!(conversations.len(), 1);
+        assert_eq!(conversations[0].title, "foo");
+        assert_eq!(conversations[0].history.len(), 1);
+        assert_eq!(conversations[0].history[0].role, USER_ROLE);
+        assert_eq!(conversations[0].history[0].content.len(), 1);
+        assert_eq!(
+            conversations[0].history[0].content[0],
+            ChatHistoryContent::Text("Hello!".into())
+        );
+    }
 }

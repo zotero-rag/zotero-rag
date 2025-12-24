@@ -15,7 +15,7 @@ pub const ASSISTANT_ROLE: &str = "assistant";
 /// passed to that tool. It also includes the tool call id, which most providers use to
 /// disambiguate each tool use response. Note that the *result* of the tool call is not stored
 /// here; that is the `ToolCallResponse` struct.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ToolCallRequest {
     /// Tool calls typically contain an ID. This ID is used in the corresponding response to signal
     /// which results are for which tool calls.
@@ -29,7 +29,7 @@ pub struct ToolCallRequest {
 /// The user-facing version of a tool call result. This contains the id of the tool call request
 /// made by the model, the tool that was called, and the result. Notably, this does not contain the
 /// args passed to the tool; that is only present in `ToolCallRequest`.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ToolCallResponse {
     /// Tool calls typically contain an ID. This ID matches the request for a specific tool call.
     pub id: String,
@@ -45,7 +45,7 @@ pub struct ToolCallResponse {
 /// from the model is `ContentType`, which does not include that variant. `ContentType` also
 /// differs in that `ContentType::ToolCall` includes all the metadata for each tool call, while the
 /// variants here only contain what is pertinent to common API schemas.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ChatHistoryContent {
     /// A plain-text message
     Text(String),
@@ -58,7 +58,7 @@ pub enum ChatHistoryContent {
 /// An element of the chat history. This records all previous chat interactions, including tool
 /// requests from the model and the results of those tool calls. This is a user-facing struct: this
 /// is internally converted to provider-specific implementations.
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 pub struct ChatHistoryItem {
     /// The chat role. Every supported provider has a "user" (`USER_ROLE`) and an "assistant"
     /// (`ASSISTANT_ROLE`) role.

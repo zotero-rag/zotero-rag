@@ -63,7 +63,7 @@ pub(crate) struct Context<OutStream: Write, ErrStream: Write> {
 /// # Errors
 ///
 /// `log::SetLoggerError` if the logger could not be initialized.
-pub(crate) fn setup_logger(log_level: LevelFilter) -> Result<(), log::SetLoggerError> {
+pub fn setup_logger(log_level: LevelFilter) -> Result<(), log::SetLoggerError> {
     // Set up logging via fern
     fern::Dispatch::new()
         // Perform allocation-free log formatting
