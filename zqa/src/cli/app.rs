@@ -917,7 +917,7 @@ pub(crate) async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<()
                 // Handle SIGINT by saving the conversation if needed
                 if ctx.state.dirty.load(atomic::Ordering::Relaxed) {
                     let chat_history = Arc::clone(&ctx.state.chat_history);
-                    let history = chat_history.lock().unwrap();
+                    let history = chat_history.lock()?;
                     let date = Local::now();
 
                     let conversation = SavedChatHistory {

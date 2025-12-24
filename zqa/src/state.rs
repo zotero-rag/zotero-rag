@@ -163,9 +163,6 @@ pub(crate) fn check_or_create_first_run_file() -> Result<bool, StateError> {
     if first_run_file.exists() {
         Ok(false)
     } else {
-        if !state_dir.join("zqa").exists() {
-            fs::create_dir(state_dir.join("zqa"))?;
-        }
         fs::File::create(&first_run_file)?;
         Ok(true)
     }
