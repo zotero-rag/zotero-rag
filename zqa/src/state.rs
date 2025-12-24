@@ -163,6 +163,7 @@ pub(crate) fn check_or_create_first_run_file() -> Result<bool, StateError> {
     if first_run_file.exists() {
         Ok(false)
     } else {
+        fs::create_dir_all(&state_dir)?;
         fs::File::create(&first_run_file)?;
         Ok(true)
     }
