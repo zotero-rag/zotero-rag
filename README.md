@@ -21,6 +21,14 @@ This project provides a command-line interface for querying your Zotero library 
 
 ## Installation
 
+The most straightforward way to install this is using `cargo` directly:
+
+```bash
+cargo install --git https://github.com/zotero-rag/zotero-rag --tag v0.1.0-beta.1
+```
+
+It should be safe to omit the `--tag` and install the `HEAD` version, if you prefer. Contributors might prefer the below version instead, since you'll already have run a `git clone`:
+
 ```bash
 # Clone the repository
 git clone https://github.com/yrahul3910/zotero-rag.git
@@ -200,6 +208,8 @@ To report a bug, please re-run using `--log-level debug` and add the logs to you
 **What does the `--tui` option do?** Right now, nothing; it's disabled. A TUI is planned, but it's relatively low on priorities.
 
 **How do I write a config file for this?** Read [the docs](./README.md).
+
+**Is this blazing fast?** Of course, it's written entirely in Rust. Here are your obligatory rocket emojis 🚀🚀
 
 # License
 
