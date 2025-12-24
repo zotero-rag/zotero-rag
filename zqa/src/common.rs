@@ -3,7 +3,10 @@ use fern;
 use humantime;
 use log::LevelFilter;
 use rag::llm::base::ChatHistoryItem;
-use std::io::Write;
+use std::{
+    io::Write,
+    sync::{Arc, Mutex, atomic::AtomicBool},
+};
 
 use crate::config::Config;
 
@@ -29,24 +32,26 @@ pub struct Args {
 /// The application state. This is embedded in the context, and all state variables are
 /// encapsulated in this struct to avoid polluting the `Context`.
 #[derive(Default)]
-pub struct State {
+pub(crate) struct State {
     /// The current conversation's chat history
-    pub chat_history: Vec<ChatHistoryItem>,
+    pub(crate) chat_history: Arc<Mutex<Vec<ChatHistoryItem>>>,
+    /// Has the chat history been modified?
+    pub(crate) dirty: AtomicBool,
 }
 
 /// A structure that holds the application context, including CLI arguments and an writers
 /// for `stdout` and `stderr`.
-pub struct Context<OutStream: Write, ErrStream: Write> {
+pub(crate) struct Context<OutStream: Write, ErrStream: Write> {
     /// Application state
-    pub state: State,
+    pub(crate) state: State,
     /// Config from TOML and env
-    pub config: Config,
+    pub(crate) config: Config,
     /// CLI arguments passed
-    pub args: Args,
+    pub(crate) args: Args,
     /// Abstraction for `stdout()`
-    pub out: OutStream,
+    pub(crate) out: OutStream,
     /// Abstraction for `stderr()`
-    pub err: ErrStream,
+    pub(crate) err: ErrStream,
 }
 
 /// Initialize the `fern` logger.

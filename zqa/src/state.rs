@@ -1,6 +1,9 @@
 //!  NOTE: This is not state management! The `state` module is actually a way to interact with `XDG_STATE_HOME`.
 
-use std::{fs, io};
+use chrono::{DateTime, Local};
+use rag::llm::base::ChatHistoryItem;
+use serde::{Deserialize, Serialize};
+use std::{fs, io, path::PathBuf};
 use thiserror::Error;
 
 use crate::config::{BaseDirError, Config, get_config_dir};
@@ -12,31 +15,134 @@ const DIM_TEXT: &str = "\x1b[2m";
 const RESET: &str = "\x1b[0m";
 
 /// Errors that can occur when interacting with the state directory.
-#[derive(Debug, Error)]
-pub enum StateErrors {
+#[derive(PartialEq, Debug, Error)]
+pub(crate) enum StateError {
     #[error("Failed to get home directory.")]
     DirectoryError,
     #[error("Failed to save first run information.")]
     FileWriteError,
     #[error("Serialization error: {0}")]
-    SerializationError(#[from] toml::ser::Error),
+    SerializationError(String),
     #[error("Other error: {0}")]
     Other(String),
 }
 
-impl From<BaseDirError> for StateErrors {
-    fn from(_value: BaseDirError) -> Self {
-        StateErrors::DirectoryError
+impl From<toml::ser::Error> for StateError {
+    fn from(value: toml::ser::Error) -> Self {
+        Self::SerializationError(format!("Serialization error: {value}"))
     }
 }
 
-impl From<io::Error> for StateErrors {
+impl From<serde_json::Error> for StateError {
+    fn from(value: serde_json::Error) -> Self {
+        Self::SerializationError(format!("Serialization error: {value}"))
+    }
+}
+
+impl From<BaseDirError> for StateError {
+    fn from(_value: BaseDirError) -> Self {
+        StateError::DirectoryError
+    }
+}
+
+impl From<io::Error> for StateError {
     fn from(err: io::Error) -> Self {
         match err.kind() {
-            io::ErrorKind::PermissionDenied => StateErrors::FileWriteError,
-            _ => StateErrors::Other(err.to_string()),
+            io::ErrorKind::PermissionDenied => StateError::FileWriteError,
+            _ => StateError::Other(err.to_string()),
         }
     }
+}
+
+/// Returns the state directory inside `XDG_STATE_HOME`. On *nix systems, this returns
+/// ~/.local/state/zqa. On Windows, this also returns ~/.local/state/zqa, except that `$HOME` is
+/// typically C:\Users\<username>.
+///
+/// # Errors
+///
+/// * `StateError::DirectoryError` if the user's base directory could not be obtained. See
+///   `directories::BaseDirError` for when this can occur.
+pub(crate) fn get_state_dir() -> Result<PathBuf, StateError> {
+    let base_dir = directories::BaseDirs::new().ok_or(StateError::DirectoryError)?;
+
+    let alt_state_dir = base_dir.home_dir().join(".local").join("state");
+    let state_dir = base_dir.state_dir().unwrap_or(&alt_state_dir);
+
+    Ok(state_dir.join("zqa"))
+}
+
+/// A chat history that is stored in the user's state directory. This wraps a
+/// `Vec<ChatHistoryItem>` under the hood, but also includes some metadata such as when the chat
+/// occurred.
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
+pub(crate) struct SavedChatHistory {
+    /// The chat history
+    pub(crate) history: Vec<ChatHistoryItem>,
+    /// When this conversation occurred
+    pub(crate) date: DateTime<Local>,
+    /// A brief title
+    pub(crate) title: String,
+}
+
+/// Attempt to get all previous conversations if they exist.
+///
+/// # Returns
+///
+/// If there are no conversations, or if there was no conversations directory, returns `Ok(None)`. In
+/// the latter case, the directory is also created. If conversations could not be loaded (such as
+/// due to permissions errors), returns a `StateError`.
+///
+/// In all other cases, returns `Ok(Some(history))`, where `history` contains reverse
+/// chronologically ordered conversation histories.
+///
+/// # Errors
+///
+/// * `StateErrors::DirectoryError` when the state dir could not be obtained.
+/// * `StateError::FileWriteError` if the conversations directory could not be created.
+#[allow(dead_code)]
+pub(crate) fn get_conversation_history() -> Result<Option<Vec<SavedChatHistory>>, StateError> {
+    let state_dir = get_state_dir()?;
+    let conversations_dir = state_dir.join("conversations");
+
+    if !conversations_dir.exists() {
+        fs::create_dir_all(&conversations_dir)?;
+        return Ok(None);
+    }
+
+    let histories = conversations_dir
+        .read_dir()?
+        .filter_map(std::result::Result::ok)
+        .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "json"))
+        .filter_map(|entry| fs::read_to_string(entry.path()).ok())
+        .filter_map(|s| serde_json::from_str::<SavedChatHistory>(&s).ok())
+        .collect::<Vec<_>>();
+
+    Ok(Some(histories))
+}
+
+/// Attempt to save a conversation history to the user state directory.
+///
+/// # Errors
+///
+/// * `StateErrors::DirectoryError` when the state dir could not be obtained.
+/// * `StateError::FileWriteError` if the conversations directory could not be created.
+pub(crate) fn save_conversation(conversation: &SavedChatHistory) -> Result<(), StateError> {
+    let state_dir = get_state_dir()?;
+    let conversations_dir = state_dir.join("conversations");
+
+    if !conversations_dir.exists() {
+        fs::create_dir_all(&conversations_dir)?;
+    }
+
+    let timestamp_suffix = conversation.date.timestamp_millis().to_string();
+    let file_name = format!("conversation_{timestamp_suffix}.json");
+
+    fs::write(
+        conversations_dir.join(&file_name),
+        serde_json::to_string_pretty(&conversation)?,
+    )?;
+
+    Ok(())
 }
 
 /// Determine if this is the first run of the application. We simply use a blank file's existence to determine this;
@@ -50,17 +156,14 @@ impl From<io::Error> for StateErrors {
 ///
 /// * `StateErrors::DirectoryError` when the state dir could not be obtained.
 /// * `StateErrors::FileWriteError` if we do not have permissions to create the `first_run` file.
-pub fn check_or_create_first_run_file() -> Result<bool, StateErrors> {
-    let base_dir = directories::BaseDirs::new().ok_or(StateErrors::DirectoryError)?;
-    let state_dir = base_dir.state_dir().ok_or(StateErrors::DirectoryError)?;
-    let first_run_file = state_dir.join("zqa").join("first_run");
+pub(crate) fn check_or_create_first_run_file() -> Result<bool, StateError> {
+    let state_dir = get_state_dir()?;
+    let first_run_file = state_dir.join("first_run");
 
     if first_run_file.exists() {
         Ok(false)
     } else {
-        if !state_dir.join("zqa").exists() {
-            fs::create_dir(state_dir.join("zqa"))?;
-        }
+        fs::create_dir_all(&state_dir)?;
         fs::File::create(&first_run_file)?;
         Ok(true)
     }
@@ -145,7 +248,7 @@ fn read_number(default: u8, bounds: (u8, u8)) -> u8 {
 ///
 /// If getting the config for the chosen provider fails.
 #[allow(clippy::too_many_lines)]
-pub fn oobe() -> Result<(), StateErrors> {
+pub(crate) fn oobe() -> Result<(), StateError> {
     // Here, we don't load the env because that's directory-specific.
     let mut config = Config::default();
 
@@ -334,4 +437,101 @@ pub fn oobe() -> Result<(), StateErrors> {
         "Since your API keys are stored in plain-text, make sure to never commit ~/.config/zqa/config.toml without first deleting the keys. The recommended setup is to set the values in the TOML file blank and use .env files where you need them with the keys. As an additional security measure, consider running `chmod 600 ~/.config/zqa/config.toml`.{RESET}"
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::Local;
+    use clap::builder::OsStr;
+    use rag::llm::base::{ChatHistoryContent, ChatHistoryItem, USER_ROLE};
+    use std::fs;
+    use std::path::Component;
+
+    use crate::state::{
+        SavedChatHistory, get_conversation_history, get_state_dir, save_conversation,
+    };
+
+    #[test]
+    fn test_get_state_dir() {
+        let state_dir = get_state_dir();
+
+        assert!(state_dir.is_ok());
+        let state_dir = state_dir.unwrap();
+
+        let mut components = state_dir.components();
+        assert!(components.next_back() == Some(Component::Normal(&OsStr::from("zqa"))));
+        assert!(components.next_back() == Some(Component::Normal(&OsStr::from("state"))));
+    }
+
+    #[test]
+    fn test_get_conversation_history() {
+        let state_dir = get_state_dir().unwrap();
+
+        if state_dir.exists() {
+            let _ = fs::remove_dir_all(state_dir);
+        }
+
+        assert_eq!(get_conversation_history(), Ok(None));
+    }
+
+    #[test]
+    fn test_save_conversation_creates_dirs() {
+        let state_dir = get_state_dir().unwrap();
+
+        if state_dir.exists() {
+            let _ = fs::remove_dir_all(state_dir);
+        }
+
+        let conversation = SavedChatHistory {
+            date: Local::now(),
+            title: "foo".into(),
+            history: vec![ChatHistoryItem {
+                role: USER_ROLE.into(),
+                content: vec![ChatHistoryContent::Text("Hello!".into())],
+            }],
+        };
+
+        let result = save_conversation(&conversation);
+        let state_dir = get_state_dir().unwrap();
+        assert!(result.is_ok());
+        assert!(state_dir.exists());
+    }
+
+    #[test]
+    fn test_get_conversation_history_works() {
+        let state_dir = get_state_dir().unwrap();
+
+        if state_dir.exists() {
+            let _ = fs::remove_dir_all(state_dir);
+        }
+
+        let conversation = SavedChatHistory {
+            date: Local::now(),
+            title: "foo".into(),
+            history: vec![ChatHistoryItem {
+                role: USER_ROLE.into(),
+                content: vec![ChatHistoryContent::Text("Hello!".into())],
+            }],
+        };
+
+        let result = save_conversation(&conversation);
+        assert!(result.is_ok());
+
+        let conversations = get_conversation_history();
+        assert!(conversations.is_ok());
+
+        let conversations = conversations.unwrap();
+        assert!(conversations.is_some());
+
+        let conversations = conversations.unwrap();
+        assert_eq!(conversations.len(), 1);
+        assert_eq!(conversations[0].title, "foo");
+        assert_eq!(conversations[0].history.len(), 1);
+        assert_eq!(conversations[0].history[0].role, USER_ROLE);
+        assert_eq!(conversations[0].history[0].content.len(), 1);
+        assert_eq!(
+            conversations[0].history[0].content[0],
+            ChatHistoryContent::Text("Hello!".into())
+        );
+    }
 }

@@ -21,7 +21,7 @@ use super::http_client::{HttpClient, ReqwestClient};
 use crate::common::request_with_backoff;
 use crate::constants::{DEFAULT_MAX_RETRIES, DEFAULT_OPENAI_EMBEDDING_DIM, DEFAULT_OPENAI_MODEL};
 use crate::embedding::openai::compute_openai_embeddings_sync;
-use crate::llm::base::{ChatHistoryContent, ContentType, ToolUseStats};
+use crate::llm::base::{ChatHistoryContent, ContentType, ToolUseStats, USER_ROLE};
 use crate::llm::tools::{SerializedTool, get_owned_tools};
 use serde_json::{Map, Value};
 
@@ -179,7 +179,7 @@ enum OpenAIRequestInputItem {
 
 #[derive(Clone, Serialize)]
 struct OpenAIChatHistoryItem {
-    /// Either "user" or "assistant".
+    /// Either USER_ROLE or "assistant".
     pub role: String,
     /// The content item for this role.
     pub content: OpenAIRequestInputItem,
@@ -255,7 +255,7 @@ fn build_openai_messages_and_tools<'a>(
         .collect::<Vec<_>>();
 
     messages.push(OpenAIRequestInput::Message(OpenAIChatHistoryItem {
-        role: "user".to_owned(),
+        role: USER_ROLE.to_owned(),
         r#type: "message".into(),
         content: OpenAIRequestInputItem::Text(req.message.clone()),
     }));

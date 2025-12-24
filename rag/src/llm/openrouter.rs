@@ -2,7 +2,7 @@
 //! module includes support for text generation only.
 
 use crate::common::request_with_backoff;
-use crate::llm::base::{ChatHistoryContent, ContentType, ToolCallRequest};
+use crate::llm::base::{ChatHistoryContent, ContentType, ToolCallRequest, USER_ROLE};
 use crate::llm::tools::{SerializedTool, get_owned_tools, process_tool_calls};
 use std::collections::HashMap;
 use std::env;
@@ -174,7 +174,7 @@ fn build_openrouter_messages_and_tools<'a>(
         .collect();
 
     messages.push(OpenRouterMessage {
-        role: "user".to_owned(),
+        role: USER_ROLE.to_owned(),
         content: Some(req.message.clone()),
         tool_calls: None,
         tool_call_id: None,

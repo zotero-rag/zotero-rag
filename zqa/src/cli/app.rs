@@ -1,15 +1,20 @@
 use crate::cli::placeholder::PlaceholderText;
 use crate::cli::prompts::{get_extraction_prompt, get_summarize_prompt};
 use crate::cli::readline::get_readline_config;
+use crate::state::{SavedChatHistory, save_conversation};
 use crate::utils::arrow::{DbFields, library_to_arrow, vector_search};
 use crate::utils::library::{ZoteroItem, ZoteroItemSet, get_authors, get_new_library_items};
-use crate::utils::rag::SingleResponse;
+use crate::utils::rag::ModelResponse;
 use arrow_array::{self, RecordBatch, RecordBatchIterator, StringArray};
 use arrow_schema::Schema;
+use chrono::Local;
 use lancedb::embeddings::EmbeddingDefinition;
 use rag::capabilities::ModelProviders;
 use rag::config::LLMClientConfig;
-use rag::llm::base::{ApiClient, ChatRequest, CompletionApiResponse, ContentType};
+use rag::llm::base::{
+    ASSISTANT_ROLE, ApiClient, ChatHistoryContent, ChatHistoryItem, ChatRequest,
+    CompletionApiResponse, ContentType, USER_ROLE,
+};
 use rag::llm::errors::LLMError;
 use rag::llm::factory::{get_client_by_provider, get_client_with_config};
 use rag::vector::checkhealth::lancedb_health_check;
@@ -26,7 +31,7 @@ use crate::common::Context;
 use crate::{full_library_to_arrow, utils::library::parse_library_metadata};
 use arrow_ipc::reader::FileReader;
 use arrow_ipc::writer::FileWriter;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, atomic};
 use std::{
     fs::File,
     io::{self, Write},
@@ -522,6 +527,8 @@ async fn run_query<O: Write, E: Write>(
         let metadata = item.metadata.clone();
 
         set.spawn(async move {
+            // TODO: Use `ctx.state` when we provide the model with tools to perform its own
+            // retrieval.
             let request = ChatRequest {
                 chat_history: Vec::new(),
                 max_tokens: None,
@@ -544,15 +551,7 @@ async fn run_query<O: Write, E: Write>(
         for (paper, summary_result) in search_results.iter().zip(results.iter()) {
             if let Ok(summary) = summary_result {
                 let title = &paper.metadata.title;
-                let summary_text = summary
-                    .content
-                    .iter()
-                    .filter_map(|c| match c {
-                        ContentType::Text(text) => Some(text.as_str()),
-                        ContentType::ToolCall(_) => None,
-                    })
-                    .collect::<String>();
-
+                let summary_text = ModelResponse::from(&summary.content).to_string();
                 log::info!("Paper: {title}");
                 log::info!("Summary: {summary_text}");
             }
@@ -595,7 +594,7 @@ async fn run_query<O: Write, E: Write>(
         .map(|res| {
             format!(
                 "<search_result>{}</search_result>",
-                SingleResponse::from(res)
+                ModelResponse::from(res)
             )
         })
         .collect::<Vec<_>>()
@@ -616,11 +615,17 @@ async fn run_query<O: Write, E: Write>(
         .flatten() // We should only have one here anyway
         .collect::<Vec<_>>();
 
-    let request = ChatRequest {
-        chat_history: Vec::new(),
-        max_tokens: None,
-        message: get_summarize_prompt(&query, &texts),
-        tools: None,
+    let chat_history = Arc::clone(&ctx.state.chat_history);
+    let request = {
+        let history = chat_history
+            .lock()
+            .expect("Could not obtain lock on chat history.");
+        ChatRequest {
+            chat_history: history.clone(),
+            max_tokens: None,
+            message: get_summarize_prompt(&query, &texts),
+            tools: None,
+        }
     };
 
     let final_draft_start = Instant::now();
@@ -634,10 +639,26 @@ async fn run_query<O: Write, E: Write>(
             )?;
 
             writeln!(&mut ctx.out, "\n-----")?;
-            writeln!(&mut ctx.out, "{}", SingleResponse::from(response.content))?;
+
+            let model_response_text = ModelResponse::from(&response.content).to_string();
+            writeln!(&mut ctx.out, "{model_response_text}")?;
 
             total_input_tokens += response.input_tokens;
             total_output_tokens += response.output_tokens;
+
+            // Update state - re-acquire lock
+            let mut history = chat_history
+                .lock()
+                .expect("Could not obtain lock on chat history.");
+            history.push(ChatHistoryItem {
+                role: USER_ROLE.into(),
+                content: vec![ChatHistoryContent::Text(query.clone())],
+            });
+            history.push(ChatHistoryItem {
+                role: ASSISTANT_ROLE.into(),
+                content: vec![ChatHistoryContent::Text(model_response_text)],
+            });
+            ctx.state.dirty.store(true, atomic::Ordering::Relaxed);
         }
         Err(e) => {
             writeln!(
@@ -702,8 +723,7 @@ async fn stats<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Result<(), CLIErr
 /// Cannot happen; `unwrap()` is called on `strip_prefix` result after checking that the prefix exists.
 #[allow(clippy::too_many_lines)]
 #[allow(clippy::needless_continue)]
-#[cfg(not(tarpaulin))]
-pub async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<(), CLIError> {
+pub(crate) async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<(), CLIError> {
     // First, get the path to the history file used by the `readline` implementation.
     let user_dirs = directories::UserDirs::new().ok_or(CLIError::ReadlineError(
         "Could not get user directories".into(),
@@ -715,7 +735,8 @@ pub async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<(), CLIEr
     let mut rl =
         rustyline::Editor::<PlaceholderText, rustyline::history::DefaultHistory>::with_config(
             get_readline_config(),
-        )?;
+        )
+        .map_err(|e| CLIError::ReadlineError(e.to_string()))?;
 
     if rl.load_history(&history_path).is_err() {
         log::debug!("No previous history.");
@@ -755,6 +776,10 @@ pub async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<(), CLIEr
                         writeln!(
                             &mut ctx.out,
                             "/search\t\tSearch for papers without summarizing them. Usage: /search <query>"
+                        )?;
+                        writeln!(
+                            &mut ctx.out,
+                            "/new\t\tSave the current conversation and switch to a new one."
                         )?;
                         writeln!(&mut ctx.out, "/index\t\tCreate or update indices.")?;
                         writeln!(
@@ -805,8 +830,32 @@ pub async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<(), CLIEr
                             writeln!(&mut ctx.err, "Failed to write statistics to buffer. {e}")?;
                         }
                     }
-                    "/quit" | "/exit" | "quit" | "exit" => {
-                        break;
+                    "/quit" | "/exit" | "quit" | "exit" | "/new" => {
+                        if ctx.state.dirty.load(atomic::Ordering::Relaxed) {
+                            let chat_history = Arc::clone(&ctx.state.chat_history);
+                            let history = chat_history.lock()?;
+                            let date = Local::now();
+
+                            let conversation = SavedChatHistory {
+                                history: history.clone(),
+                                date,
+                                title: format!("Conversation on {}", date.format("%Y-%m-%d %H:%M")),
+                            };
+
+                            if let Err(e) = save_conversation(&conversation)
+                                && let Err(write_err) =
+                                    writeln!(&mut ctx.err, "Error saving conversation: {e}")
+                            {
+                                log::error!("Failed to write to stderr: {write_err}");
+                            }
+                        }
+
+                        if command == "/new" {
+                            ctx.state.dirty.store(false, atomic::Ordering::Relaxed);
+                            ctx.state.chat_history = Arc::new(Mutex::new(Vec::new()));
+                        } else {
+                            break;
+                        }
                     }
                     query => {
                         writeln!(&mut ctx.out)?;
@@ -864,11 +913,34 @@ pub async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<(), CLIEr
                 // Handle SIGWINCH; we should just rewrite the prompt and continue
                 continue;
             }
+            Err(ReadlineError::Interrupted) => {
+                // Handle SIGINT by saving the conversation if needed
+                if ctx.state.dirty.load(atomic::Ordering::Relaxed) {
+                    let chat_history = Arc::clone(&ctx.state.chat_history);
+                    let history = chat_history.lock()?;
+                    let date = Local::now();
+
+                    let conversation = SavedChatHistory {
+                        history: history.clone(),
+                        date,
+                        title: format!("Conversation on {}", date.format("%Y-%m-%d %H:%M")),
+                    };
+
+                    if let Err(e) = save_conversation(&conversation)
+                        && let Err(write_err) =
+                            writeln!(&mut ctx.err, "Error saving conversation: {e}")
+                    {
+                        log::error!("Failed to write to stderr: {write_err}");
+                    }
+                }
+                break;
+            }
             _ => break,
         }
     }
 
-    rl.save_history(&history_path)?;
+    rl.save_history(&history_path)
+        .map_err(|e| CLIError::ReadlineError(e.to_string()))?;
 
     Ok(())
 }

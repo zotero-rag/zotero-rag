@@ -1,8 +1,7 @@
-use std::io;
+use std::{io, sync::PoisonError};
 use thiserror::Error;
 
 use rag::{llm::errors::LLMError, vector::lance::LanceError};
-use rustyline::error::ReadlineError;
 
 use crate::utils;
 
@@ -22,6 +21,14 @@ pub enum CLIError {
     LanceError(String),
     #[error("Configuration error: {0}")]
     ConfigError(String),
+    #[error("Mutex poisoning error: {0}")]
+    MutexPoisoningError(String),
+}
+
+impl<T> From<PoisonError<T>> for CLIError {
+    fn from(value: PoisonError<T>) -> Self {
+        Self::MutexPoisoningError(value.to_string())
+    }
 }
 
 impl From<LanceError> for CLIError {
@@ -57,11 +64,5 @@ impl From<&arrow_schema::ArrowError> for CLIError {
 impl From<LLMError> for CLIError {
     fn from(value: LLMError) -> Self {
         Self::LLMError(value.to_string())
-    }
-}
-
-impl From<ReadlineError> for CLIError {
-    fn from(value: ReadlineError) -> Self {
-        Self::ReadlineError(value.to_string())
     }
 }
