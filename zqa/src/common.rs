@@ -19,7 +19,7 @@ pub struct Args {
     pub tui: bool,
 
     /// Log level. Options: debug, info, warn, error, off (default)
-    #[arg(value_enum, long)]
+    #[arg(long, default_value = "off")]
     pub log_level: log::LevelFilter,
 
     /// Whether to also print out the extracted snippets of the retrieved papers. Note that these
