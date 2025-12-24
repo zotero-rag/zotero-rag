@@ -36,7 +36,7 @@ pub(crate) struct State {
     /// The current conversation's chat history
     pub(crate) chat_history: Arc<Mutex<Vec<ChatHistoryItem>>>,
     /// Has the chat history been modified?
-    pub(crate) dirty: Arc<AtomicBool>,
+    pub(crate) dirty: AtomicBool,
 }
 
 /// A structure that holds the application context, including CLI arguments and an writers

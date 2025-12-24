@@ -65,7 +65,7 @@ impl From<io::Error> for StateError {
 pub(crate) fn get_state_dir() -> Result<PathBuf, StateError> {
     let base_dir = directories::BaseDirs::new().ok_or(StateError::DirectoryError)?;
 
-    let alt_state_dir = base_dir.home_dir().join(".local").join(".state");
+    let alt_state_dir = base_dir.home_dir().join(".local").join("state");
     let state_dir = base_dir.state_dir().unwrap_or(&alt_state_dir);
 
     Ok(state_dir.join("zqa"))
@@ -135,7 +135,7 @@ pub(crate) fn save_conversation(conversation: &SavedChatHistory) -> Result<(), S
     }
 
     let timestamp_suffix = conversation.date.timestamp_millis().to_string();
-    let file_name = format!("conversation_{timestamp_suffix}");
+    let file_name = format!("conversation_{timestamp_suffix}.json");
 
     fs::write(
         conversations_dir.join(&file_name),

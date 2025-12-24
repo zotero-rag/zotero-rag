@@ -639,11 +639,9 @@ async fn run_query<O: Write, E: Write>(
             )?;
 
             writeln!(&mut ctx.out, "\n-----")?;
-            writeln!(
-                &mut ctx.out,
-                "{}",
-                ModelResponse::from(response.content.clone())
-            )?;
+
+            let model_response_text = ModelResponse::from(&response.content).to_string();
+            writeln!(&mut ctx.out, "{model_response_text}")?;
 
             total_input_tokens += response.input_tokens;
             total_output_tokens += response.output_tokens;
@@ -658,9 +656,7 @@ async fn run_query<O: Write, E: Write>(
             });
             history.push(ChatHistoryItem {
                 role: ASSISTANT_ROLE.into(),
-                content: vec![ChatHistoryContent::Text(
-                    ModelResponse::from(response.content).to_string(),
-                )],
+                content: vec![ChatHistoryContent::Text(model_response_text)],
             });
             ctx.state.dirty.store(true, atomic::Ordering::Relaxed);
         }
@@ -739,7 +735,8 @@ pub(crate) async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<()
     let mut rl =
         rustyline::Editor::<PlaceholderText, rustyline::history::DefaultHistory>::with_config(
             get_readline_config(),
-        )?;
+        )
+        .map_err(|e| CLIError::ReadlineError(e.to_string()))?;
 
     if rl.load_history(&history_path).is_err() {
         log::debug!("No previous history.");
@@ -836,23 +833,28 @@ pub(crate) async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<()
                     "/quit" | "/exit" | "quit" | "exit" | "/new" => {
                         if ctx.state.dirty.load(atomic::Ordering::Relaxed) {
                             let chat_history = Arc::clone(&ctx.state.chat_history);
-                            let history = chat_history.lock().unwrap();
+                            let history = chat_history.lock()?;
+                            let date = Local::now();
 
                             let conversation = SavedChatHistory {
                                 history: history.clone(),
-                                date: Local::now(),
-                                title: "Conversation on ".into(),
+                                date,
+                                title: format!("Conversation on {}", date.format("%Y-%m-%d %H:%M")),
                             };
 
-                            save_conversation(&conversation)
-                                .expect("Failed to save conversation history");
+                            if let Err(e) = save_conversation(&conversation)
+                                && let Err(write_err) =
+                                    writeln!(&mut ctx.err, "Error saving conversation: {e}")
+                            {
+                                log::error!("Failed to write to stderr: {write_err}");
+                            }
                         }
 
                         if command == "/new" {
                             ctx.state.dirty.store(false, atomic::Ordering::Relaxed);
                             ctx.state.chat_history = Arc::new(Mutex::new(Vec::new()));
                         } else {
-                            std::process::exit(0);
+                            break;
                         }
                     }
                     query => {
@@ -911,11 +913,34 @@ pub(crate) async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<()
                 // Handle SIGWINCH; we should just rewrite the prompt and continue
                 continue;
             }
+            Err(ReadlineError::Interrupted) => {
+                // Handle SIGINT by saving the conversation if needed
+                if ctx.state.dirty.load(atomic::Ordering::Relaxed) {
+                    let chat_history = Arc::clone(&ctx.state.chat_history);
+                    let history = chat_history.lock().unwrap();
+                    let date = Local::now();
+
+                    let conversation = SavedChatHistory {
+                        history: history.clone(),
+                        date,
+                        title: format!("Conversation on {}", date.format("%Y-%m-%d %H:%M")),
+                    };
+
+                    if let Err(e) = save_conversation(&conversation)
+                        && let Err(write_err) =
+                            writeln!(&mut ctx.err, "Error saving conversation: {e}")
+                    {
+                        log::error!("Failed to write to stderr: {write_err}");
+                    }
+                }
+                break;
+            }
             _ => break,
         }
     }
 
-    rl.save_history(&history_path)?;
+    rl.save_history(&history_path)
+        .map_err(|e| CLIError::ReadlineError(e.to_string()))?;
 
     Ok(())
 }

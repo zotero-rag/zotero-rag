@@ -3,12 +3,8 @@
 #![allow(clippy::cast_precision_loss)]
 #![allow(clippy::cast_possible_wrap)]
 
-use std::{
-    io::{self, stderr, stdout},
-    sync::{Arc, atomic},
-};
+use std::io::{self, stderr, stdout};
 
-use chrono::Local;
 use clap::Parser;
 
 pub mod cli;
@@ -25,10 +21,7 @@ use common::{Args, Context, setup_logger};
 use config::Config;
 use state::{check_or_create_first_run_file, oobe};
 
-use crate::{
-    common::State,
-    state::{SavedChatHistory, save_conversation},
-};
+use crate::common::State;
 
 fn load_config() -> Config {
     // Load the configs in priority order: TOML < env < CLI args
@@ -137,26 +130,6 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         out: stdout(),
         err: stderr(),
     };
-
-    // It only makes sense to add the SIGINT handler here, since there's no conversation to be had
-    // before this.
-    let chat_history = Arc::clone(&context.state.chat_history);
-    let history_modified = Arc::clone(&context.state.dirty);
-
-    let _ = ctrlc::set_handler(move || {
-        if history_modified.load(atomic::Ordering::Relaxed) {
-            let history = chat_history.lock().unwrap();
-
-            let conversation = SavedChatHistory {
-                history: history.clone(),
-                date: Local::now(),
-                title: "Conversation on ".into(),
-            };
-
-            save_conversation(&conversation).expect("Failed to save conversation history");
-        }
-        std::process::exit(0);
-    });
 
     cli(context).await?;
     Ok(())
