@@ -24,28 +24,18 @@ This project provides a command-line interface for querying your Zotero library 
 The most straightforward way to install this is using `cargo` directly:
 
 ```bash
-cargo install --git https://github.com/zotero-rag/zotero-rag --tag v0.1.0-beta.1
+cargo install zqa
 ```
 
-It should be safe to omit the `--tag` and install the `HEAD` version, if you prefer. Contributors might prefer the below version instead, since you'll already have run a `git clone`:
+You can install the "nightly" version (the `HEAD` of the GitHub repo, which will likely be newer than the latest release) using
 
 ```bash
-# Clone the repository
-git clone https://github.com/yrahul3910/zotero-rag.git
-cd zotero-rag
-
-# Build the project
-cargo build --release
-
-# Install the CLI
-cargo install --path zqa
+cargo install --git https://github.com/zotero-rag/zotero-rag
 ```
 
-This will install the `zqa` binary in `~/.cargo/bin/`, so you should make sure this is in your `$PATH`. If you prefer, you can change this location to be, for example, `/usr/local/bin`, like so:
+In general, this "nightly" release should be stable enough to use, but YMMV. This version will report its version `--version` as the latest stable release, so if you wish to switch to a new "stable" version when a release is made, it should, in theory, work seamlessly.
 
-```
-cargo install --path zqa --root /usr/local/bin
-```
+The crates.io release is kept up-to-date with the latest release on GitHub, so there's no benefit to using one over the other.
 
 ## Usage
 
