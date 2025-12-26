@@ -6,6 +6,8 @@ description = "A QA and search program for your Zotero library."
 version = "0.1.0-beta.1"
 edition = "2024"
 rust-version = "1.91"
+license = "MIT"
+categories = ["command-line-utilities", "science"]
 
 [dependencies]
 directories = "6.0.0"

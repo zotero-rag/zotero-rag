@@ -1,7 +1,12 @@
 [package]
 name = "zqa-rag"
+authors = ["Rahul Yedida <hello@ryedida.me>"]
+description = "A retrieval-augmented generation (RAG) crate, used by `zqa`"
+homepage = "https://github.com/zotero-rag/zotero-rag"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.91"
+license = "MIT"
 
 [dependencies]
 dotenv = "0.15.0"

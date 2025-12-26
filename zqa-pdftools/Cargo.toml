@@ -1,7 +1,13 @@
 [package]
 name = "zqa-pdftools"
+authors = ["Rahul Yedida <hello@ryedida.me>"]
+homepage = "https://github.com/zotero-rag/zotero-rag"
+description = "A work-in-progress PDF parser tailored to CS-academic papers."
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.91"
+license = "MIT"
+categories = ["parser-implementations"]
 
 [dependencies]
 log = "0.4.27"
