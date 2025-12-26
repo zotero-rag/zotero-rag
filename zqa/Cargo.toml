@@ -8,6 +8,10 @@ edition = "2024"
 rust-version = "1.91"
 license = "MIT"
 categories = ["command-line-utilities", "science"]
+exclude = [
+    "assets",
+    "tests"
+]
 
 [dependencies]
 directories = "6.0.0"
