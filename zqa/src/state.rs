@@ -1,10 +1,10 @@
 //!  NOTE: This is not state management! The `state` module is actually a way to interact with `XDG_STATE_HOME`.
 
 use chrono::{DateTime, Local};
-use zqa_rag::llm::base::ChatHistoryItem;
 use serde::{Deserialize, Serialize};
 use std::{fs, io, path::PathBuf};
 use thiserror::Error;
+use zqa_rag::llm::base::ChatHistoryItem;
 
 use crate::config::{BaseDirError, Config, get_config_dir};
 
@@ -443,9 +443,9 @@ pub(crate) fn oobe() -> Result<(), StateError> {
 mod tests {
     use chrono::Local;
     use clap::builder::OsStr;
-    use zqa_rag::llm::base::{ChatHistoryContent, ChatHistoryItem, USER_ROLE};
     use std::fs;
     use std::path::Component;
+    use zqa_rag::llm::base::{ChatHistoryContent, ChatHistoryItem, USER_ROLE};
 
     use crate::state::{
         SavedChatHistory, get_conversation_history, get_state_dir, save_conversation,

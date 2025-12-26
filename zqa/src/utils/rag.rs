@@ -1,10 +1,10 @@
 //! Utilities to interface with the `rag` crate. This mostly contains type conversions.
 
-use zqa_rag::llm::base::ContentType;
 use std::{
     borrow::Cow,
     fmt::{self, Write},
 };
+use zqa_rag::llm::base::ContentType;
 
 /// ANSI escape code for dimming text
 const DIM_TEXT: &str = "\x1b[2m";

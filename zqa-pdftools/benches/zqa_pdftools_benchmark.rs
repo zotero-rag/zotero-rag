@@ -1,6 +1,6 @@
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use zqa_pdftools::parse::extract_text;
 use std::{fs, hint::black_box, time::Duration};
+use zqa_pdftools::parse::extract_text;
 
 fn criterion_benchmark(c: &mut Criterion) {
     let files_and_sizes = fs::read_dir(format!("{}/assets/bench", env!("CARGO_MANIFEST_DIR")))

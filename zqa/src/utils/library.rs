@@ -1,8 +1,6 @@
 use arrow_array::RecordBatch;
 use directories::UserDirs;
 use indicatif::ProgressBar;
-use zqa_rag::embedding::common::EmbeddingProviderConfig;
-use zqa_rag::vector::lance::{LanceError, get_lancedb_items, lancedb_exists};
 use rusqlite::Connection;
 use std::collections::HashSet;
 use std::env;
@@ -13,6 +11,8 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Instant;
 use thiserror::Error;
+use zqa_rag::embedding::common::EmbeddingProviderConfig;
+use zqa_rag::vector::lance::{LanceError, get_lancedb_items, lancedb_exists};
 
 use zqa_pdftools::parse::extract_text;
 

@@ -1,3 +1,9 @@
+use serde::{Deserialize, Serialize};
+use std::fmt::Display;
+use std::path::PathBuf;
+use std::{env, num::ParseIntError, path::Path};
+use thiserror;
+use thiserror::Error;
 use zqa_rag::config::LLMClientConfig;
 use zqa_rag::constants::{
     DEFAULT_ANTHROPIC_MAX_TOKENS, DEFAULT_ANTHROPIC_MODEL, DEFAULT_COHERE_EMBEDDING_DIM,
@@ -8,12 +14,6 @@ use zqa_rag::constants::{
 };
 use zqa_rag::constants::{DEFAULT_OPENAI_EMBEDDING_DIM, DEFAULT_OPENAI_EMBEDDING_MODEL};
 use zqa_rag::embedding::common::EmbeddingProviderConfig;
-use serde::{Deserialize, Serialize};
-use std::fmt::Display;
-use std::path::PathBuf;
-use std::{env, num::ParseIntError, path::Path};
-use thiserror;
-use thiserror::Error;
 
 /// TOML config. Below is an example config with all the defaults. The TOML config is
 /// overridden by environment variables.

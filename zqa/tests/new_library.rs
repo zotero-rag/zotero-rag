@@ -2,14 +2,14 @@ use arrow_array::RecordBatchIterator;
 use dotenv::dotenv;
 use lancedb::embeddings::EmbeddingDefinition;
 use log::LevelFilter;
-use zqa_rag::constants::{
-    DEFAULT_MAX_CONCURRENT_REQUESTS, DEFAULT_MAX_RETRIES, DEFAULT_VOYAGE_EMBEDDING_DIM,
-};
-use zqa_rag::vector::lance::insert_records;
 use std::env;
 use zqa::common::setup_logger;
 use zqa::config::{AnthropicConfig, Config, VoyageAIConfig};
 use zqa::full_library_to_arrow;
+use zqa_rag::constants::{
+    DEFAULT_MAX_CONCURRENT_REQUESTS, DEFAULT_MAX_RETRIES, DEFAULT_VOYAGE_EMBEDDING_DIM,
+};
+use zqa_rag::vector::lance::insert_records;
 
 #[tokio::test]
 async fn test_integration_works() {

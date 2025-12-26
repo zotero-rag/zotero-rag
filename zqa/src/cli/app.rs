@@ -9,6 +9,8 @@ use arrow_array::{self, RecordBatch, RecordBatchIterator, StringArray};
 use arrow_schema::Schema;
 use chrono::Local;
 use lancedb::embeddings::EmbeddingDefinition;
+use rustyline::error::ReadlineError;
+use tokio::task::JoinSet;
 use zqa_rag::capabilities::ModelProviders;
 use zqa_rag::config::LLMClientConfig;
 use zqa_rag::llm::base::{
@@ -23,8 +25,6 @@ use zqa_rag::vector::lance::{
     create_or_update_indexes, db_statistics, delete_rows, get_zero_vector_records, insert_records,
     lancedb_exists,
 };
-use rustyline::error::ReadlineError;
-use tokio::task::JoinSet;
 
 use crate::cli::errors::CLIError;
 use crate::common::Context;
@@ -952,15 +952,15 @@ mod tests {
     use crate::config::{Config, VoyageAIConfig};
     use arrow_array::{RecordBatch, StringArray};
     use arrow_ipc::writer::FileWriter;
-    use zqa_rag::constants::{
-        DEFAULT_VOYAGE_EMBEDDING_DIM, DEFAULT_VOYAGE_EMBEDDING_MODEL, DEFAULT_VOYAGE_RERANK_MODEL,
-    };
-    use zqa_rag::vector::lance::DB_URI;
     use serial_test::serial;
     use std::fs::{self, File};
     use std::io::Cursor;
     use std::sync::Arc;
     use temp_env;
+    use zqa_rag::constants::{
+        DEFAULT_VOYAGE_EMBEDDING_DIM, DEFAULT_VOYAGE_EMBEDDING_MODEL, DEFAULT_VOYAGE_RERANK_MODEL,
+    };
+    use zqa_rag::vector::lance::DB_URI;
 
     use crate::{
         cli::app::{process, run_query},
