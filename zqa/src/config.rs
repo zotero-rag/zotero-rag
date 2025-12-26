@@ -1,13 +1,13 @@
-use rag::config::LLMClientConfig;
-use rag::constants::{
+use zqa_rag::config::LLMClientConfig;
+use zqa_rag::constants::{
     DEFAULT_ANTHROPIC_MAX_TOKENS, DEFAULT_ANTHROPIC_MODEL, DEFAULT_COHERE_EMBEDDING_DIM,
     DEFAULT_COHERE_EMBEDDING_MODEL, DEFAULT_COHERE_RERANK_MODEL, DEFAULT_GEMINI_EMBEDDING_DIM,
     DEFAULT_GEMINI_EMBEDDING_MODEL, DEFAULT_GEMINI_MODEL, DEFAULT_MAX_CONCURRENT_REQUESTS,
     DEFAULT_MAX_RETRIES, DEFAULT_OPENAI_MAX_TOKENS, DEFAULT_OPENAI_MODEL, DEFAULT_OPENROUTER_MODEL,
     DEFAULT_VOYAGE_EMBEDDING_DIM, DEFAULT_VOYAGE_EMBEDDING_MODEL, DEFAULT_VOYAGE_RERANK_MODEL,
 };
-use rag::constants::{DEFAULT_OPENAI_EMBEDDING_DIM, DEFAULT_OPENAI_EMBEDDING_MODEL};
-use rag::embedding::common::EmbeddingProviderConfig;
+use zqa_rag::constants::{DEFAULT_OPENAI_EMBEDDING_DIM, DEFAULT_OPENAI_EMBEDDING_MODEL};
+use zqa_rag::embedding::common::EmbeddingProviderConfig;
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
 use std::path::PathBuf;
@@ -503,7 +503,7 @@ impl Default for Config {
 }
 
 // Convert zqa configs to rag configs using From trait
-impl From<AnthropicConfig> for rag::config::AnthropicConfig {
+impl From<AnthropicConfig> for zqa_rag::config::AnthropicConfig {
     fn from(config: AnthropicConfig) -> Self {
         Self {
             api_key: config
@@ -515,7 +515,7 @@ impl From<AnthropicConfig> for rag::config::AnthropicConfig {
     }
 }
 
-impl From<OpenAIConfig> for rag::config::OpenAIConfig {
+impl From<OpenAIConfig> for zqa_rag::config::OpenAIConfig {
     fn from(config: OpenAIConfig) -> Self {
         Self {
             api_key: config
@@ -536,9 +536,9 @@ impl From<OpenAIConfig> for rag::config::OpenAIConfig {
     }
 }
 
-impl From<GeminiConfig> for rag::config::GeminiConfig {
+impl From<GeminiConfig> for zqa_rag::config::GeminiConfig {
     fn from(config: GeminiConfig) -> Self {
-        use rag::constants::{DEFAULT_GEMINI_EMBEDDING_DIM, DEFAULT_GEMINI_EMBEDDING_MODEL};
+        use zqa_rag::constants::{DEFAULT_GEMINI_EMBEDDING_DIM, DEFAULT_GEMINI_EMBEDDING_MODEL};
 
         Self {
             api_key: config.api_key.expect(
@@ -555,9 +555,9 @@ impl From<GeminiConfig> for rag::config::GeminiConfig {
     }
 }
 
-impl From<VoyageAIConfig> for rag::config::VoyageAIConfig {
+impl From<VoyageAIConfig> for zqa_rag::config::VoyageAIConfig {
     fn from(config: VoyageAIConfig) -> Self {
-        use rag::constants::{
+        use zqa_rag::constants::{
             DEFAULT_VOYAGE_EMBEDDING_DIM, DEFAULT_VOYAGE_EMBEDDING_MODEL,
             DEFAULT_VOYAGE_RERANK_MODEL,
         };
@@ -580,9 +580,9 @@ impl From<VoyageAIConfig> for rag::config::VoyageAIConfig {
     }
 }
 
-impl From<CohereConfig> for rag::config::CohereConfig {
+impl From<CohereConfig> for zqa_rag::config::CohereConfig {
     fn from(config: CohereConfig) -> Self {
-        use rag::constants::{
+        use zqa_rag::constants::{
             DEFAULT_COHERE_EMBEDDING_DIM, DEFAULT_COHERE_EMBEDDING_MODEL,
             DEFAULT_COHERE_RERANK_MODEL,
         };
@@ -607,7 +607,7 @@ impl From<CohereConfig> for rag::config::CohereConfig {
     }
 }
 
-impl From<OpenRouterConfig> for rag::config::OpenRouterConfig {
+impl From<OpenRouterConfig> for zqa_rag::config::OpenRouterConfig {
     fn from(config: OpenRouterConfig) -> Self {
         Self {
             api_key: config

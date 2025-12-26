@@ -4487,16 +4487,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "pdftools"
-version = "0.1.0"
-dependencies = [
- "criterion",
- "log",
- "lopdf",
- "thiserror 1.0.69",
-]
-
-[[package]]
 name = "percent-encoding"
 version = "2.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4828,31 +4818,6 @@ checksum = "c069c179fcdc6a2fe24d8d18305cf085fdbd4f922c041943e203685d6a1c58fd"
 dependencies = [
  "endian-type",
  "nibble_vec",
-]
-
-[[package]]
-name = "rag"
-version = "0.1.0"
-dependencies = [
- "arrow-array",
- "arrow-schema",
- "bytes",
- "dotenv",
- "futures",
- "http 1.3.1",
- "indicatif 0.18.0",
- "lancedb",
- "log",
- "rand 0.9.2",
- "reqwest",
- "schemars 1.0.4",
- "serde",
- "serde_json",
- "serial_test",
- "tantivy",
- "tempfile",
- "thiserror 1.0.69",
- "tokio",
 ]
 
 [[package]]
@@ -7246,8 +7211,6 @@ dependencies = [
  "lancedb",
  "libsqlite3-sys",
  "log",
- "pdftools",
- "rag",
  "reqwest",
  "rusqlite",
  "rustyline",
@@ -7258,6 +7221,43 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "toml",
+ "zqa-pdftools",
+ "zqa-rag",
+]
+
+[[package]]
+name = "zqa-pdftools"
+version = "0.1.0"
+dependencies = [
+ "criterion",
+ "log",
+ "lopdf",
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "zqa-rag"
+version = "0.1.0"
+dependencies = [
+ "arrow-array",
+ "arrow-schema",
+ "bytes",
+ "dotenv",
+ "futures",
+ "http 1.3.1",
+ "indicatif 0.18.0",
+ "lancedb",
+ "log",
+ "rand 0.9.2",
+ "reqwest",
+ "schemars 1.0.4",
+ "serde",
+ "serde_json",
+ "serial_test",
+ "tantivy",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
 ]
 
 [[package]]

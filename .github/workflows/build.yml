@@ -34,7 +34,7 @@ jobs:
         key: ${{ runner.os }}-cargo-build-${{ hashFiles('**/Cargo.lock') }}
 
     - name: Run tests
-      run: RUST_BACKTRACE=1 cargo test -p rag -p pdftools --verbose -- --nocapture
+      run: RUST_BACKTRACE=1 cargo test -p zqa-rag -p zqa-pdftools --verbose -- --nocapture
       env:
         ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_KEY }}
         VOYAGE_AI_API_KEY: ${{ secrets.VOYAGE_AI_API_KEY }}

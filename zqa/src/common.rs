@@ -2,7 +2,7 @@ use clap::Parser;
 use fern;
 use humantime;
 use log::LevelFilter;
-use rag::llm::base::ChatHistoryItem;
+use zqa_rag::llm::base::ChatHistoryItem;
 use std::{
     io::Write,
     sync::{Arc, Mutex, atomic::AtomicBool},

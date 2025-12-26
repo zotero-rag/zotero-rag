@@ -1,7 +1,7 @@
 use std::{io, sync::PoisonError};
 use thiserror::Error;
 
-use rag::{llm::errors::LLMError, vector::lance::LanceError};
+use zqa_rag::{llm::errors::LLMError, vector::lance::LanceError};
 
 use crate::utils;
 

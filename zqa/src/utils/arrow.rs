@@ -6,7 +6,7 @@ use crate::{
     config::Config,
     utils::library::{ZoteroItem, ZoteroItemSet},
 };
-use rag::{
+use zqa_rag::{
     embedding::common::{
         EmbeddingProviderConfig, get_embedding_dims_by_provider,
         get_embedding_provider_with_config, get_reranking_provider,
@@ -338,7 +338,7 @@ mod tests {
     use super::*;
     use arrow_array::RecordBatchIterator;
     use dotenv::dotenv;
-    use rag::{
+    use zqa_rag::{
         constants::{
             DEFAULT_VOYAGE_EMBEDDING_DIM, DEFAULT_VOYAGE_EMBEDDING_MODEL,
             DEFAULT_VOYAGE_RERANK_MODEL,

@@ -1,3 +1,7 @@
 [workspace]
-members = ["zqa", "rag", "pdftools"]
+members = ["zqa", "zqa-rag", "zqa-pdftools"]
 resolver = "2"
+
+[workspace.dependencies]
+zqa-pdftools = { path = "zqa-pdftools" }
+zqa-rag = { path = "zqa-rag" }

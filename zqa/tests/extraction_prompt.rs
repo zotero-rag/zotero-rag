@@ -5,13 +5,13 @@ use zqa::utils::library::ZoteroItemMetadata;
 
 use std::{env, fs};
 
-use rag::config::LLMClientConfig;
-use rag::llm::base::{ApiClient, ChatRequest, ContentType};
-use rag::llm::factory::get_client_with_config;
+use zqa_rag::config::LLMClientConfig;
+use zqa_rag::llm::base::{ApiClient, ChatRequest, ContentType};
+use zqa_rag::llm::factory::get_client_with_config;
 use zqa::cli::prompts::get_extraction_prompt;
 use zqa::config::{AnthropicConfig, GeminiConfig, OpenAIConfig};
 
-async fn run_extraction_test(client: rag::llm::factory::LLMClient, provider_name: &str) {
+async fn run_extraction_test(client: zqa_rag::llm::factory::LLMClient, provider_name: &str) {
     // Sample query and PDF text
     let query = "What is the main contribution of this paper?";
     let pdf_text = fs::read_to_string("assets/Zotero/storage/5KWS383N/.zotero-ft-cache")

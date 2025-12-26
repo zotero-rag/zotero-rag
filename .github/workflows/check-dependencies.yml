@@ -18,11 +18,11 @@ jobs:
           override: true
       - name: Check for circular dependencies
         run: |
-          if cargo tree -p rag --invert | grep -qE "^pdftools"; then
-            echo "Error: 'rag' crate has a dependency on 'pdftools'"
+          if cargo tree -p zqa-rag --invert | grep -qE "^zqa-pdftools"; then
+            echo "Error: 'zqa-rag' crate has a dependency on 'zqa-pdftools'"
             exit 1
           fi
-          if cargo tree -p pdftools --invert | grep -qE "^rag"; then
-            echo "Error: 'pdftools' crate has a dependency on 'rag'"
+          if cargo tree -p zqa-pdftools --invert | grep -qE "^zqa-rag"; then
+            echo "Error: 'zqa-pdftools' crate has a dependency on 'zqa-rag'"
             exit 1
           fi

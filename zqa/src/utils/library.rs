@@ -1,8 +1,8 @@
 use arrow_array::RecordBatch;
 use directories::UserDirs;
 use indicatif::ProgressBar;
-use rag::embedding::common::EmbeddingProviderConfig;
-use rag::vector::lance::{LanceError, get_lancedb_items, lancedb_exists};
+use zqa_rag::embedding::common::EmbeddingProviderConfig;
+use zqa_rag::vector::lance::{LanceError, get_lancedb_items, lancedb_exists};
 use rusqlite::Connection;
 use std::collections::HashSet;
 use std::env;
@@ -14,7 +14,7 @@ use std::thread;
 use std::time::Instant;
 use thiserror::Error;
 
-use pdftools::parse::extract_text;
+use zqa_pdftools::parse::extract_text;
 
 use crate::izip;
 use crate::utils::arrow::{DbFields, get_column_from_batch};
@@ -563,7 +563,7 @@ mod tests {
 
     use super::*;
     use dotenv::dotenv;
-    use rag::{
+    use zqa_rag::{
         config::VoyageAIConfig,
         constants::{
             DEFAULT_VOYAGE_EMBEDDING_DIM, DEFAULT_VOYAGE_EMBEDDING_MODEL,

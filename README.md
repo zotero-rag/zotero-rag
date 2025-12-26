@@ -80,8 +80,8 @@ You should know that this comes with no warranty and I assume no liability if th
 
 The project is organized into three Rust crates:
 
-- **pdftools**: PDF parsing and text extraction
-- **rag**: Core RAG implementation with vector database and LLM clients
+- **zqa-pdftools**: PDF parsing and text extraction
+- **zqa-rag**: Core RAG implementation with vector database and LLM clients
 - **zqa**: Command-line interface and query processing
 
 ## Requirements

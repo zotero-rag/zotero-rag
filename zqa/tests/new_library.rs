@@ -2,10 +2,10 @@ use arrow_array::RecordBatchIterator;
 use dotenv::dotenv;
 use lancedb::embeddings::EmbeddingDefinition;
 use log::LevelFilter;
-use rag::constants::{
+use zqa_rag::constants::{
     DEFAULT_MAX_CONCURRENT_REQUESTS, DEFAULT_MAX_RETRIES, DEFAULT_VOYAGE_EMBEDDING_DIM,
 };
-use rag::vector::lance::insert_records;
+use zqa_rag::vector::lance::insert_records;
 use std::env;
 use zqa::common::setup_logger;
 use zqa::config::{AnthropicConfig, Config, VoyageAIConfig};
