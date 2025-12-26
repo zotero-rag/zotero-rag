@@ -3,5 +3,6 @@ members = ["zqa", "zqa-rag", "zqa-pdftools"]
 resolver = "2"
 
 [workspace.dependencies]
-zqa-pdftools = { path = "zqa-pdftools" }
-zqa-rag = { path = "zqa-rag" }
+zqa-rag = { path = "./zqa-rag", version = "0.1" }
+zqa-pdftools = { path = "./zqa-pdftools", version = "0.1" }
+

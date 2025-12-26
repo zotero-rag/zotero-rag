@@ -17,8 +17,8 @@ arrow-ipc = "^55.1.0"
 libsqlite3-sys = "^0.32"
 rusqlite = "0.34.0"
 dotenv = "0.15.0"
-zqa-rag = { workspace = true }
-zqa-pdftools = { workspace = true }
+zqa-rag = { workspace = true, version = "^0.1.0" }
+zqa-pdftools = { workspace = true, version = "^0.1.0" }
 reqwest = "0.12.14"
 serde = "1.0.219"
 serde_json = "1.0.140"
