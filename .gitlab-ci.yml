@@ -1,0 +1,357 @@
+# GitLab CI/CD configuration for zotero-rag
+# Converted from GitHub Actions workflows
+
+# Global settings
+variables:
+  CARGO_TERM_COLOR: always
+  CICD_INTERMEDIATES_DIR: "_cicd-intermediates"
+
+# Define stages
+stages:
+  - check
+  - test
+  - coverage
+  - build
+  - release
+
+# Cache template for Rust projects
+.rust_cache:
+  cache:
+    key:
+      files:
+        - Cargo.lock
+      prefix: $CI_JOB_NAME
+    paths:
+      - .cargo/registry/index/
+      - .cargo/registry/cache/
+      - .cargo/git/db/
+      - target/
+
+# Common setup for Rust jobs
+.rust_setup:
+  before_script:
+    - rustup component add rustfmt clippy
+    - rustc -V
+    - cargo -V
+
+# Mold linker installation script (reusable via !reference)
+.install_mold:
+  script:
+    # Install build-essential which provides ld and other essential build tools
+    - apt-get install -y build-essential wget
+    - wget -O- --timeout=10 --waitretry=3 --retry-connrefused --progress=dot:mega https://github.com/rui314/mold/releases/download/v2.40.4/mold-2.40.4-x86_64-linux.tar.gz | tar -C /usr/local --strip-components=1 --no-overwrite-dir -xzf -
+    - test "$(realpath /usr/bin/ld)" != /usr/local/bin/mold && ln -sf /usr/local/bin/mold "$(realpath /usr/bin/ld)"; true
+    - chmod +x /usr/local/bin/mold
+    - mold --version
+
+#==============================================================================
+# CHECK STAGE - Formatting, Linting, and Dependency Checks
+#==============================================================================
+
+rust-formatting:
+  stage: check
+  image: rust:latest
+  extends:
+    - .rust_cache
+    - .rust_setup
+  script:
+    - cargo fmt --all -- --check
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == "master"
+    - if: $CI_PIPELINE_SOURCE == "web"
+  allow_failure: false
+
+rust-clippy:
+  stage: check
+  image: rust:latest
+  extends:
+    - .rust_cache
+  before_script:
+    # Install mold linker and dependencies
+    - apt-get update && apt-get install -y protobuf-compiler
+    - !reference [.install_mold, script]
+    # Setup Rust
+    - rustup component add rustfmt clippy
+    - rustc -V
+    - cargo -V
+  script:
+    - cargo clippy --all-targets --all-features -- -D warnings
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == "master"
+    - if: $CI_PIPELINE_SOURCE == "web"
+  allow_failure: false
+
+check-circular-dependencies:
+  stage: check
+  image: rust:latest
+  script:
+    - |
+      if cargo tree -p zqa-rag --invert | grep -qE "^zqa-pdftools"; then
+        echo "Error: 'zqa-rag' crate has a dependency on 'zqa-pdftools'"
+        exit 1
+      fi
+    - |
+      if cargo tree -p zqa-pdftools --invert | grep -qE "^zqa-rag"; then
+        echo "Error: 'zqa-pdftools' crate has a dependency on 'zqa-rag'"
+        exit 1
+      fi
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == "master"
+    - if: $CI_PIPELINE_SOURCE == "web"
+  allow_failure: false
+
+#==============================================================================
+# TEST STAGE - Build and test packages
+#==============================================================================
+
+test-pdftools-and-rag:
+  tags:
+    - saas-linux-medium-amd64
+  stage: test
+  image: rust:latest
+  extends:
+    - .rust_cache
+  before_script:
+    # Install mold linker and dependencies
+    - apt-get update && apt-get install -y protobuf-compiler
+    - !reference [.install_mold, script]
+    # Setup Rust
+    - rustc -V
+    - cargo -V
+  script:
+    - RUST_BACKTRACE=1 cargo test -p zqa-rag -p zqa-pdftools --verbose -- --nocapture
+  variables:
+    ANTHROPIC_API_KEY: $ANTHROPIC_KEY
+    VOYAGE_AI_API_KEY: $VOYAGE_KEY
+    OPENAI_API_KEY: $OPENAI_KEY
+    OPENROUTER_API_KEY: $OPENROUTER_KEY
+    GEMINI_API_KEY: $GEMINI_KEY
+    COHERE_API_KEY: $COHERE_KEY
+    OPENROUTER_MODEL: google/gemini-2.5-flash
+    ANTHROPIC_MODEL: claude-haiku-4-5-20251001
+    OPENAI_EMBEDDING_MODEL: text-embedding-3-small
+    MAX_CONCURRENT_REQUESTS: "5"
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == "master"
+    - if: $CI_PIPELINE_SOURCE == "web"
+
+test-zqa:
+  tags:
+    - saas-linux-medium-amd64
+  stage: test
+  image: rust:latest
+  extends:
+    - .rust_cache
+  before_script:
+    # Install mold linker and dependencies
+    - apt-get update && apt-get install -y protobuf-compiler
+    - !reference [.install_mold, script]
+    # Setup Rust
+    - rustc -V
+    - cargo -V
+  script:
+    - RUST_BACKTRACE=1 cargo test -p zqa --verbose -- --nocapture --test-threads=1
+  variables:
+    ANTHROPIC_API_KEY: $ANTHROPIC_KEY
+    VOYAGE_AI_API_KEY: $VOYAGE_KEY
+    OPENAI_API_KEY: $OPENAI_KEY
+    OPENROUTER_API_KEY: $OPENROUTER_KEY
+    GEMINI_API_KEY: $GEMINI_KEY
+    COHERE_API_KEY: $COHERE_KEY
+    OPENROUTER_MODEL: google/gemini-2.5-flash
+    ANTHROPIC_MODEL: claude-haiku-4-5-20251001
+    OPENAI_EMBEDDING_MODEL: text-embedding-3-small
+    MAX_CONCURRENT_REQUESTS: "5"
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == "master"
+    - if: $CI_PIPELINE_SOURCE == "web"
+
+#==============================================================================
+# COVERAGE STAGE - Generate and upload code coverage
+#==============================================================================
+
+coverage:
+  tags:
+    - saas-linux-medium-amd64
+  stage: coverage
+  image: rust:latest
+  extends:
+    - .rust_cache
+  before_script:
+    # Install mold linker and dependencies
+    - apt-get update && apt-get install -y protobuf-compiler
+    - !reference [.install_mold, script]
+    # Setup Rust
+    - rustc -V
+    - cargo -V
+    - cargo install cargo-tarpaulin --force
+  script:
+    # Generate coverage in multiple formats
+    # - Cobertura XML for GitLab's coverage visualization
+    # - LCOV for Codecov
+    - cargo tarpaulin --out Xml --out lcov --output-dir . --timeout 300 --rustflags="-C opt-level=0" --exclude-files 'zqa/tests/*'
+    - |
+      # Upload to Codecov
+      curl -Os https://uploader.codecov.io/latest/linux/codecov
+      chmod +x codecov
+      ./codecov -t ${CODECOV_TOKEN} -f lcov.info -R .
+  variables:
+    ANTHROPIC_API_KEY: $ANTHROPIC_KEY
+    VOYAGE_AI_API_KEY: $VOYAGE_KEY
+    OPENAI_API_KEY: $OPENAI_KEY
+    OPENROUTER_API_KEY: $OPENROUTER_KEY
+    GEMINI_API_KEY: $GEMINI_KEY
+    COHERE_API_KEY: $COHERE_KEY
+    OPENROUTER_MODEL: google/gemini-2.5-flash
+    ANTHROPIC_MODEL: claude-haiku-4-5-20251001
+    OPENAI_EMBEDDING_MODEL: text-embedding-3-small
+    MAX_CONCURRENT_REQUESTS: "5"
+  # Parse coverage percentage from tarpaulin output (format: "XX.XX% coverage")
+  coverage: '/\d+\.\d+% coverage/'
+  artifacts:
+    reports:
+      coverage_report:
+        coverage_format: cobertura
+        path: cobertura.xml
+    paths:
+      - lcov.info
+      - cobertura.xml
+    expire_in: 30 days
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == "master"
+    - if: $CI_PIPELINE_SOURCE == "web"
+  allow_failure: true
+
+#==============================================================================
+# RELEASE STAGE - Build binaries for multiple platforms and create releases
+#==============================================================================
+
+# Extract crate metadata
+.crate_metadata:
+  stage: .pre
+  image: rust:latest
+  script:
+    - apt-get update && apt-get install -y jq
+    - echo "CRATE_NAME=zqa" > metadata.env
+    - cargo metadata --no-deps --format-version 1 | jq -r '"CRATE_VERSION=" + (.packages[] | select(.name == "zqa")).version' >> metadata.env
+    - cargo metadata --no-deps --format-version 1 | jq -r '"CRATE_MAINTAINER=" + (.packages[] | select(.name == "zqa")).authors[0]' >> metadata.env
+    - cargo metadata --no-deps --format-version 1 | jq -r '"CRATE_HOMEPAGE=" + (.packages[] | select(.name == "zqa")).homepage' >> metadata.env
+    - cargo metadata --no-deps --format-version 1 | jq -r '"CRATE_MSRV=" + (.packages[] | select(.name == "zqa")).rust_version' >> metadata.env
+    - cat metadata.env
+  artifacts:
+    reports:
+      dotenv: metadata.env
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v.*/
+
+# Build template for release binaries
+.build_release:
+  tags:
+    - saas-linux-medium-amd64
+  stage: release
+  image: rust:latest
+  extends:
+    - .rust_cache
+  before_script:
+    - rustc -V
+    - cargo -V
+  script:
+    # Install prerequisites based on target
+    - |
+      case ${TARGET} in
+        aarch64-unknown-linux-gnu|x86_64-unknown-linux-gnu)
+          apt-get update && apt-get install -y protobuf-compiler
+          ;;
+      esac
+    # Install mold for Linux targets
+    - !reference [.install_mold, script]
+    # Add target
+    - rustup target add ${TARGET}
+    # Build
+    - cargo build --locked --release --target="${TARGET}"
+    # Set binary path
+    - export BIN_PATH="target/${TARGET}/release/zqa"
+    # Run tests
+    - cargo test --locked --target="${TARGET}" -p zqa
+    # Create tarball
+    - export PKG_BASENAME="zqa-v${CRATE_VERSION}-${TARGET}"
+    - export PKG_NAME="${PKG_BASENAME}.tar.gz"
+    - mkdir -p "${CICD_INTERMEDIATES_DIR}/package/${PKG_BASENAME}"
+    - cp "${BIN_PATH}" "${CICD_INTERMEDIATES_DIR}/package/${PKG_BASENAME}/"
+    - cp README.md LICENSE CHANGELOG.md "${CICD_INTERMEDIATES_DIR}/package/${PKG_BASENAME}/"
+    - cd "${CICD_INTERMEDIATES_DIR}/package" && tar czf "${PKG_NAME}" "${PKG_BASENAME}"/*
+    - mv "${CICD_INTERMEDIATES_DIR}/package/${PKG_NAME}" .
+  variables:
+    ANTHROPIC_API_KEY: $ANTHROPIC_KEY
+    VOYAGE_AI_API_KEY: $VOYAGE_KEY
+    OPENAI_API_KEY: $OPENAI_KEY
+    OPENROUTER_API_KEY: $OPENROUTER_KEY
+    GEMINI_API_KEY: $GEMINI_KEY
+    COHERE_API_KEY: $COHERE_KEY
+    OPENROUTER_MODEL: google/gemini-2.5-flash
+    ANTHROPIC_MODEL: claude-haiku-4-5-20251001
+    OPENAI_EMBEDDING_MODEL: text-embedding-3-small
+    MAX_CONCURRENT_REQUESTS: "5"
+  artifacts:
+    paths:
+      - "*.tar.gz"
+    expire_in: never
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v.*/
+
+# Build for x86_64 Linux
+build-x86_64-linux:
+  extends: .build_release
+  variables:
+    TARGET: x86_64-unknown-linux-gnu
+
+# Build for aarch64 Linux
+build-aarch64-linux:
+  extends: .build_release
+  variables:
+    TARGET: aarch64-unknown-linux-gnu
+
+# Build for aarch64 macOS (requires macOS runner)
+# This job is disabled by default since GitLab.com doesn't provide macOS shared runners
+# Enable it if you have a self-hosted macOS runner with tag 'macos'
+build-aarch64-macos:
+  extends: .build_release
+  variables:
+    TARGET: aarch64-apple-darwin
+  before_script:
+    - rustc -V
+    - cargo -V
+    - brew install protobuf || true
+  # Uncomment the tags line below if you have a macOS runner
+  # tags:
+  #   - macos
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v.*/
+      when: manual  # Manual trigger since macOS runners may not be available
+
+# Create GitHub release (requires release-cli)
+create-release:
+  stage: release
+  image: registry.gitlab.com/gitlab-org/release-cli:latest
+  needs:
+    - build-x86_64-linux
+    - build-aarch64-linux
+  script:
+    - echo "Creating release for tag $CI_COMMIT_TAG"
+  release:
+    tag_name: $CI_COMMIT_TAG
+    description: "Release $CI_COMMIT_TAG"
+    assets:
+      links:
+        - name: "x86_64 Linux Binary"
+          url: "${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/zqa-${CI_COMMIT_TAG}-x86_64-unknown-linux-gnu.tar.gz?job=build-x86_64-linux"
+        - name: "aarch64 Linux Binary"
+          url: "${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/zqa-${CI_COMMIT_TAG}-aarch64-unknown-linux-gnu.tar.gz?job=build-aarch64-linux"
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v.*/
