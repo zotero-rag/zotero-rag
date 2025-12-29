@@ -11,7 +11,6 @@ use crate::llm::{http_client::ReqwestClient, openai::OpenAIClient};
 use crate::vector::backup::with_backup;
 use crate::vector::checkhealth::get_zero_vectors;
 use lancedb::table::OptimizeOptions;
-use tantivy::tokenizer::Language;
 
 use arrow_array::cast::as_string_array;
 use arrow_array::{
@@ -145,10 +144,7 @@ pub async fn create_or_update_indexes(
         // Note that currently, multi-column indexes are not supported by LanceDB.
         tbl.create_index(
             &[text_col],
-            lancedb::index::Index::FTS(FtsIndexBuilder::new(
-                "simple".to_string(),
-                Language::English,
-            )),
+            lancedb::index::Index::FTS(FtsIndexBuilder::default()),
         )
         .execute()
         .await?;
@@ -156,11 +152,9 @@ pub async fn create_or_update_indexes(
 
     // If both indices already existed before this run, optimize them.
     if has_vector_index && has_fts_index {
-        tbl.optimize(lancedb::table::OptimizeAction::Index(OptimizeOptions {
-            num_indices_to_merge: 1, // default
-            index_names: None,       // optimize all indices
-            retrain: false,          // possibly expose this option later
-        }))
+        tbl.optimize(lancedb::table::OptimizeAction::Index(
+            OptimizeOptions::merge(1),
+        ))
         .await?;
     }
 
