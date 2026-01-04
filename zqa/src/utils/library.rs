@@ -377,13 +377,23 @@ pub fn get_authors(items: &mut [ZoteroItem]) -> Result<(), LibraryParsingError> 
 /// the byte in reverse order) describe the bottom two. I'm sure there's some historical reason why
 /// the first three in each column are separate from the last two, and this is certainly a choice
 /// we've made.
-fn get_pbar_ticks() -> String {
+const fn compute_pbar_ticks() -> [char; 8] {
     const FILLED_BOX: u32 = 0x28FF;
     const DOTS: [u32; 8] = [1, 1 << 1, 1 << 2, 1 << 6, 1 << 7, 1 << 5, 1 << 4, 1 << 3];
 
-    DOTS.iter()
-        .map(|d| char::from_u32(FILLED_BOX - d).unwrap())
-        .collect::<String>()
+    let mut chars = ['\0'; 8];
+    let mut i = 0;
+    while i < 8 {
+        chars[i] = char::from_u32(FILLED_BOX - DOTS[i]).unwrap();
+        i += 1;
+    }
+    chars
+}
+
+#[inline]
+fn get_pbar_ticks() -> String {
+    const PBAR_TICKS: [char; 8] = compute_pbar_ticks();
+    PBAR_TICKS.iter().collect()
 }
 
 /// Parses the Zotero library, also parsing PDF files if they exist on disk. If not, we currently
@@ -540,7 +550,7 @@ pub async fn parse_library(
 
     for handle in handles {
         if let Err(e) = handle.join() {
-            log::error!("Thread panicked: {:?}", e);
+            log::error!("Thread panicked: {e:?}");
         }
     }
 
