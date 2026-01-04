@@ -1,15 +1,16 @@
 use arrow_array::RecordBatch;
 use directories::UserDirs;
-use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
+use indicatif::{MultiProgress, ProgressBar};
 use rusqlite::Connection;
 use std::collections::HashSet;
 use std::env;
 use std::fmt::Write;
 use std::hash::Hash;
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::atomic;
 use std::sync::atomic::AtomicUsize;
-use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Instant;
 use thiserror::Error;
@@ -366,18 +367,6 @@ pub fn get_authors(items: &mut [ZoteroItem]) -> Result<(), LibraryParsingError> 
     Ok(())
 }
 
-fn create_progress_bar(item_count: usize) -> ProgressBar {
-    let pb = ProgressBar::new(item_count as u64);
-    pb.set_style(
-        ProgressStyle::with_template("{prefix:>12.cyan.bold} [{bar:57}] {pos}/{len} {wide_msg}")
-            .unwrap()
-            .progress_chars("=> "),
-    );
-    pb.set_prefix("Processing");
-
-    pb
-}
-
 /// Parses the Zotero library, also parsing PDF files if they exist on disk. If not, we currently
 /// discard those items.
 ///
@@ -428,90 +417,116 @@ pub async fn parse_library(
     let chunk_size = metadata.len().div_ceil(n_threads);
     log::debug!("Using chunk size of {chunk_size}");
 
-    let mbar = MultiProgress::new();
-
-    // Keep track of how many were skipped, and for what reasons. Currently, we won't track the
-    // actual items themselves.
-    #[allow(clippy::items_after_statements)]
-    enum FailReason {
-        NotPdf = 0,
-        InvalidPath = 1,
-        Panic = 2,
-    }
-
-    let not_pdf_counts = AtomicUsize::new(0);
-    let invalid_path_counts = AtomicUsize::new(0);
-    let panic_counts = AtomicUsize::new(0);
+    let not_pdf_counts = Arc::new(AtomicUsize::new(0));
+    let invalid_path_counts = Arc::new(AtomicUsize::new(0));
+    let panic_counts = Arc::new(AtomicUsize::new(0));
 
     let (task_tx, task_rx) = crossbeam_channel::bounded::<ZoteroItemMetadata>(metadata.len());
     let (res_tx, res_rx) = crossbeam_channel::bounded::<ZoteroItem>(metadata.len());
 
-    let handles = (0..n_threads).map(|_| {
-        thread::spawn(|| {
-            while let Ok(task) = task_rx.recv() {
-                /* Handle each ZoteroItemMetadata item. This has all the info needed to
-                 * actually figure out where the file is on disk and parse it--it's here
-                 * that we integrate with `pdftools` to get text out of each PDF. */
-                let Some(path_str) = task.file_path.to_str() else {
-                    // Best not to try printing the file path here, give the user the
-                    // library key instead.
-                    log::warn!(
-                        "Skipping item with invalid UTF-8 in path: {:?}",
-                        task.library_key
-                    );
+    let metadata_len = metadata.len();
+    for item in metadata {
+        task_tx.send(item).unwrap();
+    }
+    drop(task_tx);
 
-                    invalid_path_counts.fetch_add(1, atomic::Ordering::Relaxed);
-                    return;
-                };
+    let mbar = Arc::new(MultiProgress::new());
 
-                // TODO: Handle other formats
-                if !Path::new(path_str)
-                    .extension()
-                    .is_some_and(|ext| ext.eq_ignore_ascii_case("pdf"))
-                {
-                    log::warn!("Path {path_str} is not a PDF file.");
-                    not_pdf_counts.fetch_add(1, atomic::Ordering::Relaxed);
+    let handles: Vec<_> = (0..n_threads)
+        .map(|_| {
+            let task_rx = task_rx.clone();
+            let res_tx = res_tx.clone();
+            let mbar = Arc::clone(&mbar);
+            let not_pdf_counts = Arc::clone(&not_pdf_counts);
+            let invalid_path_counts = Arc::clone(&invalid_path_counts);
+            let panic_counts = Arc::clone(&panic_counts);
 
-                    return;
-                }
-                log::debug!("Processing {path_str}");
+            thread::spawn(move || {
+                let pbar = mbar.add(ProgressBar::no_length());
+                // pbar.set_style(style);
 
-                match extract_text(path_str) {
-                    Ok(text) => {
-                        res_tx.send(ZoteroItem {
-                            metadata: task.clone(),
-                            text,
-                        });
+                while let Ok(task) = task_rx.recv() {
+                    pbar.set_message(task.title.clone());
+                    pbar.inc(1);
+
+                    // Wrap processing in catch_unwind to handle panics gracefully
+                    let result = catch_unwind(AssertUnwindSafe(|| {
+                        /* Handle each ZoteroItemMetadata item. This has all the info needed to
+                         * actually figure out where the file is on disk and parse it--it's here
+                         * that we integrate with `pdftools` to get text out of each PDF. */
+                        let Some(path_str) = task.file_path.to_str() else {
+                            // Best not to try printing the file path here, give the user the
+                            // library key instead.
+                            log::warn!(
+                                "Skipping item with invalid UTF-8 in path: {:?}",
+                                task.library_key
+                            );
+
+                            invalid_path_counts.fetch_add(1, atomic::Ordering::Relaxed);
+                            return;
+                        };
+
+                        // TODO: Handle other formats
+                        if !Path::new(path_str)
+                            .extension()
+                            .is_some_and(|ext| ext.eq_ignore_ascii_case("pdf"))
+                        {
+                            log::warn!("Path {path_str} is not a PDF file.");
+                            not_pdf_counts.fetch_add(1, atomic::Ordering::Relaxed);
+
+                            return;
+                        }
+                        log::debug!("Processing {path_str}");
+
+                        match extract_text(path_str) {
+                            Ok(text) => {
+                                res_tx
+                                    .send(ZoteroItem {
+                                        metadata: task,
+                                        text,
+                                    })
+                                    .unwrap();
+                            }
+                            Err(e) => {
+                                log::warn!(
+                                    "Failed to parse PDF for item {} with path {}: {}",
+                                    task.library_key,
+                                    path_str,
+                                    e
+                                );
+                            }
+                        }
+                    }));
+
+                    if result.is_err() {
+                        log::error!("Thread panicked while processing item");
+                        panic_counts.fetch_add(1, atomic::Ordering::Relaxed);
                     }
-                    Err(e) => {
-                        log::warn!(
-                            "Failed to parse PDF for item {} with path {}: {}",
-                            task.library_key,
-                            path_str,
-                            e
-                        );
-                    }
                 }
-            }
-        });
-    });
+
+                pbar.finish_with_message("done");
+            })
+        })
+        .collect();
     drop(res_tx);
 
-    let pbar = create_progress_bar(metadata.len());
-    for result in res_rx {
-        pbar.inc(1);
+    let mut results: Vec<ZoteroItem> = Vec::new();
+    while let Ok(item) = res_rx.recv() {
+        results.push(item);
     }
-    pbar.finish_and_clear();
+    mbar.clear().unwrap();
+
+    for handle in handles {
+        if let Err(e) = handle.join() {
+            log::error!("Thread panicked: {:?}", e);
+        }
+    }
 
     let end_time = Instant::now();
     let elapsed_time = (end_time - start_time).as_secs();
     let minutes = elapsed_time / 60;
     let seconds = elapsed_time % 60;
 
-    let results = handles
-        .into_iter()
-        .flat_map(|handle| handle.join().unwrap_or_else(|_| Vec::new()))
-        .collect::<Vec<_>>();
     log::info!(
         "Parsed {} items from library in {}min {}s.",
         results.len(),
@@ -519,33 +534,26 @@ pub async fn parse_library(
         seconds
     );
 
-    let fail_count = metadata.len() - results.len();
+    let fail_count = metadata_len - results.len();
     if fail_count == 0 {
         log::info!("There were no errors during parsing.");
     } else {
         log::warn!("{fail_count} items could not be parsed.");
         println!("{fail_count} items could not be parsed:");
 
-        let fail_counts = Arc::clone(&skip_counts);
-        if let Ok(fail_counts) = fail_counts.lock() {
-            // There's probably a more elegant way to do this, but let's not prematurely optimize.
-            if fail_counts[FailReason::NotPdf as usize] > 0 {
-                println!(
-                    "\t{} failed because they were not PDFs.",
-                    fail_counts[FailReason::NotPdf as usize]
-                );
-            }
+        let not_pdf_count = not_pdf_counts.load(atomic::Ordering::Relaxed);
+        if not_pdf_count > 0 {
+            println!("\t{not_pdf_count} failed because they were not PDFs.");
+        }
 
-            if fail_counts[FailReason::InvalidPath as usize] > 0 {
-                println!(
-                    "\t{} failed because they had invalid file paths.",
-                    fail_counts[FailReason::InvalidPath as usize]
-                );
-            }
-        } else {
-            log::warn!(
-                "We couldn't get a lock on `fail_counts`, so detailed stats are not printed."
-            );
+        let invalid_path_count = invalid_path_counts.load(atomic::Ordering::Relaxed);
+        if invalid_path_count > 0 {
+            println!("\t{invalid_path_count} failed because they had invalid file paths.");
+        }
+
+        let panic_count = panic_counts.load(atomic::Ordering::Relaxed);
+        if panic_count > 0 {
+            println!("\t{panic_count} failed because parsing failed.");
         }
     }
 
