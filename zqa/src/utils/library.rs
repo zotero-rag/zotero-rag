@@ -1,12 +1,14 @@
 use arrow_array::RecordBatch;
 use directories::UserDirs;
-use indicatif::ProgressBar;
+use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use rusqlite::Connection;
 use std::collections::HashSet;
 use std::env;
 use std::fmt::Write;
 use std::hash::Hash;
 use std::path::{Path, PathBuf};
+use std::sync::atomic;
+use std::sync::atomic::AtomicUsize;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Instant;
@@ -364,6 +366,18 @@ pub fn get_authors(items: &mut [ZoteroItem]) -> Result<(), LibraryParsingError> 
     Ok(())
 }
 
+fn create_progress_bar(item_count: usize) -> ProgressBar {
+    let pb = ProgressBar::new(item_count as u64);
+    pb.set_style(
+        ProgressStyle::with_template("{prefix:>12.cyan.bold} [{bar:57}] {pos}/{len} {wide_msg}")
+            .unwrap()
+            .progress_chars("=> "),
+    );
+    pb.set_prefix("Processing");
+
+    pb
+}
+
 /// Parses the Zotero library, also parsing PDF files if they exist on disk. If not, we currently
 /// discard those items.
 ///
@@ -414,13 +428,7 @@ pub async fn parse_library(
     let chunk_size = metadata.len().div_ceil(n_threads);
     log::debug!("Using chunk size of {chunk_size}");
 
-    let bar = Arc::new(Mutex::new(ProgressBar::new(
-        metadata.len().try_into().unwrap(),
-    )));
-    {
-        let pbar = bar.lock().unwrap();
-        pbar.inc(1);
-    } // Drop the lock
+    let mbar = MultiProgress::new();
 
     // Keep track of how many were skipped, and for what reasons. Currently, we won't track the
     // actual items themselves.
@@ -428,80 +436,72 @@ pub async fn parse_library(
     enum FailReason {
         NotPdf = 0,
         InvalidPath = 1,
+        Panic = 2,
     }
 
-    let skip_counts = Arc::new(Mutex::new([0, 0]));
+    let not_pdf_counts = AtomicUsize::new(0);
+    let invalid_path_counts = AtomicUsize::new(0);
+    let panic_counts = AtomicUsize::new(0);
 
-    let handles = metadata
-        .chunks(chunk_size)
-        .map(|chunk| {
-            // Parse each chunked subset of items
-            let bar = Arc::clone(&bar);
-            let fail_map_clone = Arc::clone(&skip_counts);
-            let chunk = chunk.to_vec();
-            let cur_chunk_size = chunk.len();
+    let (task_tx, task_rx) = crossbeam_channel::bounded::<ZoteroItemMetadata>(metadata.len());
+    let (res_tx, res_rx) = crossbeam_channel::bounded::<ZoteroItem>(metadata.len());
 
-            thread::spawn(move || {
-                let result = chunk
-                    .iter()
-                    .filter_map(|m| {
-                        /* Handle each ZoteroItemMetadata item. This has all the info needed to
-                         * actually figure out where the file is on disk and parse it--it's here
-                         * that we integrate with `pdftools` to get text out of each PDF. */
-                        let Some(path_str) = m.file_path.to_str() else {
-                            // Best not to try printing the file path here, give the user the
-                            // library key instead.
-                            log::warn!(
-                                "Skipping item with invalid UTF-8 in path: {:?}",
-                                m.library_key
-                            );
+    let handles = (0..n_threads).map(|_| {
+        thread::spawn(|| {
+            while let Ok(task) = task_rx.recv() {
+                /* Handle each ZoteroItemMetadata item. This has all the info needed to
+                 * actually figure out where the file is on disk and parse it--it's here
+                 * that we integrate with `pdftools` to get text out of each PDF. */
+                let Some(path_str) = task.file_path.to_str() else {
+                    // Best not to try printing the file path here, give the user the
+                    // library key instead.
+                    log::warn!(
+                        "Skipping item with invalid UTF-8 in path: {:?}",
+                        task.library_key
+                    );
 
-                            let mut fail_map = fail_map_clone.lock().ok()?;
-                            fail_map[FailReason::InvalidPath as usize] += 1;
+                    invalid_path_counts.fetch_add(1, atomic::Ordering::Relaxed);
+                    return;
+                };
 
-                            return None;
-                        };
+                // TODO: Handle other formats
+                if !Path::new(path_str)
+                    .extension()
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("pdf"))
+                {
+                    log::warn!("Path {path_str} is not a PDF file.");
+                    not_pdf_counts.fetch_add(1, atomic::Ordering::Relaxed);
 
-                        // TODO: Handle other formats
-                        if !Path::new(path_str)
-                            .extension()
-                            .is_some_and(|ext| ext.eq_ignore_ascii_case("pdf"))
-                        {
-                            log::warn!("Path {path_str} is not a PDF file.");
+                    return;
+                }
+                log::debug!("Processing {path_str}");
 
-                            let mut fail_map = fail_map_clone.lock().ok()?;
-                            fail_map[FailReason::NotPdf as usize] += 1;
+                match extract_text(path_str) {
+                    Ok(text) => {
+                        res_tx.send(ZoteroItem {
+                            metadata: task.clone(),
+                            text,
+                        });
+                    }
+                    Err(e) => {
+                        log::warn!(
+                            "Failed to parse PDF for item {} with path {}: {}",
+                            task.library_key,
+                            path_str,
+                            e
+                        );
+                    }
+                }
+            }
+        });
+    });
+    drop(res_tx);
 
-                            return None;
-                        }
-                        log::debug!("Processing {path_str}");
-
-                        match extract_text(path_str) {
-                            Ok(text) => Some(ZoteroItem {
-                                metadata: m.clone(),
-                                text,
-                            }),
-                            Err(e) => {
-                                log::warn!(
-                                    "Failed to parse PDF for item {} with path {}: {}",
-                                    m.library_key,
-                                    path_str,
-                                    e
-                                );
-                                None
-                            }
-                        }
-                    })
-                    .collect::<Vec<_>>();
-
-                // Batch-update the progress bar
-                let pbar = bar.lock().unwrap();
-                pbar.inc(cur_chunk_size as u64);
-
-                result
-            })
-        })
-        .collect::<Vec<_>>();
+    let pbar = create_progress_bar(metadata.len());
+    for result in res_rx {
+        pbar.inc(1);
+    }
+    pbar.finish_and_clear();
 
     let end_time = Instant::now();
     let elapsed_time = (end_time - start_time).as_secs();
@@ -518,9 +518,6 @@ pub async fn parse_library(
         minutes,
         seconds
     );
-
-    let pbar = bar.lock().unwrap();
-    pbar.finish();
 
     let fail_count = metadata.len() - results.len();
     if fail_count == 0 {
