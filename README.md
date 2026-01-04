@@ -24,7 +24,7 @@ This project provides a command-line interface for querying your Zotero library 
 The most straightforward way to install this is using `cargo` directly:
 
 ```bash
-cargo install zqa
+cargo install zqa@0.1.0-beta.2
 ```
 
 You can install the "nightly" version (the `HEAD` of the GitHub repo, which will likely be newer than the latest release) using
@@ -174,7 +174,7 @@ You likely don't need _all_ of these set (or even mentioned) in your `.env` file
 You can run the code using
 
 ```bash
-cargo run --bin zqa@0.1.0-beta.2
+cargo run --bin zqa
 ```
 
 The binary exposes some options, but most of them are unlikely to be useful at the moment for end-users. The one that you might want to play with is `--model-provider`, which lets you choose the model provider. Note that this must be set for the model settings in your `.env` to have any effect.
