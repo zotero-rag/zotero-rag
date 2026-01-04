@@ -455,7 +455,10 @@ pub async fn parse_library(
 
     let metadata_len = metadata.len();
     for item in metadata {
-        task_tx.send(item).unwrap();
+        task_tx.send(item).map_err(|e| {
+            log::error!("Failed to send task to worker threads: {e}");
+            LibraryParsingError::PdfParsingError("Channel send error".into())
+        })?;
     }
     drop(task_tx);
 
@@ -512,12 +515,12 @@ pub async fn parse_library(
 
                         match extract_text(path_str) {
                             Ok(text) => {
-                                res_tx
-                                    .send(ZoteroItem {
-                                        metadata: task,
-                                        text,
-                                    })
-                                    .unwrap();
+                                if let Err(e) = res_tx.send(ZoteroItem {
+                                    metadata: task,
+                                    text,
+                                }) {
+                                    log::error!("Failed to send result: {e:#?}");
+                                }
                             }
                             Err(e) => {
                                 log::warn!(
@@ -546,7 +549,10 @@ pub async fn parse_library(
     while let Ok(item) = res_rx.recv() {
         results.push(item);
     }
-    mbar.clear().unwrap();
+
+    if let Err(e) = mbar.clear() {
+        log::error!("Error when clearing MultiProgress: {e:#?}");
+    }
 
     for handle in handles {
         if let Err(e) = handle.join() {
