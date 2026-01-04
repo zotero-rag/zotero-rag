@@ -6843,6 +6843,7 @@ dependencies = [
  "arrow-schema",
  "chrono",
  "clap",
+ "crossbeam-channel",
  "directories",
  "dotenv",
  "fern",
