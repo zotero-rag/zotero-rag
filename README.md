@@ -174,7 +174,7 @@ You likely don't need _all_ of these set (or even mentioned) in your `.env` file
 You can run the code using
 
 ```bash
-cargo run --bin zqa
+cargo run --bin zqa@v0.1.0-beta.2
 ```
 
 The binary exposes some options, but most of them are unlikely to be useful at the moment for end-users. The one that you might want to play with is `--model-provider`, which lets you choose the model provider. Note that this must be set for the model settings in your `.env` to have any effect.
