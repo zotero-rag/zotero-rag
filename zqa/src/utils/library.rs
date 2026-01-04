@@ -1,6 +1,6 @@
 use arrow_array::RecordBatch;
 use directories::UserDirs;
-use indicatif::{MultiProgress, ProgressBar};
+use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use rusqlite::Connection;
 use std::collections::HashSet;
 use std::env;
@@ -367,6 +367,25 @@ pub fn get_authors(items: &mut [ZoteroItem]) -> Result<(), LibraryParsingError> 
     Ok(())
 }
 
+/// Get the Unicode characters for each tick of the progress bar.
+///
+/// This uses the ⣿ pattern, which is part of the Unicode Braille Pattern block. Each of the 8 dots
+/// is represented by a bit, and the block itself starts at U+2800. The 8 dots are represented by
+/// an offset in a byte. The representation is as follows: the last three bits, read in reverse
+/// order, describe the first three dots of the left column; the next three bits describe the first
+/// three dots of the right column. The last two bits (which are the two most significant bits of
+/// the byte in reverse order) describe the bottom two. I'm sure there's some historical reason why
+/// the first three in each column are separate from the last two, and this is certainly a choice
+/// we've made.
+fn get_pbar_ticks() -> String {
+    const FILLED_BOX: u32 = 0x28FF;
+    const DOTS: [u32; 8] = [1, 1 << 1, 1 << 2, 1 << 6, 1 << 7, 1 << 5, 1 << 4, 1 << 3];
+
+    DOTS.iter()
+        .map(|d| char::from_u32(FILLED_BOX - d).unwrap())
+        .collect::<String>()
+}
+
 /// Parses the Zotero library, also parsing PDF files if they exist on disk. If not, we currently
 /// discard those items.
 ///
@@ -443,13 +462,16 @@ pub async fn parse_library(
 
             thread::spawn(move || {
                 let pbar = mbar.add(ProgressBar::no_length());
-                // pbar.set_style(style);
+                pbar.set_style(
+                    ProgressStyle::with_template("{spinner} {wide_msg}")
+                        .unwrap()
+                        .tick_chars(&get_pbar_ticks()),
+                );
 
                 while let Ok(task) = task_rx.recv() {
                     pbar.set_message(task.title.clone());
                     pbar.inc(1);
 
-                    // Wrap processing in catch_unwind to handle panics gracefully
                     let result = catch_unwind(AssertUnwindSafe(|| {
                         /* Handle each ZoteroItemMetadata item. This has all the info needed to
                          * actually figure out where the file is on disk and parse it--it's here
@@ -653,5 +675,12 @@ mod tests {
         for item in items {
             assert!(item.metadata.authors.is_some());
         }
+    }
+
+    #[test]
+    fn test_get_pbar_ticks() {
+        let ticks = get_pbar_ticks();
+
+        assert_eq!(ticks, "⣾⣽⣻⢿⡿⣟⣯⣷");
     }
 }
