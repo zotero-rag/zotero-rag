@@ -558,11 +558,6 @@ impl PdfParser {
     /// * `content` - The PDF content stream as a string
     /// * `start_idx` - The starting index of the range to search
     /// * `end_idx` - The ending index of the range to search
-    ///
-    /// # Errors
-    ///
-    /// * `PdfError::ContentError` if the `/F` marker is found but the font ID cannot be properly extracted
-    /// * Propagates errors from `get_font_name` if the font cannot be resolved
     fn check_and_update_font(
         &mut self,
         doc: &Document,
@@ -570,23 +565,32 @@ impl PdfParser {
         content: &str,
         start_idx: usize,
         end_idx: usize,
-    ) -> Result<(), PdfError> {
-        if content[start_idx..end_idx].contains("/F") {
-            let font_begin_idx = content[start_idx..end_idx]
-                .find("/F")
-                .ok_or(PdfError::ContentError)?;
-            let font_end_idx = content[start_idx + font_begin_idx..]
-                .find(' ')
-                .ok_or(PdfError::ContentError)?
-                + font_begin_idx;
+    ) {
+        let slice = &content[start_idx..end_idx];
+        let Some(font_begin_idx) = slice.find("/F") else {
+            return;
+        };
 
-            let font_id = content[start_idx..][font_begin_idx + 1..font_end_idx].to_string();
+        // Find the space after the font ID
+        let Some(space_offset) = slice[font_begin_idx..].find(' ') else {
+            // No space found in slice - this /F might be inside text content, skip it
+            return;
+        };
+        let font_end_idx = font_begin_idx + space_offset;
 
-            self.cur_font = get_font_name(doc, page_id, &font_id)?.to_string();
-            self.cur_font_id = font_id;
+        let font_id = &slice[font_begin_idx + 1..font_end_idx];
+
+        // Skip empty font IDs or IDs that don't start with an alphanumeric character
+        // Valid font IDs look like "F28", "F1", etc.
+        if font_id.is_empty() || !font_id.starts_with(|c: char| c.is_ascii_alphanumeric()) {
+            return;
         }
 
-        Ok(())
+        // Try to get the font name - if it fails, this might not be a valid font reference
+        if let Ok(font_name) = get_font_name(doc, page_id, font_id) {
+            self.cur_font = font_name.to_string();
+            self.cur_font_id = font_id.to_string();
+        }
     }
 
     /// Given a string `content` and a position `pos`, look *around* `pos` and search for likely
@@ -697,8 +701,7 @@ impl PdfParser {
                 bt_count += 1;
 
                 // Before we move, check if the font has changed
-                self.check_and_update_font(doc, page_id, content, 0, content.len() - 1)
-                    .ok()?;
+                self.check_and_update_font(doc, page_id, content, 0, content.len() - 1);
 
                 cur_pos = cur_td_idx;
             } else if bt_count > 0 {
@@ -823,7 +826,7 @@ impl PdfParser {
                 .ok_or(PdfError::ContentError)?;
 
             // Check the font, if it has been set.
-            self.check_and_update_font(doc, page_id, &content, cur_parse_idx, content.len() - 1)?;
+            self.check_and_update_font(doc, page_id, &content, cur_parse_idx, content.len());
 
             // We need to match the ] immediately preceding TJ with its [, but papers have references
             // that are written inside [], so a naive method doesn't work. Yes--right now, this doesn't
@@ -878,6 +881,12 @@ impl PdfParser {
 
                 if idx1 >= idx2 {
                     break;
+                }
+
+                // Skip if we don't have a valid font ID yet
+                if font_id.is_empty() {
+                    cur_content = &cur_content[idx2 + 1..];
+                    continue;
                 }
 
                 let font_encoding = self.is_cid_keyed_font(doc, page_id, &font_id)?;
