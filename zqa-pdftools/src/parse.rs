@@ -124,6 +124,79 @@ struct PdfParser {
 /// values are irrelevant, and it is more useful to think about the page ID itself as one "thing".
 type PageID = (u32, u16);
 
+/// Having collected all the positions where the y position was changed, work
+/// backwards to add sub/superscript markers. The core idea here is that when we "come back"
+/// from a script, the y position will return to one that we've seen. This creates a span of
+/// indices to look through. Within this span, we can parse nested scripts (but note that
+/// these might not all follow the same "direction", particularly because for sums, the
+/// upper limit comes before the summation symbol for some reason in LaTeX-created content
+/// streams. We use the sign in the difference between y positions to determine what kind of
+/// a script it is.
+///
+/// # Arguments
+///
+/// * `y_history`: A slice of (font size, position) tuples where each `position` refers to an
+///   index in `parsed`.
+/// * `parsed`: A mutable reference to a string that should be updated with sub/superscript
+///   markers.
+fn insert_script_markers(y_history: &[(f32, usize)], parsed: &mut String) {
+    let mut additions: Vec<(usize, &str)> = Vec::new();
+    let mut i = y_history.len().saturating_sub(1);
+    while i > 0 {
+        // Find the last index where the y position was equal to the y position recorded by
+        // `y_history[i]`.
+        #[allow(clippy::float_cmp)]
+        let j = (0..i).rev().find(|k| y_history[*k].0 == y_history[i].0);
+
+        if j.is_none() {
+            i -= 1;
+            continue;
+        }
+
+        // Start at the next position...
+        let j_orig = j.unwrap();
+        let mut j = j_orig + 1;
+
+        // ...and go in pairs. We can only collect the additions at this point, since they may
+        // be overlapping.
+        while j < i {
+            const BACKSLASH_ASCII: u8 = 92;
+
+            // The offset measures how much we need to shift the opening curly braces by. This
+            // is because while symbols are single characters in math fonts (such as CMEX),
+            // they expand to a longer string, so we account for the difference in lengths.
+            let offset = if parsed.as_bytes().get(y_history[j].1) == Some(&BACKSLASH_ASCII) {
+                parsed[y_history[j].1..].find(' ').unwrap()
+            } else {
+                0
+            };
+
+            additions.push((y_history[j + 1].1.saturating_sub(1), "}"));
+            // TODO: Refine the below rule.
+            additions.push((
+                y_history[j].1 + offset,
+                if y_history[j].0 > y_history[j_orig].0 {
+                    "^{"
+                } else {
+                    "_{"
+                },
+            ));
+
+            j += 2;
+        }
+
+        i = j_orig.saturating_sub(1);
+    }
+
+    // Sort in descending order and then perform the insertions
+    additions.sort_by(|a, b| b.0.cmp(&a.0));
+    for (pos, s) in additions {
+        if pos < parsed.len() {
+            parsed.insert_str(pos, s);
+        }
+    }
+}
+
 impl Default for PdfParser {
     fn default() -> Self {
         Self::new(PdfParserConfig::default())
@@ -638,79 +711,6 @@ impl PdfParser {
         }
     }
 
-    /// Having collected all the positions where the y position was changed, work
-    /// backwards to add sub/superscript markers. The core idea here is that when we "come back"
-    /// from a script, the y position will return to one that we've seen. This creates a span of
-    /// indices to look through. Within this span, we can parse nested scripts (but note that
-    /// these might not all follow the same "direction", particularly because for sums, the
-    /// upper limit comes before the summation symbol for some reason in LaTeX-created content
-    /// streams. We use the sign in the difference between y positions to determine what kind of
-    /// a script it is.
-    ///
-    /// # Arguments
-    ///
-    /// * `y_history`: A slice of (font size, position) tuples where each `position` refers to an
-    ///   index in `parsed`.
-    /// * `parsed`: A mutable reference to a string that should be updated with sub/superscript
-    ///   markers.
-    fn insert_script_markers(&self, y_history: &[(f32, usize)], parsed: &mut String) {
-        let mut additions: Vec<(usize, &str)> = Vec::new();
-        let mut i = y_history.len().saturating_sub(1);
-        while i > 0 {
-            // Find the last index where the y position was equal to the y position recorded by
-            // `y_history[i]`.
-            #[allow(clippy::float_cmp)]
-            let j = (0..i).rev().find(|k| y_history[*k].0 == y_history[i].0);
-
-            if j.is_none() {
-                i -= 1;
-                continue;
-            }
-
-            // Start at the next position...
-            let j_orig = j.unwrap();
-            let mut j = j_orig + 1;
-
-            // ...and go in pairs. We can only collect the additions at this point, since they may
-            // be overlapping.
-            while j < i {
-                const BACKSLASH_ASCII: u8 = 92;
-
-                // The offset measures how much we need to shift the opening curly braces by. This
-                // is because while symbols are single characters in math fonts (such as CMEX),
-                // they expand to a longer string, so we account for the difference in lengths.
-                let offset = if parsed.as_bytes().get(y_history[j].1) == Some(&BACKSLASH_ASCII) {
-                    parsed[y_history[j].1..].find(' ').unwrap()
-                } else {
-                    0
-                };
-
-                additions.push((y_history[j + 1].1.saturating_sub(1), "}"));
-                // TODO: Refine the below rule.
-                additions.push((
-                    y_history[j].1 + offset,
-                    if y_history[j].0 > y_history[j_orig].0 {
-                        "^{"
-                    } else {
-                        "_{"
-                    },
-                ));
-
-                j += 2;
-            }
-
-            i = j_orig.saturating_sub(1);
-        }
-
-        // Sort in descending order and then perform the insertions
-        additions.sort_by(|a, b| b.0.cmp(&a.0));
-        for (pos, s) in additions {
-            if pos < parsed.len() {
-                parsed.insert_str(pos, s);
-            }
-        }
-    }
-
     /// The actual PDF parser itself. Parses UTF-8 encoded code points in a best-effort manner,
     /// making reasonable assumptions along the way. Such assumptions are documented.
     #[allow(clippy::too_many_lines)]
@@ -936,7 +936,7 @@ impl PdfParser {
             parsed = parsed.replace(from, to);
         }
 
-        self.insert_script_markers(&y_history, &mut parsed);
+        insert_script_markers(&y_history, &mut parsed);
 
         Ok(ParseResult {
             content: parsed,

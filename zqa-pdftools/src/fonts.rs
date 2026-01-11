@@ -45,13 +45,12 @@ pub(crate) fn get_document_font_sizes(
     let body_font_size = counts
         .iter()
         .max_by_key(|(_, count)| *count)
-        .map(|f| f.0.clone().into())
-        .unwrap_or(10.0);
+        .map_or(10.0, |f| (*f.0).into());
 
     let mut font_sizes: Vec<OrderedFloat<f32>> = counts
         .iter()
         .filter(|(size, _)| **size >= OrderedFloat(body_font_size))
-        .map(|f| f.0.clone().into())
+        .map(|f| *f.0)
         .collect();
 
     font_sizes.sort();
