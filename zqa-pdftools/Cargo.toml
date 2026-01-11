@@ -8,6 +8,9 @@ edition = "2024"
 rust-version = "1.91"
 license = "MIT"
 categories = ["parser-implementations"]
+exclude = [
+    "assets"
+]
 
 [dependencies]
 log = "0.4.27"
