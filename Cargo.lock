@@ -6871,6 +6871,7 @@ dependencies = [
  "criterion",
  "log",
  "lopdf",
+ "ordered-float 5.1.0",
  "thiserror 1.0.69",
 ]
 
