@@ -514,10 +514,10 @@ pub async fn parse_library(
                         log::debug!("Processing {path_str}");
 
                         match extract_text(path_str) {
-                            Ok(text) => {
+                            Ok(content) => {
                                 if let Err(e) = res_tx.send(ZoteroItem {
                                     metadata: task,
-                                    text,
+                                    text: content.text_content,
                                 }) {
                                     log::error!("Failed to send result: {e:#?}");
                                 }

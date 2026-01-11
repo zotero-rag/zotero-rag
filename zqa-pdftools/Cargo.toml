@@ -12,6 +12,7 @@ categories = ["parser-implementations"]
 [dependencies]
 log = "0.4.27"
 lopdf = "0.34.0"
+ordered-float = "5.1.0"
 thiserror = "1.0"
 
 [dev-dependencies]

@@ -4,6 +4,7 @@
 //! LaTeX equivalents.
 
 use log;
+use ordered_float::OrderedFloat;
 use std::char::decode_utf16;
 use std::{error::Error, str};
 
@@ -11,9 +12,10 @@ use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::sync::LazyLock;
 
+use crate::fonts::{
+    FONT_TRANSFORMS, FontEncoding, FontSizeMarker, font_transform, get_document_font_sizes,
+};
 use lopdf::{Document, Object};
-
-use crate::math::{from_cmex, from_cmmi, from_cmsy, from_msbm};
 
 const ASCII_PLUS: u8 = b'+';
 const DEFAULT_SAME_WORD_THRESHOLD: f32 = 60.0;
@@ -60,91 +62,27 @@ impl Default for PdfParserConfig {
     }
 }
 
-/// A type to convert from bytes in math fonts to LaTeX code
-type ByteTransformFn = fn(u8) -> String;
-
-/// A zero-allocation iterator for octal escape sequences and raw bytes. This is useful for parsing
-/// octal escape codes that are used in math fonts when non-printable characters are used to
-/// represent symbols.
-pub struct IterCodepoints<'a> {
-    bytes: &'a [u8],
-    pos: usize,
+/// A detected section boundary.
+#[derive(Debug, Clone)]
+pub struct SectionBoundary {
+    /// 0-indexed page number
+    pub page_number: usize,
+    /// Byte index into the extracted text
+    pub byte_index: usize,
+    /// Header level: 0 = title, 1 = section, 2 = subsection, etc.
+    pub level: usize,
+    /// Index of parent section for focal context traversal
+    pub parent_idx: Option<usize>,
 }
 
-impl Iterator for IterCodepoints<'_> {
-    type Item = u8;
-
-    fn next(&mut self) -> Option<u8> {
-        if self.pos >= self.bytes.len() {
-            return None;
-        }
-        let b = self.bytes[self.pos];
-        if b == b'\\' {
-            // Possible octal escape
-            let rem = self.bytes.len() - self.pos;
-            if rem >= 4  // Length of octal escape sequence
-                && self.bytes[self.pos + 1] == b'0'
-                && self.bytes[self.pos + 2].is_ascii_digit()
-                && self.bytes[self.pos + 2] < b'8'
-                && self.bytes[self.pos + 3].is_ascii_digit()
-                && self.bytes[self.pos + 3] < b'8'
-            {
-                let oct = &self.bytes[self.pos + 1..=self.pos + 3];
-                let code = (oct[1] - b'0') * 8 + (oct[2] - b'0');
-                self.pos += 4;
-                Some(code)
-            } else {
-                // Just a backslash or malformed escape
-                self.pos += 1;
-                Some(b'\\')
-            }
-        } else {
-            self.pos += 1;
-            Some(b)
-        }
-    }
+/// The return type of `parse_content`. This includes the extracted text and the detected section
+/// boundaries.
+pub struct ExtractedContent {
+    /// The extracted text
+    pub text_content: String,
+    /// The list of detected section boundaries
+    pub sections: Vec<SectionBoundary>,
 }
-
-fn font_transform(input: &str, transform: ByteTransformFn) -> String {
-    IterCodepoints {
-        bytes: input.as_bytes(),
-        pos: 0,
-    }
-    .map(transform)
-    .collect::<String>()
-}
-
-/// A lazy-loaded hashmap storing conversions from math fonts to LaTeX code
-/// Handles most common math fonts, but does not yet support specialized math fonts.
-static FONT_TRANSFORMS: LazyLock<HashMap<&'static str, ByteTransformFn>> = LazyLock::new(|| {
-    let mut m: HashMap<&'static str, ByteTransformFn> = HashMap::new();
-
-    m.insert("CMMI5", from_cmmi);
-    m.insert("CMMI6", from_cmmi);
-    m.insert("CMMI7", from_cmmi);
-    m.insert("CMMI8", from_cmmi);
-    m.insert("CMMI9", from_cmmi);
-    m.insert("CMMI10", from_cmmi);
-    m.insert("CMMI12", from_cmmi);
-
-    m.insert("CMSY5", from_cmsy);
-    m.insert("CMSY6", from_cmsy);
-    m.insert("CMSY7", from_cmsy);
-    m.insert("CMSY8", from_cmsy);
-    m.insert("CMSY9", from_cmsy);
-    m.insert("CMSY10", from_cmsy);
-
-    m.insert("CMEX10", from_cmex);
-
-    m.insert("MSBM5", from_msbm);
-    m.insert("MSBM6", from_msbm);
-    m.insert("MSBM7", from_msbm);
-    m.insert("MSBM8", from_msbm);
-    m.insert("MSBM9", from_msbm);
-    m.insert("MSBM10", from_msbm);
-
-    m
-});
 
 /// A lazy-loaded hashmap of octal character replacements post-parsing.
 /// Some of these come across because of ligature support in fonts. This
@@ -163,27 +101,6 @@ static OCTAL_REPLACEMENTS: LazyLock<HashMap<&str, &str>> = LazyLock::new(|| {
 
     m
 });
-
-/// The mappings of a ToUnicode CMap. For now, we do not support other kinds of CMaps.
-type CMap = HashMap<String, String>;
-
-/// The type of encoding used by a font. Either `SIMPLE` (human-readable) or `CID_KEYED`
-/// (Unicode/glyph ID-encoded)
-#[derive(Debug)]
-enum FontEncoding {
-    /// Human-readable, "simple" encoding. Under this encoding, each TJ block has contents that can
-    /// be parsed as plain text.
-    Simple,
-    /// CID-keyed, or glyph ID-encoded font. For this encoding, the font usually is a subsetted
-    /// embedded font (i.e., a CID-keyed subset of a font that's embedded), and we need to check
-    /// the `ToUnicode` CMap for that font. It is possible to also use non-ToUnicode CMaps; we do
-    /// not yet handle this case.
-    ///
-    /// Modern PDFs, such as those generated by `pdflatex`, use CID-keyed font subsets, with
-    /// two-byte (or multi-byte, but we don't yet handle this) CIDs, custom glyph ID maps, and
-    /// `ToUnicode` CMaps for real text extraction.
-    CIDKeyed(CMap),
-}
 
 struct PdfParser {
     /// The config
@@ -211,6 +128,12 @@ impl Default for PdfParser {
     fn default() -> Self {
         Self::new(PdfParserConfig::default())
     }
+}
+
+/// An intermediate representation that contains the result of parsing one page.
+struct ParseResult {
+    content: String,
+    font_size_markers: Vec<FontSizeMarker>,
 }
 
 impl PdfParser {
@@ -715,10 +638,88 @@ impl PdfParser {
         }
     }
 
+    /// Having collected all the positions where the y position was changed, work
+    /// backwards to add sub/superscript markers. The core idea here is that when we "come back"
+    /// from a script, the y position will return to one that we've seen. This creates a span of
+    /// indices to look through. Within this span, we can parse nested scripts (but note that
+    /// these might not all follow the same "direction", particularly because for sums, the
+    /// upper limit comes before the summation symbol for some reason in LaTeX-created content
+    /// streams. We use the sign in the difference between y positions to determine what kind of
+    /// a script it is.
+    ///
+    /// # Arguments
+    ///
+    /// * `y_history`: A slice of (font size, position) tuples where each `position` refers to an
+    ///   index in `parsed`.
+    /// * `parsed`: A mutable reference to a string that should be updated with sub/superscript
+    ///   markers.
+    fn insert_script_markers(&self, y_history: &[(f32, usize)], parsed: &mut String) {
+        let mut additions: Vec<(usize, &str)> = Vec::new();
+        let mut i = y_history.len().saturating_sub(1);
+        while i > 0 {
+            // Find the last index where the y position was equal to the y position recorded by
+            // `y_history[i]`.
+            #[allow(clippy::float_cmp)]
+            let j = (0..i).rev().find(|k| y_history[*k].0 == y_history[i].0);
+
+            if j.is_none() {
+                i -= 1;
+                continue;
+            }
+
+            // Start at the next position...
+            let j_orig = j.unwrap();
+            let mut j = j_orig + 1;
+
+            // ...and go in pairs. We can only collect the additions at this point, since they may
+            // be overlapping.
+            while j < i {
+                const BACKSLASH_ASCII: u8 = 92;
+
+                // The offset measures how much we need to shift the opening curly braces by. This
+                // is because while symbols are single characters in math fonts (such as CMEX),
+                // they expand to a longer string, so we account for the difference in lengths.
+                let offset = if parsed.as_bytes().get(y_history[j].1) == Some(&BACKSLASH_ASCII) {
+                    parsed[y_history[j].1..].find(' ').unwrap()
+                } else {
+                    0
+                };
+
+                additions.push((y_history[j + 1].1.saturating_sub(1), "}"));
+                // TODO: Refine the below rule.
+                additions.push((
+                    y_history[j].1 + offset,
+                    if y_history[j].0 > y_history[j_orig].0 {
+                        "^{"
+                    } else {
+                        "_{"
+                    },
+                ));
+
+                j += 2;
+            }
+
+            i = j_orig.saturating_sub(1);
+        }
+
+        // Sort in descending order and then perform the insertions
+        additions.sort_by(|a, b| b.0.cmp(&a.0));
+        for (pos, s) in additions {
+            if pos < parsed.len() {
+                parsed.insert_str(pos, s);
+            }
+        }
+    }
+
     /// The actual PDF parser itself. Parses UTF-8 encoded code points in a best-effort manner,
     /// making reasonable assumptions along the way. Such assumptions are documented.
     #[allow(clippy::too_many_lines)]
-    fn parse_content(&mut self, doc: &Document, page_id: PageID) -> Result<String, PdfError> {
+    fn parse_content(
+        &mut self,
+        doc: &Document,
+        page_id: PageID,
+        page_number: usize,
+    ) -> Result<ParseResult, PdfError> {
         let content = doc
             .get_page_content(page_id)
             .map_err(|_| PdfError::ContentError)?;
@@ -726,8 +727,9 @@ impl PdfParser {
         let mut cur_parse_idx = 0;
         let mut parsed = String::new();
 
-        // Keep track of the font sizes (Tf), and vertical movements (second arg of Td) and associated positions
-        let mut tf_history: Vec<(f32, usize)> = Vec::new();
+        // Keep track of the font sizes markers (from Tf) and associated positions
+        let mut tf_history: Vec<FontSizeMarker> = Vec::new();
+        // Keep track of vertical movements (second arg of Td) and associated positions
         let mut y_history: Vec<(f32, usize)> = Vec::new();
 
         /* A loop over TJ blocks. The broad idea is:
@@ -783,7 +785,12 @@ impl PdfParser {
                 let [font_size_str] = self.get_params::<1>(&content, cur_parse_idx + tf_idx)?;
 
                 if let Ok(font_size) = font_size_str.parse::<f32>() {
-                    tf_history.push((font_size, parsed.len()));
+                    tf_history.push(FontSizeMarker {
+                        page_number,
+                        byte_index: parsed.len(),
+                        font_size,
+                        font_name: self.cur_font.clone(),
+                    });
 
                     self.cur_font_size = font_size;
                 }
@@ -929,71 +936,12 @@ impl PdfParser {
             parsed = parsed.replace(from, to);
         }
 
-        // Having collected all the positions where the y position was changed, we can now work
-        // backwards to add sub/superscript markers. The core idea here is that when we "come back"
-        // from a script, the y position will return to one that we've seen. This creates a span of
-        // indices to look through. Within this span, we can parse nested scripts (but note that
-        // these might not all follow the same "direction", particularly because for sums, the
-        // upper limit comes before the summation symbol for some reason in LaTeX-created content
-        // streams. We use the sign in the difference between y positions to determine what kind of
-        // a script it is.
-        let mut additions: Vec<(usize, &str)> = Vec::new();
-        let mut i = y_history.len().saturating_sub(1);
-        while i > 0 {
-            // Find the last index where the y position was equal to the y position recorded by
-            // `y_history[i]`.
-            #[allow(clippy::float_cmp)]
-            let j = (0..i).rev().find(|k| y_history[*k].0 == y_history[i].0);
+        self.insert_script_markers(&y_history, &mut parsed);
 
-            if j.is_none() {
-                i -= 1;
-                continue;
-            }
-
-            // Start at the next position...
-            let j_orig = j.unwrap();
-            let mut j = j_orig + 1;
-
-            // ...and go in pairs. We can only collect the additions at this point, since they may
-            // be overlapping.
-            while j < i {
-                const BACKSLASH_ASCII: u8 = 92;
-
-                // The offset measures how much we need to shift the opening curly braces by. This
-                // is because while symbols are single characters in math fonts (such as CMEX),
-                // they expand to a longer string, so we account for the difference in lengths.
-                let offset = if parsed.as_bytes().get(y_history[j].1) == Some(&BACKSLASH_ASCII) {
-                    parsed[y_history[j].1..].find(' ').unwrap()
-                } else {
-                    0
-                };
-
-                additions.push((y_history[j + 1].1.saturating_sub(1), "}"));
-                // TODO: Refine the below rule.
-                additions.push((
-                    y_history[j].1 + offset,
-                    if y_history[j].0 > y_history[j_orig].0 {
-                        "^{"
-                    } else {
-                        "_{"
-                    },
-                ));
-
-                j += 2;
-            }
-
-            i = j_orig.saturating_sub(1);
-        }
-
-        // Sort in descending order and then perform the insertions
-        additions.sort_by(|a, b| b.0.cmp(&a.0));
-        for (pos, s) in additions {
-            if pos < parsed.len() {
-                parsed.insert_str(pos, s);
-            }
-        }
-
-        Ok(parsed)
+        Ok(ParseResult {
+            content: parsed,
+            font_size_markers: tf_history,
+        })
     }
 }
 
@@ -1083,33 +1031,82 @@ fn get_font_name<'a>(
     }
 }
 
+/// Fill in the `parent_idx` field for a set of sections that are ordered in the same manner as
+/// they appear in the document.
+///
+/// # Arguments
+///
+/// * sections - A list of sections in document order.
+fn compute_parent_indices(sections: &mut [SectionBoundary]) {
+    for i in 1..sections.len() {
+        let my_level = sections[i].level;
+        sections[i].parent_idx = (0..i).rev().find(|&j| sections[j].level < my_level);
+    }
+}
+
 /// Extracts text content from a PDF file at the given path.
 ///
 /// # Errors
 /// Returns an error if the file cannot be loaded or if text extraction fails.
-pub fn extract_text(file_path: &str) -> Result<String, Box<dyn Error>> {
+pub fn extract_text(file_path: &str) -> Result<ExtractedContent, Box<dyn Error>> {
     let doc = Document::load(file_path)?;
     let mut parser = PdfParser::with_default_config();
 
+    let mut full_text = String::new();
+    let mut all_markers = Vec::new();
+
     let page_count = doc.get_pages().len();
 
-    let content = doc
-        .page_iter()
-        .enumerate()
-        .map(|(page_num, page_id)| {
-            log::debug!("\tParsing page {} of {page_count}", page_num + 1);
+    for (page_num, page_id) in doc.page_iter().enumerate() {
+        log::debug!("\tParsing page {} of {page_count}", page_num + 1);
 
-            let parsed = parser
-                .parse_content(&doc, page_id)
-                .unwrap_or_else(|_| String::new());
+        let byte_offset = full_text.len();
+        let result = parser.parse_content(&doc, page_id, page_num)?;
 
-            parser.reset_font_cache();
+        for mut marker in result.font_size_markers {
+            marker.byte_index += byte_offset;
+            marker.page_number = page_num;
+            all_markers.push(marker);
+        }
 
-            parsed
+        full_text.push_str(&result.content);
+        parser.reset_font_cache();
+    }
+
+    let (body_font_size, section_font_sizes) =
+        get_document_font_sizes(&all_markers.clone().into_iter().collect());
+
+    let mut font_size_levels: HashMap<OrderedFloat<f32>, usize> = HashMap::new();
+    for (i, f) in section_font_sizes.into_iter().enumerate() {
+        font_size_levels.insert(f, i);
+    }
+
+    let mut sections = all_markers
+        .iter()
+        .filter_map(|marker| {
+            if FONT_TRANSFORMS.get(marker.font_name.as_str()).is_none()  // not a math font
+                && marker.font_size > body_font_size
+            {
+                Some(SectionBoundary {
+                    page_number: marker.page_number,
+                    byte_index: marker.byte_index,
+                    level: *font_size_levels
+                        .get(&OrderedFloat(marker.font_size))
+                        .unwrap_or(&(font_size_levels.len() - 1)),
+                    parent_idx: None,
+                })
+            } else {
+                None
+            }
         })
-        .collect::<String>();
+        .collect::<Vec<_>>();
 
-    Ok(content)
+    compute_parent_indices(&mut sections);
+
+    Ok(ExtractedContent {
+        text_content: full_text,
+        sections,
+    })
 }
 
 #[cfg(test)]
@@ -1136,7 +1133,8 @@ mod tests {
 
     fn check_pdf_contains(file_name: &str, queries: &[&str]) {
         let path = PathBuf::from("assets").join(file_name);
-        let content = extract_text(path.to_str().unwrap()).unwrap();
+        let content = extract_text(path.to_str().unwrap()).unwrap().text_content;
+
         for query in queries {
             assert!(
                 content.contains(*query),
@@ -1175,7 +1173,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Manual test for debugging font properties"]
+    // #[ignore = "Manual test for debugging font properties"]
     fn test_font_properties() {
         if env::var("CI").is_ok() {
             // Skip this test in CI environments
@@ -1261,7 +1259,7 @@ mod tests {
         let content = extract_text(path.to_str().unwrap());
         assert!(content.is_ok());
 
-        let content = content.unwrap();
+        let content = content.unwrap().text_content;
         for op in [r"\int", r"\sum", r"\infty"] {
             assert!(content.contains(op));
         }
@@ -1293,7 +1291,7 @@ mod tests {
 
         assert!(content.is_ok());
 
-        let content = content.unwrap();
+        let content = content.unwrap().text_content;
         let tests = ["r1c1", "r1c2", "r2c1", "r2c2"];
         for text in tests {
             assert!(!content.contains(text));
@@ -1304,7 +1302,8 @@ mod tests {
     fn test_subtables_are_ignored() {
         let path = PathBuf::from("assets").join("subtables.pdf");
         let content = extract_text(path.to_str().unwrap())
-            .expect("Failed to extract content from subtables.pdf");
+            .expect("Failed to extract content from subtables.pdf")
+            .text_content;
 
         // NOTE: This should also ignore "quux2" and "Caption", but it currently doesn't. This is
         // left to a future story, because the current implementation is already much better than
@@ -1322,7 +1321,7 @@ mod tests {
 
         assert!(content.is_ok());
 
-        let content = content.unwrap();
+        let content = content.unwrap().text_content;
 
         let tests = ["Figure", "Caption", "is", "caption", "good", "HERE"];
         for text in tests {
@@ -1342,7 +1341,7 @@ mod tests {
 
         assert!(content.is_ok());
 
-        let content = content.unwrap();
+        let content = content.unwrap().text_content;
 
         let tests = ["google.com", "sec:2", "cite.yedida"];
         for text in tests {
