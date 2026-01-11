@@ -448,10 +448,12 @@ pub async fn parse_library(
 
     let not_pdf_counts = Arc::new(AtomicUsize::new(0));
     let invalid_path_counts = Arc::new(AtomicUsize::new(0));
+    let failed_extraction_counts = Arc::new(AtomicUsize::new(0));
     let panic_counts = Arc::new(AtomicUsize::new(0));
 
     let (task_tx, task_rx) = crossbeam_channel::bounded::<ZoteroItemMetadata>(metadata.len());
     let (res_tx, res_rx) = crossbeam_channel::bounded::<ZoteroItem>(metadata.len());
+    let (err_tx, err_rx) = crossbeam_channel::bounded::<String>(metadata.len());
 
     let metadata_len = metadata.len();
     for item in metadata {
@@ -468,10 +470,13 @@ pub async fn parse_library(
         .map(|_| {
             let task_rx = task_rx.clone();
             let res_tx = res_tx.clone();
+            let err_tx = err_tx.clone();
+
             let mbar = Arc::clone(&mbar);
             let not_pdf_counts = Arc::clone(&not_pdf_counts);
             let invalid_path_counts = Arc::clone(&invalid_path_counts);
             let panic_counts = Arc::clone(&panic_counts);
+            let failed_extraction_counts = Arc::clone(&failed_extraction_counts);
 
             thread::spawn(move || {
                 let pbar = mbar.add(ProgressBar::no_length());
@@ -529,6 +534,10 @@ pub async fn parse_library(
                                     path_str,
                                     e
                                 );
+                                if let Err(send_err) = err_tx.send(e.to_string()) {
+                                    log::error!("Failed to send error: {send_err}");
+                                }
+                                failed_extraction_counts.fetch_add(1, atomic::Ordering::Relaxed);
                             }
                         }
                     }));
@@ -544,6 +553,7 @@ pub async fn parse_library(
         })
         .collect();
     drop(res_tx);
+    drop(err_tx);
 
     let mut results: Vec<ZoteroItem> = Vec::new();
     while let Ok(item) = res_rx.recv() {
@@ -587,6 +597,15 @@ pub async fn parse_library(
         let invalid_path_count = invalid_path_counts.load(atomic::Ordering::Relaxed);
         if invalid_path_count > 0 {
             println!("\t{invalid_path_count} failed because they had invalid file paths.");
+        }
+
+        let failed_extraction_count = failed_extraction_counts.load(atomic::Ordering::Relaxed);
+        if failed_extraction_count > 0 {
+            println!("\t{failed_extraction_count} failed PDF text extraction:");
+        }
+
+        while let Ok(e) = err_rx.recv() {
+            println!("\t\tError: {e}");
         }
 
         let panic_count = panic_counts.load(atomic::Ordering::Relaxed);

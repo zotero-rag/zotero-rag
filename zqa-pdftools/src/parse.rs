@@ -26,8 +26,8 @@ const DEFAULT_TABLE_EUCLIDEAN_THRESHOLD: f32 = 40.0;
 enum PdfError {
     #[error("Failed to get page content")]
     ContentError,
-    #[error("Font key not found in dictionary")]
-    FontNotFound,
+    #[error("Font key \"{0}\" not found in dictionary")]
+    FontNotFound(String),
     #[error("Internal error: {0}")]
     InternalError(String),
     #[error("BaseFont value isn't a valid name")]
@@ -979,7 +979,7 @@ fn get_font<'a>(
 
     let font_obj = fonts
         .get(font_key.as_bytes())
-        .ok_or(PdfError::FontNotFound)?;
+        .ok_or(PdfError::FontNotFound(font_key.into()))?;
     let font_hash = font_obj.as_hashmap();
 
     Ok(font_hash
@@ -1111,8 +1111,8 @@ pub fn extract_text(file_path: &str) -> Result<ExtractedContent, Box<dyn Error>>
 
 #[cfg(test)]
 mod tests {
-    use std::env;
     use std::path::PathBuf;
+    use std::{env, fs};
 
     use super::*;
 
@@ -1231,6 +1231,22 @@ mod tests {
                 .decompressed_content()
                 .unwrap();
             print!("{}", String::from_utf8(decompressed).unwrap());
+        }
+    }
+
+    #[test]
+    fn test_real_papers_parse_without_errors() {
+        let path = PathBuf::from("assets").join("test_papers");
+
+        for file in fs::read_dir(path).unwrap() {
+            let file = file.unwrap().path();
+            let file = file.to_str().unwrap();
+            let content = extract_text(file);
+
+            if let Err(e) = content {
+                println!("Error in {file}: {e}");
+                panic!();
+            }
         }
     }
 
