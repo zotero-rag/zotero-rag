@@ -20,6 +20,8 @@ use lopdf::{Document, Object};
 const ASCII_PLUS: u8 = b'+';
 const DEFAULT_SAME_WORD_THRESHOLD: f32 = 60.0;
 const DEFAULT_TABLE_EUCLIDEAN_THRESHOLD: f32 = 40.0;
+const DEFAULT_MIN_SIZE_COUNT: usize = 2;
+const DEFAULT_MAX_DEPTH: usize = 3;
 
 /// A wrapper for all PDF parsing errors
 #[derive(Debug, thiserror::Error)]
@@ -73,6 +75,8 @@ pub struct SectionBoundary {
     pub level: usize,
     /// Index of parent section for focal context traversal
     pub parent_idx: Option<usize>,
+    /// The font size of the header
+    pub font_size: f32,
 }
 
 /// The return type of `parse_content`. This includes the extracted text and the detected section
@@ -224,10 +228,6 @@ impl PdfParser {
             cur_baselineskip: 1.2, // The pdflatex default
             font_type: HashMap::new(),
         }
-    }
-
-    pub(crate) fn reset_font_cache(&mut self) {
-        self.font_type.clear();
     }
 
     fn with_default_config() -> Self {
@@ -1059,7 +1059,6 @@ fn compute_parent_indices(sections: &mut [SectionBoundary]) {
 /// Returns an error if the file cannot be loaded or if text extraction fails.
 pub fn extract_text(file_path: &str) -> Result<ExtractedContent, Box<dyn Error>> {
     let doc = Document::load(file_path)?;
-    let mut parser = PdfParser::with_default_config();
 
     let mut full_text = String::new();
     let mut all_markers = Vec::new();
@@ -1070,6 +1069,7 @@ pub fn extract_text(file_path: &str) -> Result<ExtractedContent, Box<dyn Error>>
         log::debug!("\tParsing page {} of {page_count}", page_num + 1);
 
         let byte_offset = full_text.len();
+        let mut parser = PdfParser::with_default_config();
         let result = parser.parse_content(&doc, page_id, page_num)?;
 
         for mut marker in result.font_size_markers {
@@ -1079,22 +1079,35 @@ pub fn extract_text(file_path: &str) -> Result<ExtractedContent, Box<dyn Error>>
         }
 
         full_text.push_str(&result.content);
-        parser.reset_font_cache();
     }
 
-    let (body_font_size, section_font_sizes) =
-        get_document_font_sizes(&all_markers.clone().into_iter().collect());
+    let (body_font_size, section_font_sizes) = get_document_font_sizes(
+        full_text.len(),
+        &all_markers.clone().into_iter().collect(),
+        DEFAULT_MIN_SIZE_COUNT,
+        DEFAULT_MAX_DEPTH,
+    );
+
+    for marker in &all_markers {
+        if marker.font_size > body_font_size {
+            dbg!(marker);
+            dbg!(full_text[marker.byte_index..][..10].to_string());
+        }
+    }
+
+    dbg!(&body_font_size);
+    dbg!(&section_font_sizes);
 
     let mut font_size_levels: HashMap<OrderedFloat<f32>, usize> = HashMap::new();
-    for (i, f) in section_font_sizes.into_iter().enumerate() {
-        font_size_levels.insert(f, i);
+    for (i, f) in section_font_sizes.iter().enumerate() {
+        font_size_levels.insert(f.clone(), i);
     }
 
     let mut sections = all_markers
         .iter()
         .filter_map(|marker| {
             if FONT_TRANSFORMS.get(marker.font_name.as_str()).is_none()  // not a math font
-                && marker.font_size > body_font_size
+                && section_font_sizes.contains(&OrderedFloat(marker.font_size))
             {
                 Some(SectionBoundary {
                     page_number: marker.page_number,
@@ -1103,6 +1116,7 @@ pub fn extract_text(file_path: &str) -> Result<ExtractedContent, Box<dyn Error>>
                         .get(&OrderedFloat(marker.font_size))
                         .unwrap_or(&(font_size_levels.len() - 1)),
                     parent_idx: None,
+                    font_size: marker.font_size,
                 })
             } else {
                 None
@@ -1165,7 +1179,7 @@ mod tests {
     }
 
     #[test]
-    // #[ignore = "Manual test for debugging PDF content"]
+    #[ignore = "Manual test for debugging PDF content"]
     fn test_pdf_content() {
         if env::var("CI").is_ok() {
             // Skip this test in CI environments
@@ -1201,8 +1215,8 @@ mod tests {
          *
          * The only font that will have a ToUnicode map is `F9` in `manifold.pdf`.
          */
-        let font_key = "F9";
-        let path = PathBuf::from("assets").join("manifold.pdf");
+        let font_key = "F48";
+        let path = PathBuf::from("assets").join("sections.pdf");
         let expect_cid_keyed_font = true;
 
         let doc = Document::load(path).unwrap();
@@ -1240,6 +1254,75 @@ mod tests {
                 .decompressed_content()
                 .unwrap();
             print!("{}", String::from_utf8(decompressed).unwrap());
+        }
+    }
+
+    #[test]
+    #[ignore = "Manual test for debugging PDF content stream"]
+    fn test_get_content_around_object() {
+        let page_number = 0; // 0-indexed page number to inspect
+        let anchor = "section"; // What should be found
+        let context = 50; // Characters around the anchor
+
+        let path = PathBuf::from("assets").join("sections.pdf");
+        let doc = Document::load(path).unwrap();
+        let raw_content = get_raw_content_stream(&doc, page_number).unwrap();
+
+        let idx = raw_content.find(anchor).unwrap();
+        let start = idx.saturating_sub(context);
+        let end = idx.saturating_add(anchor.len()).saturating_add(context);
+
+        dbg!(raw_content[start..end].to_string());
+    }
+
+    #[test]
+    fn test_sections_detected_correctly() {
+        let path = PathBuf::from("assets").join("sections.pdf");
+        let content = extract_text(path.to_str().unwrap());
+
+        assert!(content.is_ok());
+
+        let content = content.unwrap();
+        let text = content.text_content;
+        assert_eq!(content.sections.len(), 4);
+
+        assert_eq!(
+            text[content.sections.get(0).unwrap().byte_index..][..5].to_string(),
+            "title"
+        );
+        // The author is, for now, incorrectly detected as a section.
+        assert_eq!(
+            text[content.sections.get(1).unwrap().byte_index..][..6].to_string(),
+            "author"
+        );
+        assert_eq!(
+            text[content.sections.get(2).unwrap().byte_index..][..9].to_string(),
+            "1 section"
+        );
+        assert_eq!(
+            text[content.sections.get(3).unwrap().byte_index..][..10].to_string(),
+            "1.1 subsec"
+        );
+    }
+
+    #[test]
+    fn test_same_size_sections_detected_correctly() {
+        // This paper has section headings that are the same font size as the text, with
+        // sections being bold and subsections being italicized.
+        let path = PathBuf::from("assets")
+            .join("test_papers")
+            .join("deeply.pdf");
+        let content = extract_text(path.to_str().unwrap());
+
+        assert!(content.is_ok());
+
+        let content = content.unwrap();
+        assert!(content.sections.len() > 0);
+
+        for section in &content.sections {
+            let section_text = content.text_content[section.byte_index..][..10].to_string();
+            println!("{:#?}", section);
+            println!("Text: {section_text}");
         }
     }
 

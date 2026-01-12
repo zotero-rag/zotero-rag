@@ -26,7 +26,12 @@ pub(crate) struct FontSizeMarker {
 ///
 /// # Arguments
 ///
-/// * tf_history - A list of font size markers.
+/// * content_length - The total document length.
+/// * tf_history - A list of font size markers in the order they appear in the document.
+/// * min_size_count - The minimum number of times a font size has to appear to be considered. This
+///   is useful to reduce noise, remove the effect of a large-font title, etc.
+/// * max_depth - The maximum number of section levels to consider. For example, setting this to 3
+///   considers sections, subsections, and subsubsections, but not paragraphs with a bold preface.
 ///
 /// # Returns
 ///
@@ -35,11 +40,19 @@ pub(crate) struct FontSizeMarker {
 /// * The body font size if a mode can be detected, otherwise a default value of 10.0.
 /// * Sorted font sizes (in descending order) of sections
 pub(crate) fn get_document_font_sizes(
+    content_length: usize,
     tf_history: &Vec<FontSizeMarker>,
+    min_size_count: usize,
+    max_depth: usize,
 ) -> (f32, Vec<OrderedFloat<f32>>) {
     let mut counts = HashMap::<OrderedFloat<f32>, usize>::new();
-    for m in tf_history {
-        *counts.entry(OrderedFloat(m.font_size)).or_default() += 1;
+    for (cur, next) in tf_history.iter().zip(tf_history.iter().skip(1)) {
+        *counts.entry(OrderedFloat(cur.font_size)).or_default() +=
+            next.byte_index.saturating_sub(cur.byte_index);
+    }
+    if let Some(last) = tf_history.last() {
+        *counts.entry(OrderedFloat(last.font_size)).or_default() +=
+            content_length.saturating_sub(last.byte_index);
     }
 
     let body_font_size = counts
@@ -49,14 +62,18 @@ pub(crate) fn get_document_font_sizes(
 
     let mut font_sizes: Vec<OrderedFloat<f32>> = counts
         .iter()
-        .filter(|(size, _)| **size >= OrderedFloat(body_font_size))
+        .filter(|(size, _)| **size > OrderedFloat(body_font_size))
+        .filter(|(_, c)| **c > min_size_count)
         .map(|f| *f.0)
         .collect();
 
     font_sizes.sort();
     font_sizes.reverse();
 
-    (body_font_size, font_sizes)
+    (
+        body_font_size,
+        font_sizes.into_iter().take(max_depth).collect(),
+    )
 }
 
 /// A type to convert from bytes in math fonts to LaTeX code
