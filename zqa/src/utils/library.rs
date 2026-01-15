@@ -446,11 +446,13 @@ pub async fn parse_library(
     let chunk_size = metadata.len().div_ceil(n_threads);
     log::debug!("Using chunk size of {chunk_size}");
 
+    // Track failure conditions
     let not_pdf_counts = Arc::new(AtomicUsize::new(0));
     let invalid_path_counts = Arc::new(AtomicUsize::new(0));
     let failed_extraction_counts = Arc::new(AtomicUsize::new(0));
     let panic_counts = Arc::new(AtomicUsize::new(0));
 
+    // Channels for sending tasks and receiving results and errors
     let (task_tx, task_rx) = crossbeam_channel::bounded::<ZoteroItemMetadata>(metadata.len());
     let (res_tx, res_rx) = crossbeam_channel::bounded::<ZoteroItem>(metadata.len());
     let (err_tx, err_rx) = crossbeam_channel::bounded::<String>(metadata.len());
