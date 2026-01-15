@@ -18,10 +18,21 @@ use crate::fonts::{
 use lopdf::{Document, Object};
 
 const ASCII_PLUS: u8 = b'+';
-const DEFAULT_SAME_WORD_THRESHOLD: f32 = 60.0;
-const DEFAULT_TABLE_EUCLIDEAN_THRESHOLD: f32 = 40.0;
-const DEFAULT_MIN_SIZE_COUNT: usize = 2;
+
+/// The default kerning tolerance between adjacent elements in a `TJ` to mark them as part of the same
+/// word.
+pub const DEFAULT_SAME_WORD_THRESHOLD: f32 = 60.0;
+/// The default distance threshold to check alignment efforts in a table.
+pub const DEFAULT_TABLE_EUCLIDEAN_THRESHOLD: f32 = 40.0;
+/// The default number of times a font size should occur to avoid discarding as noise when
+/// determining section boundaries.
+const DEFAULT_MIN_SIZE_COUNT: usize = 3;
+/// The default section depth to maintain when computing section boundaries. For example, setting
+/// this to 3 (the default) means elements up to subsubsections will be considered (usually).
 const DEFAULT_MAX_DEPTH: usize = 3;
+/// The tolerance between adjacent `Td` *positions* (not values) in the parsed document to assess
+/// vertical adjustment efforts for a new section.
+const DEFAULT_TD_SECTION_TOLERANCE: usize = 30;
 
 /// A wrapper for all PDF parsing errors
 #[derive(Debug, thiserror::Error)]
@@ -139,11 +150,11 @@ type PageID = (u32, u16);
 ///
 /// # Arguments
 ///
-/// * `y_history`: A slice of (font size, position) tuples where each `position` refers to an
+/// * `y_history`: A slice of (position, font size) tuples where each `position` refers to an
 ///   index in `parsed`.
 /// * `parsed`: A mutable reference to a string that should be updated with sub/superscript
 ///   markers.
-fn insert_script_markers(y_history: &[(f32, usize)], parsed: &mut String) {
+fn insert_script_markers(y_history: &[(usize, f32)], parsed: &mut String) {
     let mut additions: Vec<(usize, &str)> = Vec::new();
     let mut i = y_history.len().saturating_sub(1);
     while i > 0 {
@@ -169,17 +180,17 @@ fn insert_script_markers(y_history: &[(f32, usize)], parsed: &mut String) {
             // The offset measures how much we need to shift the opening curly braces by. This
             // is because while symbols are single characters in math fonts (such as CMEX),
             // they expand to a longer string, so we account for the difference in lengths.
-            let offset = if parsed.as_bytes().get(y_history[j].1) == Some(&BACKSLASH_ASCII) {
-                parsed[y_history[j].1..].find(' ').unwrap()
+            let offset = if parsed.as_bytes().get(y_history[j].0) == Some(&BACKSLASH_ASCII) {
+                parsed[y_history[j].0..].find(' ').unwrap()
             } else {
                 0
             };
 
-            additions.push((y_history[j + 1].1.saturating_sub(1), "}"));
+            additions.push((y_history[j + 1].0.saturating_sub(1), "}"));
             // TODO: Refine the below rule.
             additions.push((
-                y_history[j].1 + offset,
-                if y_history[j].0 > y_history[j_orig].0 {
+                y_history[j].0 + offset,
+                if y_history[j].1 > y_history[j_orig].1 {
                     "^{"
                 } else {
                     "_{"
@@ -209,8 +220,13 @@ impl Default for PdfParser {
 
 /// An intermediate representation that contains the result of parsing one page.
 struct ParseResult {
+    /// The contents of a page
     content: String,
+    /// A record of all font size changes, including the page number, byte index (in that page),
+    /// new font size, and new font name
     font_size_markers: Vec<FontSizeMarker>,
+    /// A record of all vertical movements and the byte index (in that page) where it occurred.
+    y_history: Vec<(usize, f32)>,
 }
 
 impl PdfParser {
@@ -733,7 +749,7 @@ impl PdfParser {
         // Keep track of the font sizes markers (from Tf) and associated positions
         let mut tf_history: Vec<FontSizeMarker> = Vec::new();
         // Keep track of vertical movements (second arg of Td) and associated positions
-        let mut y_history: Vec<(f32, usize)> = Vec::new();
+        let mut y_history: Vec<(usize, f32)> = Vec::new();
 
         /* A loop over TJ blocks. The broad idea is:
          * 1. Look for tables/images--and skip them.
@@ -810,11 +826,11 @@ impl PdfParser {
 
                 if let Ok(vert) = vert_str.parse::<f32>() {
                     // `Td` args are movements, not absolute
-                    let (cur_y, _) = y_history.last().unwrap_or(&(0.0, 0));
+                    let (_, cur_y) = y_history.last().unwrap_or(&(0, 0.0));
                     let new_y = cur_y + vert;
 
                     if vert != 0.0 {
-                        y_history.push((new_y, parsed.len()));
+                        y_history.push((parsed.len(), new_y));
                     }
                 }
             }
@@ -950,6 +966,7 @@ impl PdfParser {
         Ok(ParseResult {
             content: parsed,
             font_size_markers: tf_history,
+            y_history,
         })
     }
 }
@@ -1072,7 +1089,22 @@ pub fn extract_text(file_path: &str) -> Result<ExtractedContent, Box<dyn Error>>
         let mut parser = PdfParser::with_default_config();
         let result = parser.parse_content(&doc, page_id, page_num)?;
 
+        let y_history = result.y_history;
+
         for mut marker in result.font_size_markers {
+            // Find the position of the last `Td` before the current `Tf`.
+            let td_idx = match y_history.binary_search_by_key(&marker.byte_index, |(byte, _)| *byte)
+            {
+                Ok(i) | Err(i) => i.saturating_sub(1),
+            };
+
+            if let Some((cur, _)) = y_history.get(td_idx)
+                && let Some((next, _)) = y_history.get(td_idx + 1)
+                && next.saturating_sub(*cur) < DEFAULT_TD_SECTION_TOLERANCE
+            {
+                // TODO: Mark this as a section
+            }
+
             marker.byte_index += byte_offset;
             marker.page_number = page_num;
             all_markers.push(marker);
@@ -1132,6 +1164,20 @@ pub fn extract_text(file_path: &str) -> Result<ExtractedContent, Box<dyn Error>>
     })
 }
 
+/// Tests for the core PDF parser. While the tests themselves are nothing special, there are a few
+/// useful tools here for maintainers. These are specific tests whose purpose is to help debugging:
+///
+/// * `test_pdf_content` shows the raw PDF content stream for the first page of a specified file.
+///   Feel free to change this filename, or the (0-indexed) page number across PRs, this does not
+///   need to be kept constant.
+/// * `test_font_properties` is usually the second thing you'll use after the above. This test
+///   prints out information about a font as obtained from the page's font dictionary. If
+///   available, it will also print out the font's CMap, but you can disable this by commenting out
+///   those lines.
+/// * `test_get_content_around_object` shows a context window around some "anchor" text on a
+///   specific page. This is useful for showing you nearby PDF content stream operators when
+///   working on a feature and you need to test with a real PDF with potentially large content
+///   streams.
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
@@ -1179,7 +1225,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Manual test for debugging PDF content"]
+    // #[ignore = "Manual test for debugging PDF content"]
     fn test_pdf_content() {
         if env::var("CI").is_ok() {
             // Skip this test in CI environments
@@ -1258,13 +1304,19 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Manual test for debugging PDF content stream"]
+    // #[ignore = "Manual test for debugging PDF content stream"]
     fn test_get_content_around_object() {
-        let page_number = 0; // 0-indexed page number to inspect
-        let anchor = "section"; // What should be found
-        let context = 50; // Characters around the anchor
+        if env::var("CI").is_ok() {
+            // Skip this test in CI environments
+            return;
+        }
+        let page_number = 3; // 0-indexed page number to inspect
+        let anchor = "Designing"; // What should be found (case-sensitive)
+        let context = 60; // Characters around the anchor
 
-        let path = PathBuf::from("assets").join("sections.pdf");
+        let path = PathBuf::from("assets")
+            .join("test_papers")
+            .join("deeply.pdf");
         let doc = Document::load(path).unwrap();
         let raw_content = get_raw_content_stream(&doc, page_number).unwrap();
 

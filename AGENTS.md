@@ -45,7 +45,7 @@ This is a Rust-based Zotero RAG QA System for answering questions from academic 
 ```rs
 /// Description
 ///
-/// # Arguments:
+/// # Arguments
 ///
 /// * `some_arg` - Description
 ///
@@ -53,7 +53,14 @@ This is a Rust-based Zotero RAG QA System for answering questions from academic 
 ///
 /// Description
 ```
-In particular, there is no colon after `# Returns`, but there is one after `# Arguments`. The exception to the no-colon rule is for when a return type is a tuple of at least three elements.
+
+### Debugging
+
+A few tests are provided specifically to help debugging when working with PDFs:
+
+* `test_pdf_content` shows the raw PDF content stream for the first page of a specified file.
+* `test_font_properties` prints out information about a font as obtained from the page's font dictionary. If available, it will also print out the font's CMap, but you can disable this by commenting out
+  those lines.
 
 ## PR Review
 
