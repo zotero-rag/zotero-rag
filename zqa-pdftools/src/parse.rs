@@ -986,7 +986,6 @@ impl PdfParser {
 
         let script_edits = get_script_marker_edits(&y_history, &mut parsed);
         edits.extend_from_slice(&script_edits);
-        // TODO: Also update y_history
         apply_edits(&edits, &mut parsed, &mut tf_history);
 
         let body_font_size = if compute_body_font_size && tf_history.len() > 2 {
