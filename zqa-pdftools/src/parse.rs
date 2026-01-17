@@ -805,7 +805,11 @@ impl PdfParser {
             let et_idx = content[cur_parse_idx..].find(" ET").unwrap_or(usize::MAX);
 
             // Get the current font size, if it's set.
-            if let Some(tf_idx) = content[cur_parse_idx..].find("Tf")
+            // For some reason, this `find` argument has to be "Tf " exactly. With "Tf", the
+            // `test_real_papers_parse_without_errors` fails because (I assume) it finds a spurious
+            // font. With " Tf" or " Tf ", `test_images_are_ignored` fails because the second line
+            // of the caption isn't removed. I could not tell you why.
+            if let Some(tf_idx) = content[cur_parse_idx..].find("Tf ")
                 && tf_idx < et_idx
                 && tf_idx < tj_idx
             {
@@ -970,7 +974,7 @@ impl PdfParser {
 
         let mut edits = Vec::new();
 
-        // Replace ligatures with constitutent characters
+        // Collect edits for replacing ligatures with constitutent characters
         for (from, to) in OCTAL_REPLACEMENTS.iter() {
             edits.extend_from_slice(
                 &parsed
@@ -984,8 +988,10 @@ impl PdfParser {
             );
         }
 
+        // Add edits for sub/super-script markers
         let script_edits = get_script_marker_edits(&y_history, &mut parsed);
         edits.extend_from_slice(&script_edits);
+
         apply_edits(&edits, &mut parsed, &mut tf_history);
 
         let body_font_size = if compute_body_font_size && tf_history.len() > 2 {
@@ -1126,7 +1132,7 @@ pub fn extract_text(file_path: &str) -> Result<ExtractedContent, Box<dyn Error>>
 
     let page_count = doc.get_pages().len();
 
-    for (page_num, page_id) in doc.page_iter().enumerate().take(1) {
+    for (page_num, page_id) in doc.page_iter().enumerate() {
         log::debug!("\tParsing page {} of {page_count}", page_num + 1);
 
         let byte_offset = full_text.len();
@@ -1158,7 +1164,6 @@ pub fn extract_text(file_path: &str) -> Result<ExtractedContent, Box<dyn Error>>
         full_text.push_str(&result.content);
     }
 
-    sections = sections.into_iter().unique().collect();
     let mut font_sizes = sections
         .iter()
         .map(|s| OrderedFloat(s.font_size))
