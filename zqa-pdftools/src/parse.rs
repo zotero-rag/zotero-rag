@@ -805,7 +805,7 @@ impl PdfParser {
             let et_idx = content[cur_parse_idx..].find(" ET").unwrap_or(usize::MAX);
 
             // Get the current font size, if it's set.
-            if let Some(tf_idx) = content[cur_parse_idx..].find(" Tf ")
+            if let Some(tf_idx) = content[cur_parse_idx..].find("Tf")
                 && tf_idx < et_idx
                 && tf_idx < tj_idx
             {
