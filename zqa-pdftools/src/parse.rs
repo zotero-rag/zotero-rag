@@ -3,6 +3,7 @@
 //! later. The parser also handles common math symbols and converts them to their corresponding
 //! LaTeX equivalents.
 
+use itertools::Itertools;
 use log;
 use ordered_float::OrderedFloat;
 use std::char::decode_utf16;
@@ -12,9 +13,8 @@ use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::sync::LazyLock;
 
-use crate::fonts::{
-    FONT_TRANSFORMS, FontEncoding, FontSizeMarker, font_transform, get_document_font_sizes,
-};
+use crate::edits::{Edit, EditType, apply_edits};
+use crate::fonts::{FONT_TRANSFORMS, FontEncoding, FontSizeMarker, font_transform};
 use lopdf::{Document, Object};
 
 const ASCII_PLUS: u8 = b'+';
@@ -24,15 +24,6 @@ const ASCII_PLUS: u8 = b'+';
 pub const DEFAULT_SAME_WORD_THRESHOLD: f32 = 60.0;
 /// The default distance threshold to check alignment efforts in a table.
 pub const DEFAULT_TABLE_EUCLIDEAN_THRESHOLD: f32 = 40.0;
-/// The default number of times a font size should occur to avoid discarding as noise when
-/// determining section boundaries.
-const DEFAULT_MIN_SIZE_COUNT: usize = 3;
-/// The default section depth to maintain when computing section boundaries. For example, setting
-/// this to 3 (the default) means elements up to subsubsections will be considered (usually).
-const DEFAULT_MAX_DEPTH: usize = 3;
-/// The tolerance between adjacent `Td` *positions* (not values) in the parsed document to assess
-/// vertical adjustment efforts for a new section.
-const DEFAULT_TD_SECTION_TOLERANCE: usize = 30;
 
 /// A wrapper for all PDF parsing errors
 #[derive(Debug, thiserror::Error)]
@@ -90,6 +81,19 @@ pub struct SectionBoundary {
     pub font_size: f32,
 }
 
+impl PartialEq for SectionBoundary {
+    fn eq(&self, other: &Self) -> bool {
+        self.page_number == other.page_number && self.byte_index == other.byte_index
+    }
+}
+impl Eq for SectionBoundary {}
+impl std::hash::Hash for SectionBoundary {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.page_number.hash(state);
+        self.byte_index.hash(state);
+    }
+}
+
 /// The return type of `parse_content`. This includes the extracted text and the detected section
 /// boundaries.
 pub struct ExtractedContent {
@@ -139,8 +143,8 @@ struct PdfParser {
 /// values are irrelevant, and it is more useful to think about the page ID itself as one "thing".
 type PageID = (u32, u16);
 
-/// Having collected all the positions where the y position was changed, work
-/// backwards to add sub/superscript markers. The core idea here is that when we "come back"
+/// Having collected all the positions where the y position was changed, collect the edits
+/// necessary to add sub/superscript markers. The core idea here is that when we "come back"
 /// from a script, the y position will return to one that we've seen. This creates a span of
 /// indices to look through. Within this span, we can parse nested scripts (but note that
 /// these might not all follow the same "direction", particularly because for sums, the
@@ -154,8 +158,13 @@ type PageID = (u32, u16);
 ///   index in `parsed`.
 /// * `parsed`: A mutable reference to a string that should be updated with sub/superscript
 ///   markers.
-fn insert_script_markers(y_history: &[(usize, f32)], parsed: &mut String) {
-    let mut additions: Vec<(usize, &str)> = Vec::new();
+///
+/// # Returns
+///
+/// A list of `Edit`s to apply.
+#[must_use]
+fn get_script_marker_edits(y_history: &[(usize, f32)], parsed: &mut String) -> Vec<Edit> {
+    let mut additions: Vec<Edit> = Vec::new();
     let mut i = y_history.len().saturating_sub(1);
     while i > 0 {
         // Find the last index where the y position was equal to the y position recorded by
@@ -186,16 +195,22 @@ fn insert_script_markers(y_history: &[(usize, f32)], parsed: &mut String) {
                 0
             };
 
-            additions.push((y_history[j + 1].0.saturating_sub(1), "}"));
+            additions.push(Edit {
+                start: y_history[j + 1].0.saturating_sub(1),
+                end: y_history[j + 1].0.saturating_sub(1) + 1,
+                r#type: EditType::Insert("}".into()),
+            });
+
             // TODO: Refine the below rule.
-            additions.push((
-                y_history[j].0 + offset,
-                if y_history[j].1 > y_history[j_orig].1 {
-                    "^{"
+            additions.push(Edit {
+                start: y_history[j].0 + offset,
+                end: y_history[j].0 + offset + 2, // both cases below have length 2
+                r#type: EditType::Insert(if y_history[j].1 > y_history[j_orig].1 {
+                    "^{".into()
                 } else {
-                    "_{"
-                },
-            ));
+                    "_{".into()
+                }),
+            });
 
             j += 2;
         }
@@ -203,13 +218,7 @@ fn insert_script_markers(y_history: &[(usize, f32)], parsed: &mut String) {
         i = j_orig.saturating_sub(1);
     }
 
-    // Sort in descending order and then perform the insertions
-    additions.sort_by(|a, b| b.0.cmp(&a.0));
-    for (pos, s) in additions {
-        if pos < parsed.len() {
-            parsed.insert_str(pos, s);
-        }
-    }
+    additions
 }
 
 impl Default for PdfParser {
@@ -225,8 +234,8 @@ struct ParseResult {
     /// A record of all font size changes, including the page number, byte index (in that page),
     /// new font size, and new font name
     font_size_markers: Vec<FontSizeMarker>,
-    /// A record of all vertical movements and the byte index (in that page) where it occurred.
-    y_history: Vec<(usize, f32)>,
+    /// Body font size
+    body_font_size: Option<f32>,
 }
 
 impl PdfParser {
@@ -494,21 +503,18 @@ impl PdfParser {
         content: &'a str,
         pos: usize,
     ) -> Result<[&'a str; N], PdfError> {
-        let parts: Vec<&str> = content[..pos].split_whitespace().collect();
-        let n_parts = parts.len();
+        let mut params = [""; N];
+        let mut start_pos = pos - 1;
 
-        if n_parts < N {
-            let operator = content[pos..]
-                .split_whitespace()
-                .next()
-                .unwrap_or("unknown");
-
-            return Err(PdfError::InternalError(format!(
-                "get_params expected {N} params for {operator}, but got {n_parts} instead"
-            )));
+        for i in 0..N {
+            let idx = content[..start_pos].rfind([' ', '/', '\n', '\t']).ok_or(
+                PdfError::InternalError("No valid separator in content at {start_pos}".into()),
+            )? + 1;
+            params[N - 1 - i] = &content[idx..start_pos];
+            start_pos = idx - 1;
         }
 
-        Ok(std::array::from_fn(|i| parts[n_parts - N + i]))
+        Ok(params)
     }
 
     /// Given a string `content` and a position `pos`, look *from* `pos` and search for an image.
@@ -738,6 +744,7 @@ impl PdfParser {
         doc: &Document,
         page_id: PageID,
         page_number: usize,
+        compute_body_font_size: bool,
     ) -> Result<ParseResult, PdfError> {
         let content = doc
             .get_page_content(page_id)
@@ -795,19 +802,26 @@ impl PdfParser {
                 }
             }
 
-            let et_idx = content[cur_parse_idx..].find("ET").unwrap_or(usize::MAX);
+            let et_idx = content[cur_parse_idx..].find(" ET").unwrap_or(usize::MAX);
 
             // Get the current font size, if it's set.
-            if let Some(tf_idx) = content[cur_parse_idx..].find("Tf")
+            if let Some(tf_idx) = content[cur_parse_idx..].find(" Tf ")
                 && tf_idx < et_idx
+                && tf_idx < tj_idx
             {
-                let [font_size_str] = self.get_params::<1>(&content, cur_parse_idx + tf_idx)?;
+                let [font_id, font_size_str] =
+                    self.get_params::<2>(&content, cur_parse_idx + tf_idx)?;
 
-                if let Ok(font_size) = font_size_str.parse::<f32>() {
+                if let Ok(font_name) = get_font_name(doc, page_id, font_id)
+                    && let Ok(font_size) = font_size_str.parse::<f32>()
+                {
+                    self.cur_font = font_name.into();
+                    self.cur_font_id = font_id.into();
+
                     tf_history.push(FontSizeMarker {
                         page_number,
                         byte_index: parsed.len(),
-                        font_size,
+                        font_size: OrderedFloat(font_size),
                         font_name: self.cur_font.clone(),
                     });
 
@@ -821,6 +835,7 @@ impl PdfParser {
             if let Some(td_idx) = content[cur_parse_idx..].find("Td")
                 // We need this Td to be before an ET, otherwise we could be looking too far ahead
                 && td_idx < et_idx
+                && td_idx < tj_idx
             {
                 let [_, vert_str] = self.get_params::<2>(&content, cur_parse_idx + td_idx)?;
 
@@ -840,9 +855,6 @@ impl PdfParser {
             let end_idx = content[cur_parse_idx..]
                 .find("TJ")
                 .ok_or(PdfError::ContentError)?;
-
-            // Check the font, if it has been set.
-            self.check_and_update_font(doc, page_id, &content, cur_parse_idx, content.len());
 
             // We need to match the ] immediately preceding TJ with its [, but papers have references
             // that are written inside [], so a naive method doesn't work. Yes--right now, this doesn't
@@ -956,17 +968,45 @@ impl PdfParser {
             cur_parse_idx += end_idx + 2;
         }
 
+        let mut edits = Vec::new();
+
         // Replace ligatures with constitutent characters
         for (from, to) in OCTAL_REPLACEMENTS.iter() {
-            parsed = parsed.replace(from, to);
+            edits.extend_from_slice(
+                &parsed
+                    .match_indices(from)
+                    .map(|(idx, _)| Edit {
+                        start: idx,
+                        end: idx + from.len(),
+                        r#type: EditType::Replace((**to).into()),
+                    })
+                    .collect::<Vec<_>>(),
+            );
         }
 
-        insert_script_markers(&y_history, &mut parsed);
+        let script_edits = get_script_marker_edits(&y_history, &mut parsed);
+        edits.extend_from_slice(&script_edits);
+        // TODO: Also update y_history
+        apply_edits(&edits, &mut parsed, &mut tf_history);
+
+        let body_font_size = if compute_body_font_size && tf_history.len() > 2 {
+            Some(Into::<f32>::into(
+                tf_history
+                    .iter()
+                    .zip(tf_history.iter().skip(1))
+                    .map(|(a, b)| (a.font_size, b.byte_index.saturating_sub(a.byte_index)))
+                    .max_by_key(|f| f.1)
+                    .unwrap()
+                    .0,
+            ))
+        } else {
+            None
+        };
 
         Ok(ParseResult {
             content: parsed,
             font_size_markers: tf_history,
-            y_history,
+            body_font_size,
         })
     }
 }
@@ -1057,6 +1097,10 @@ fn get_font_name<'a>(
     }
 }
 
+fn is_bold_font(font_name: &str) -> bool {
+    font_name.contains("BX") || font_name.ends_with('B')
+}
+
 /// Fill in the `parent_idx` field for a set of sections that are ordered in the same manner as
 /// they appear in the document.
 ///
@@ -1078,83 +1122,66 @@ pub fn extract_text(file_path: &str) -> Result<ExtractedContent, Box<dyn Error>>
     let doc = Document::load(file_path)?;
 
     let mut full_text = String::new();
-    let mut all_markers = Vec::new();
+    let mut sections = Vec::new();
+    let mut body_font_size: Option<f32> = None;
 
     let page_count = doc.get_pages().len();
 
-    for (page_num, page_id) in doc.page_iter().enumerate() {
+    for (page_num, page_id) in doc.page_iter().enumerate().take(1) {
         log::debug!("\tParsing page {} of {page_count}", page_num + 1);
 
         let byte_offset = full_text.len();
         let mut parser = PdfParser::with_default_config();
-        let result = parser.parse_content(&doc, page_id, page_num)?;
+        let result = parser.parse_content(&doc, page_id, page_num, body_font_size.is_none())?;
 
-        let y_history = result.y_history;
+        if let Some(size) = result.body_font_size {
+            body_font_size = Some(size);
+        }
 
         for mut marker in result.font_size_markers {
-            // Find the position of the last `Td` before the current `Tf`.
-            let td_idx = match y_history.binary_search_by_key(&marker.byte_index, |(byte, _)| *byte)
-            {
-                Ok(i) | Err(i) => i.saturating_sub(1),
-            };
-
-            if let Some((cur, _)) = y_history.get(td_idx)
-                && let Some((next, _)) = y_history.get(td_idx + 1)
-                && next.saturating_sub(*cur) < DEFAULT_TD_SECTION_TOLERANCE
-            {
-                // TODO: Mark this as a section
+            if body_font_size.is_some_and(|s| {
+                marker.font_size > OrderedFloat(s)
+                    || (marker.font_size == s && is_bold_font(&marker.font_name))
+            }) {
+                sections.push(SectionBoundary {
+                    page_number: marker.page_number,
+                    byte_index: marker.byte_index,
+                    font_size: Into::<f32>::into(marker.font_size),
+                    level: 0,
+                    parent_idx: None,
+                });
             }
 
             marker.byte_index += byte_offset;
             marker.page_number = page_num;
-            all_markers.push(marker);
         }
 
         full_text.push_str(&result.content);
     }
 
-    let (body_font_size, section_font_sizes) = get_document_font_sizes(
-        full_text.len(),
-        &all_markers.clone().into_iter().collect(),
-        DEFAULT_MIN_SIZE_COUNT,
-        DEFAULT_MAX_DEPTH,
-    );
-
-    for marker in &all_markers {
-        if marker.font_size > body_font_size {
-            dbg!(marker);
-            dbg!(full_text[marker.byte_index..][..10].to_string());
-        }
-    }
-
-    dbg!(&body_font_size);
-    dbg!(&section_font_sizes);
-
-    let mut font_size_levels: HashMap<OrderedFloat<f32>, usize> = HashMap::new();
-    for (i, f) in section_font_sizes.iter().enumerate() {
-        font_size_levels.insert(f.clone(), i);
-    }
-
-    let mut sections = all_markers
+    sections = sections.into_iter().unique().collect();
+    let mut font_sizes = sections
         .iter()
-        .filter_map(|marker| {
-            if FONT_TRANSFORMS.get(marker.font_name.as_str()).is_none()  // not a math font
-                && section_font_sizes.contains(&OrderedFloat(marker.font_size))
-            {
-                Some(SectionBoundary {
-                    page_number: marker.page_number,
-                    byte_index: marker.byte_index,
-                    level: *font_size_levels
-                        .get(&OrderedFloat(marker.font_size))
-                        .unwrap_or(&(font_size_levels.len() - 1)),
-                    parent_idx: None,
-                    font_size: marker.font_size,
-                })
-            } else {
-                None
-            }
-        })
+        .map(|s| OrderedFloat(s.font_size))
         .collect::<Vec<_>>();
+
+    font_sizes = font_sizes.into_iter().unique().collect();
+    font_sizes.sort();
+    font_sizes.reverse();
+
+    let levels = font_sizes
+        .iter()
+        .enumerate()
+        .map(|(i, f)| (f, i))
+        .collect::<HashMap<_, _>>();
+
+    for section in &mut sections {
+        section.level = *levels
+            .get(&OrderedFloat(section.font_size))
+            .unwrap_or(&(levels.len() - 1));
+    }
+
+    sections.retain(|f| f.level < 3);
 
     compute_parent_indices(&mut sections);
 
@@ -1225,7 +1252,7 @@ mod tests {
     }
 
     #[test]
-    // #[ignore = "Manual test for debugging PDF content"]
+    #[ignore = "Manual test for debugging PDF content"]
     fn test_pdf_content() {
         if env::var("CI").is_ok() {
             // Skip this test in CI environments
@@ -1242,7 +1269,7 @@ mod tests {
     }
 
     #[test]
-    // #[ignore = "Manual test for debugging font properties"]
+    #[ignore = "Manual test for debugging font properties"]
     fn test_font_properties() {
         if env::var("CI").is_ok() {
             // Skip this test in CI environments
@@ -1261,8 +1288,10 @@ mod tests {
          *
          * The only font that will have a ToUnicode map is `F9` in `manifold.pdf`.
          */
-        let font_key = "F48";
-        let path = PathBuf::from("assets").join("sections.pdf");
+        let font_key = "F172";
+        let path = PathBuf::from("assets")
+            .join("test_papers")
+            .join("mono2micro.pdf");
         let expect_cid_keyed_font = true;
 
         let doc = Document::load(path).unwrap();
@@ -1304,21 +1333,22 @@ mod tests {
     }
 
     #[test]
-    // #[ignore = "Manual test for debugging PDF content stream"]
+    #[ignore = "Manual test for debugging PDF content stream"]
     fn test_get_content_around_object() {
         if env::var("CI").is_ok() {
             // Skip this test in CI environments
             return;
         }
-        let page_number = 3; // 0-indexed page number to inspect
-        let anchor = "Designing"; // What should be found (case-sensitive)
+        let page_number = 0; // 0-indexed page number to inspect
+        let anchor = "Int"; // What should be found (case-sensitive)
         let context = 60; // Characters around the anchor
 
         let path = PathBuf::from("assets")
             .join("test_papers")
-            .join("deeply.pdf");
+            .join("mono2micro.pdf");
         let doc = Document::load(path).unwrap();
         let raw_content = get_raw_content_stream(&doc, page_number).unwrap();
+        dbg!(&raw_content);
 
         let idx = raw_content.find(anchor).unwrap();
         let start = idx.saturating_sub(context);
@@ -1336,10 +1366,12 @@ mod tests {
 
         let content = content.unwrap();
         let text = content.text_content;
+
+        dbg!(&content.sections);
         assert_eq!(content.sections.len(), 4);
 
         assert_eq!(
-            text[content.sections.get(0).unwrap().byte_index..][..5].to_string(),
+            text[content.sections.first().unwrap().byte_index..][..5].to_string(),
             "title"
         );
         // The author is, for now, incorrectly detected as a section.
@@ -1357,25 +1389,64 @@ mod tests {
         );
     }
 
+    /// A harder version of the above, which uses a real paper. This is by no means the hardest
+    /// PDF, but it's meant to be more "real-world".
+    #[test]
+    fn test_sections_detected_correctly_hard() {
+        let path = PathBuf::from("assets")
+            .join("test_papers")
+            .join("mono2micro.pdf");
+        let res = extract_text(path.to_str().unwrap()).unwrap();
+
+        const TESTS: [&str; 5] = [
+            "Mono2Micro",
+            "ABSTRACT",
+            "CCS CONCEPTS",
+            "KEYWORDS",
+            "1 INTRODUCTION",
+        ];
+        let mut satisfied = [false; TESTS.len()];
+
+        for s in &res.sections {
+            let nearby_content = &res.text_content[s.byte_index..][..20];
+
+            for (i, test) in TESTS.iter().enumerate() {
+                if nearby_content.contains(test) {
+                    satisfied[i] = true;
+                }
+            }
+        }
+
+        assert!(satisfied.iter().all(|s| *s));
+    }
+
     #[test]
     fn test_same_size_sections_detected_correctly() {
         // This paper has section headings that are the same font size as the text, with
         // sections being bold and subsections being italicized.
         let path = PathBuf::from("assets")
             .join("test_papers")
-            .join("deeply.pdf");
+            .join("mono2micro.pdf");
         let content = extract_text(path.to_str().unwrap());
 
         assert!(content.is_ok());
 
         let content = content.unwrap();
-        assert!(content.sections.len() > 0);
+        assert!(!content.sections.is_empty());
 
         for section in &content.sections {
-            let section_text = content.text_content[section.byte_index..][..10].to_string();
-            println!("{:#?}", section);
+            let section_text = content.text_content[section.byte_index..][..30].to_string();
+            println!("Page: {}", section.page_number);
             println!("Text: {section_text}");
+            println!("Font size: {}", section.font_size);
+            println!();
+
+            if section_text.contains("Ref") {
+                break;
+            }
         }
+
+        dbg!(&content.sections.len());
     }
 
     #[test]
@@ -1482,9 +1553,11 @@ mod tests {
         assert!(content.is_ok());
 
         let content = content.unwrap().text_content;
+        dbg!(&content);
 
         let tests = ["Figure", "Caption", "is", "caption", "good", "HERE"];
         for text in tests {
+            dbg!(&text);
             assert!(!content.contains(text));
         }
 

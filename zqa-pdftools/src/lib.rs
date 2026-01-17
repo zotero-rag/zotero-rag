@@ -30,6 +30,7 @@
 #![allow(clippy::cast_precision_loss)]
 #![allow(clippy::cast_possible_wrap)]
 
+pub(crate) mod edits;
 pub(crate) mod fonts;
 pub(crate) mod math;
 pub mod parse;

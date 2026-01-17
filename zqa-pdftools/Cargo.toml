@@ -13,6 +13,7 @@ exclude = [
 ]
 
 [dependencies]
+itertools = "0.14.0"
 log = "0.4.27"
 lopdf = "0.34.0"
 ordered-float = "5.1.0"
