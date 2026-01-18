@@ -72,10 +72,10 @@ pub(crate) fn apply_edits(edits: &[Edit], input: &mut String, update_idx: &mut [
 
         let change_start_idx = match update_idx.binary_search_by_key(&edit.start, |f| f.byte_index)
         {
-            Ok(i) | Err(i) => i.min(updates.len() - 2),
+            Ok(i) | Err(i) => i,
         };
 
-        for val in &mut updates[change_start_idx + 1..] {
+        for val in &mut updates[change_start_idx..] {
             match &edit.r#type {
                 EditType::Insert(ins) => {
                     *val += ins.len() as i64;
