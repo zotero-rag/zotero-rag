@@ -4,8 +4,8 @@ This is a Rust-based Zotero RAG QA System for answering questions from academic 
 
 ## Project Structure
 
-- **pdftools**: PDF parsing and text extraction utilities
-- **rag**: Core RAG implementation with vector database (LanceDB) and LLM clients (OpenAI, Anthropic)
+- **zqa-pdftools**: PDF parsing and text extraction utilities
+- **zqa-rag**: Core RAG implementation with vector database (LanceDB) and LLM clients (OpenAI, Anthropic)
 - **zqa**: Command-line interface and query processing (currently Hello World)
 
 ## Development Commands
@@ -15,10 +15,10 @@ This is a Rust-based Zotero RAG QA System for answering questions from academic 
 - Build (release): `cargo build --release`
 - Run CLI: `cargo run --bin zqa`
 - Tests (workspace): `cargo test --workspace`
-- Tests (per crate): `cargo test -p rag` (or `-p zqa`, `-p pdftools`)
+- Tests (per crate): `cargo test -p rag` (or `-p zqa`, `-p zqa-pdftools`)
 - Lint: `cargo clippy --all-targets --all-features -- -D warnings`
 - Format: `cargo fmt --all`
-- Bench (pdftools): `cargo bench -p pdftools`
+- Bench (zqa-pdftools): `cargo bench -p zqa-pdftools`
 - Faster Linux linking: uses `mold` via `.cargo/config.toml` (install or remove the flag).
 
 ## Coding Standards
@@ -39,7 +39,7 @@ This is a Rust-based Zotero RAG QA System for answering questions from academic 
 - Factory pattern for LLM clients (`rag/src/llm/factory.rs`)
 - Trait-based design for extensibility (base traits in `rag/src/llm/base.rs`)
 - In general, functions should have documentation above them. This does not need to be done for trait implementations, if the trait is standard in Rust (e.g., `From<...>`, `Copy`, etc.).
-- In general, the library crates `pdftools` and `rag` should not have side-effects such as printing to `stdout`, _unless_ that side-effect provides useful information to the user (e.g., warnings, specific error messages, etc.).
+- In general, the library crates `zqa-pdftools` and `zqa-rag` should not have side-effects such as printing to `stdout`, _unless_ that side-effect provides useful information to the user (e.g., warnings, specific error messages, etc.).
 - Although `cargo clippy` is automatically run and will block PR merging, you should also perform checks for idiomatic Rust, especially for code that reimplements functions that are built-in. However, if the user notes, or you believe, that Clippy marked that instance as okay, this is fine, and Clippy's ruling should be followed.
 * Documentation comments for functions follow this pattern:
 ```rs
@@ -75,10 +75,10 @@ A few tests are provided specifically to help debugging when working with PDFs:
 
 ## Important Files
 
-- `rag/src/llm/`: LLM client implementations
-- `rag/src/embedding/`: Embedding client implementations
-- `rag/src/vector/`: Vector database operations
-- `pdftools/src/`: PDF parsing utilities
+- `zqa-rag/src/llm/`: LLM client implementations
+- `zqa-rag/src/embedding/`: Embedding client implementations
+- `zqa-rag/src/vector/`: Vector database operations
+- `zqa-pdftools/src/`: PDF parsing utilities
 - `zqa/src/`: CLI interface (work in progress)
 
 ## Testing Notes
