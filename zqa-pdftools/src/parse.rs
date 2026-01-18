@@ -7,6 +7,7 @@ use itertools::Itertools;
 use log;
 use ordered_float::OrderedFloat;
 use std::char::decode_utf16;
+use std::f32;
 use std::{error::Error, str};
 
 use std::collections::HashMap;
@@ -170,7 +171,7 @@ fn get_script_marker_edits(y_history: &[(usize, f32)], parsed: &mut String) -> V
         // Find the last index where the y position was equal to the y position recorded by
         // `y_history[i]`.
         #[allow(clippy::float_cmp)]
-        let j = (0..i).rev().find(|k| y_history[*k].0 == y_history[i].0);
+        let j = (0..i).rev().find(|k| y_history[*k].1 == y_history[i].1);
 
         if j.is_none() {
             i -= 1;
@@ -994,7 +995,7 @@ impl PdfParser {
 
         apply_edits(&edits, &mut parsed, &mut tf_history);
 
-        let body_font_size = if compute_body_font_size && tf_history.len() > 2 {
+        let body_font_size = if compute_body_font_size && tf_history.len() > 1 {
             Some(Into::<f32>::into(
                 tf_history
                     .iter()
@@ -1146,7 +1147,8 @@ pub fn extract_text(file_path: &str) -> Result<ExtractedContent, Box<dyn Error>>
         for mut marker in result.font_size_markers {
             if body_font_size.is_some_and(|s| {
                 marker.font_size > OrderedFloat(s)
-                    || (marker.font_size == s && is_bold_font(&marker.font_name))
+                    || ((marker.font_size - s).abs() < f32::EPSILON
+                        && is_bold_font(&marker.font_name))
             }) {
                 sections.push(SectionBoundary {
                     page_number: marker.page_number,
