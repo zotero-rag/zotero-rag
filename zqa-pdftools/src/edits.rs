@@ -47,6 +47,17 @@ impl Ord for Edit {
 #[allow(clippy::cast_possible_truncation)]
 pub(crate) fn apply_edits(edits: &[Edit], input: &mut String, update_idx: &mut [FontSizeMarker]) {
     let sorted_edits = edits.iter().collect::<BTreeSet<_>>();
+
+    if update_idx.is_empty() {
+        for edit in &sorted_edits {
+            match &edit.r#type {
+                EditType::Insert(ins) => input.insert_str(edit.start, ins),
+                EditType::Replace(new) => input.replace_range(edit.start..edit.end, new),
+            }
+        }
+        return;
+    }
+
     let mut updates = vec![0_i64; update_idx.len()];
 
     for edit in &sorted_edits {
@@ -70,16 +81,13 @@ pub(crate) fn apply_edits(edits: &[Edit], input: &mut String, update_idx: &mut [
                     *val += ins.len() as i64;
                 }
                 EditType::Replace(new) => {
-                    *val += edit
-                        .end
-                        .saturating_sub(edit.start)
-                        .saturating_add(new.len()) as i64;
+                    *val += new.len() as i64 - (edit.end as i64 - edit.start as i64);
                 }
             }
         }
     }
 
     for (orig, update) in update_idx.iter_mut().zip(updates) {
-        orig.byte_index -= update as usize;
+        orig.byte_index = (orig.byte_index as i64 + update) as usize;
     }
 }
