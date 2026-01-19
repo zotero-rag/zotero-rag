@@ -6898,6 +6898,7 @@ dependencies = [
  "tempfile",
  "thiserror 1.0.69",
  "tokio",
+ "zqa-pdftools",
 ]
 
 [[package]]

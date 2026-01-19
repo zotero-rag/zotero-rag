@@ -2,7 +2,7 @@
 //! LanceDB's features, including connecting, inserting, querying, and deleting. For certain
 //! operations, variants with backup support are provided.
 
-use crate::capabilities::EmbeddingProviders;
+use crate::capabilities::EmbeddingProvider;
 use crate::embedding::cohere::CohereClient;
 use crate::embedding::common::EmbeddingProviderConfig;
 use crate::embedding::voyage::VoyageAIClient;
@@ -206,25 +206,25 @@ async fn get_db_with_embeddings(
     match embedding_config {
         EmbeddingProviderConfig::OpenAI(cfg) => {
             db.embedding_registry().register(
-                EmbeddingProviders::OpenAI.as_str(),
+                EmbeddingProvider::OpenAI.as_str(),
                 Arc::new(OpenAIClient::<ReqwestClient>::with_config(cfg.clone())),
             )?;
         }
         EmbeddingProviderConfig::VoyageAI(cfg) => {
             db.embedding_registry().register(
-                EmbeddingProviders::VoyageAI.as_str(),
+                EmbeddingProvider::VoyageAI.as_str(),
                 Arc::new(VoyageAIClient::<ReqwestClient>::with_config(cfg.clone())),
             )?;
         }
         EmbeddingProviderConfig::Gemini(cfg) => {
             db.embedding_registry().register(
-                EmbeddingProviders::Gemini.as_str(),
+                EmbeddingProvider::Gemini.as_str(),
                 Arc::new(GeminiClient::<ReqwestClient>::with_config(cfg.clone())),
             )?;
         }
         EmbeddingProviderConfig::Cohere(cfg) => {
             db.embedding_registry().register(
-                EmbeddingProviders::Cohere.as_str(),
+                EmbeddingProvider::Cohere.as_str(),
                 Arc::new(CohereClient::<ReqwestClient>::with_config(cfg.clone())),
             )?;
         }

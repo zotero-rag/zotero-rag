@@ -2,7 +2,7 @@
 //! includes support for both embedding only.
 
 use crate::{
-    capabilities::EmbeddingProviders,
+    capabilities::EmbeddingProvider,
     constants::{
         DEFAULT_VOYAGE_EMBEDDING_DIM, DEFAULT_VOYAGE_EMBEDDING_MODEL, DEFAULT_VOYAGE_RERANK_MODEL,
     },
@@ -98,7 +98,7 @@ where
                 "https://api.voyageai.com/v1/embeddings",
                 &api_key,
                 self.client.clone(),
-                EmbeddingProviders::VoyageAI.as_str().to_string(),
+                EmbeddingProvider::VoyageAI.as_str().to_string(),
                 BATCH_SIZE,
                 WAIT_AFTER_REQUEST_S,
                 DEFAULT_VOYAGE_EMBEDDING_DIM as usize,
