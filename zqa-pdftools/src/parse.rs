@@ -97,21 +97,11 @@ impl std::hash::Hash for SectionBoundary {
 
 /// The return type of `parse_content`. This includes the extracted text and the detected section
 /// boundaries.
-#[derive(Debug, Clone)]
 pub struct ExtractedContent {
     /// The extracted text
     pub text_content: String,
     /// The list of detected section boundaries
     pub sections: Vec<SectionBoundary>,
-    /// Page count
-    pub page_count: usize,
-}
-
-impl ExtractedContent {
-    /// Get the length of the content
-    pub const fn len(&self) -> usize {
-        self.text_content.len()
-    }
 }
 
 /// A lazy-loaded hashmap of octal character replacements post-parsing.
@@ -1140,7 +1130,6 @@ pub fn extract_text(file_path: &str) -> Result<ExtractedContent, Box<dyn Error>>
     let mut full_text = String::new();
     let mut sections = Vec::new();
     let mut body_font_size: Option<f32> = None;
-    let mut page_count = 0;
 
     let page_count = doc.get_pages().len();
 
@@ -1150,7 +1139,6 @@ pub fn extract_text(file_path: &str) -> Result<ExtractedContent, Box<dyn Error>>
         let byte_offset = full_text.len();
         let mut parser = PdfParser::with_default_config();
         let result = parser.parse_content(&doc, page_id, page_num, body_font_size.is_none())?;
-        page_count += 1;
 
         if let Some(size) = result.body_font_size {
             body_font_size = Some(size);
@@ -1206,7 +1194,6 @@ pub fn extract_text(file_path: &str) -> Result<ExtractedContent, Box<dyn Error>>
     Ok(ExtractedContent {
         text_content: full_text,
         sections,
-        page_count,
     })
 }
 
