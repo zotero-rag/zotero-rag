@@ -2,11 +2,13 @@
 //! providers exposed through this crate have which capabilities. Note that it is possible for a
 //! provider to not have all the capabilities listed here, if that API endpoint is not (yet) supported.
 
+use crate::chunking::ChunkingStrategy;
+
 /// Providers of models that can generate text. Clients for these providers should implement
 /// the `ApiClient` trait. Generally speaking, for this reason, these structs and all their trait
 /// implementations will be in the `llm/` directory.
 #[derive(Clone, Debug)]
-pub enum ModelProviders {
+pub enum ModelProvider {
     /// OpenAI model provider
     OpenAI,
     /// Anthropic model provider
@@ -17,15 +19,15 @@ pub enum ModelProviders {
     Gemini,
 }
 
-impl ModelProviders {
+impl ModelProvider {
     /// Returns the string representation of the provider.
     #[must_use]
     pub fn as_str(&self) -> &'static str {
         match self {
-            ModelProviders::OpenAI => "openai",
-            ModelProviders::Anthropic => "anthropic",
-            ModelProviders::OpenRouter => "openrouter",
-            ModelProviders::Gemini => "gemini",
+            ModelProvider::OpenAI => "openai",
+            ModelProvider::Anthropic => "anthropic",
+            ModelProvider::OpenRouter => "openrouter",
+            ModelProvider::Gemini => "gemini",
         }
     }
 
@@ -33,10 +35,10 @@ impl ModelProviders {
     #[must_use]
     pub fn contains(provider: &str) -> bool {
         [
-            ModelProviders::OpenAI.as_str(),
-            ModelProviders::Anthropic.as_str(),
-            ModelProviders::OpenRouter.as_str(),
-            ModelProviders::Gemini.as_str(),
+            ModelProvider::OpenAI.as_str(),
+            ModelProvider::Anthropic.as_str(),
+            ModelProvider::OpenRouter.as_str(),
+            ModelProvider::Gemini.as_str(),
         ]
         .contains(&provider)
     }
@@ -50,7 +52,7 @@ impl ModelProviders {
 /// included in this list (and it implements `EmbeddingFunction` by calling OpenAI's embedding
 /// model instead.
 #[derive(Clone, Debug)]
-pub enum EmbeddingProviders {
+pub enum EmbeddingProvider {
     /// Cohere embedding provider
     Cohere,
     /// OpenAI embedding provider
@@ -63,16 +65,16 @@ pub enum EmbeddingProviders {
     Gemini,
 }
 
-impl EmbeddingProviders {
+impl EmbeddingProvider {
     /// Returns the string representation of the provider.
     #[must_use]
     pub fn as_str(&self) -> &'static str {
         match self {
-            EmbeddingProviders::Cohere => "cohere",
-            EmbeddingProviders::OpenAI => "openai",
-            EmbeddingProviders::Anthropic => "anthropic",
-            EmbeddingProviders::VoyageAI => "voyageai",
-            EmbeddingProviders::Gemini => "gemini",
+            EmbeddingProvider::Cohere => "cohere",
+            EmbeddingProvider::OpenAI => "openai",
+            EmbeddingProvider::Anthropic => "anthropic",
+            EmbeddingProvider::VoyageAI => "voyageai",
+            EmbeddingProvider::Gemini => "gemini",
         }
     }
 
@@ -80,13 +82,27 @@ impl EmbeddingProviders {
     #[must_use]
     pub fn contains(provider: &str) -> bool {
         [
-            EmbeddingProviders::Cohere.as_str(),
-            EmbeddingProviders::OpenAI.as_str(),
-            EmbeddingProviders::Anthropic.as_str(),
-            EmbeddingProviders::VoyageAI.as_str(),
-            EmbeddingProviders::Gemini.as_str(),
+            EmbeddingProvider::Cohere.as_str(),
+            EmbeddingProvider::OpenAI.as_str(),
+            EmbeddingProvider::Anthropic.as_str(),
+            EmbeddingProvider::VoyageAI.as_str(),
+            EmbeddingProvider::Gemini.as_str(),
         ]
         .contains(&provider)
+    }
+
+    /// Returns the recommended chunking strategy for this provider.
+    #[must_use]
+    pub fn recommended_chunking_strategy(&self) -> ChunkingStrategy {
+        match self {
+            EmbeddingProvider::Cohere => ChunkingStrategy::WholeDocument,
+            // include a buffer for approximation errors
+            EmbeddingProvider::OpenAI => ChunkingStrategy::SectionBased(7500),
+            EmbeddingProvider::Anthropic => ChunkingStrategy::SectionBased(7500),
+            EmbeddingProvider::VoyageAI => ChunkingStrategy::WholeDocument,
+            // include a buffer for approximation errors; actual limit is 2048
+            EmbeddingProvider::Gemini => ChunkingStrategy::SectionBased(1500),
+        }
     }
 }
 

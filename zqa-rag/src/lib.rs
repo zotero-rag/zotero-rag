@@ -37,6 +37,7 @@
 )]
 
 pub mod capabilities;
+pub mod chunking;
 pub(crate) mod common;
 pub mod config;
 pub mod constants;
