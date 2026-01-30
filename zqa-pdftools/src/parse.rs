@@ -109,8 +109,15 @@ pub struct ExtractedContent {
 
 impl ExtractedContent {
     /// Get the length of the content
+    #[must_use]
     pub const fn len(&self) -> usize {
         self.text_content.len()
+    }
+
+    /// Check if there is any content present.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 }
 
@@ -1140,7 +1147,6 @@ pub fn extract_text(file_path: &str) -> Result<ExtractedContent, Box<dyn Error>>
     let mut full_text = String::new();
     let mut sections = Vec::new();
     let mut body_font_size: Option<f32> = None;
-    let mut page_count = 0;
 
     let page_count = doc.get_pages().len();
 
@@ -1150,7 +1156,6 @@ pub fn extract_text(file_path: &str) -> Result<ExtractedContent, Box<dyn Error>>
         let byte_offset = full_text.len();
         let mut parser = PdfParser::with_default_config();
         let result = parser.parse_content(&doc, page_id, page_num, body_font_size.is_none())?;
-        page_count += 1;
 
         if let Some(size) = result.body_font_size {
             body_font_size = Some(size);

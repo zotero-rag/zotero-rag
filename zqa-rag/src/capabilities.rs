@@ -2,7 +2,7 @@
 //! providers exposed through this crate have which capabilities. Note that it is possible for a
 //! provider to not have all the capabilities listed here, if that API endpoint is not (yet) supported.
 
-use crate::chunking::ChunkingStrategy;
+use zqa_pdftools::chunk::ChunkingStrategy;
 
 /// Providers of models that can generate text. Clients for these providers should implement
 /// the `ApiClient` trait. Generally speaking, for this reason, these structs and all their trait
@@ -95,11 +95,13 @@ impl EmbeddingProvider {
     #[must_use]
     pub fn recommended_chunking_strategy(&self) -> ChunkingStrategy {
         match self {
-            EmbeddingProvider::Cohere => ChunkingStrategy::WholeDocument,
+            EmbeddingProvider::Cohere | EmbeddingProvider::VoyageAI => {
+                ChunkingStrategy::WholeDocument
+            }
             // include a buffer for approximation errors
-            EmbeddingProvider::OpenAI => ChunkingStrategy::SectionBased(7500),
-            EmbeddingProvider::Anthropic => ChunkingStrategy::SectionBased(7500),
-            EmbeddingProvider::VoyageAI => ChunkingStrategy::WholeDocument,
+            EmbeddingProvider::OpenAI | EmbeddingProvider::Anthropic => {
+                ChunkingStrategy::SectionBased(7500)
+            }
             // include a buffer for approximation errors; actual limit is 2048
             EmbeddingProvider::Gemini => ChunkingStrategy::SectionBased(1500),
         }
