@@ -133,7 +133,7 @@ impl Chunker {
                 let mut chunks: Vec<_> = sections
                     .iter()
                     .enumerate()
-                    .map(|(i, sec)| {
+                    .flat_map(|(i, sec)| {
                         // Calculate the end byte: either the start of the next section, or end of text
                         let byte_end = sections
                             .get(i + 1)
@@ -152,7 +152,6 @@ impl Chunker {
                             (sec.page_number, page_end),
                         )
                     })
-                    .flatten()
                     .collect();
 
                 // Fix the chunk ids
@@ -160,7 +159,7 @@ impl Chunker {
                     chunk.chunk_id = i;
                 }
 
-                return chunks;
+                chunks
             }
         }
     }
