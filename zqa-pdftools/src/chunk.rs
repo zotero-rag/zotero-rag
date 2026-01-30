@@ -4,6 +4,8 @@
 //! convert the metadata included along with your domain-specific metadata into `RecordBatch`es,
 //! and pass those back to `zqa-rag` to work with LanceDB.
 
+use itertools::Itertools;
+
 use crate::parse::ExtractedContent;
 
 /// A single chunk in a document. It's unlikely you will want to use this directly; instead, you
@@ -51,6 +53,48 @@ impl Chunker {
         Self { content, strategy }
     }
 
+    /// Given initial conditions and constraints, chunk `text` into chunks.
+    ///
+    /// # Arguments
+    ///
+    /// * `text` - The content to chunk
+    /// * `budget` - The maximum number of *characters* per chunk. As noted by
+    ///   [`core::str::Chars`], a character corresponds to a Unicode scalar value, not a grapheme
+    ///   cluster or a byte.
+    /// * `start_chunk_id` - The starting index to use for each `chunk_id`.
+    /// * `start_byte_idx` - The byte offset to add to the `byte_range`.
+    /// * `page_range` - The page range spanned by this text.
+    ///
+    /// # Returns
+    ///
+    /// A list of [`DocumentChunk`], each with a maximum of `budget` characters, with `chunk_id`s
+    /// starting at `start_chunk_id`, and `byte_range` offset by `start_byte_idx`.
+    fn chunk_text(
+        text: &str,
+        budget: usize,
+        start_chunk_id: usize,
+        start_byte_idx: usize,
+        page_range: (usize, usize),
+    ) -> Vec<DocumentChunk> {
+        text.chars()
+            .chunks(budget)
+            .into_iter()
+            .enumerate()
+            .map(|(i, s1)| {
+                let cur_str: String = s1.collect();
+
+                DocumentChunk {
+                    chunk_id: start_chunk_id + i,
+                    chunk_count: text.chars().count(),
+                    content: cur_str.clone(),
+                    byte_range: (start_byte_idx, start_byte_idx + cur_str.len()),
+                    page_range,
+                    strategy: ChunkingStrategy::SectionBased(budget),
+                }
+            })
+            .collect::<Vec<_>>()
+    }
+
     /// Chunk the document using the strategy selected in [`Chunker::new`].
     ///
     /// # Returns
@@ -71,23 +115,22 @@ impl Chunker {
                     strategy: ChunkingStrategy::WholeDocument,
                 }]
             }
-            ChunkingStrategy::SectionBased(_max_tok) => {
+            ChunkingStrategy::SectionBased(max_tok) => {
                 let text_len = self.content.text_content.len();
                 let sections = &self.content.sections;
 
                 if sections.is_empty() {
-                    // If no sections, treat as whole document
-                    return vec![DocumentChunk {
-                        chunk_id: 1,
-                        chunk_count: 1,
-                        content: self.content.text_content.clone(),
-                        byte_range: (0, text_len),
-                        page_range: (1, self.content.page_count),
-                        strategy: self.strategy,
-                    }];
+                    // Treat entire doc as one section and chunk by `max_tok`.
+                    return Chunker::chunk_text(
+                        &self.content.text_content,
+                        *max_tok,
+                        0,
+                        0,
+                        (0, self.content.page_count),
+                    );
                 }
 
-                sections
+                let mut chunks: Vec<_> = sections
                     .iter()
                     .enumerate()
                     .map(|(i, sec)| {
@@ -101,17 +144,23 @@ impl Chunker {
                             .get(i + 1)
                             .map_or(self.content.page_count, |next_sec| next_sec.page_number);
 
-                        DocumentChunk {
-                            chunk_id: i + 1,
-                            chunk_count: sections.len(),
-                            content: self.content.text_content[sec.byte_index..byte_end]
-                                .to_string(),
-                            byte_range: (sec.byte_index, byte_end),
-                            page_range: (sec.page_number, page_end),
-                            strategy: self.strategy,
-                        }
+                        Chunker::chunk_text(
+                            &self.content.text_content[sec.byte_index..byte_end],
+                            *max_tok,
+                            0,
+                            sec.byte_index,
+                            (sec.page_number, page_end),
+                        )
                     })
-                    .collect()
+                    .flatten()
+                    .collect();
+
+                // Fix the chunk ids
+                for (i, chunk) in chunks.iter_mut().enumerate() {
+                    chunk.chunk_id = i;
+                }
+
+                return chunks;
             }
         }
     }
