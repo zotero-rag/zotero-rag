@@ -1,4 +1,4 @@
-name: Check Unwanted Dependencies
+name: Check Inter-Crate Dependencies
 
 on:
   push:
@@ -18,12 +18,8 @@ jobs:
         with:
           toolchain: stable
           override: true
-      - name: Check for circular dependencies
+      - name: Check invalid inter-crate deps
         run: |
-          if cargo tree -p zqa-rag --invert | grep -qE "^zqa-pdftools"; then
-            echo "Error: 'zqa-rag' crate has a dependency on 'zqa-pdftools'"
-            exit 1
-          fi
           if cargo tree -p zqa-pdftools --invert | grep -qE "^zqa-rag"; then
             echo "Error: 'zqa-pdftools' crate has a dependency on 'zqa-rag'"
             exit 1
