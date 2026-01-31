@@ -351,7 +351,7 @@ async fn process_openai_tool_calls(
     contents: &[OpenAIRequestInput],
     tools: &[SerializedTool<'_>],
 ) -> Result<(), LLMError> {
-    for content in contents {
+    let futures = contents.iter().map(|content| async move {
         match content {
             OpenAIRequestInput::ToolResult(res_item) => {
                 // This is invalid, but technically we can recover by just ignoring it--so
@@ -360,22 +360,24 @@ async fn process_openai_tool_calls(
                     "Got a tool result from the API response. This is not expected, and will be ignored. Tool result: {:#?}",
                     res_item.output
                 );
+                Ok::<_, LLMError>((None, None))
             }
             OpenAIRequestInput::FunctionCall(tool_call) => {
                 let tool_call_id = tool_call.call_id.clone();
-                let called_tool = tools.iter().find(|tool| tool.0.name() == tool_call.name)
-                .ok_or_else(|| {
-                    LLMError::ToolCallError(format!(
-                        "Tool {} was called, but it does not exist in the passed list of tools.",
-                        tool_call.name
-                    ))
-                })?;
+                let called_tool = tools
+                    .iter()
+                    .find(|tool| tool.0.name() == tool_call.name)
+                    .ok_or_else(|| {
+                        LLMError::ToolCallError(format!(
+                            "Tool {} was called, but it does not exist in the passed list of tools.",
+                            tool_call.name
+                        ))
+                    })?;
 
                 // OpenAI returns arguments as a JSON string, so we need to parse it
                 let parsed_arguments = match &tool_call.arguments {
-                    serde_json::Value::String(s) => {
-                        serde_json::from_str(s).unwrap_or_else(|_| tool_call.arguments.clone())
-                    }
+                    serde_json::Value::String(s) => serde_json::from_str(s)
+                        .unwrap_or_else(|_| tool_call.arguments.clone()),
                     other => other.clone(),
                 };
 
@@ -384,24 +386,37 @@ async fn process_openai_tool_calls(
                     Err(e) => serde_json::Value::String(format!("Error calling tool: {e}")),
                 };
 
-                new_contents.push(ContentType::ToolCall(ToolUseStats {
-                    tool_call_id: tool_call.call_id.clone(),
-                    tool_name: tool_call.name.clone(),
-                    tool_args: parsed_arguments.clone(),
-                    tool_result: tool_result.clone(),
-                }));
-
-                let new_items: OpenAIRequestInput =
-                    OpenAIRequestInput::ToolResult(OpenAIRequestToolResultInputItem {
-                        r#type: "function_call_output".into(),
-                        call_id: tool_call_id,
-                        output: tool_result,
-                    });
-                chat_history.push(new_items);
+                Ok((
+                    Some(ContentType::ToolCall(ToolUseStats {
+                        tool_call_id: tool_call.call_id.clone(),
+                        tool_name: tool_call.name.clone(),
+                        tool_args: parsed_arguments.clone(),
+                        tool_result: tool_result.clone(),
+                    })),
+                    Some(OpenAIRequestInput::ToolResult(
+                        OpenAIRequestToolResultInputItem {
+                            r#type: "function_call_output".into(),
+                            call_id: tool_call_id,
+                            output: tool_result,
+                        },
+                    )),
+                ))
             }
             OpenAIRequestInput::Message(chi) => match &chi.content {
-                OpenAIRequestInputItem::Text(s) => new_contents.push(ContentType::Text(s.clone())),
+                OpenAIRequestInputItem::Text(s) => Ok((Some(ContentType::Text(s.clone())), None)),
             },
+        }
+    });
+
+    let results = futures::future::join_all(futures).await;
+
+    for result in results {
+        let (content, history_item) = result?;
+        if let Some(c) = content {
+            new_contents.push(c);
+        }
+        if let Some(h) = history_item {
+            chat_history.push(h);
         }
     }
 
@@ -802,5 +817,89 @@ mod tests {
 
         assert!(res.is_ok());
         assert!(call_count.lock().unwrap().eq(&1_usize));
+    }
+
+    use super::{OpenAIRequestInput, OpenAIRequestToolCallInputItem, process_openai_tool_calls};
+    use crate::llm::tools::Tool;
+    use crate::llm::tools::get_owned_tools;
+    use crate::llm::tools::test_utils::MockToolInput;
+    use std::future::Future;
+    use std::pin::Pin;
+    use std::time::{Duration, Instant};
+
+    #[derive(Debug)]
+    struct SlowMockTool {
+        delay: Duration,
+    }
+
+    impl Tool for SlowMockTool {
+        fn name(&self) -> String {
+            "slow_tool".into()
+        }
+        fn description(&self) -> String {
+            "slow".into()
+        }
+        fn parameters(&self) -> schemars::Schema {
+            schemars::schema_for!(MockToolInput)
+        }
+        fn schema_key(&self) -> String {
+            "parameters".into()
+        }
+        fn call(
+            &self,
+            _args: serde_json::Value,
+        ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, String>> + Send>> {
+            let delay = self.delay;
+            Box::pin(async move {
+                tokio::time::sleep(delay).await;
+                Ok(serde_json::Value::String("Done".into()))
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn test_process_tool_calls_performance() {
+        let delay = Duration::from_millis(100);
+        let tool = SlowMockTool { delay };
+        let tools: Vec<Box<dyn Tool>> = vec![Box::new(tool)];
+        let serialized_tools = get_owned_tools(Some(&tools)).unwrap();
+
+        // Construct input with 5 tool calls
+        let mut contents = Vec::new();
+        for i in 0..5 {
+            contents.push(OpenAIRequestInput::FunctionCall(
+                OpenAIRequestToolCallInputItem {
+                    call_id: format!("call_{}", i),
+                    r#type: "function_call".into(),
+                    name: "slow_tool".into(),
+                    arguments: serde_json::json!({ "name": "Test" }),
+                },
+            ));
+        }
+
+        let mut chat_history = Vec::new();
+        let mut new_contents = Vec::new();
+
+        let start = Instant::now();
+        process_openai_tool_calls(
+            &mut chat_history,
+            &mut new_contents,
+            &contents,
+            &serialized_tools,
+        )
+        .await
+        .expect("Failed to process tool calls");
+        let duration = start.elapsed();
+
+        println!("Duration: {:?}", duration);
+
+        // Expect concurrent execution: approx 100ms.
+        // It should be definitely less than 500ms.
+        // Let's say < 200ms to be safe (overhead + sleep).
+        assert!(
+            duration < delay * 2,
+            "Expected concurrent execution, took {:?}",
+            duration
+        );
     }
 }
