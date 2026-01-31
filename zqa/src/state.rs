@@ -4,7 +4,7 @@ use chrono::{DateTime, Local};
 use serde::{Deserialize, Serialize};
 use std::{
     fs,
-    io::{self, IsTerminal},
+    io::{self, BufRead},
     path::PathBuf,
 };
 use thiserror::Error;
@@ -174,21 +174,19 @@ pub(crate) fn check_or_create_first_run_file() -> Result<bool, StateError> {
 }
 
 /// Read a line of input.
-fn read_line() -> String {
+fn read_line<R: BufRead>(reader: &mut R) -> String {
     let mut input = String::new();
-    io::stdin()
-        .read_line(&mut input)
-        .expect("Failed to read input");
+    reader.read_line(&mut input).expect("Failed to read input");
 
     input
 }
 
 /// Read a password from standard input.
-fn read_password() -> String {
-    if io::stdin().is_terminal() {
+fn read_password<R: BufRead>(reader: &mut R, is_terminal: bool) -> String {
+    if is_terminal {
         rpassword::read_password().expect("Failed to read password")
     } else {
-        read_line()
+        read_line(reader)
     }
 }
 
@@ -196,12 +194,13 @@ fn read_password() -> String {
 ///
 /// # Arguments:
 ///
+/// * `reader` - The input reader.
 /// * `default` - The default if Enter is pressed.
 /// * `valid_set` - The valid set of characters.
-fn read_char(default: char, valid_set: &[char]) -> char {
+fn read_char<R: BufRead>(reader: &mut R, default: char, valid_set: &[char]) -> char {
     loop {
         print!("> ");
-        let input = read_line();
+        let input = read_line(reader);
         let choice = input.chars().next().unwrap_or(default).to_ascii_lowercase();
 
         if valid_set.contains(&choice) {
@@ -218,12 +217,13 @@ fn read_char(default: char, valid_set: &[char]) -> char {
 ///
 /// # Arguments:
 ///
+/// * `reader` - The input reader.
 /// * `default` - The default value if Enter is pressed.
 /// * `bounds` - Lower and upper bounds to accept. Lower bound is inclusive, upper is exclusive.
-fn read_number(default: u8, bounds: (u8, u8)) -> u8 {
+fn read_number<R: BufRead>(reader: &mut R, default: u8, bounds: (u8, u8)) -> u8 {
     loop {
         println!("> ");
-        let input = read_line();
+        let input = read_line(reader);
         let input = input.trim();
         if input.is_empty() {
             return default;
@@ -261,7 +261,7 @@ fn read_number(default: u8, bounds: (u8, u8)) -> u8 {
 ///
 /// If getting the config for the chosen provider fails.
 #[allow(clippy::too_many_lines)]
-pub(crate) fn oobe() -> Result<(), StateError> {
+pub(crate) fn oobe<R: BufRead>(reader: &mut R, is_terminal: bool) -> Result<(), StateError> {
     // Here, we don't load the env because that's directory-specific.
     let mut config = Config::default();
 
@@ -275,7 +275,7 @@ pub(crate) fn oobe() -> Result<(), StateError> {
     println!("Would you like to set up your configuration?");
     println!("[Y]es");
     println!("(N)o");
-    let choice = read_char('y', &['y', 'n']);
+    let choice = read_char(reader, 'y', &['y', 'n']);
 
     if choice == 'n' {
         return Ok(());
@@ -287,10 +287,10 @@ pub(crate) fn oobe() -> Result<(), StateError> {
     println!("(G)emini");
     println!("Open(R)outer");
     println!();
-    let model_provider = read_char('a', &['a', 'o', 'g', 'r']);
+    let model_provider = read_char(reader, 'a', &['a', 'o', 'g', 'r']);
 
     println!("Enter your model provider's API key: ");
-    let model_api_key = read_password().trim().to_string();
+    let model_api_key = read_password(reader, is_terminal).trim().to_string();
     println!();
 
     config.model_provider = match model_provider {
@@ -313,7 +313,7 @@ pub(crate) fn oobe() -> Result<(), StateError> {
     println!("(O)penAI");
     println!("[V]oyage AI");
     println!();
-    let embedding_provider = read_char('v', &['c', 'g', 'o', 'v']);
+    let embedding_provider = read_char(reader, 'v', &['c', 'g', 'o', 'v']);
 
     config.embedding_provider = match embedding_provider {
         'c' => "cohere",
@@ -331,7 +331,7 @@ pub(crate) fn oobe() -> Result<(), StateError> {
     } else {
         println!("Enter your embedding provider's API key: ");
         println!();
-        let key = read_password().trim().to_string();
+        let key = read_password(reader, is_terminal).trim().to_string();
         println!();
         key
     };
@@ -352,7 +352,7 @@ pub(crate) fn oobe() -> Result<(), StateError> {
         }
     }
     println!();
-    let reranker_provider = read_char(embedding_provider, &['c', 'v']);
+    let reranker_provider = read_char(reader, embedding_provider, &['c', 'v']);
     config.reranker_provider = match reranker_provider {
         'c' => "cohere",
         'v' => "voyageai",
@@ -365,7 +365,7 @@ pub(crate) fn oobe() -> Result<(), StateError> {
     } else {
         println!("Enter your reranker provider's API key: ");
         println!();
-        let key = read_password().trim().to_string();
+        let key = read_password(reader, is_terminal).trim().to_string();
         println!();
         key
     };
@@ -378,7 +378,7 @@ pub(crate) fn oobe() -> Result<(), StateError> {
     println!(
         "{DIM_TEXT}A higher number can yield faster results, but can also result in being rate-limited. You should check what tier of API you have access to and check the TPM (tokens per minute) limit to make a choice here. As a rough estimate, your TPM limit divided by 150,000 is a somewhat reasonable estimate.{RESET}"
     );
-    let max_concurrent_requests = read_number(5, (1, 20));
+    let max_concurrent_requests = read_number(reader, 5, (1, 20));
     config.max_concurrent_requests = max_concurrent_requests as usize;
 
     // We can unwrap the provider configs since we initialized via `Default`, which sets them to a `Some(..)`.
@@ -460,11 +460,12 @@ mod tests {
     use chrono::Local;
     use clap::builder::OsStr;
     use std::fs;
+    use std::io::Cursor;
     use std::path::Component;
     use zqa_rag::llm::base::{ChatHistoryContent, ChatHistoryItem, USER_ROLE};
 
     use crate::state::{
-        SavedChatHistory, get_conversation_history, get_state_dir, save_conversation,
+        SavedChatHistory, get_conversation_history, get_state_dir, oobe, save_conversation,
     };
 
     #[test]
@@ -548,6 +549,56 @@ mod tests {
         assert_eq!(
             conversations[0].history[0].content[0],
             ChatHistoryContent::Text("Hello!".into())
+        );
+    }
+
+    #[test]
+    fn test_oobe_interactive() {
+        temp_env::with_vars(
+            [
+                ("XDG_CONFIG_HOME", Some("/tmp/zqa_test_config")),
+                ("HOME", Some("/tmp/zqa_test_home")),
+            ],
+            || {
+                // Prepare a fake input stream for the OOBE wizard
+                // Inputs:
+                // 1. "y" (Would you like to set up?)
+                // 2. "a" (Model provider: Anthropic)
+                // 3. "sk-test-model" (Model API key)
+                // 4. "v" (Embedding provider: Voyage AI)
+                // 5. "sk-test-embedding" (Embedding API key)
+                // 6. "v" (Reranker provider: Voyage AI - same as embedding default choice logic but we pick explicitly or default?)
+                //    Wait, logic says:
+                //    if reranker_provider != embedding_provider { ... }
+                //    We need to select reranker provider.
+                //    "println!("[C]ohere"); println!("[V]oyage AI");"
+                //    read_char(embedding_provider, &['c', 'v'])
+                //    Since embedding is 'v', default is 'v'.
+                //    So we can just press enter (empty line) to accept default 'v'.
+                //    But read_char handles newline as default.
+                //    So let's send "\n".
+                // 7. Max concurrent requests: "10"
+                let input_data = "y\na\nsk-test-model\nv\nsk-test-embedding\n\n10\n";
+                let mut cursor = Cursor::new(input_data);
+
+                // Run OOBE with is_terminal = false to test fallback path
+                let result = oobe(&mut cursor, false);
+                assert!(result.is_ok());
+
+                // Verify config file was created
+                // get_config_dir depends on directories crate which depends on HOME/XDG_CONFIG_HOME
+                // We mocked them.
+                let config_dir = crate::config::get_config_dir().unwrap();
+                let config_path = config_dir.join("config.toml");
+                assert!(config_path.exists());
+
+                let content = fs::read_to_string(config_path).unwrap();
+                assert!(content.contains("model_provider = \"anthropic\""));
+                assert!(content.contains("embedding_provider = \"voyageai\""));
+                assert!(content.contains("sk-test-model"));
+                assert!(content.contains("sk-test-embedding"));
+                assert!(content.contains("max_concurrent_requests = 10"));
+            },
         );
     }
 }
