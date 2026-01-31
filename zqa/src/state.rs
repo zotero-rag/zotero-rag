@@ -250,35 +250,85 @@ fn read_number(default: u8, bounds: (u8, u8)) -> u8 {
 #[allow(clippy::too_many_lines)]
 pub(crate) fn oobe() -> Result<(), StateError> {
     // Here, we don't load the env because that's directory-specific.
-    let mut config = Config::default();
+    let config_dir = get_config_dir()?;
+    let config_path = config_dir.join("config.toml");
+    let mut config = if config_path.exists() {
+        match Config::from_file(&config_path) {
+            Ok(c) => c,
+            Err(_) => Config::default(),
+        }
+    } else {
+        Config::default()
+    };
 
     println!("Let's set up your config.");
     println!(
         "{DIM_TEXT}Since this is your first run, you will set up a basic configuration. This should take a few minutes. You can always update these by editing ~/.config/zqa/config.toml directly. For most options, a default will be shown in [square brackets]; if that is okay, you can simply press Enter. You can use uppercase or lowercase.\n{RESET}"
     );
 
-    // TODO: We need smarter defaults where if the user for some reason has a config file, we use that value. We could
-    // skip users that have a *valid* config.
     println!("Would you like to set up your configuration?");
-    println!("[Y]es");
-    println!("(N)o");
-    let choice = read_char('y', &['y', 'n']);
+    let setup_default = if config_path.exists() { 'n' } else { 'y' };
+    if setup_default == 'y' {
+        println!("[Y]es");
+        println!("(N)o");
+    } else {
+        println!("(Y)es");
+        println!("[N]o");
+    }
+    let choice = read_char(setup_default, &['y', 'n']);
 
     if choice == 'n' {
         return Ok(());
     }
 
     println!("What model provider do you want to use?");
-    println!("[A]nthropic");
-    println!("(O)penAI");
-    println!("(G)emini");
-    println!("Open(R)outer");
+    let model_default = match config.model_provider.as_str() {
+        "anthropic" => 'a',
+        "openai" => 'o',
+        "gemini" => 'g',
+        "openrouter" => 'r',
+        _ => 'a',
+    };
+
+    println!(
+        "{}nthropic",
+        if model_default == 'a' { "[A]" } else { "(A)" }
+    );
+    println!("{}penAI", if model_default == 'o' { "[O]" } else { "(O)" });
+    println!("{}emini", if model_default == 'g' { "[G]" } else { "(G)" });
+    println!(
+        "Open{}outer",
+        if model_default == 'r' { "[R]" } else { "(R)" }
+    );
     println!();
-    let model_provider = read_char('a', &['a', 'o', 'g', 'r']);
+    let model_provider = read_char(model_default, &['a', 'o', 'g', 'r']);
 
     // TODO: Ideally we want to enable the password mode that some shells support.
-    println!("Enter your model provider's API key: ");
-    let model_api_key = read_line().trim().to_string();
+    let existing_api_key = match model_provider {
+        'a' => config
+            .anthropic
+            .as_ref()
+            .and_then(|c| c.api_key.clone()),
+        'o' => config.openai.as_ref().and_then(|c| c.api_key.clone()),
+        'g' => config.gemini.as_ref().and_then(|c| c.api_key.clone()),
+        'r' => config
+            .openrouter
+            .as_ref()
+            .and_then(|c| c.api_key.clone()),
+        _ => None,
+    };
+
+    if existing_api_key.is_some() {
+        println!("Enter your model provider's API key (Press Enter to keep existing): ");
+    } else {
+        println!("Enter your model provider's API key: ");
+    }
+    let input = read_line().trim().to_string();
+    let model_api_key = if input.is_empty() {
+        existing_api_key.unwrap_or_default()
+    } else {
+        input
+    };
     println!();
 
     config.model_provider = match model_provider {
@@ -296,12 +346,33 @@ pub(crate) fn oobe() -> Result<(), StateError> {
     println!(
         "{DIM_TEXT}Note that we strongly discourage OpenAI at this time, since we do not chunk PDF texts, and it is very likely to fail. The other providers use truncated texts.{RESET}"
     );
-    println!("(C)ohere");
-    println!("(G)emini");
-    println!("(O)penAI");
-    println!("[V]oyage AI");
+
+    let embedding_default = match config.embedding_provider.as_str() {
+        "cohere" => 'c',
+        "gemini" => 'g',
+        "openai" => 'o',
+        "voyageai" => 'v',
+        _ => 'v',
+    };
+
+    println!(
+        "{}ohere",
+        if embedding_default == 'c' { "[C]" } else { "(C)" }
+    );
+    println!(
+        "{}emini",
+        if embedding_default == 'g' { "[G]" } else { "(G)" }
+    );
+    println!(
+        "{}penAI",
+        if embedding_default == 'o' { "[O]" } else { "(O)" }
+    );
+    println!(
+        "{}oyage AI",
+        if embedding_default == 'v' { "[V]" } else { "(V)" }
+    );
     println!();
-    let embedding_provider = read_char('v', &['c', 'g', 'o', 'v']);
+    let embedding_provider = read_char(embedding_default, &['c', 'g', 'o', 'v']);
 
     config.embedding_provider = match embedding_provider {
         'c' => "cohere",
@@ -317,28 +388,73 @@ pub(crate) fn oobe() -> Result<(), StateError> {
     let embedding_api_key = if embedding_provider == model_provider {
         model_api_key.clone()
     } else {
-        println!("Enter your embedding provider's API key: ");
+        let existing_api_key = match embedding_provider {
+            'c' => config.cohere.as_ref().and_then(|c| c.api_key.clone()),
+            'g' => config.gemini.as_ref().and_then(|c| c.api_key.clone()),
+            'o' => config.openai.as_ref().and_then(|c| c.api_key.clone()),
+            'v' => config
+                .voyageai
+                .as_ref()
+                .and_then(|c| c.api_key.clone()),
+            _ => None,
+        };
+
+        if existing_api_key.is_some() {
+            println!("Enter your embedding provider's API key (Press Enter to keep existing): ");
+        } else {
+            println!("Enter your embedding provider's API key: ");
+        }
         println!();
-        read_line().trim().to_string()
+        let input = read_line().trim().to_string();
+        if input.is_empty() {
+            existing_api_key.unwrap_or_default()
+        } else {
+            input
+        }
     };
 
     println!("What provider do you want to use for reranking results?");
     println!("{DIM_TEXT}In general, you will want to use the same provider as embeddings.{RESET}");
+
+    let reranker_default = match config.reranker_provider.as_str() {
+        "cohere" => 'c',
+        "voyageai" => 'v',
+        _ => {
+            if embedding_provider == 'c' {
+                'c'
+            } else {
+                'v'
+            }
+        }
+    };
+
     match embedding_provider {
         'c' | 'g' | 'o' => {
-            println!("[C]ohere");
-            println!("(V)oyage AI");
+            println!(
+                "{}ohere",
+                if reranker_default == 'c' { "[C]" } else { "(C)" }
+            );
+            println!(
+                "{}oyage AI",
+                if reranker_default == 'v' { "[V]" } else { "(V)" }
+            );
         }
         'v' => {
-            println!("(C)ohere");
-            println!("[V]oyage AI");
+            println!(
+                "{}ohere",
+                if reranker_default == 'c' { "[C]" } else { "(C)" }
+            );
+            println!(
+                "{}oyage AI",
+                if reranker_default == 'v' { "[V]" } else { "(V)" }
+            );
         }
         _ => {
             unreachable!("Embedding provider was validated.");
         }
     }
     println!();
-    let reranker_provider = read_char(embedding_provider, &['c', 'v']);
+    let reranker_provider = read_char(reranker_default, &['c', 'v']);
     config.reranker_provider = match reranker_provider {
         'c' => "cohere",
         'v' => "voyageai",
@@ -349,20 +465,38 @@ pub(crate) fn oobe() -> Result<(), StateError> {
     let reranker_api_key = if reranker_provider == embedding_provider {
         embedding_api_key.clone()
     } else {
-        println!("Enter your reranker provider's API key: ");
+        let existing_api_key = match reranker_provider {
+            'c' => config.cohere.as_ref().and_then(|c| c.api_key.clone()),
+            'v' => config
+                .voyageai
+                .as_ref()
+                .and_then(|c| c.api_key.clone()),
+            _ => None,
+        };
+
+        if existing_api_key.is_some() {
+            println!("Enter your reranker provider's API key (Press Enter to keep existing): ");
+        } else {
+            println!("Enter your reranker provider's API key: ");
+        }
         println!();
-        read_line().trim().to_string()
+        let input = read_line().trim().to_string();
+        if input.is_empty() {
+            existing_api_key.unwrap_or_default()
+        } else {
+            input
+        }
     };
 
     // The 100k and 150k are somewhat napkin math-based, but pretty decent. In practice, embedding providers usually
     // have much higher TPM limits, so we're limited by the generation model provider's TPM. A half-decent estimate
     // for one paper is ~30k-50k tokens. For example, I have an 800k TPM with Claude, and a value of 5 works well,
     // though I haven't tested other values. For most users, the RPM will be far higher than necessary.
-    println!("How many requests do you want to send at a time?");
+    println!("How many requests do you want to send at a time? (Default: {})", config.max_concurrent_requests);
     println!(
         "{DIM_TEXT}A higher number can yield faster results, but can also result in being rate-limited. You should check what tier of API you have access to and check the TPM (tokens per minute) limit to make a choice here. As a rough estimate, your TPM limit divided by 150,000 is a somewhat reasonable estimate.{RESET}"
     );
-    let max_concurrent_requests = read_number(5, (1, 20));
+    let max_concurrent_requests = read_number(config.max_concurrent_requests as u8, (1, 20));
     config.max_concurrent_requests = max_concurrent_requests as usize;
 
     // We can unwrap the provider configs since we initialized via `Default`, which sets them to a `Some(..)`.
