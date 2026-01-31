@@ -114,7 +114,7 @@ pub(crate) async fn restore_backup(backup_metadata: &BackupMetadata) -> Result<(
 ///
 /// # Examples
 ///
-/// ```
+/// ```no_run
 /// use zqa_rag::vector::backup::{with_backup };
 /// use zqa_rag::vector::lance::LanceError;
 /// use std::io;
@@ -128,6 +128,7 @@ pub(crate) async fn restore_backup(backup_metadata: &BackupMetadata) -> Result<(
 ///
 /// #[tokio::main]
 /// async fn main() -> Result<(), LanceError> {
+///     // This example requires a running database connection, so it's marked as no_run
 ///     with_backup(my_database_operation()).await?;
 ///     println!("Operation completed with backup and cleanup.");
 ///     Ok(())

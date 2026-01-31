@@ -115,7 +115,9 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap();
 
     if is_first_run {
-        if let Err(e) = oobe() {
+        let mut stdin = io::stdin().lock();
+        let mut stdout = io::stdout();
+        if let Err(e) = oobe(&mut stdin, &mut stdout) {
             eprintln!("Error during setup: {e}");
         } else {
             // Reload possibly different config from OOBE
