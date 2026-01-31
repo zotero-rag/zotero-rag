@@ -114,7 +114,7 @@ pub(crate) async fn restore_backup(backup_metadata: &BackupMetadata) -> Result<(
 ///
 /// # Examples
 ///
-/// ```
+/// ```no_run
 /// use zqa_rag::vector::backup::{with_backup };
 /// use zqa_rag::vector::lance::LanceError;
 /// use std::io;
