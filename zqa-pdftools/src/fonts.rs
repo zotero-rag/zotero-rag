@@ -22,7 +22,7 @@ pub(crate) struct FontSizeMarker {
 }
 
 /// A type to convert from bytes in math fonts to LaTeX code
-type ByteTransformFn = fn(u8) -> String;
+type ByteTransformFn = fn(u8) -> std::borrow::Cow<'static, str>;
 
 /// A zero-allocation iterator for octal escape sequences and raw bytes. This is useful for parsing
 /// octal escape codes that are used in math fonts when non-printable characters are used to
