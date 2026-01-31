@@ -747,8 +747,11 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    #[allow(unsafe_code)]
     async fn test_compute_embeddings() {
         dotenv().ok();
+        // SAFETY: Setting environment variable for test configuration
+        unsafe { std::env::set_var("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small"); }
 
         let array = arrow_array::StringArray::from(vec![
             "Hello, World!",
