@@ -20,16 +20,16 @@ use std::sync::Arc;
 ///
 /// # Arguments:
 ///
-/// * `text` - The text to embed.
+/// * `texts` - The list of texts to embed.
 ///
 /// # Returns
 ///
-/// If successful, a `Vec<f32>` containing the embeddings.
-async fn get_openai_embedding(text: String) -> Result<Vec<f32>, LLMError> {
+/// If successful, a `Vec<Vec<f32>>` containing the embeddings in the same order as input.
+async fn get_openai_embeddings(texts: Vec<String>) -> Result<Vec<Vec<f32>>, LLMError> {
     #[derive(Serialize)]
     struct EmbeddingRequest {
         model: String,
-        input: String,
+        input: Vec<String>,
         encoding_format: String,
     }
 
@@ -63,16 +63,17 @@ async fn get_openai_embedding(text: String) -> Result<Vec<f32>, LLMError> {
     let key = env::var("OPENAI_API_KEY")?;
     let model =
         env::var("OPENAI_EMBEDDING_MODEL").unwrap_or(DEFAULT_OPENAI_EMBEDDING_MODEL.to_string());
+    let api_base = env::var("OPENAI_API_BASE").unwrap_or("https://api.openai.com/v1".to_string());
 
     let client = reqwest::Client::new();
     let request_body = EmbeddingRequest {
         model,
-        input: text,
+        input: texts,
         encoding_format: "float".to_string(),
     };
 
     let response = client
-        .post("https://api.openai.com/v1/embeddings")
+        .post(format!("{api_base}/embeddings"))
         .bearer_auth(key)
         .header("content-type", "application/json")
         .json(&request_body)
@@ -90,7 +91,11 @@ async fn get_openai_embedding(text: String) -> Result<Vec<f32>, LLMError> {
         e
     })?;
 
-    Ok(response.data[0].embedding.clone())
+    // Sort by index to ensure order matches input
+    let mut data = response.data;
+    data.sort_by_key(|d| d.index);
+
+    Ok(data.into_iter().map(|d| d.embedding).collect())
 }
 
 /// Shared embedding computation logic for OpenAI embeddings
@@ -115,9 +120,13 @@ pub async fn compute_openai_embeddings_async(
         .collect();
 
     // Create a stream of futures
-    let futures = texts.iter().map(|text| get_openai_embedding(text.clone()));
+    // Batch size of 100 to respect API limits and efficiency
+    let batch_size = 100;
+    let futures = texts
+        .chunks(batch_size)
+        .map(|chunk| get_openai_embeddings(chunk.to_vec()));
 
-    // Convert to a stream and process with buffer_unordered to limit concurrency
+    // Convert to a stream and process with buffered to limit concurrency but preserve order
     let max_concurrent = env::var("MAX_CONCURRENT_REQUESTS")
         .ok()
         .and_then(|s| s.parse().ok())
@@ -125,7 +134,7 @@ pub async fn compute_openai_embeddings_async(
 
     // Process futures with limited concurrency
     let results = stream::iter(futures)
-        .buffer_unordered(max_concurrent)
+        .buffered(max_concurrent)
         .collect::<Vec<_>>()
         .await;
 
@@ -133,7 +142,7 @@ pub async fn compute_openai_embeddings_async(
     let mut embeddings: Vec<Vec<f32>> = Vec::with_capacity(texts.len());
     for result in results {
         match result {
-            Ok(embedding) => embeddings.push(embedding),
+            Ok(batch_embeddings) => embeddings.extend(batch_embeddings),
             Err(e) => return Err(e),
         }
     }
