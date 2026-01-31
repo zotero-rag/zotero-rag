@@ -413,7 +413,7 @@ mod tests {
         .unwrap();
         let duration = start.elapsed();
 
-        println!("Execution time: {:?}", duration);
+        println!("Execution time: {duration:?}");
         // Expect ~500ms for concurrent execution
         assert!(duration.as_millis() < 1000);
         // Ensure that we processed two tool calls
