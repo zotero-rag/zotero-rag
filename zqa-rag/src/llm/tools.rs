@@ -346,7 +346,7 @@ mod tests {
     }
 
     #[derive(Deserialize, JsonSchema)]
-    pub(crate) struct SlowToolInput {}
+    pub(crate) struct SlowToolInput;
 
     impl Tool for SlowTool {
         fn name(&self) -> String {
