@@ -444,6 +444,7 @@ pub(crate) fn oobe<R: BufRead>(reader: &mut R, is_terminal: bool) -> Result<(), 
 
     let config_dir = get_config_dir()?;
     let config_path = config_dir.join("config.toml");
+    fs::create_dir_all(&config_dir)?;
     fs::write(config_path, toml::to_string_pretty(&config)?)?;
 
     println!("You've set up your config!");
@@ -555,10 +556,16 @@ mod tests {
 
     #[test]
     fn test_oobe_interactive() {
+        // Create temp directories
+        let temp_home = std::env::temp_dir().join("zqa_test_home");
+        let temp_config = std::env::temp_dir().join("zqa_test_config");
+        fs::create_dir_all(&temp_home).unwrap();
+        fs::create_dir_all(&temp_config).unwrap();
+
         temp_env::with_vars(
             [
-                ("XDG_CONFIG_HOME", Some("/tmp/zqa_test_config")),
-                ("HOME", Some("/tmp/zqa_test_home")),
+                ("XDG_CONFIG_HOME", Some(temp_config.to_str().unwrap())),
+                ("HOME", Some(temp_home.to_str().unwrap())),
             ],
             || {
                 // Prepare a fake input stream for the OOBE wizard
@@ -584,7 +591,7 @@ mod tests {
 
                 // Run OOBE with is_terminal = false to test fallback path
                 let result = oobe(&mut cursor, false);
-                assert!(result.is_ok());
+                result.unwrap();
 
                 // Verify config file was created
                 // get_config_dir depends on directories crate which depends on HOME/XDG_CONFIG_HOME
@@ -601,5 +608,9 @@ mod tests {
                 assert!(content.contains("max_concurrent_requests = 10"));
             },
         );
+
+        // Cleanup
+        let _ = fs::remove_dir_all(temp_home);
+        let _ = fs::remove_dir_all(temp_config);
     }
 }
