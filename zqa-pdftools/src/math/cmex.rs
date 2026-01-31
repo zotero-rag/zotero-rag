@@ -1,9 +1,7 @@
-use std::borrow::Cow;
-
-pub(crate) fn from_cmex(ch: u8) -> Cow<'static, str> {
+pub(crate) fn from_cmex(ch: u8) -> String {
     match ch {
-        b'X' => Cow::Borrowed("\\sum"),
-        b'Z' => Cow::Borrowed("\\int"),
-        _ => Cow::Owned(char::from(ch).to_string()),
+        88 => "\\sum".to_string(), // X
+        90 => "\\int".to_string(), // Z
+        _ => char::from(ch).to_string(),
     }
 }

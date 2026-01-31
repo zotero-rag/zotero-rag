@@ -20,9 +20,10 @@ use std::sync::Arc;
 ///
 /// # Arguments:
 ///
+/// * `client` - The reqwest client to use.
 /// * `texts` - The list of texts to embed.
-/// * `api_key` - OpenAI API key.
-/// * `model` - The embedding model to use.
+/// * `api_key` - The OpenAI API key.
+/// * `model` - The OpenAI model to use.
 ///
 /// # Returns
 ///
@@ -133,11 +134,7 @@ pub async fn compute_openai_embeddings_async(
     let client = reqwest::Client::new();
     // Create a stream of futures
     // Batch size of 100 to respect API limits and efficiency
-    let batch_size = env::var("OPENAI_EMBEDDING_BATCH_SIZE")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(100);
-
+    let batch_size = 100;
     let futures = texts.chunks(batch_size).map(|chunk| {
         get_openai_embeddings(&client, chunk.to_vec(), api_key.clone(), model.clone())
     });
@@ -157,7 +154,10 @@ pub async fn compute_openai_embeddings_async(
     // Process results and construct Arrow array
     let mut embeddings: Vec<Vec<f32>> = Vec::with_capacity(texts.len());
     for result in results {
-        embeddings.extend(result?);
+        match result {
+            Ok(batch_embeddings) => embeddings.extend(batch_embeddings),
+            Err(e) => return Err(e),
+        }
     }
 
     // Convert to Arrow FixedSizeListArray
