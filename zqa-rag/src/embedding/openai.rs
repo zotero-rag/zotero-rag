@@ -28,6 +28,8 @@ use std::sync::Arc;
 async fn get_openai_embedding(
     client: &reqwest::Client,
     text: String,
+    api_key: String,
+    model: String,
 ) -> Result<Vec<f32>, LLMError> {
     #[derive(Serialize)]
     struct EmbeddingRequest {
@@ -62,11 +64,6 @@ async fn get_openai_embedding(
         data: Vec<EmbeddingResponseData>,
     }
 
-    // TODO: Fix this to use config
-    let key = env::var("OPENAI_API_KEY")?;
-    let model =
-        env::var("OPENAI_EMBEDDING_MODEL").unwrap_or(DEFAULT_OPENAI_EMBEDDING_MODEL.to_string());
-
     let request_body = EmbeddingRequest {
         model,
         input: text,
@@ -75,7 +72,7 @@ async fn get_openai_embedding(
 
     let response = client
         .post("https://api.openai.com/v1/embeddings")
-        .bearer_auth(key)
+        .bearer_auth(api_key)
         .header("content-type", "application/json")
         .json(&request_body)
         .send()
@@ -109,6 +106,7 @@ async fn get_openai_embedding(
 /// * `LLMError::GenericLLMError` - If other HTTP errors occur or Arrow array creation fails
 pub async fn compute_openai_embeddings_async(
     source: Arc<dyn arrow_array::Array>,
+    config: Option<&crate::config::OpenAIConfig>,
 ) -> Result<Arc<dyn arrow_array::Array>, LLMError> {
     let source_array = arrow_array::cast::as_string_array(&source);
     let texts: Vec<String> = source_array
@@ -116,11 +114,21 @@ pub async fn compute_openai_embeddings_async(
         .filter_map(|s| Some(s?.to_owned()))
         .collect();
 
+    let (api_key, model) = if let Some(config) = config {
+        (config.api_key.clone(), config.embedding_model.clone())
+    } else {
+        (
+            env::var("OPENAI_API_KEY")?,
+            env::var("OPENAI_EMBEDDING_MODEL")
+                .unwrap_or(DEFAULT_OPENAI_EMBEDDING_MODEL.to_string()),
+        )
+    };
+
     let client = reqwest::Client::new();
     // Create a stream of futures
-    let futures = texts
-        .iter()
-        .map(|text| get_openai_embedding(&client, text.clone()));
+    let futures = texts.iter().map(|text| {
+        get_openai_embedding(&client, text.clone(), api_key.clone(), model.clone())
+    });
 
     // Convert to a stream and process with buffer_unordered to limit concurrency
     let max_concurrent = env::var("MAX_CONCURRENT_REQUESTS")
@@ -177,8 +185,9 @@ pub async fn compute_openai_embeddings_async(
 /// * `LLMError::GenericLLMError` - If other HTTP errors occur or Arrow array creation fails
 pub fn compute_openai_embeddings_sync(
     source: Arc<dyn arrow_array::Array>,
+    config: Option<&crate::config::OpenAIConfig>,
 ) -> Result<Arc<dyn arrow_array::Array>, LLMError> {
     tokio::task::block_in_place(|| {
-        tokio::runtime::Handle::current().block_on(compute_openai_embeddings_async(source))
+        tokio::runtime::Handle::current().block_on(compute_openai_embeddings_async(source, config))
     })
 }
