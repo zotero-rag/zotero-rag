@@ -2,13 +2,14 @@
 //! Anthropic client, but that will likely be changed, at which point this module will move to
 //! `llm`.
 
-use crate::constants::DEFAULT_OPENAI_EMBEDDING_MODEL;
 use crate::constants::{DEFAULT_MAX_CONCURRENT_REQUESTS, DEFAULT_OPENAI_EMBEDDING_DIM};
 use crate::llm::errors::LLMError;
+use crate::llm::http_client::HttpClient;
 use arrow_array;
 use futures::StreamExt;
 use futures::stream;
 use lancedb::arrow::arrow_schema::{DataType, Field};
+use reqwest::header::HeaderMap;
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::sync::Arc;
@@ -20,16 +21,24 @@ use std::sync::Arc;
 ///
 /// # Arguments:
 ///
-/// * `text` - The text to embed.
+/// * `client` - The HTTP client to use.
+/// * `texts` - The list of texts to embed.
+/// * `api_key` - The API key to use.
+/// * `model` - The model to use.
 ///
 /// # Returns
 ///
-/// If successful, a `Vec<f32>` containing the embeddings.
-async fn get_openai_embedding(text: String) -> Result<Vec<f32>, LLMError> {
+/// If successful, a `Vec<Vec<f32>>` containing the embeddings in the same order as input.
+async fn get_openai_embeddings(
+    client: &impl HttpClient,
+    texts: Vec<String>,
+    api_key: &str,
+    model: &str,
+) -> Result<Vec<Vec<f32>>, LLMError> {
     #[derive(Serialize)]
-    struct EmbeddingRequest {
-        model: String,
-        input: String,
+    struct EmbeddingRequest<'a> {
+        model: &'a str,
+        input: Vec<String>,
         encoding_format: String,
     }
 
@@ -59,24 +68,22 @@ async fn get_openai_embedding(text: String) -> Result<Vec<f32>, LLMError> {
         data: Vec<EmbeddingResponseData>,
     }
 
-    // TODO: Fix this to use config
-    let key = env::var("OPENAI_API_KEY")?;
-    let model =
-        env::var("OPENAI_EMBEDDING_MODEL").unwrap_or(DEFAULT_OPENAI_EMBEDDING_MODEL.to_string());
-
-    let client = reqwest::Client::new();
     let request_body = EmbeddingRequest {
         model,
-        input: text,
+        input: texts,
         encoding_format: "float".to_string(),
     };
 
+    let mut headers = HeaderMap::new();
+    headers.insert("content-type", "application/json".parse()?);
+    headers.insert("Authorization", format!("Bearer {api_key}").parse()?);
+
     let response = client
-        .post("https://api.openai.com/v1/embeddings")
-        .bearer_auth(key)
-        .header("content-type", "application/json")
-        .json(&request_body)
-        .send()
+        .post_json(
+            "https://api.openai.com/v1/embeddings",
+            headers,
+            &request_body,
+        )
         .await?;
 
     let body = response.text().await?;
@@ -90,7 +97,11 @@ async fn get_openai_embedding(text: String) -> Result<Vec<f32>, LLMError> {
         e
     })?;
 
-    Ok(response.data[0].embedding.clone())
+    // Sort by index to ensure order matches input
+    let mut data = response.data;
+    data.sort_by_key(|d| d.index);
+
+    Ok(data.into_iter().map(|d| d.embedding).collect())
 }
 
 /// Shared embedding computation logic for OpenAI embeddings
@@ -107,6 +118,9 @@ async fn get_openai_embedding(text: String) -> Result<Vec<f32>, LLMError> {
 /// * `LLMError::GenericLLMError` - If other HTTP errors occur or Arrow array creation fails
 pub async fn compute_openai_embeddings_async(
     source: Arc<dyn arrow_array::Array>,
+    client: &impl HttpClient,
+    api_key: &str,
+    model: &str,
 ) -> Result<Arc<dyn arrow_array::Array>, LLMError> {
     let source_array = arrow_array::cast::as_string_array(&source);
     let texts: Vec<String> = source_array
@@ -115,9 +129,13 @@ pub async fn compute_openai_embeddings_async(
         .collect();
 
     // Create a stream of futures
-    let futures = texts.iter().map(|text| get_openai_embedding(text.clone()));
+    // Batch size of 100 to respect API limits and efficiency
+    let batch_size = 100;
+    let futures = texts
+        .chunks(batch_size)
+        .map(|chunk| get_openai_embeddings(client, chunk.to_vec(), api_key, model));
 
-    // Convert to a stream and process with buffer_unordered to limit concurrency
+    // Convert to a stream and process with buffered to limit concurrency but preserve order
     let max_concurrent = env::var("MAX_CONCURRENT_REQUESTS")
         .ok()
         .and_then(|s| s.parse().ok())
@@ -125,7 +143,7 @@ pub async fn compute_openai_embeddings_async(
 
     // Process futures with limited concurrency
     let results = stream::iter(futures)
-        .buffer_unordered(max_concurrent)
+        .buffered(max_concurrent)
         .collect::<Vec<_>>()
         .await;
 
@@ -133,7 +151,7 @@ pub async fn compute_openai_embeddings_async(
     let mut embeddings: Vec<Vec<f32>> = Vec::with_capacity(texts.len());
     for result in results {
         match result {
-            Ok(embedding) => embeddings.push(embedding),
+            Ok(batch_embeddings) => embeddings.extend(batch_embeddings),
             Err(e) => return Err(e),
         }
     }
@@ -172,8 +190,13 @@ pub async fn compute_openai_embeddings_async(
 /// * `LLMError::GenericLLMError` - If other HTTP errors occur or Arrow array creation fails
 pub fn compute_openai_embeddings_sync(
     source: Arc<dyn arrow_array::Array>,
+    client: &impl HttpClient,
+    api_key: &str,
+    model: &str,
 ) -> Result<Arc<dyn arrow_array::Array>, LLMError> {
     tokio::task::block_in_place(|| {
-        tokio::runtime::Handle::current().block_on(compute_openai_embeddings_async(source))
+        tokio::runtime::Handle::current().block_on(compute_openai_embeddings_async(
+            source, client, api_key, model,
+        ))
     })
 }

@@ -16,7 +16,7 @@ pub const DEFAULT_OPENAI_MAX_TOKENS: u32 = 8192;
 pub const DEFAULT_OPENAI_EMBEDDING_DIM: u32 = 1536;
 
 /// Default OpenAI embedding model
-pub const DEFAULT_OPENAI_EMBEDDING_MODEL: &str = "text-embedding-3-large";
+pub const DEFAULT_OPENAI_EMBEDDING_MODEL: &str = "text-embedding-3-small";
 
 /// Default Anthropic model for chat completions
 pub const DEFAULT_ANTHROPIC_MODEL: &str = "claude-sonnet-4-5";
@@ -25,7 +25,7 @@ pub const DEFAULT_ANTHROPIC_MODEL: &str = "claude-sonnet-4-5";
 pub const DEFAULT_ANTHROPIC_MAX_TOKENS: u32 = 64000;
 
 /// Default Gemini model for chat completions
-pub const DEFAULT_GEMINI_MODEL: &str = "gemini-2.5-pro";
+pub const DEFAULT_GEMINI_MODEL: &str = "gemini-1.5-pro";
 
 /// Gemini gemini-embedding-001 dimension
 pub const DEFAULT_GEMINI_EMBEDDING_DIM: u32 = 3072;

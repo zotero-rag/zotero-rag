@@ -19,7 +19,7 @@ use super::base::{ApiClient, ChatHistoryItem, ChatRequest, CompletionApiResponse
 use super::errors::LLMError;
 use super::http_client::{HttpClient, ReqwestClient};
 use crate::common::request_with_backoff;
-use crate::constants::{DEFAULT_MAX_RETRIES, DEFAULT_OPENAI_EMBEDDING_DIM, DEFAULT_OPENAI_MODEL};
+use crate::constants::{DEFAULT_MAX_RETRIES, DEFAULT_OPENAI_EMBEDDING_DIM, DEFAULT_OPENAI_EMBEDDING_MODEL, DEFAULT_OPENAI_MODEL};
 use crate::embedding::openai::compute_openai_embeddings_sync;
 use crate::llm::base::{ChatHistoryContent, ContentType, ToolUseStats, USER_ROLE};
 use crate::llm::tools::{SerializedTool, get_owned_tools};
@@ -99,7 +99,25 @@ where
         &self,
         source: Arc<dyn arrow_array::Array>,
     ) -> Result<Arc<dyn arrow_array::Array>, LLMError> {
-        compute_openai_embeddings_sync(source)
+        // Use config if available, otherwise fall back to env vars
+        // Note: For embeddings, we often use a different model than for chat.
+        // The config might store the chat model.
+        // Currently, OpenAIConfig doesn't seem to differentiate, or maybe we should use a separate embedding model env var/config.
+        // The shared function looked up OPENAI_EMBEDDING_MODEL.
+        // We will maintain that behavior: prefer env var for embedding model, or default.
+        // For API key, use config or env.
+
+        let api_key = if let Some(ref config) = self.config {
+            config.api_key.clone()
+        } else {
+            env::var("OPENAI_API_KEY")?
+        };
+
+        // For embedding model, we don't have it in OpenAIConfig usually (it has `model` which is for chat).
+        // So we'll use the env var or default.
+        let model = env::var("OPENAI_EMBEDDING_MODEL").unwrap_or_else(|_| DEFAULT_OPENAI_EMBEDDING_MODEL.to_string());
+
+        compute_openai_embeddings_sync(source, &self.client, &api_key, &model)
     }
 }
 

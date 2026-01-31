@@ -450,8 +450,10 @@ mod tests {
     use crate::state::{
         SavedChatHistory, get_conversation_history, get_state_dir, save_conversation,
     };
+    use serial_test::serial;
 
     #[test]
+    #[serial]
     fn test_get_state_dir() {
         let state_dir = get_state_dir();
 
@@ -464,6 +466,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_get_conversation_history() {
         let state_dir = get_state_dir().unwrap();
 
@@ -475,6 +478,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_save_conversation_creates_dirs() {
         let state_dir = get_state_dir().unwrap();
 
@@ -498,6 +502,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_get_conversation_history_works() {
         let state_dir = get_state_dir().unwrap();
 

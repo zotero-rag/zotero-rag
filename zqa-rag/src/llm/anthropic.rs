@@ -16,7 +16,7 @@ use super::http_client::{HttpClient, ReqwestClient};
 use crate::common::request_with_backoff;
 use crate::constants::{
     DEFAULT_ANTHROPIC_MAX_TOKENS, DEFAULT_ANTHROPIC_MODEL, DEFAULT_MAX_RETRIES,
-    DEFAULT_OPENAI_EMBEDDING_DIM,
+    DEFAULT_OPENAI_EMBEDDING_DIM, DEFAULT_OPENAI_EMBEDDING_MODEL,
 };
 use crate::embedding::openai::compute_openai_embeddings_sync;
 use crate::llm::base::{ChatHistoryContent, ContentType, ToolCallRequest, USER_ROLE};
@@ -77,7 +77,12 @@ where
         &self,
         source: Arc<dyn arrow_array::Array>,
     ) -> Result<Arc<dyn arrow_array::Array>, LLMError> {
-        compute_openai_embeddings_sync(source)
+        // Anthropic currently relies on OpenAI for embeddings, so we must fetch OpenAI credentials
+        // from the environment, as they are not part of AnthropicConfig.
+        let api_key = env::var("OPENAI_API_KEY")?;
+        let model = env::var("OPENAI_EMBEDDING_MODEL").unwrap_or_else(|_| DEFAULT_OPENAI_EMBEDDING_MODEL.to_string());
+
+        compute_openai_embeddings_sync(source, &self.client, &api_key, &model)
     }
 }
 
