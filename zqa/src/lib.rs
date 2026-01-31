@@ -3,7 +3,7 @@
 #![allow(clippy::cast_precision_loss)]
 #![allow(clippy::cast_possible_wrap)]
 
-use std::io::{self, stderr, stdout};
+use std::io::{self, stderr, stdout, IsTerminal};
 
 use clap::Parser;
 
@@ -115,7 +115,8 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap();
 
     if is_first_run {
-        if let Err(e) = oobe() {
+        let mut stdin = io::stdin().lock();
+        if let Err(e) = oobe(&mut stdin, io::stdin().is_terminal()) {
             eprintln!("Error during setup: {e}");
         } else {
             // Reload possibly different config from OOBE
