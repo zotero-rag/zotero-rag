@@ -270,10 +270,7 @@ pub(crate) fn oobe<R: BufRead, W: Write>(input: &mut R, output: &mut W) -> Resul
     let config_dir = get_config_dir()?;
     let config_path = config_dir.join("config.toml");
     let mut config = if config_path.exists() {
-        match Config::from_file(&config_path) {
-            Ok(c) => c,
-            Err(_) => Config::default(),
-        }
+        Config::from_file(&config_path).unwrap_or_default()
     } else {
         Config::default()
     };
@@ -383,7 +380,6 @@ pub(crate) fn oobe<R: BufRead, W: Write>(input: &mut R, output: &mut W) -> Resul
         "cohere" => 'c',
         "gemini" => 'g',
         "openai" => 'o',
-        "voyageai" => 'v',
         _ => 'v',
     };
 
@@ -495,29 +491,7 @@ pub(crate) fn oobe<R: BufRead, W: Write>(input: &mut R, output: &mut W) -> Resul
     };
 
     match embedding_provider {
-        'c' | 'g' | 'o' => {
-            writeln!(
-                output,
-                "{}ohere",
-                if reranker_default == 'c' {
-                    "[C]"
-                } else {
-                    "(C)"
-                }
-            )
-            .ok();
-            writeln!(
-                output,
-                "{}oyage AI",
-                if reranker_default == 'v' {
-                    "[V]"
-                } else {
-                    "(V)"
-                }
-            )
-            .ok();
-        }
-        'v' => {
+        'c' | 'g' | 'o' | 'v' => {
             writeln!(
                 output,
                 "{}ohere",
@@ -594,6 +568,7 @@ pub(crate) fn oobe<R: BufRead, W: Write>(input: &mut R, output: &mut W) -> Resul
         output,
         "{DIM_TEXT}A higher number can yield faster results, but can also result in being rate-limited. You should check what tier of API you have access to and check the TPM (tokens per minute) limit to make a choice here. As a rough estimate, your TPM limit divided by 150,000 is a somewhat reasonable estimate.{RESET}"
     ).ok();
+    #[allow(clippy::cast_possible_truncation)]
     let max_concurrent_requests =
         read_number(input, output, config.max_concurrent_requests as u8, (1, 20));
     config.max_concurrent_requests = max_concurrent_requests as usize;
@@ -810,11 +785,19 @@ mod tests {
     fn test_oobe_respects_existing_config() {
         // Setup existing config
         let config_dir = get_config_dir().unwrap();
-        fs::create_dir_all(&config_dir).unwrap();
+        if !config_dir.exists() {
+            fs::create_dir_all(&config_dir).unwrap();
+        }
         let config_path = config_dir.join("config.toml");
-        let mut initial_config = Config::default();
-        initial_config.model_provider = "openai".to_string();
-        initial_config.openai.as_mut().unwrap().api_key = Some("existing-key".to_string());
+        let mut initial_config = Config {
+            model_provider: "openai".to_string(),
+            ..Config::default()
+        };
+        // Ensure the config object has OpenAI initialized properly with a key
+        initial_config.openai = Some(crate::config::OpenAIConfig {
+            api_key: Some("existing-key".to_string()),
+            ..crate::config::OpenAIConfig::default()
+        });
         fs::write(
             &config_path,
             toml::to_string_pretty(&initial_config).unwrap(),
@@ -841,6 +824,78 @@ mod tests {
         assert_eq!(
             config.openai.unwrap().api_key,
             Some("existing-key".to_string())
+        );
+    }
+
+    #[test]
+    fn test_oobe_skip_setup() {
+        // Setup config dir
+        let config_dir = get_config_dir().unwrap();
+        if !config_dir.exists() {
+            fs::create_dir_all(&config_dir).unwrap();
+        }
+        let config_path = config_dir.join("config.toml");
+        if config_path.exists() {
+            fs::remove_file(&config_path).unwrap();
+        }
+
+        // Simulate input: No to setup
+        let input_str = "n\n";
+        let mut input = Cursor::new(input_str);
+        let mut output = Vec::new();
+
+        let result = oobe(&mut input, &mut output);
+        assert!(result.is_ok());
+
+        let output_str = String::from_utf8(output).unwrap();
+        assert!(output_str.contains("Would you like to set up your configuration?"));
+        // Config file should NOT be created if it didn't exist and we said no
+        assert!(!config_path.exists());
+    }
+
+    #[test]
+    fn test_oobe_alternative_providers() {
+        // Setup config dir
+        let config_dir = get_config_dir().unwrap();
+        if !config_dir.exists() {
+            fs::create_dir_all(&config_dir).unwrap();
+        }
+        let config_path = config_dir.join("config.toml");
+        if config_path.exists() {
+            fs::remove_file(&config_path).unwrap();
+        }
+
+        // Simulate input:
+        // 1. Yes to setup
+        // 2. Gemini ('g') for model
+        // 3. API key
+        // 4. Cohere ('c') for embedding
+        // 5. API key
+        // 6. Voyage ('v') for reranker (to avoid key collision)
+        // 7. API key
+        // 8. Max requests (default)
+        let input_str = "y\ng\ngemini-key\nc\ncohere-key\nv\nvoyage-key\n\n";
+        let mut input = Cursor::new(input_str);
+        let mut output = Vec::new();
+
+        let result = oobe(&mut input, &mut output);
+        assert!(result.is_ok());
+
+        let config = Config::from_file(&config_path).unwrap();
+        assert_eq!(config.model_provider, "gemini");
+        assert_eq!(config.embedding_provider, "cohere");
+        assert_eq!(config.reranker_provider, "voyageai");
+        assert_eq!(
+            config.gemini.unwrap().api_key,
+            Some("gemini-key".to_string())
+        );
+        assert_eq!(
+            config.cohere.unwrap().api_key,
+            Some("cohere-key".to_string())
+        );
+        assert_eq!(
+            config.voyageai.unwrap().api_key,
+            Some("voyage-key".to_string())
         );
     }
 }
