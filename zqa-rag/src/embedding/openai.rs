@@ -187,7 +187,6 @@ pub fn compute_openai_embeddings_sync(
     config: Option<&crate::config::OpenAIConfig>,
 ) -> Result<Arc<dyn arrow_array::Array>, LLMError> {
     tokio::task::block_in_place(|| {
-        tokio::runtime::Handle::current()
-            .block_on(compute_openai_embeddings_async(source, config))
+        tokio::runtime::Handle::current().block_on(compute_openai_embeddings_async(source, config))
     })
 }
