@@ -249,6 +249,53 @@ fn read_number<R: BufRead, W: Write>(
     }
 }
 
+/// Prompt for an API key with support for keeping existing keys.
+///
+/// # Arguments:
+///
+/// * `input` - The input stream to read from.
+/// * `output` - The output stream to write to.
+/// * `provider_name` - The name of the provider (e.g., "model provider's", "embedding provider's").
+/// * `existing_key` - The existing API key, if any.
+///
+/// # Returns:
+///
+/// The API key entered by the user, or the existing key if the user pressed Enter.
+/// If no existing key is found and the user presses Enter, prompts again.
+fn prompt_for_api_key<R: BufRead, W: Write>(
+    input: &mut R,
+    output: &mut W,
+    provider_name: &str,
+    existing_key: Option<String>,
+) -> String {
+    loop {
+        if existing_key.is_some() {
+            writeln!(
+                output,
+                "Enter your {} API key (Press Enter to keep existing): ",
+                provider_name
+            )
+            .ok();
+        } else {
+            writeln!(output, "Enter your {} API key: ", provider_name).ok();
+        }
+        writeln!(output).ok();
+        let line = read_line(input);
+        let buffer = line.trim().to_string();
+
+        if buffer.is_empty() {
+            if let Some(key) = &existing_key {
+                if !key.is_empty() {
+                    return key.clone();
+                }
+            }
+            writeln!(output, "No existing API key found. Please enter one:").ok();
+        } else {
+            return buffer;
+        }
+    }
+}
+
 /// Set up the out-of-box experience (OOBE) for the application.
 ///
 /// This function uses reasonable defaults for most config attributes. The goal here is not to be meticulous, but
@@ -270,7 +317,14 @@ pub(crate) fn oobe<R: BufRead, W: Write>(input: &mut R, output: &mut W) -> Resul
     let config_dir = get_config_dir()?;
     let config_path = config_dir.join("config.toml");
     let mut config = if config_path.exists() {
-        Config::from_file(&config_path).unwrap_or_default()
+        Config::from_file(&config_path).unwrap_or_else(|e| {
+            writeln!(
+                output,
+                "{DIM_TEXT}Warning: Could not load existing config ({e}). Using defaults.{RESET}"
+            )
+            .ok();
+            Config::default()
+        })
     } else {
         Config::default()
     };
@@ -340,23 +394,7 @@ pub(crate) fn oobe<R: BufRead, W: Write>(input: &mut R, output: &mut W) -> Resul
         _ => None,
     };
 
-    if existing_api_key.is_some() {
-        writeln!(
-            output,
-            "Enter your model provider's API key (Press Enter to keep existing): "
-        )
-        .ok();
-    } else {
-        writeln!(output, "Enter your model provider's API key: ").ok();
-    }
-    let line = read_line(input);
-    let buffer = line.trim().to_string();
-    let model_api_key = if buffer.is_empty() {
-        existing_api_key.unwrap_or_default()
-    } else {
-        buffer
-    };
-    writeln!(output).ok();
+    let model_api_key = prompt_for_api_key(input, output, "model provider's", existing_api_key);
 
     config.model_provider = match model_provider {
         'a' => "anthropic",
@@ -447,23 +485,7 @@ pub(crate) fn oobe<R: BufRead, W: Write>(input: &mut R, output: &mut W) -> Resul
             _ => None,
         };
 
-        if existing_api_key.is_some() {
-            writeln!(
-                output,
-                "Enter your embedding provider's API key (Press Enter to keep existing): "
-            )
-            .ok();
-        } else {
-            writeln!(output, "Enter your embedding provider's API key: ").ok();
-        }
-        writeln!(output).ok();
-        let line = read_line(input);
-        let buffer = line.trim().to_string();
-        if buffer.is_empty() {
-            existing_api_key.unwrap_or_default()
-        } else {
-            buffer
-        }
+        prompt_for_api_key(input, output, "embedding provider's", existing_api_key)
     };
 
     writeln!(
@@ -481,10 +503,12 @@ pub(crate) fn oobe<R: BufRead, W: Write>(input: &mut R, output: &mut W) -> Resul
         "cohere" => 'c',
         "voyageai" => 'v',
         _ => {
-            if embedding_provider == 'c' {
-                'c'
+            // Fall back to embedding provider's recommendation if it supports reranking
+            if embedding_provider == 'c' || embedding_provider == 'v' {
+                embedding_provider
             } else {
-                'v'
+                // Default to Cohere for Gemini/OpenAI embeddings
+                'c'
             }
         }
     };
@@ -534,23 +558,7 @@ pub(crate) fn oobe<R: BufRead, W: Write>(input: &mut R, output: &mut W) -> Resul
             _ => None,
         };
 
-        if existing_api_key.is_some() {
-            writeln!(
-                output,
-                "Enter your reranker provider's API key (Press Enter to keep existing): "
-            )
-            .ok();
-        } else {
-            writeln!(output, "Enter your reranker provider's API key: ").ok();
-        }
-        writeln!(output).ok();
-        let line = read_line(input);
-        let buffer = line.trim().to_string();
-        if buffer.is_empty() {
-            existing_api_key.unwrap_or_default()
-        } else {
-            buffer
-        }
+        prompt_for_api_key(input, output, "reranker provider's", existing_api_key)
     };
 
     // The 100k and 150k are somewhat napkin math-based, but pretty decent. In practice, embedding providers usually
