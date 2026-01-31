@@ -337,8 +337,7 @@ mod tests {
     use arrow_array::RecordBatchIterator;
     use dotenv::dotenv;
     use zqa_rag::constants::{
-        DEFAULT_VOYAGE_EMBEDDING_DIM, DEFAULT_VOYAGE_EMBEDDING_MODEL,
-        DEFAULT_VOYAGE_RERANK_MODEL,
+        DEFAULT_VOYAGE_EMBEDDING_DIM, DEFAULT_VOYAGE_EMBEDDING_MODEL, DEFAULT_VOYAGE_RERANK_MODEL,
     };
 
     fn get_config() -> Config {
