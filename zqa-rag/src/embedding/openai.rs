@@ -20,21 +20,24 @@ use std::sync::Arc;
 ///
 /// # Arguments:
 ///
-/// * `text` - The text to embed.
+/// * `client` - The reqwest client to use.
+/// * `texts` - The list of texts to embed.
+/// * `api_key` - The OpenAI API key.
+/// * `model` - The OpenAI model to use.
 ///
 /// # Returns
 ///
-/// If successful, a `Vec<f32>` containing the embeddings.
-async fn get_openai_embedding(
+/// If successful, a `Vec<Vec<f32>>` containing the embeddings in the same order as input.
+async fn get_openai_embeddings(
     client: &reqwest::Client,
-    text: String,
+    texts: Vec<String>,
     api_key: String,
     model: String,
-) -> Result<Vec<f32>, LLMError> {
+) -> Result<Vec<Vec<f32>>, LLMError> {
     #[derive(Serialize)]
     struct EmbeddingRequest {
         model: String,
-        input: String,
+        input: Vec<String>,
         encoding_format: String,
     }
 
@@ -66,7 +69,7 @@ async fn get_openai_embedding(
 
     let request_body = EmbeddingRequest {
         model,
-        input: text,
+        input: texts,
         encoding_format: "float".to_string(),
     };
 
@@ -89,7 +92,11 @@ async fn get_openai_embedding(
         e
     })?;
 
-    Ok(response.data[0].embedding.clone())
+    // Sort by index to ensure order matches input
+    let mut data = response.data;
+    data.sort_by_key(|d| d.index);
+
+    Ok(data.into_iter().map(|d| d.embedding).collect())
 }
 
 /// Shared embedding computation logic for OpenAI embeddings
@@ -126,11 +133,13 @@ pub async fn compute_openai_embeddings_async(
 
     let client = reqwest::Client::new();
     // Create a stream of futures
-    let futures = texts
-        .iter()
-        .map(|text| get_openai_embedding(&client, text.clone(), api_key.clone(), model.clone()));
+    // Batch size of 100 to respect API limits and efficiency
+    let batch_size = 100;
+    let futures = texts.chunks(batch_size).map(|chunk| {
+        get_openai_embeddings(&client, chunk.to_vec(), api_key.clone(), model.clone())
+    });
 
-    // Convert to a stream and process with buffer_unordered to limit concurrency
+    // Convert to a stream and process with buffered to limit concurrency but preserve order
     let max_concurrent = env::var("MAX_CONCURRENT_REQUESTS")
         .ok()
         .and_then(|s| s.parse().ok())
@@ -138,7 +147,7 @@ pub async fn compute_openai_embeddings_async(
 
     // Process futures with limited concurrency
     let results = stream::iter(futures)
-        .buffer_unordered(max_concurrent)
+        .buffered(max_concurrent)
         .collect::<Vec<_>>()
         .await;
 
@@ -146,7 +155,7 @@ pub async fn compute_openai_embeddings_async(
     let mut embeddings: Vec<Vec<f32>> = Vec::with_capacity(texts.len());
     for result in results {
         match result {
-            Ok(embedding) => embeddings.push(embedding),
+            Ok(batch_embeddings) => embeddings.extend(batch_embeddings),
             Err(e) => return Err(e),
         }
     }
