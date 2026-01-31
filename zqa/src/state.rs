@@ -298,7 +298,6 @@ pub(crate) fn oobe<R: BufRead, W: Write>(input: &mut R, output: &mut W) -> Resul
 
     writeln!(output, "What model provider do you want to use?").ok();
     let model_default = match config.model_provider.as_str() {
-        "anthropic" => 'a',
         "openai" => 'o',
         "gemini" => 'g',
         "openrouter" => 'r',
@@ -655,6 +654,7 @@ pub(crate) fn oobe<R: BufRead, W: Write>(input: &mut R, output: &mut W) -> Resul
 mod tests {
     use chrono::Local;
     use clap::builder::OsStr;
+    use serial_test::serial;
     use std::fs;
     use std::io::Cursor;
     use std::path::Component;
@@ -751,6 +751,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_oobe_setup() {
         // Setup config dir
         let config_dir = get_config_dir().unwrap();
@@ -782,6 +783,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_oobe_respects_existing_config() {
         // Setup existing config
         let config_dir = get_config_dir().unwrap();
@@ -828,6 +830,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_oobe_skip_setup() {
         // Setup config dir
         let config_dir = get_config_dir().unwrap();
@@ -854,6 +857,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_oobe_alternative_providers() {
         // Setup config dir
         let config_dir = get_config_dir().unwrap();
