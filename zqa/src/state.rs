@@ -443,7 +443,6 @@ pub(crate) fn oobe() -> Result<(), StateError> {
 mod tests {
     use chrono::Local;
     use clap::builder::OsStr;
-    use serial_test::serial;
     use std::fs;
     use std::path::Component;
     use zqa_rag::llm::base::{ChatHistoryContent, ChatHistoryItem, USER_ROLE};
@@ -465,7 +464,6 @@ mod tests {
     }
 
     #[test]
-    #[serial]
     fn test_get_conversation_history() {
         let state_dir = get_state_dir().unwrap();
 
@@ -477,7 +475,6 @@ mod tests {
     }
 
     #[test]
-    #[serial]
     fn test_save_conversation_creates_dirs() {
         let state_dir = get_state_dir().unwrap();
 
@@ -501,7 +498,6 @@ mod tests {
     }
 
     #[test]
-    #[serial]
     fn test_get_conversation_history_works() {
         let state_dir = get_state_dir().unwrap();
 
