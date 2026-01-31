@@ -31,6 +31,13 @@ use thiserror::Error;
 /// The URI for the LanceDB table. This is the default location for the table, and for now cannot
 /// be changed.
 pub const DB_URI: &str = "data/lancedb-table";
+
+/// Returns the database URI, allowing override via `LANCEDB_URI` environment variable.
+#[must_use]
+pub fn get_db_uri() -> String {
+    std::env::var("LANCEDB_URI").unwrap_or_else(|_| DB_URI.to_string())
+}
+
 /// The name of the table. This is the default table name, and for now cannot be changed.
 pub const TABLE_NAME: &str = "data";
 
@@ -92,12 +99,13 @@ impl Display for TableStatistics {
 
 /// Checks if an existing LanceDB exists and has a valid table
 pub async fn lancedb_exists() -> bool {
-    if !PathBuf::from(DB_URI).exists() {
+    let uri = get_db_uri();
+    if !PathBuf::from(&uri).exists() {
         return false;
     }
 
     // Check if we can actually connect and open the table
-    let db_result = connect(DB_URI).execute().await;
+    let db_result = connect(&uri).execute().await;
     if let Ok(db) = db_result {
         db.open_table(TABLE_NAME).execute().await.is_ok()
     } else {
@@ -121,7 +129,7 @@ pub async fn create_or_update_indexes(
     text_col: &str,
     embedding_col: &str,
 ) -> Result<(), LanceError> {
-    let db = connect(DB_URI)
+    let db = connect(&get_db_uri())
         .execute()
         .await
         .map_err(|e| LanceError::ConnectionError(e.to_string()))?;
@@ -170,7 +178,7 @@ pub async fn create_or_update_indexes(
 /// - the table could not be opened
 /// - the table statistics could not be computed
 pub async fn db_statistics() -> Result<TableStatistics, LanceError> {
-    let db = connect(DB_URI)
+    let db = connect(&get_db_uri())
         .execute()
         .await
         .map_err(|e| LanceError::ConnectionError(e.to_string()))?;
@@ -198,7 +206,7 @@ pub async fn db_statistics() -> Result<TableStatistics, LanceError> {
 async fn get_db_with_embeddings(
     embedding_config: &EmbeddingProviderConfig,
 ) -> Result<Connection, LanceError> {
-    let db = connect(DB_URI)
+    let db = connect(&get_db_uri())
         .execute()
         .await
         .map_err(|e| LanceError::ConnectionError(e.to_string()))?;

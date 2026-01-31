@@ -4,7 +4,7 @@
 use std::future::Future;
 use thiserror::Error;
 
-use crate::vector::lance::{DB_URI, LanceError, TABLE_NAME};
+use crate::vector::lance::{LanceError, TABLE_NAME, get_db_uri};
 
 /// Errors that can occur during backup operations
 #[derive(Debug, Error)]
@@ -40,7 +40,7 @@ pub(crate) struct BackupMetadata {
 /// the operation is executed, resulting in data loss.
 pub(crate) async fn create_backup() -> Result<BackupMetadata, LanceError> {
     // Connect to the database to get current version
-    let db = lancedb::connect(DB_URI)
+    let db = lancedb::connect(&get_db_uri())
         .execute()
         .await
         .map_err(|e| LanceError::ConnectionError(e.to_string()))?;
@@ -68,7 +68,7 @@ pub(crate) async fn restore_backup(backup_metadata: &BackupMetadata) -> Result<(
     })?;
 
     // Connect to database
-    let db = lancedb::connect(DB_URI)
+    let db = lancedb::connect(&get_db_uri())
         .execute()
         .await
         .map_err(BackupError::LanceDbError)?;
@@ -181,7 +181,7 @@ mod tests {
         let reader = RecordBatchIterator::new(batches.into_iter(), record_batch.schema());
 
         // Connect and register embedding function
-        let db = connect(DB_URI).execute().await?;
+        let db = connect(&get_db_uri()).execute().await?;
 
         db.embedding_registry().register(
             "openai",
@@ -207,7 +207,7 @@ mod tests {
 
     /// Helper function to add more data to the database (creating a new version)
     async fn add_data_to_db() -> Result<u64, LanceError> {
-        let db = connect(DB_URI).execute().await?;
+        let db = connect(&get_db_uri()).execute().await?;
 
         // Register embedding function
         db.embedding_registry().register(
@@ -250,7 +250,7 @@ mod tests {
         let initial_version = setup_test_db().await.expect("Failed to setup test db");
 
         // Get initial row count
-        let db = connect(DB_URI)
+        let db = connect(&get_db_uri())
             .execute()
             .await
             .expect("Failed to connect to db");
@@ -354,7 +354,7 @@ mod tests {
         setup_test_db().await.expect("Failed to setup test db");
 
         // Get initial row count
-        let db = connect(DB_URI)
+        let db = connect(&get_db_uri())
             .execute()
             .await
             .expect("Failed to connect to db");

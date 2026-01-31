@@ -960,7 +960,6 @@ mod tests {
     use zqa_rag::constants::{
         DEFAULT_VOYAGE_EMBEDDING_DIM, DEFAULT_VOYAGE_EMBEDDING_MODEL, DEFAULT_VOYAGE_RERANK_MODEL,
     };
-    use zqa_rag::vector::lance::DB_URI;
 
     use crate::{
         cli::app::{process, run_query},
@@ -1012,9 +1011,13 @@ mod tests {
     async fn test_embed() {
         dotenv::dotenv().ok();
 
-        // Clean up any existing data directories
-        let _ = std::fs::remove_dir_all(format!("rag/{DB_URI}"));
-        let _ = std::fs::remove_dir_all(DB_URI);
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_uri = temp_dir
+            .path()
+            .join("lancedb-table")
+            .to_str()
+            .unwrap()
+            .to_string();
 
         let mut ctx = create_test_context();
 
@@ -1036,7 +1039,9 @@ mod tests {
         writer.finish().unwrap();
 
         // Actually call `embed`
-        let result = embed(&mut ctx, false).await;
+        let result =
+            temp_env::async_with_vars([("LANCEDB_URI", Some(&db_uri))], embed(&mut ctx, false))
+                .await;
         assert!(result.is_ok());
 
         let output = String::from_utf8(ctx.out.into_inner()).unwrap();
@@ -1056,20 +1061,29 @@ mod tests {
     async fn test_process() {
         dotenv::dotenv().ok();
 
-        // Clean up any existing data directories
-        let _ = std::fs::remove_dir_all(format!("rag/{DB_URI}"));
-        let _ = std::fs::remove_dir_all(DB_URI);
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_uri = temp_dir
+            .path()
+            .join("lancedb-table")
+            .to_str()
+            .unwrap()
+            .to_string();
 
         let mut ctx = create_test_context();
 
-        let result = temp_env::async_with_vars([("CI", Some("true"))], process(&mut ctx)).await;
+        let result = temp_env::async_with_vars(
+            [("CI", Some("true")), ("LANCEDB_URI", Some(&db_uri))],
+            process(&mut ctx),
+        )
+        .await;
 
         assert!(result.is_ok());
 
         let output = String::from_utf8(ctx.out.clone().into_inner()).unwrap();
         assert!(output.contains("Successfully parsed library!"));
 
-        let stats = stats(&mut ctx).await;
+        let stats =
+            temp_env::async_with_vars([("LANCEDB_URI", Some(&db_uri))], stats(&mut ctx)).await;
         let output = String::from_utf8(ctx.out.into_inner()).unwrap();
         assert!(stats.is_ok());
         assert!(output.contains("Table statistics:"));
@@ -1085,21 +1099,27 @@ mod tests {
     #[serial]
     async fn test_search_only() {
         dotenv::dotenv().ok();
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_uri = temp_dir
+            .path()
+            .join("lancedb-table")
+            .to_str()
+            .unwrap()
+            .to_string();
+
         let mut setup_ctx = create_test_context();
 
-        // Clean up any existing data directories
-        let _ = std::fs::remove_dir_all(format!("rag/{DB_URI}"));
-        let _ = std::fs::remove_dir_all(format!("zqa/{DB_URI}"));
-        let _ = std::fs::remove_dir_all(DB_URI);
-
         // `process` needs to be run before `search_for_papers`
-        let result =
-            temp_env::async_with_vars([("CI", Some("true"))], process(&mut setup_ctx)).await;
+        let result = temp_env::async_with_vars(
+            [("CI", Some("true")), ("LANCEDB_URI", Some(&db_uri))],
+            process(&mut setup_ctx),
+        )
+        .await;
         assert!(result.is_ok());
 
         let mut ctx = create_test_context();
         let result = temp_env::async_with_vars(
-            [("CI", Some("true"))],
+            [("CI", Some("true")), ("LANCEDB_URI", Some(&db_uri))],
             search_for_papers(
                 "How should I oversample in defect prediction?".into(),
                 &mut ctx,
@@ -1121,14 +1141,26 @@ mod tests {
     #[serial]
     async fn test_run_query() {
         dotenv::dotenv().ok();
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_uri = temp_dir
+            .path()
+            .join("lancedb-table")
+            .to_str()
+            .unwrap()
+            .to_string();
+
         let mut setup_ctx = create_test_context();
 
         // `process` needs to be run before `run_query`
-        let _ = temp_env::async_with_vars([("CI", Some("true"))], process(&mut setup_ctx)).await;
+        let _ = temp_env::async_with_vars(
+            [("CI", Some("true")), ("LANCEDB_URI", Some(&db_uri))],
+            process(&mut setup_ctx),
+        )
+        .await;
 
         let mut ctx = create_test_context();
         let result = temp_env::async_with_vars(
-            [("CI", Some("true"))],
+            [("CI", Some("true")), ("LANCEDB_URI", Some(&db_uri))],
             run_query(
                 "How should I oversample in defect prediction?".into(),
                 &mut ctx,
@@ -1147,14 +1179,21 @@ mod tests {
     async fn test_checkhealth_no_database() {
         dotenv::dotenv().ok();
 
-        // Clean up any existing data directories
-        let _ = std::fs::remove_dir_all(format!("rag/{DB_URI}"));
-        let _ = std::fs::remove_dir_all(DB_URI);
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_uri = temp_dir
+            .path()
+            .join("lancedb-table")
+            .to_str()
+            .unwrap()
+            .to_string();
 
         let mut ctx = create_test_context();
-        checkhealth(&mut ctx).await;
+        let output = temp_env::async_with_vars([("LANCEDB_URI", Some(&db_uri))], async move {
+            checkhealth(&mut ctx).await;
+            String::from_utf8(ctx.out.into_inner()).unwrap()
+        })
+        .await;
 
-        let output = String::from_utf8(ctx.out.into_inner()).unwrap();
         assert!(output.contains("directory does not exist"));
     }
 
@@ -1163,21 +1202,31 @@ mod tests {
     async fn test_checkhealth_with_database() {
         dotenv::dotenv().ok();
 
-        // Clean up any existing data directories
-        let _ = std::fs::remove_dir_all(format!("rag/{DB_URI}"));
-        let _ = std::fs::remove_dir_all(DB_URI);
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_uri = temp_dir
+            .path()
+            .join("lancedb-table")
+            .to_str()
+            .unwrap()
+            .to_string();
 
         // First create a database by running process
         let mut setup_ctx = create_test_context();
-        let result =
-            temp_env::async_with_vars([("CI", Some("true"))], process(&mut setup_ctx)).await;
+        let result = temp_env::async_with_vars(
+            [("CI", Some("true")), ("LANCEDB_URI", Some(&db_uri))],
+            process(&mut setup_ctx),
+        )
+        .await;
         assert!(result.is_ok());
 
         // Now run health check
         let mut ctx = create_test_context();
-        checkhealth(&mut ctx).await;
+        let output = temp_env::async_with_vars([("LANCEDB_URI", Some(&db_uri))], async move {
+            checkhealth(&mut ctx).await;
+            String::from_utf8(ctx.out.into_inner()).unwrap()
+        })
+        .await;
 
-        let output = String::from_utf8(ctx.out.into_inner()).unwrap();
         assert!(output.contains("LanceDB Health Check Results"));
         assert!(output.contains("directory exists"));
         assert!(output.contains("Table is accessible"));

@@ -2,6 +2,7 @@
 //! tools that can be called by the LLM. Tools are used to perform tasks such as summarizing
 //! conversations, generating text, and performing calculations.
 
+use futures::future::join_all;
 use schemars::Schema;
 use serde::Serialize;
 use serde::ser::SerializeMap;
@@ -202,51 +203,66 @@ pub async fn process_tool_calls<CHI>(
 where
     CHI: From<ChatHistoryItem>,
 {
-    for content in contents {
+    let futures = contents.iter().map(|content| async move {
         match content {
-            ChatHistoryContent::Text(s) => new_contents.push(ContentType::Text(s.clone())),
+            ChatHistoryContent::Text(s) => {
+                Ok::<_, LLMError>((Some(ContentType::Text(s.clone())), None))
+            }
             ChatHistoryContent::ToolCallResponse(tool_result) => {
                 // This is invalid, but technically we can recover by just ignoring it--so
                 // we will.
                 log::warn!(
                     "Got a tool result from the API response. This is not expected, and will be ignored. Tool result: {tool_result:#?}"
                 );
+                Ok((None, None))
             }
             ChatHistoryContent::ToolCallRequest(tool_call) => {
                 let tool_call_id = tool_call.id.clone();
-                let called_tool = tools.iter().find(|tool| tool.0.name() == tool_call.tool_name)
+                let called_tool = tools
+                    .iter()
+                    .find(|tool| tool.0.name() == tool_call.tool_name)
                     .ok_or_else(|| {
                         LLMError::ToolCallError(format!(
                             "Tool {} was called, but it does not exist in the passed list of tools.",
                             tool_call.tool_name
                         ))
-                    }
-                )?;
+                    })?;
 
                 let tool_result = match called_tool.0.call(tool_call.args.clone()).await {
                     Ok(res) => res,
                     Err(e) => Value::String(format!("Error calling tool: {e}")),
                 };
 
-                new_contents.push(ContentType::ToolCall(ToolUseStats {
-                    tool_call_id: tool_call.id.clone(),
+                let tool_use_stats = ToolUseStats {
+                    tool_call_id: tool_call_id.clone(),
                     tool_name: tool_call.tool_name.clone(),
                     tool_args: tool_call.args.clone(),
                     tool_result: tool_result.clone(),
-                }));
+                };
 
-                chat_history.push(
-                    ChatHistoryItem {
-                        role: USER_ROLE.into(),
-                        content: vec![ChatHistoryContent::ToolCallResponse(ToolCallResponse {
-                            id: tool_call_id,
-                            tool_name: tool_call.tool_name.clone(),
-                            result: tool_result,
-                        })],
-                    }
-                    .into(),
-                );
+                let chat_history_item = ChatHistoryItem {
+                    role: USER_ROLE.into(),
+                    content: vec![ChatHistoryContent::ToolCallResponse(ToolCallResponse {
+                        id: tool_call_id,
+                        tool_name: tool_call.tool_name.clone(),
+                        result: tool_result,
+                    })],
+                };
+
+                Ok((Some(ContentType::ToolCall(tool_use_stats)), Some(chat_history_item)))
             }
+        }
+    });
+
+    let results = join_all(futures).await;
+
+    for result in results {
+        let (content_opt, history_opt) = result?;
+        if let Some(content) = content_opt {
+            new_contents.push(content);
+        }
+        if let Some(history) = history_opt {
+            chat_history.push(history.into());
         }
     }
 
@@ -310,5 +326,98 @@ pub(crate) mod test_utils {
                 serde_json::to_value(greeting).map_err(|e| format!("Error: {e}"))
             })
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::llm::base::{ChatHistoryContent, ChatHistoryItem, ContentType, ToolCallRequest};
+    use schemars::{JsonSchema, schema_for};
+    use serde::Deserialize;
+    use serde_json::{Value, json};
+    use std::future::Future;
+    use std::pin::Pin;
+    use std::time::Instant;
+
+    #[derive(Debug)]
+    pub(crate) struct SlowTool {
+        pub delay: std::time::Duration,
+    }
+
+    #[derive(Deserialize, JsonSchema)]
+    pub(crate) struct SlowToolInput;
+
+    impl Tool for SlowTool {
+        fn name(&self) -> String {
+            "slow_tool".into()
+        }
+
+        fn description(&self) -> String {
+            "A slow tool".into()
+        }
+
+        fn parameters(&self) -> Schema {
+            schema_for!(SlowToolInput)
+        }
+
+        fn schema_key(&self) -> String {
+            "input_schema".into()
+        }
+
+        fn call(
+            &self,
+            _args: Value,
+        ) -> Pin<Box<dyn Future<Output = Result<Value, String>> + Send>> {
+            let delay = self.delay;
+            Box::pin(async move {
+                tokio::time::sleep(delay).await;
+                Ok(Value::String("Done".to_string()))
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn test_concurrent_execution() {
+        let tool = SlowTool {
+            delay: std::time::Duration::from_millis(500),
+        };
+        let boxed_tool: Box<dyn Tool> = Box::new(tool);
+        let tools = vec![boxed_tool];
+        let serialized_tools = get_owned_tools(Some(&tools)).unwrap();
+
+        let contents = vec![
+            ChatHistoryContent::ToolCallRequest(ToolCallRequest {
+                id: "1".into(),
+                tool_name: "slow_tool".into(),
+                args: json!({}),
+            }),
+            ChatHistoryContent::ToolCallRequest(ToolCallRequest {
+                id: "2".into(),
+                tool_name: "slow_tool".into(),
+                args: json!({}),
+            }),
+        ];
+
+        let mut chat_history: Vec<ChatHistoryItem> = vec![];
+        let mut new_contents: Vec<ContentType> = vec![];
+
+        let start = Instant::now();
+        process_tool_calls(
+            &mut chat_history,
+            &mut new_contents,
+            &contents,
+            &serialized_tools,
+        )
+        .await
+        .unwrap();
+        let duration = start.elapsed();
+
+        println!("Execution time: {duration:?}");
+        // Expect ~500ms for concurrent execution
+        assert!(duration.as_millis() < 1000);
+        // Ensure that we processed two tool calls
+        assert_eq!(chat_history.len(), 2);
+        assert_eq!(new_contents.len(), 2);
     }
 }

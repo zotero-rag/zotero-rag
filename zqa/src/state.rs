@@ -67,6 +67,10 @@ impl From<io::Error> for StateError {
 /// * `StateError::DirectoryError` if the user's base directory could not be obtained. See
 ///   `directories::BaseDirError` for when this can occur.
 pub(crate) fn get_state_dir() -> Result<PathBuf, StateError> {
+    if let Ok(dir) = std::env::var("ZQA_STATE_DIR") {
+        return Ok(PathBuf::from(dir));
+    }
+
     let base_dir = directories::BaseDirs::new().ok_or(StateError::DirectoryError)?;
 
     let alt_state_dir = base_dir.home_dir().join(".local").join("state");
@@ -688,74 +692,71 @@ mod tests {
 
     #[test]
     fn test_get_conversation_history() {
-        let state_dir = get_state_dir().unwrap();
+        let temp_dir = tempfile::tempdir().unwrap();
+        temp_env::with_var("ZQA_STATE_DIR", Some(temp_dir.path()), || {
+            let state_dir = get_state_dir().unwrap();
 
-        if state_dir.exists() {
-            let _ = fs::remove_dir_all(state_dir);
-        }
+            if state_dir.exists() {
+                let _ = fs::remove_dir_all(&state_dir);
+            }
 
-        assert_eq!(get_conversation_history(), Ok(None));
+            assert_eq!(get_conversation_history(), Ok(None));
+        });
     }
 
     #[test]
     fn test_save_conversation_creates_dirs() {
-        let state_dir = get_state_dir().unwrap();
+        let temp_dir = tempfile::tempdir().unwrap();
+        temp_env::with_var("ZQA_STATE_DIR", Some(temp_dir.path()), || {
+            let conversation = SavedChatHistory {
+                date: Local::now(),
+                title: "foo".into(),
+                history: vec![ChatHistoryItem {
+                    role: USER_ROLE.into(),
+                    content: vec![ChatHistoryContent::Text("Hello!".into())],
+                }],
+            };
 
-        if state_dir.exists() {
-            let _ = fs::remove_dir_all(state_dir);
-        }
-
-        let conversation = SavedChatHistory {
-            date: Local::now(),
-            title: "foo".into(),
-            history: vec![ChatHistoryItem {
-                role: USER_ROLE.into(),
-                content: vec![ChatHistoryContent::Text("Hello!".into())],
-            }],
-        };
-
-        let result = save_conversation(&conversation);
-        let state_dir = get_state_dir().unwrap();
-        assert!(result.is_ok());
-        assert!(state_dir.exists());
+            let result = save_conversation(&conversation);
+            let state_dir = get_state_dir().unwrap();
+            assert!(result.is_ok());
+            assert!(state_dir.exists());
+        });
     }
 
     #[test]
     fn test_get_conversation_history_works() {
-        let state_dir = get_state_dir().unwrap();
+        let temp_dir = tempfile::tempdir().unwrap();
+        temp_env::with_var("ZQA_STATE_DIR", Some(temp_dir.path()), || {
+            let conversation = SavedChatHistory {
+                date: Local::now(),
+                title: "foo".into(),
+                history: vec![ChatHistoryItem {
+                    role: USER_ROLE.into(),
+                    content: vec![ChatHistoryContent::Text("Hello!".into())],
+                }],
+            };
 
-        if state_dir.exists() {
-            let _ = fs::remove_dir_all(state_dir);
-        }
+            let result = save_conversation(&conversation);
+            assert!(result.is_ok());
 
-        let conversation = SavedChatHistory {
-            date: Local::now(),
-            title: "foo".into(),
-            history: vec![ChatHistoryItem {
-                role: USER_ROLE.into(),
-                content: vec![ChatHistoryContent::Text("Hello!".into())],
-            }],
-        };
+            let conversations = get_conversation_history();
+            assert!(conversations.is_ok());
 
-        let result = save_conversation(&conversation);
-        assert!(result.is_ok());
+            let conversations = conversations.unwrap();
+            assert!(conversations.is_some());
 
-        let conversations = get_conversation_history();
-        assert!(conversations.is_ok());
-
-        let conversations = conversations.unwrap();
-        assert!(conversations.is_some());
-
-        let conversations = conversations.unwrap();
-        assert_eq!(conversations.len(), 1);
-        assert_eq!(conversations[0].title, "foo");
-        assert_eq!(conversations[0].history.len(), 1);
-        assert_eq!(conversations[0].history[0].role, USER_ROLE);
-        assert_eq!(conversations[0].history[0].content.len(), 1);
-        assert_eq!(
-            conversations[0].history[0].content[0],
-            ChatHistoryContent::Text("Hello!".into())
-        );
+            let conversations = conversations.unwrap();
+            assert_eq!(conversations.len(), 1);
+            assert_eq!(conversations[0].title, "foo");
+            assert_eq!(conversations[0].history.len(), 1);
+            assert_eq!(conversations[0].history[0].role, USER_ROLE);
+            assert_eq!(conversations[0].history[0].content.len(), 1);
+            assert_eq!(
+                conversations[0].history[0].content[0],
+                ChatHistoryContent::Text("Hello!".into())
+            );
+        });
     }
 
     #[test]
