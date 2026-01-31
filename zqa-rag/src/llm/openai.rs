@@ -99,7 +99,7 @@ where
         &self,
         source: Arc<dyn arrow_array::Array>,
     ) -> Result<Arc<dyn arrow_array::Array>, LLMError> {
-        compute_openai_embeddings_sync(source)
+        compute_openai_embeddings_sync(source, self.config.as_ref())
     }
 }
 
