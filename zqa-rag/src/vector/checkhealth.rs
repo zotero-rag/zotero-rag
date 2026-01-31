@@ -4,7 +4,7 @@
 use crate::embedding::common::get_embedding_dims_by_provider;
 
 use super::lance::LanceError;
-use super::lance::{get_db_uri, TABLE_NAME};
+use super::lance::{TABLE_NAME, get_db_uri};
 use arrow_array::RecordBatch;
 use futures::TryStreamExt;
 use lancedb::query::{ExecutableQuery, QueryBase};
