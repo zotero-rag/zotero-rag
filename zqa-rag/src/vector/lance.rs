@@ -33,6 +33,7 @@ use thiserror::Error;
 pub const DB_URI: &str = "data/lancedb-table";
 
 /// Returns the database URI, allowing override via `LANCEDB_URI` environment variable.
+#[must_use]
 pub fn get_db_uri() -> String {
     std::env::var("LANCEDB_URI").unwrap_or_else(|_| DB_URI.to_string())
 }

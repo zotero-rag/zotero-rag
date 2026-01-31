@@ -331,19 +331,14 @@ pub async fn vector_search(
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
-
     use crate::{common::setup_logger, config::VoyageAIConfig};
 
     use super::*;
     use arrow_array::RecordBatchIterator;
     use dotenv::dotenv;
-    use zqa_rag::{
-        constants::{
-            DEFAULT_VOYAGE_EMBEDDING_DIM, DEFAULT_VOYAGE_EMBEDDING_MODEL,
-            DEFAULT_VOYAGE_RERANK_MODEL,
-        },
-        vector::lance::TABLE_NAME,
+    use zqa_rag::constants::{
+        DEFAULT_VOYAGE_EMBEDDING_DIM, DEFAULT_VOYAGE_EMBEDDING_MODEL,
+        DEFAULT_VOYAGE_RERANK_MODEL,
     };
 
     fn get_config() -> Config {
@@ -365,13 +360,22 @@ mod tests {
     async fn test_library_to_arrow_works() {
         dotenv().ok();
         let _ = setup_logger(log::LevelFilter::Info);
-        let _ = fs::remove_dir_all(TABLE_NAME);
-        let _ = fs::remove_dir_all(format!("zqa/{TABLE_NAME}"));
-        let _ = fs::remove_dir_all(format!("rag/{TABLE_NAME}"));
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_uri = temp_dir
+            .path()
+            .join("lancedb-table")
+            .to_str()
+            .unwrap()
+            .to_string();
 
         let config = get_config();
 
-        let record_batch = full_library_to_arrow(&config, Some(0), Some(5)).await;
+        let record_batch = temp_env::async_with_vars([("LANCEDB_URI", Some(&db_uri))], async {
+            full_library_to_arrow(&config, Some(0), Some(5)).await
+        })
+        .await;
+
         assert!(
             record_batch.is_ok(),
             "Failed to fetch library: {:?}",
