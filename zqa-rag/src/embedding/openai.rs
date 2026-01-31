@@ -29,12 +29,15 @@ async fn get_openai_embedding(
     text: String,
     api_key: String,
     model: String,
+    dimensions: Option<u32>,
 ) -> Result<Vec<f32>, LLMError> {
     #[derive(Serialize)]
     struct EmbeddingRequest {
         model: String,
         input: String,
         encoding_format: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        dimensions: Option<u32>,
     }
 
     // Adding #[allow(dead_code)] to suppress warnings for fields required by the API
@@ -68,6 +71,7 @@ async fn get_openai_embedding(
         model,
         input: text,
         encoding_format: "float".to_string(),
+        dimensions,
     };
 
     let response = client
@@ -114,20 +118,32 @@ pub async fn compute_openai_embeddings_async(
         .filter_map(|s| Some(s?.to_owned()))
         .collect();
 
-    let (api_key, model) = if let Some(config) = config {
-        (config.api_key.clone(), config.embedding_model.clone())
-    } else {
+    let (api_key, model, dimensions) = if let Some(config) = config {
         (
-            env::var("OPENAI_API_KEY")?,
-            env::var("OPENAI_EMBEDDING_MODEL")
-                .unwrap_or(DEFAULT_OPENAI_EMBEDDING_MODEL.to_string()),
+            config.api_key.clone(),
+            config.embedding_model.clone(),
+            Some(config.embedding_dims as u32),
         )
+    } else {
+        let model = env::var("OPENAI_EMBEDDING_MODEL")
+            .unwrap_or(DEFAULT_OPENAI_EMBEDDING_MODEL.to_string());
+        let dimensions = if model.contains("text-embedding-3") {
+            Some(DEFAULT_OPENAI_EMBEDDING_DIM)
+        } else {
+            None
+        };
+        (env::var("OPENAI_API_KEY")?, model, dimensions)
     };
 
     // Create a stream of futures
-    let futures = texts
-        .iter()
-        .map(|text| get_openai_embedding(text.clone(), api_key.clone(), model.clone()));
+    let futures = texts.iter().map(|text| {
+        get_openai_embedding(
+            text.clone(),
+            api_key.clone(),
+            model.clone(),
+            dimensions.clone(),
+        )
+    });
 
     // Convert to a stream and process with buffer_unordered to limit concurrency
     let max_concurrent = env::var("MAX_CONCURRENT_REQUESTS")
