@@ -28,6 +28,7 @@ use std::sync::Arc;
 ///
 /// If successful, a `Vec<Vec<f32>>` containing the embeddings in the same order as input.
 async fn get_openai_embeddings(
+    client: &reqwest::Client,
     texts: Vec<String>,
     api_key: String,
     model: String,
@@ -65,7 +66,6 @@ async fn get_openai_embeddings(
         data: Vec<EmbeddingResponseData>,
     }
 
-    let client = reqwest::Client::new();
     let request_body = EmbeddingRequest {
         model,
         input: texts,
@@ -130,22 +130,17 @@ pub async fn compute_openai_embeddings_async(
         )
     };
 
+    let client = reqwest::Client::new();
     // Create a stream of futures
-<<<<<<< HEAD
     // Batch size of 100 to respect API limits and efficiency
-    let batch_size = 100;
-    let futures = texts
-        .chunks(batch_size)
-        .map(|chunk| get_openai_embeddings(chunk.to_vec(), api_key.clone(), model.clone()));
-||||||| parent of 36c0d4d (Fix formatting in openai.rs)
-    let futures = texts.iter().map(|text| {
-        get_openai_embedding(&client, text.clone(), api_key.clone(), model.clone())
+    let batch_size = env::var("OPENAI_EMBEDDING_BATCH_SIZE")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(100);
+
+    let futures = texts.chunks(batch_size).map(|chunk| {
+        get_openai_embeddings(&client, chunk.to_vec(), api_key.clone(), model.clone())
     });
-=======
-    let futures = texts
-        .iter()
-        .map(|text| get_openai_embedding(&client, text.clone(), api_key.clone(), model.clone()));
->>>>>>> 36c0d4d (Fix formatting in openai.rs)
 
     // Convert to a stream and process with buffered to limit concurrency but preserve order
     let max_concurrent = env::var("MAX_CONCURRENT_REQUESTS")
@@ -162,10 +157,7 @@ pub async fn compute_openai_embeddings_async(
     // Process results and construct Arrow array
     let mut embeddings: Vec<Vec<f32>> = Vec::with_capacity(texts.len());
     for result in results {
-        match result {
-            Ok(batch_embeddings) => embeddings.extend(batch_embeddings),
-            Err(e) => return Err(e),
-        }
+        embeddings.extend(result?);
     }
 
     // Convert to Arrow FixedSizeListArray
