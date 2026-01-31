@@ -99,7 +99,7 @@ where
         &self,
         source: Arc<dyn arrow_array::Array>,
     ) -> Result<Arc<dyn arrow_array::Array>, LLMError> {
-        compute_openai_embeddings_sync(source, self.config.as_ref())
+        compute_openai_embeddings_sync(source)
     }
 }
 
@@ -751,7 +751,9 @@ mod tests {
     async fn test_compute_embeddings() {
         dotenv().ok();
         // SAFETY: Setting environment variable for test configuration
-        unsafe { std::env::set_var("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small"); }
+        unsafe {
+            std::env::set_var("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small");
+        }
 
         let array = arrow_array::StringArray::from(vec![
             "Hello, World!",
