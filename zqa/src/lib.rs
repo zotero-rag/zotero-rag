@@ -3,7 +3,7 @@
 #![allow(clippy::cast_precision_loss)]
 #![allow(clippy::cast_possible_wrap)]
 
-use std::io::{self, stderr, stdout, IsTerminal};
+use std::io::{self, IsTerminal, stderr, stdout};
 
 use clap::Parser;
 
