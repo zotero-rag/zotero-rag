@@ -26,6 +26,7 @@ use std::sync::Arc;
 ///
 /// If successful, a `Vec<f32>` containing the embeddings.
 async fn get_openai_embedding(
+    client: &reqwest::Client,
     text: String,
     api_key: String,
     model: String,
@@ -124,10 +125,11 @@ pub async fn compute_openai_embeddings_async(
         )
     };
 
+    let client = reqwest::Client::new();
     // Create a stream of futures
     let futures = texts
         .iter()
-        .map(|text| get_openai_embedding(text.clone(), api_key.clone(), model.clone()));
+        .map(|text| get_openai_embedding(&client, text.clone(), api_key.clone(), model.clone()));
 
     // Convert to a stream and process with buffer_unordered to limit concurrency
     let max_concurrent = env::var("MAX_CONCURRENT_REQUESTS")
