@@ -333,10 +333,12 @@ pub(crate) mod test_utils {
 mod tests {
     use super::*;
     use crate::llm::base::{ChatHistoryContent, ChatHistoryItem, ContentType, ToolCallRequest};
-    use std::time::Instant;
-    use serde_json::json;
     use schemars::{JsonSchema, schema_for};
     use serde::Deserialize;
+    use serde_json::{Value, json};
+    use std::future::Future;
+    use std::pin::Pin;
+    use std::time::Instant;
 
     #[derive(Debug)]
     pub(crate) struct SlowTool {
@@ -344,8 +346,7 @@ mod tests {
     }
 
     #[derive(Deserialize, JsonSchema)]
-    pub(crate) struct SlowToolInput {
-    }
+    pub(crate) struct SlowToolInput {}
 
     impl Tool for SlowTool {
         fn name(&self) -> String {
@@ -378,7 +379,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_concurrent_execution() {
-        let tool = SlowTool { delay: std::time::Duration::from_millis(500) };
+        let tool = SlowTool {
+            delay: std::time::Duration::from_millis(500),
+        };
         let boxed_tool: Box<dyn Tool> = Box::new(tool);
         let tools = vec![boxed_tool];
         let serialized_tools = get_owned_tools(Some(&tools)).unwrap();
@@ -400,7 +403,14 @@ mod tests {
         let mut new_contents: Vec<ContentType> = vec![];
 
         let start = Instant::now();
-        process_tool_calls(&mut chat_history, &mut new_contents, &contents, &serialized_tools).await.unwrap();
+        process_tool_calls(
+            &mut chat_history,
+            &mut new_contents,
+            &contents,
+            &serialized_tools,
+        )
+        .await
+        .unwrap();
         let duration = start.elapsed();
 
         println!("Execution time: {:?}", duration);
