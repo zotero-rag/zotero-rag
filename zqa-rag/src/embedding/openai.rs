@@ -131,11 +131,21 @@ pub async fn compute_openai_embeddings_async(
     };
 
     // Create a stream of futures
+<<<<<<< HEAD
     // Batch size of 100 to respect API limits and efficiency
     let batch_size = 100;
     let futures = texts
         .chunks(batch_size)
         .map(|chunk| get_openai_embeddings(chunk.to_vec(), api_key.clone(), model.clone()));
+||||||| parent of 36c0d4d (Fix formatting in openai.rs)
+    let futures = texts.iter().map(|text| {
+        get_openai_embedding(&client, text.clone(), api_key.clone(), model.clone())
+    });
+=======
+    let futures = texts
+        .iter()
+        .map(|text| get_openai_embedding(&client, text.clone(), api_key.clone(), model.clone()));
+>>>>>>> 36c0d4d (Fix formatting in openai.rs)
 
     // Convert to a stream and process with buffered to limit concurrency but preserve order
     let max_concurrent = env::var("MAX_CONCURRENT_REQUESTS")
