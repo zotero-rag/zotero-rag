@@ -65,7 +65,6 @@ async fn get_openai_embeddings(
         data: Vec<EmbeddingResponseData>,
     }
 
-    let client = reqwest::Client::new();
     let request_body = EmbeddingRequest {
         model,
         input: texts,
