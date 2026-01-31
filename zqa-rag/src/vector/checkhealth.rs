@@ -4,7 +4,7 @@
 use crate::embedding::common::get_embedding_dims_by_provider;
 
 use super::lance::LanceError;
-use super::lance::{TABLE_NAME, get_db_uri};
+use super::lance::{DB_URI, TABLE_NAME};
 use arrow_array::RecordBatch;
 use futures::TryStreamExt;
 use lancedb::query::{ExecutableQuery, QueryBase};
@@ -309,8 +309,7 @@ pub async fn lancedb_health_check(
     };
 
     // Check 1: Directory existence and size
-    let db_uri = get_db_uri();
-    let db_path = PathBuf::from(&db_uri);
+    let db_path = PathBuf::from(DB_URI);
     result.directory_exists = db_path.exists();
 
     if result.directory_exists {
@@ -321,7 +320,7 @@ pub async fn lancedb_health_check(
     }
 
     // Check 2: Table connectivity
-    let db_connection = connect(&db_uri).execute().await;
+    let db_connection = connect(DB_URI).execute().await;
     if let Err(e) = db_connection {
         // Capture the error
         result.table_accessible = Some(Err(LanceError::ConnectionError(e.to_string())));
@@ -375,7 +374,7 @@ mod tests {
     use crate::constants::DEFAULT_VOYAGE_EMBEDDING_MODEL;
     use crate::constants::DEFAULT_VOYAGE_RERANK_MODEL;
     use crate::embedding::common::EmbeddingProviderConfig;
-    use crate::vector::lance::get_db_uri;
+    use crate::vector::lance::DB_URI;
     use crate::vector::lance::insert_records;
     use arrow_array::{RecordBatch, RecordBatchIterator, StringArray};
     use dotenv::dotenv;
@@ -390,8 +389,8 @@ mod tests {
         dotenv().ok();
 
         // Clean up any existing data
-        let _ = std::fs::remove_dir_all(get_db_uri());
-        let _ = std::fs::remove_dir_all(format!("rag/{}", get_db_uri()));
+        let _ = std::fs::remove_dir_all(DB_URI);
+        let _ = std::fs::remove_dir_all(format!("rag/{DB_URI}"));
 
         let result = lancedb_health_check("voyageai").await;
         assert!(result.is_ok());
@@ -409,7 +408,7 @@ mod tests {
         dotenv().ok();
 
         // Clean up any existing data
-        let _ = std::fs::remove_dir_all(get_db_uri());
+        let _ = std::fs::remove_dir_all(DB_URI);
 
         // Create a test database first
         let schema = arrow_schema::Schema::new(vec![

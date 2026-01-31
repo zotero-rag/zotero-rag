@@ -77,7 +77,7 @@ where
         &self,
         source: Arc<dyn arrow_array::Array>,
     ) -> Result<Arc<dyn arrow_array::Array>, LLMError> {
-        compute_openai_embeddings_sync(source, None)
+        compute_openai_embeddings_sync(source)
     }
 }
 
