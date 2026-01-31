@@ -2,7 +2,11 @@
 
 use chrono::{DateTime, Local};
 use serde::{Deserialize, Serialize};
-use std::{fs, io, path::PathBuf};
+use std::{
+    fs,
+    io::{self, IsTerminal},
+    path::PathBuf,
+};
 use thiserror::Error;
 use zqa_rag::llm::base::ChatHistoryItem;
 
@@ -179,6 +183,15 @@ fn read_line() -> String {
     input
 }
 
+/// Read a password from standard input.
+fn read_password() -> String {
+    if io::stdin().is_terminal() {
+        rpassword::read_password().expect("Failed to read password")
+    } else {
+        read_line()
+    }
+}
+
 /// Read a character from standard input and return it, handling Enter as a default.
 ///
 /// # Arguments:
@@ -276,9 +289,8 @@ pub(crate) fn oobe() -> Result<(), StateError> {
     println!();
     let model_provider = read_char('a', &['a', 'o', 'g', 'r']);
 
-    // TODO: Ideally we want to enable the password mode that some shells support.
     println!("Enter your model provider's API key: ");
-    let model_api_key = read_line().trim().to_string();
+    let model_api_key = read_password().trim().to_string();
     println!();
 
     config.model_provider = match model_provider {
@@ -319,7 +331,9 @@ pub(crate) fn oobe() -> Result<(), StateError> {
     } else {
         println!("Enter your embedding provider's API key: ");
         println!();
-        read_line().trim().to_string()
+        let key = read_password().trim().to_string();
+        println!();
+        key
     };
 
     println!("What provider do you want to use for reranking results?");
@@ -351,7 +365,9 @@ pub(crate) fn oobe() -> Result<(), StateError> {
     } else {
         println!("Enter your reranker provider's API key: ");
         println!();
-        read_line().trim().to_string()
+        let key = read_password().trim().to_string();
+        println!();
+        key
     };
 
     // The 100k and 150k are somewhat napkin math-based, but pretty decent. In practice, embedding providers usually
