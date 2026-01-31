@@ -6857,6 +6857,7 @@ dependencies = [
  "serde_json",
  "serial_test",
  "temp-env",
+ "tempfile",
  "thiserror 1.0.69",
  "tokio",
  "toml",
