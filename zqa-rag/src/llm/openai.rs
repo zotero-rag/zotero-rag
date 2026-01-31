@@ -869,7 +869,7 @@ mod tests {
         for i in 0..5 {
             contents.push(OpenAIRequestInput::FunctionCall(
                 OpenAIRequestToolCallInputItem {
-                    call_id: format!("call_{}", i),
+                    call_id: format!("call_{i}"),
                     r#type: "function_call".into(),
                     name: "slow_tool".into(),
                     arguments: serde_json::json!({ "name": "Test" }),
@@ -891,15 +891,14 @@ mod tests {
         .expect("Failed to process tool calls");
         let duration = start.elapsed();
 
-        println!("Duration: {:?}", duration);
+        println!("Duration: {duration:?}");
 
         // Expect concurrent execution: approx 100ms.
         // It should be definitely less than 500ms.
         // Let's say < 200ms to be safe (overhead + sleep).
         assert!(
             duration < delay * 2,
-            "Expected concurrent execution, took {:?}",
-            duration
+            "Expected concurrent execution, took {duration:?}",
         );
     }
 }
