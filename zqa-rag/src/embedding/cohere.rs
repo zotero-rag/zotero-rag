@@ -3,7 +3,7 @@
 
 use super::common::{EmbeddingApiRequestTexts, EmbeddingApiResponse};
 use crate::{
-    capabilities::EmbeddingProviders,
+    capabilities::EmbeddingProvider,
     constants::{
         DEFAULT_COHERE_EMBEDDING_DIM, DEFAULT_COHERE_EMBEDDING_MODEL, DEFAULT_COHERE_RERANK_MODEL,
     },
@@ -81,7 +81,7 @@ where
                 "https://api.cohere.com/v2/embed",
                 &api_key,
                 self.client.clone(),
-                EmbeddingProviders::Cohere.as_str().to_string(),
+                EmbeddingProvider::Cohere.as_str().to_string(),
                 BATCH_SIZE,
                 WAIT_AFTER_REQUEST_S,
                 DEFAULT_COHERE_EMBEDDING_DIM as usize,

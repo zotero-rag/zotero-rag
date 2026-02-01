@@ -303,10 +303,6 @@ pub fn parse_library_metadata(
 /// # Arguments
 ///
 /// * `item` - The item whose metadata needs to be filled in
-///
-/// # Returns
-///
-/// A unit type wrapped in a `Result`.
 fn get_authors_for_item(item: &mut ZoteroItem) -> Result<(), LibraryParsingError> {
     if let Some(path) = get_lib_path() {
         let conn = Connection::open(path.join("zotero.sqlite"))?;
@@ -351,10 +347,6 @@ fn get_authors_for_item(item: &mut ZoteroItem) -> Result<(), LibraryParsingError
 /// # Arguments
 ///
 /// * `items` - The items whose metadata needs to be filled in.
-///
-/// # Returns
-///
-/// A `Result` describing if the operation was successful.
 ///
 /// # Errors
 ///

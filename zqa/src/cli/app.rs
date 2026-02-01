@@ -11,7 +11,7 @@ use chrono::Local;
 use lancedb::embeddings::EmbeddingDefinition;
 use rustyline::error::ReadlineError;
 use tokio::task::JoinSet;
-use zqa_rag::capabilities::ModelProviders;
+use zqa_rag::capabilities::ModelProvider;
 use zqa_rag::config::LLMClientConfig;
 use zqa_rag::llm::base::{
     ASSISTANT_ROLE, ApiClient, ChatHistoryContent, ChatHistoryItem, ChatRequest,
@@ -481,7 +481,7 @@ async fn run_query<O: Write, E: Write>(
         "{DIM_TEXT}Vector search completed in {vector_search_duration:.2?}{RESET}"
     )?;
 
-    if !ModelProviders::contains(&model_provider) {
+    if !ModelProvider::contains(&model_provider) {
         return Err(CLIError::LLMError(format!(
             "Model provider {model_provider} is not valid."
         )));

@@ -97,11 +97,28 @@ impl std::hash::Hash for SectionBoundary {
 
 /// The return type of `parse_content`. This includes the extracted text and the detected section
 /// boundaries.
+#[derive(Debug, Clone)]
 pub struct ExtractedContent {
     /// The extracted text
     pub text_content: String,
     /// The list of detected section boundaries
     pub sections: Vec<SectionBoundary>,
+    /// Page count
+    pub page_count: usize,
+}
+
+impl ExtractedContent {
+    /// Get the length of the content
+    #[must_use]
+    pub const fn len(&self) -> usize {
+        self.text_content.len()
+    }
+
+    /// Check if there is any content present.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
 }
 
 /// A lazy-loaded hashmap of octal character replacements post-parsing.
@@ -1194,6 +1211,7 @@ pub fn extract_text(file_path: &str) -> Result<ExtractedContent, Box<dyn Error>>
     Ok(ExtractedContent {
         text_content: full_text,
         sections,
+        page_count,
     })
 }
 
