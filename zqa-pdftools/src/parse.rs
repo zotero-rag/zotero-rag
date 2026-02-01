@@ -479,38 +479,6 @@ impl PdfParser {
         }
     }
 
-    fn contains_unescaped(&self, content: &str, ch: char) -> bool {
-        self.find_next_unescaped(content, ch).is_some()
-    }
-
-    #[allow(clippy::unused_self)]
-    fn find_next_unescaped(&self, content: &str, ch: char) -> Option<usize> {
-        let mut start_idx: usize = 0;
-
-        loop {
-            let rel = content.get(start_idx..)?.find(ch)?;
-            let idx = start_idx + rel;
-
-            // If the match is preceded by a backslash, it may be escaped. Count
-            // the number of consecutive backslashes immediately preceding it.
-            let mut escape_count = 0;
-            for c in content[..idx].chars().rev() {
-                if c == '\\' {
-                    escape_count += 1;
-                } else {
-                    break;
-                }
-            }
-
-            if escape_count % 2 == 0 {
-                return Some(idx);
-            }
-
-            // Continue searching after this escaped occurrence
-            start_idx = idx + 1;
-        }
-    }
-
     /// Get the `N` whitespace-separated words in `content` before position `pos`. This is used to
     /// get the operators for a PDF command.
     ///
@@ -1011,9 +979,8 @@ impl PdfParser {
                 .ok_or(PdfError::ContentError)?;
 
             // We need to match the ] immediately preceding TJ with its [, but papers have references
-            // that are written inside [], so a naive method doesn't work. Yes--right now, this doesn't
-            // need a stack, but if it turns out we need to do this for other characters, we might want
-            // it later.
+            // that are written inside [], so a naive method doesn't work. We use a stack to find
+            // the matching opening bracket.
             let mut begin_idx = end_idx;
             let mut stack = Vec::with_capacity(50);
             while let Some(val) =
@@ -1024,7 +991,7 @@ impl PdfParser {
                     stack.push(']');
                 } else if char_at_val == '[' {
                     if stack.is_empty() {
-                        parsed += "[";
+                        begin_idx = val + 1; // Start after the '['
                         break;
                     }
                     if let Some(']') = stack.last() {
@@ -1035,89 +1002,10 @@ impl PdfParser {
                 begin_idx = val;
             }
 
-            let mut cur_content = &content[cur_parse_idx..][begin_idx..end_idx];
-            let font_id = self.cur_font_id.clone();
-
-            /* Here's our strategy. We'll look for pairs of (), consuming words inside.
-             * Then, we'll consume an integer. If that integer is less than SAME_WORD_THRESHOLD, the next
-             * chunk will be appended to the current word. Otherwise, we add a space.
-             *
-             * For CID-keyed fonts, the delimiters are <>, not (), but the remaining idea is quite similar. Here,
-             * we consume words inside the <> pair, and split them into 2-byte (4 hex character) chunks. We look those
-             * up in the font's CID map, and then convert them to the corresponding glyph.
-             */
-            let delimiters = if self.contains_unescaped(cur_content, '(') {
-                ('(', ')')
-            } else {
-                ('<', '>')
-            };
-
-            // TODO: Handle paragraphs
-            while self.contains_unescaped(cur_content, delimiters.0) {
-                let idx1 = self
-                    .find_next_unescaped(cur_content, delimiters.0)
-                    .ok_or(PdfError::ContentError)?;
-                let idx2 = self
-                    .find_next_unescaped(cur_content, delimiters.1)
-                    .ok_or(PdfError::ContentError)?;
-
-                if idx1 >= idx2 {
-                    break;
-                }
-
-                // Skip if we don't have a valid font ID yet
-                if font_id.is_empty() {
-                    cur_content = &cur_content[idx2 + 1..];
-                    continue;
-                }
-
-                let font_encoding = self.is_cid_keyed_font(doc, page_id, &font_id)?;
-                match font_encoding {
-                    // If it's a simple font encoding, the only complications are with math fonts.
-                    FontEncoding::Simple => {
-                        if let Some(transform) = FONT_TRANSFORMS.get(self.cur_font.as_str()) {
-                            parsed += &font_transform(&cur_content[idx1 + 1..idx2], *transform);
-                        } else {
-                            parsed += &cur_content[idx1 + 1..idx2];
-                        }
-                    }
-                    FontEncoding::CIDKeyed(cmap) => {
-                        // Read &cur_content[idx1 + 1..idx2] 4 characters (2 hex-bytes) at a time, and apply the CMap.
-                        let text = &cur_content[idx1 + 1..idx2];
-                        let mut i = 0;
-                        while i + 4 <= text.len() {
-                            let cid = &text[i..i + 4].to_lowercase();
-                            if let Some(unicode) = cmap.get(cid) {
-                                parsed += unicode;
-                            } else {
-                                // If CID not found in map, log warning and skip
-                                log::warn!("CID {cid} not found in ToUnicode CMap");
-                            }
-                            i += 4;
-                        }
-                    }
-                }
-
-                if !self.contains_unescaped(&cur_content[idx2..], delimiters.0) {
-                    parsed += " ";
-                    break;
-                }
-
-                let idx3 = self
-                    .find_next_unescaped(&cur_content[idx2..], delimiters.0)
-                    .unwrap()
-                    + idx2;
-                let spacing = cur_content[idx2 + 1..idx3]
-                    .parse::<f32>()
-                    .unwrap_or(self.config.same_word_threshold + 1.0)
-                    .abs();
-
-                if !(0.0..=self.config.same_word_threshold).contains(&spacing) {
-                    parsed += " ";
-                }
-
-                cur_content = &cur_content[idx2 + 1..];
-            }
+            // Tokenize just the TJ array contents (between [ and ])
+            let tj_content = &content[cur_parse_idx + begin_idx..cur_parse_idx + end_idx];
+            let tokens = tokenize(tj_content.as_bytes());
+            parsed += &self.process_tj_tokens(&tokens, doc, page_id)?;
 
             cur_parse_idx += end_idx + 2;
         }

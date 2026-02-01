@@ -1,5 +1,5 @@
 #[derive(Debug, PartialEq, Eq)]
-pub enum Token<'a> {
+pub(crate) enum Token<'a> {
     Op(&'a [u8]), // PDF operators, e.g., "TJ", "Td", "Tf"
     Number(&'a [u8]),
     Literal(&'a [u8]), // Inside (..) in TJ blocks
@@ -23,7 +23,7 @@ enum State {
     },
 }
 
-pub fn tokenize(content: &[u8]) -> Vec<Token<'_>> {
+pub(crate) fn tokenize(content: &[u8]) -> Vec<Token<'_>> {
     let mut tokens = Vec::new();
     tokens.reserve(content.len() / 5); // Heuristic
 
