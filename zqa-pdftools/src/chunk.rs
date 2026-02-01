@@ -86,16 +86,18 @@ impl Chunker {
             .map(|(i, s)| {
                 let cur_str: String = s.collect();
                 let len = cur_str.len();
-                byte_offset += len;
 
-                DocumentChunk {
+                let chunk = DocumentChunk {
                     chunk_id: start_chunk_id + i,
-                    chunk_count: chunk_count,
+                    chunk_count,
                     content: cur_str,
                     byte_range: (byte_offset, byte_offset + len),
                     page_range,
                     strategy: ChunkingStrategy::SectionBased(budget),
-                }
+                };
+                byte_offset += len;
+
+                chunk
             })
             .collect::<Vec<_>>()
     }
@@ -131,7 +133,7 @@ impl Chunker {
                         *max_tok,
                         1,
                         0,
-                        (0, self.content.page_count),
+                        (1, self.content.page_count),
                     );
                 }
 
