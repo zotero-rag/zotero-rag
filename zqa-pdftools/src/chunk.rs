@@ -76,18 +76,23 @@ impl Chunker {
         start_byte_idx: usize,
         page_range: (usize, usize),
     ) -> Vec<DocumentChunk> {
+        let chunk_count = text.chars().count().div_ceil(budget);
+        let mut byte_offset = start_byte_idx;
+
         text.chars()
             .chunks(budget)
             .into_iter()
             .enumerate()
-            .map(|(i, s1)| {
-                let cur_str: String = s1.collect();
+            .map(|(i, s)| {
+                let cur_str: String = s.collect();
+                let len = cur_str.len();
+                byte_offset += len;
 
                 DocumentChunk {
                     chunk_id: start_chunk_id + i,
-                    chunk_count: text.chars().count(),
-                    content: cur_str.clone(),
-                    byte_range: (start_byte_idx, start_byte_idx + cur_str.len()),
+                    chunk_count: chunk_count,
+                    content: cur_str,
+                    byte_range: (byte_offset, byte_offset + len),
                     page_range,
                     strategy: ChunkingStrategy::SectionBased(budget),
                 }
@@ -124,13 +129,14 @@ impl Chunker {
                     return Chunker::chunk_text(
                         &self.content.text_content,
                         *max_tok,
-                        0,
+                        1,
                         0,
                         (0, self.content.page_count),
                     );
                 }
 
-                let mut chunks: Vec<_> = sections
+                let mut chunk_count = 0;
+                sections
                     .iter()
                     .enumerate()
                     .flat_map(|(i, sec)| {
@@ -142,24 +148,22 @@ impl Chunker {
                         // Calculate the end page: either the page of the next section, or last page
                         let page_end = sections
                             .get(i + 1)
-                            .map_or(self.content.page_count, |next_sec| next_sec.page_number);
+                            .map_or(self.content.page_count, |next_sec| {
+                                next_sec.page_number.saturating_sub(1)
+                            });
 
-                        Chunker::chunk_text(
+                        let chunks = Chunker::chunk_text(
                             &self.content.text_content[sec.byte_index..byte_end],
                             *max_tok,
-                            0,
+                            chunk_count + 1,
                             sec.byte_index,
                             (sec.page_number, page_end),
-                        )
+                        );
+                        chunk_count += chunks.len();
+
+                        chunks
                     })
-                    .collect();
-
-                // Fix the chunk ids
-                for (i, chunk) in chunks.iter_mut().enumerate() {
-                    chunk.chunk_id = i;
-                }
-
-                chunks
+                    .collect()
             }
         }
     }
