@@ -16,6 +16,7 @@ use std::sync::LazyLock;
 
 use crate::edits::{Edit, EditType, apply_edits};
 use crate::fonts::{FONT_TRANSFORMS, FontEncoding, FontSizeMarker, font_transform};
+use crate::tokenizer::{Token, tokenize};
 use lopdf::{Document, Object};
 
 const ASCII_PLUS: u8 = b'+';
@@ -633,6 +634,134 @@ impl PdfParser {
         }
     }
 
+    /// Process a TJ block given its tokens, extracting text with proper spacing.
+    ///
+    /// Takes a slice of tokens that represent the contents of a TJ array (literals, hex strings,
+    /// and spacing numbers) and processes them according to the current font encoding.
+    ///
+    /// # Arguments
+    ///
+    /// * `tokens` - A slice of tokens from inside a TJ array (between [ and ])
+    /// * `doc` - The PDF document
+    /// * `page_id` - The current page ID
+    ///
+    /// # Returns
+    ///
+    /// The extracted text string with proper spacing applied
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if font information cannot be retrieved
+    #[allow(dead_code)]
+    fn process_tj_tokens(
+        &mut self,
+        tokens: &[Token<'_>],
+        doc: &Document,
+        page_id: PageID,
+    ) -> Result<String, PdfError> {
+        let mut result = String::new();
+        let font_id = self.cur_font_id.clone();
+
+        // Skip if we don't have a valid font ID yet
+        if font_id.is_empty() {
+            return Ok(result);
+        }
+
+        let cur_font = self.cur_font.clone();
+        let same_word_threshold = self.config.same_word_threshold;
+
+        let font_encoding = self.is_cid_keyed_font(doc, page_id, &font_id)?;
+        let mut i = 0;
+
+        while i < tokens.len() {
+            match &tokens[i] {
+                Token::Literal(text) => {
+                    // Simple font encoding - handle math fonts
+                    match font_encoding {
+                        FontEncoding::Simple => {
+                            let text_str = std::str::from_utf8(text).unwrap_or("");
+                            if let Some(transform) = FONT_TRANSFORMS.get(cur_font.as_str()) {
+                                result += &font_transform(text_str, *transform);
+                            } else {
+                                result += text_str;
+                            }
+                        }
+                        FontEncoding::CIDKeyed(_) => {
+                            // This shouldn't happen - CID-keyed fonts use Hex tokens
+                            log::warn!("Unexpected Literal token in CID-keyed font");
+                        }
+                    }
+
+                    // Check for spacing after this literal
+                    if i + 1 < tokens.len() {
+                        if let Token::Number(spacing_bytes) = tokens[i + 1] {
+                            let spacing_str = std::str::from_utf8(spacing_bytes).unwrap_or("0");
+                            let spacing = spacing_str.parse::<f32>().unwrap_or(0.0).abs();
+
+                            if !(0.0..=same_word_threshold).contains(&spacing) {
+                                result += " ";
+                            }
+                            i += 1; // Skip the number token
+                        } else {
+                            result += " ";
+                        }
+                    } else {
+                        result += " ";
+                    }
+                }
+                Token::Hex(hex_str) => {
+                    // CID-keyed font - process hex string
+                    match font_encoding {
+                        FontEncoding::CIDKeyed(cmap) => {
+                            let hex_text = std::str::from_utf8(hex_str).unwrap_or("");
+                            let mut j = 0;
+                            while j + 4 <= hex_text.len() {
+                                let cid = hex_text[j..j + 4].to_lowercase();
+                                if let Some(unicode) = cmap.get(&cid) {
+                                    result += unicode;
+                                } else {
+                                    log::warn!("CID {cid} not found in ToUnicode CMap");
+                                }
+                                j += 4;
+                            }
+                        }
+                        FontEncoding::Simple => {
+                            log::warn!("Unexpected Hex token in simple font");
+                        }
+                    }
+
+                    // Check for spacing after this hex string
+                    if i + 1 < tokens.len() {
+                        if let Token::Number(spacing_bytes) = tokens[i + 1] {
+                            let spacing_str = std::str::from_utf8(spacing_bytes).unwrap_or("0");
+                            let spacing = spacing_str.parse::<f32>().unwrap_or(0.0).abs();
+
+                            if !(0.0..=same_word_threshold).contains(&spacing) {
+                                result += " ";
+                            }
+                            i += 1; // Skip the number token
+                        } else {
+                            result += " ";
+                        }
+                    } else {
+                        result += " ";
+                    }
+                }
+                Token::Number(_) => {
+                    // Standalone numbers (not after a literal/hex) are just spacing
+                    // They're handled as part of literal/hex processing above
+                }
+                Token::Op(_) => {
+                    // Shouldn't encounter operators inside TJ arrays, but skip them
+                }
+            }
+
+            i += 1;
+        }
+
+        Ok(result)
+    }
+
     /// Given a string `content` and a position `pos`, look *around* `pos` and search for likely
     /// boundaries for a table. This function uses the heuristic that tables are likely to be
     /// near `ET` blocks, because tables typically have some graphics (lines for borders, etc.).
@@ -770,6 +899,9 @@ impl PdfParser {
         let content = String::from_utf8_lossy(&content).to_string();
         let mut cur_parse_idx = 0;
         let mut parsed = String::new();
+
+        // TODO: Use tokenizer for parsing
+        let _tokens = tokenize(content.as_bytes());
 
         // Keep track of the font sizes markers (from Tf) and associated positions
         let mut tf_history: Vec<FontSizeMarker> = Vec::new();
@@ -1604,5 +1736,32 @@ mod tests {
         for text in tests {
             assert!(!content.contains(text));
         }
+    }
+
+    #[test]
+    fn test_process_tj_tokens() {
+        // Test processing a simple TJ block with literals and spacing
+        let tokens = vec![
+            Token::Literal(b"Hello"),
+            Token::Number(b"-250"),
+            Token::Literal(b"World"),
+        ];
+
+        let path = PathBuf::from("assets").join("symbols.pdf");
+        let doc = Document::load(path).unwrap();
+        let page_id = doc.page_iter().next().unwrap();
+
+        let mut parser = PdfParser::with_default_config();
+
+        // F30 is CMMI7
+        parser.cur_font_id = "F30".to_string();
+        parser.cur_font = "CMMI7".to_string();
+
+        let result = parser.process_tj_tokens(&tokens, &doc, page_id);
+        assert!(result.is_ok(), "process_tj_tokens failed: {result:?}");
+
+        let text = result.unwrap();
+        assert!(text.contains("Hello"));
+        assert!(text.contains("World"));
     }
 }
