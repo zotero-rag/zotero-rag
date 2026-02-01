@@ -4,6 +4,7 @@ pub(crate) enum Token<'a> {
     Number(&'a [u8]),
     Literal(&'a [u8]), // Inside (..) in TJ blocks
     Hex(&'a [u8]),     // Inside <..> in TJ blocks
+    Name(&'a [u8]),    // Name tokens, like "/F28"
 }
 
 enum State {
@@ -19,6 +20,9 @@ enum State {
         start: usize,
     },
     Op {
+        start: usize,
+    },
+    Name {
         start: usize,
     },
 }
@@ -57,6 +61,11 @@ pub(crate) fn tokenize(content: &[u8]) -> Vec<Token<'_>> {
                     // Operator
                     b'A'..b'Z' | b'a'..b'z' => {
                         state = State::Op { start: i };
+                        i += 1;
+                    }
+                    // Name
+                    b'/' => {
+                        state = State::Name { start: i + 1 };
                         i += 1;
                     }
                     _ => i += 1,
@@ -106,12 +115,21 @@ pub(crate) fn tokenize(content: &[u8]) -> Vec<Token<'_>> {
                     i += 1;
                 }
             }
+            State::Name { start } => {
+                if !content[i].is_ascii_alphanumeric() {
+                    tokens.push(Token::Name(&content[start..i]));
+                    state = State::Normal;
+                } else {
+                    i += 1;
+                }
+            }
         }
     }
 
     match state {
         State::Number { start } => tokens.push(Token::Number(&content[start..len])),
         State::Op { start } => tokens.push(Token::Op(&content[start..len])),
+        State::Name { start } => tokens.push(Token::Name(&content[start..len])),
         _ => {}
     }
 
@@ -172,8 +190,7 @@ mod tests {
         let content = b"/F28 12.0 Tf";
         let tokens = tokenize(content);
         let expected = vec![
-            Token::Op(b"F"),
-            Token::Number(b"28"),
+            Token::Name(b"F28"),
             Token::Number(b"12.0"),
             Token::Op(b"Tf"),
         ];
@@ -202,8 +219,7 @@ mod tests {
 
         // Should contain all the key tokens
         assert!(tokens.contains(&Token::Op(b"BT")));
-        assert!(tokens.contains(&Token::Op(b"F")));
-        assert!(tokens.contains(&Token::Number(b"1")));
+        assert!(tokens.contains(&Token::Name(b"F1")));
         assert!(tokens.contains(&Token::Number(b"12.0")));
         assert!(tokens.contains(&Token::Op(b"Tf")));
         assert!(tokens.contains(&Token::Number(b"100")));
