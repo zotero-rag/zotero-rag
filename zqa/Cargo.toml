@@ -31,6 +31,7 @@ indicatif = "0.17.11"
 lancedb = { version = "0.23.0", default-features = false  }
 clap = { version = "4.5.40", default-features = false, features = ["derive", "help", "usage", "suggestions", "error-context", "std"] }
 rustyline = "16.0.0"
+rpassword = "7.4.0"
 temp-env = { version = "0.3.6", features = ["async_closure"] }
 fern = "0.7.1"
 humantime = "2.2.0"
