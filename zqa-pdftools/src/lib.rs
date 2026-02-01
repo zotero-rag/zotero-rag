@@ -35,3 +35,4 @@ pub(crate) mod edits;
 pub(crate) mod fonts;
 pub(crate) mod math;
 pub mod parse;
+pub(crate) mod tokenizer;

@@ -8,5 +8,8 @@ Below are the files used for these benchmarks. Filenames correspond to the numbe
 * `21.pdf` - The [main paper](https://ieeexplore.ieee.org/abstract/document/8851280/) for "Toward a quantitative survey of dimension reduction techniques".
 * `25.pdf` - The [main paper](https://www.nature.com/articles/s41586-024-07856-5) for "AI generates covertly racist decisions about people based on their dialect".
 * `30.pdf` - The [main paper](https://proceedings.neurips.cc/paper_files/paper/2023/file/3e592c571de69a43d7a870ea89c7e33a-Paper-Conference.pdf) for "Learning threshold neurons via edge of stability".
+* `35.pdf` - The [full paper](https://arxiv.org/pdf/2405.16002) for "Does SGD Really Happen in Tiny Subspaces?".
+* `40.pdf` - The [full paper](https://openreview.net/forum?id=mNXCViKZbI) for "UnStar: Unlearning with Self-Taught Anti-Sample Reasoning for LLMs".
+* `44.pdf` - The [full paper](https://arxiv.org/pdf/2506.06940) for "Understanding Sharpness Dynamics in NN Training with a Minimalist Example: The Effects of Dataset Difficulty, Depth, Stochasticity, and More".
 * `49.pdf` - The [main paper](https://arxiv.org/abs/2503.03908) for "On the Convergence of Adam-Type Algorithm for Bilevel Optimization under Unbounded Smoothness".
 * `56.pdf` - The [main paper](https://arxiv.org/abs/2003.05689) for "Hyper-Parameter Optimization: A Review of Algorithms and Applications".
