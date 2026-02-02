@@ -518,14 +518,17 @@ impl PdfParser {
     /// Td parameters (x, y).
     ///
     /// # Arguments
+    ///
     /// * `tokens` - The token slice to search
     /// * `op_idx` - The index of the operator token
     ///
     /// # Returns
+    ///
     /// An array of N byte slices representing the number tokens, in order (not reversed)
     ///
     /// # Errors
-    /// Returns `PdfError::InternalError` if there aren't enough Number tokens before the operator
+    ///
+    /// * `PdfError::InternalError` if there aren't enough Number tokens before the operator
     fn get_params_from_tokens<'a, const N: usize>(
         tokens: &'a [Token<'_>],
         op_idx: usize,
@@ -675,7 +678,6 @@ impl PdfParser {
     /// # Errors
     ///
     /// Returns an error if font information cannot be retrieved
-    #[allow(dead_code)]
     fn process_tj_tokens(
         &mut self,
         tokens: &[Token<'_>],
@@ -1710,11 +1712,12 @@ mod tests {
             Token::Op(b"Tf"),
         ];
 
-        let result = PdfParser::get_params_from_tokens::<1>(&tokens, 2);
+        let result = PdfParser::get_params_from_tokens::<2>(&tokens, 2);
 
         assert!(result.is_ok());
-        let [param] = result.unwrap();
-        assert_eq!(param, b"12.0");
+        let [font_id, font_size] = result.unwrap();
+        assert_eq!(font_id, b"F28");
+        assert_eq!(font_size, b"12.0");
     }
 
     #[test]

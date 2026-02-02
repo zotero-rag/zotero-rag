@@ -18,6 +18,7 @@ enum State {
     Normal,
     Number {
         start: usize,
+        dot_seen: bool, // Track decimal point
     },
     Op {
         start: usize,
@@ -27,6 +28,7 @@ enum State {
     },
 }
 
+#[allow(clippy::too_many_lines)]
 pub(crate) fn tokenize(content: &[u8]) -> Vec<Token<'_>> {
     let mut tokens = Vec::with_capacity(content.len() / 5); // Heuristic
 
@@ -53,7 +55,10 @@ pub(crate) fn tokenize(content: &[u8]) -> Vec<Token<'_>> {
                     }
                     // Number
                     b'0'..=b'9' | b'-' | b'.' => {
-                        state = State::Number { start: i };
+                        state = State::Number {
+                            start: i,
+                            dot_seen: content[i] == b'.',
+                        };
                         i += 1;
                     }
                     // Operator
@@ -97,9 +102,17 @@ pub(crate) fn tokenize(content: &[u8]) -> Vec<Token<'_>> {
                 }
                 i += 1;
             }
-            State::Number { start } => {
+            State::Number {
+                start,
+                ref mut dot_seen,
+            } => {
                 if matches!(content[i], b'0'..=b'9' | b'.') {
                     i += 1;
+
+                    // TODO: Handle invalid numbers
+                    if content[i] == b'.' {
+                        *dot_seen = true;
+                    }
                 } else {
                     tokens.push(Token::Number(&content[start..i]));
                     state = State::Normal;
@@ -125,7 +138,7 @@ pub(crate) fn tokenize(content: &[u8]) -> Vec<Token<'_>> {
     }
 
     match state {
-        State::Number { start } => tokens.push(Token::Number(&content[start..len])),
+        State::Number { start, dot_seen: _ } => tokens.push(Token::Number(&content[start..len])),
         State::Op { start } => tokens.push(Token::Op(&content[start..len])),
         State::Name { start } => tokens.push(Token::Name(&content[start..len])),
         _ => {}
