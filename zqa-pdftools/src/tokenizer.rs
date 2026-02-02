@@ -28,8 +28,7 @@ enum State {
 }
 
 pub(crate) fn tokenize(content: &[u8]) -> Vec<Token<'_>> {
-    let mut tokens = Vec::new();
-    tokens.reserve(content.len() / 5); // Heuristic
+    let mut tokens = Vec::with_capacity(content.len() / 5); // Heuristic
 
     let mut i = 0;
     let mut state = State::Normal;
@@ -47,19 +46,18 @@ pub(crate) fn tokenize(content: &[u8]) -> Vec<Token<'_>> {
                         };
                         i += 1;
                     }
-                    b')' => i += 1,
                     // Hex
                     b'<' if i + 1 < len && content[i + 1] != b'<' => {
                         state = State::Hex { start: i + 1 };
                         i += 1;
                     }
                     // Number
-                    b'0'..b'9' | b'-' | b'.' => {
+                    b'0'..=b'9' | b'-' | b'.' => {
                         state = State::Number { start: i };
                         i += 1;
                     }
                     // Operator
-                    b'A'..b'Z' | b'a'..b'z' => {
+                    b'A'..=b'Z' | b'a'..=b'z' => {
                         state = State::Op { start: i };
                         i += 1;
                     }
@@ -100,27 +98,27 @@ pub(crate) fn tokenize(content: &[u8]) -> Vec<Token<'_>> {
                 i += 1;
             }
             State::Number { start } => {
-                if !matches!(content[i], b'0'..=b'9' | b'.') {
+                if matches!(content[i], b'0'..=b'9' | b'.') {
+                    i += 1;
+                } else {
                     tokens.push(Token::Number(&content[start..i]));
                     state = State::Normal;
-                } else {
-                    i += 1;
                 }
             }
             State::Op { start } => {
-                if !content[i].is_ascii_alphabetic() {
+                if content[i].is_ascii_alphabetic() {
+                    i += 1;
+                } else {
                     tokens.push(Token::Op(&content[start..i]));
                     state = State::Normal;
-                } else {
-                    i += 1;
                 }
             }
             State::Name { start } => {
-                if !content[i].is_ascii_alphanumeric() {
+                if content[i].is_ascii_alphanumeric() {
+                    i += 1;
+                } else {
                     tokens.push(Token::Name(&content[start..i]));
                     state = State::Normal;
-                } else {
-                    i += 1;
                 }
             }
         }

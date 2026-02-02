@@ -526,9 +526,7 @@ impl PdfParser {
     ///
     /// # Errors
     /// Returns `PdfError::InternalError` if there aren't enough Number tokens before the operator
-    #[allow(dead_code)]
     fn get_params_from_tokens<'a, const N: usize>(
-        &self,
         tokens: &'a [Token<'_>],
         op_idx: usize,
     ) -> Result<[&'a [u8]; N], PdfError> {
@@ -772,15 +770,10 @@ impl PdfParser {
                         result += " ";
                     }
                 }
-                Token::Number(_) => {
-                    // Standalone numbers (not after a literal/hex) are just spacing
-                    // They're handled as part of literal/hex processing above
-                }
-                Token::Op(_) => {
-                    // Shouldn't encounter operators inside TJ arrays, but skip them
-                }
-                Token::Name(_) => {
-                    // Invalid inside TJ blocks
+                Token::Number(_) | Token::Op(_) | Token::Name(_) => {
+                    // Standalone numbers (not after a literal/hex) are just spacing.
+                    // They're handled as part of literal/hex processing above.
+                    // We shouldn't encounter operators inside TJ arrays, but skip them.
                 }
             }
 
@@ -961,10 +954,9 @@ impl PdfParser {
             // Process Tf/Td operators *before* checking for images, since `get_image_bounds`
             // needs self.cur_font_size to be accurate
             let tokenize_end = tj_idx.min(et_idx);
-            let tokens = tokenize(&content[cur_parse_idx..cur_parse_idx + tokenize_end].as_bytes());
-            let mut token_idx = 0;
+            let tokens = tokenize(&content.as_bytes()[cur_parse_idx..cur_parse_idx + tokenize_end]);
 
-            for token in &tokens {
+            for (token_idx, token) in tokens.iter().enumerate() {
                 if let Token::Op(b"TJ") = token {
                     break;
                 }
@@ -972,34 +964,31 @@ impl PdfParser {
                     break;
                 }
 
-                if let Token::Op(b"Tf") = token {
+                if let Token::Op(b"Tf") = token 
                     // Skip if there aren't enough tokens before this operator
-                    if let Ok([font_id_bytes, font_size_bytes]) =
-                        self.get_params_from_tokens(&tokens, token_idx)
-                    {
-                        if let Ok(font_id) = std::str::from_utf8(font_id_bytes)
-                            && let Ok(font_size_str) = std::str::from_utf8(font_size_bytes)
-                            && let Ok(font_name) = get_font_name(doc, page_id, &font_id)
-                            && let Ok(font_size) = font_size_str.parse::<f32>()
-                        {
-                            self.cur_font = font_name.into();
-                            self.cur_font_id = font_id.into();
-                            self.cur_font_size = font_size;
+                    && let Ok([font_id_bytes, font_size_bytes]) =
+                        PdfParser::get_params_from_tokens(&tokens, token_idx)
+                        && let Ok(font_id) = std::str::from_utf8(font_id_bytes)
+                        && let Ok(font_size_str) = std::str::from_utf8(font_size_bytes)
+                        && let Ok(font_name) = get_font_name(doc, page_id, font_id)
+                        && let Ok(font_size) = font_size_str.parse::<f32>()
+                {
+                    self.cur_font = font_name.into();
+                    self.cur_font_id = font_id.into();
+                    self.cur_font_size = font_size;
 
-                            tf_history.push(FontSizeMarker {
-                                page_number,
-                                byte_index: parsed.len(),
-                                font_size: OrderedFloat(font_size),
-                                font_name: self.cur_font.clone(),
-                            });
-                        }
-                    }
+                    tf_history.push(FontSizeMarker {
+                        page_number,
+                        byte_index: parsed.len(),
+                        font_size: OrderedFloat(font_size),
+                        font_name: self.cur_font.clone(),
+                    });
                 }
 
                 if let Token::Op(b"Td") = token {
                     // Skip if there aren't enough tokens before this operator
                     if let Ok([_x_bytes, vert_bytes]) =
-                        self.get_params_from_tokens(&tokens, token_idx)
+                        PdfParser::get_params_from_tokens(&tokens, token_idx)
                         && let Ok(vert_str) = std::str::from_utf8(vert_bytes)
                         && let Ok(vert) = vert_str.parse::<f32>()
                     {
@@ -1012,8 +1001,6 @@ impl PdfParser {
                         }
                     }
                 }
-
-                token_idx += 1;
             }
 
             // Now check for tables and images with updated font information
@@ -1723,8 +1710,7 @@ mod tests {
             Token::Op(b"Tf"),
         ];
 
-        let parser = PdfParser::with_default_config();
-        let result = parser.get_params_from_tokens::<1>(&tokens, 2);
+        let result = PdfParser::get_params_from_tokens::<1>(&tokens, 2);
 
         assert!(result.is_ok());
         let [param] = result.unwrap();
@@ -1740,8 +1726,7 @@ mod tests {
             Token::Op(b"Td"),
         ];
 
-        let parser = PdfParser::with_default_config();
-        let result = parser.get_params_from_tokens::<2>(&tokens, 2);
+        let result = PdfParser::get_params_from_tokens::<2>(&tokens, 2);
 
         assert!(result.is_ok());
         let [x, y] = result.unwrap();
