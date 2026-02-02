@@ -106,13 +106,18 @@ pub(crate) fn tokenize(content: &[u8]) -> Vec<Token<'_>> {
                 start,
                 ref mut dot_seen,
             } => {
-                if matches!(content[i], b'0'..=b'9' | b'.') {
-                    i += 1;
-
-                    // TODO: Handle invalid numbers
+                if i < len && matches!(content[i], b'0'..=b'9' | b'.') {
+                    // Check for duplicate decimal points
                     if content[i] == b'.' {
+                        if *dot_seen {
+                            // Multiple decimal points - this is invalid, emit token and reset
+                            tokens.push(Token::Number(&content[start..i]));
+                            state = State::Normal;
+                            continue;
+                        }
                         *dot_seen = true;
                     }
+                    i += 1;
                 } else {
                     tokens.push(Token::Number(&content[start..i]));
                     state = State::Normal;
