@@ -27,6 +27,8 @@ pub(crate) enum StateError {
     FileWriteError,
     #[error("Serialization error: {0}")]
     SerializationError(String),
+    #[error("Failed to read password: {0}")]
+    PasswordReadError(String),
     #[error("Other error: {0}")]
     Other(String),
 }
@@ -182,11 +184,11 @@ fn read_line<R: BufRead>(reader: &mut R) -> String {
 }
 
 /// Read a password from standard input.
-fn read_password<R: BufRead>(reader: &mut R, is_terminal: bool) -> String {
+fn read_password<R: BufRead>(reader: &mut R, is_terminal: bool) -> Result<String, StateError> {
     if is_terminal {
-        rpassword::read_password().expect("Failed to read password")
+        rpassword::read_password().map_err(|e| StateError::PasswordReadError(e.to_string()))
     } else {
-        read_line(reader)
+        Ok(read_line(reader))
     }
 }
 
@@ -290,7 +292,7 @@ pub(crate) fn oobe<R: BufRead>(reader: &mut R, is_terminal: bool) -> Result<(), 
     let model_provider = read_char(reader, 'a', &['a', 'o', 'g', 'r']);
 
     println!("Enter your model provider's API key: ");
-    let model_api_key = read_password(reader, is_terminal).trim().to_string();
+    let model_api_key = read_password(reader, is_terminal)?.trim().to_string();
     println!();
 
     config.model_provider = match model_provider {
@@ -330,7 +332,7 @@ pub(crate) fn oobe<R: BufRead>(reader: &mut R, is_terminal: bool) -> Result<(), 
         model_api_key.clone()
     } else {
         println!("Enter your embedding provider's API key: ");
-        let key = read_password(reader, is_terminal).trim().to_string();
+        let key = read_password(reader, is_terminal)?.trim().to_string();
         println!();
         key
     };
@@ -364,7 +366,7 @@ pub(crate) fn oobe<R: BufRead>(reader: &mut R, is_terminal: bool) -> Result<(), 
     } else {
         println!("Enter your reranker provider's API key: ");
         println!();
-        let key = read_password(reader, is_terminal).trim().to_string();
+        let key = read_password(reader, is_terminal)?.trim().to_string();
         println!();
         key
     };
