@@ -249,7 +249,11 @@ fn read_char<R: BufRead>(
 /// # Errors
 ///
 /// * `StateError::InputReadError` if reading from the input stream fails.
-fn read_number<R: BufRead>(reader: &mut R, default: u8, bounds: (u8, u8)) -> Result<u8, StateError> {
+fn read_number<R: BufRead>(
+    reader: &mut R,
+    default: u8,
+    bounds: (u8, u8),
+) -> Result<u8, StateError> {
     loop {
         println!("> ");
         let input = read_line(reader)?;
