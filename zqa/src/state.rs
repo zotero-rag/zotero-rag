@@ -226,7 +226,7 @@ fn read_char<R: BufRead>(reader: &mut R, default: char, valid_set: &[char]) -> c
 /// * `bounds` - Lower and upper bounds to accept. Lower bound is inclusive, upper is exclusive.
 fn read_number<R: BufRead>(reader: &mut R, default: u8, bounds: (u8, u8)) -> u8 {
     loop {
-        println!("> ");
+        print!("> ");
         let input = read_line(reader);
         let input = input.trim();
         if input.is_empty() {
@@ -334,7 +334,6 @@ pub(crate) fn oobe<R: BufRead>(reader: &mut R, is_terminal: bool) -> Result<(), 
         model_api_key.clone()
     } else {
         println!("Enter your embedding provider's API key: ");
-        println!();
         let key = read_password(reader, is_terminal).trim().to_string();
         println!();
         key
