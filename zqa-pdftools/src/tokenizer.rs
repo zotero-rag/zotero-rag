@@ -1,10 +1,23 @@
-#[derive(Debug, PartialEq, Eq)]
+#[derive(PartialEq, Eq)]
 pub(crate) enum Token<'a> {
     Op(&'a [u8]), // PDF operators, e.g., "TJ", "Td", "Tf"
     Number(&'a [u8]),
     Literal(&'a [u8]), // Inside (..) in TJ blocks
     Hex(&'a [u8]),     // Inside <..> in TJ blocks
     Name(&'a [u8]),    // Name tokens, like "/F28"
+}
+
+impl<'a> std::fmt::Debug for Token<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let (name, bytes) = match self {
+            Self::Op(b) => ("Op", b),
+            Self::Number(b) => ("Number", b),
+            Self::Literal(b) => ("Literal", b),
+            Self::Hex(b) => ("Hex", b),
+            Self::Name(b) => ("Name", b),
+        };
+        write!(f, "{}({})", name, String::from_utf8_lossy(bytes))
+    }
 }
 
 enum State {

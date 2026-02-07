@@ -492,6 +492,7 @@ impl PdfParser {
     /// # Errors
     /// * `PdfError::InternalError` if `N` > number of words in `content[..pos]`
     #[allow(clippy::unused_self)]
+    #[allow(dead_code)]
     fn get_params<'a, const N: usize>(
         &self,
         content: &'a str,
@@ -572,6 +573,7 @@ impl PdfParser {
     ///   shown.
     /// * `None` if no image is detected.
     #[allow(clippy::similar_names)]
+    #[allow(dead_code)]
     fn get_image_bounds(&self, content: &str, pos: usize) -> Option<usize> {
         let bt_idx = content[pos..].find("BT")? + pos;
         content[pos..bt_idx].find("/Im")?;
@@ -811,6 +813,7 @@ impl PdfParser {
     /// * `Some((start_idx, end_idx))`, where `start_idx` is the index of the `BT` command where it is suspected that
     ///   the table begins, and `end_idx` is the index of the `ET` command where the table is suspected to end.
     /// * If no table is detected, returns `None`.
+    #[allow(dead_code)]
     fn get_table_bounds(
         &mut self,
         content: &str,
@@ -919,75 +922,52 @@ impl PdfParser {
         let content = doc
             .get_page_content(page_id)
             .map_err(|_| PdfError::ContentError)?;
-        let content = String::from_utf8_lossy(&content).to_string();
-        let mut cur_parse_idx = 0;
         let mut parsed = String::new();
 
-        // TODO: Use tokenizer for parsing
+        let tokens = tokenize(&content);
 
         // Keep track of the font sizes markers (from Tf) and associated positions
         let mut tf_history: Vec<FontSizeMarker> = Vec::new();
         // Keep track of vertical movements (second arg of Td) and associated positions
         let mut y_history: Vec<(usize, f32)> = Vec::new();
 
-        /* A loop over TJ blocks. The broad idea is:
-         * 1. Look for tables/images--and skip them.
-         * 2. Handle super/sub-scripts and footnotes.
-         * 3. Handle math fonts to parse equations.
-         * 4. Iterate over parenthesized blocks in the TJ to parse text. */
-        loop {
-            /* We need to look for an ET so that we can exclude tables/images. However, it is possible to
-             * find an ET that is a table but is too far away to worry about for now; so we actually need to
-             * look for both an ET and a TJ. *However*, it is also possible for the immediate TJ to be part of
-             * the table that we are trying to avoid. So the following code isn't particularly efficient, but it
-             * should cover all the cases. */
-            let Some(tj_idx) = content[cur_parse_idx..].find("TJ") else {
-                // No more TJs, so nothing left to parse.
-                break;
-            };
-
-            // Generally, we *should* find an ET here, since we already found a TJ (which means
-            // there's a text block to end).
-            let et_idx = content[cur_parse_idx..].find("ET").unwrap_or(usize::MAX);
-            if et_idx == usize::MAX {
-                break;
-            }
-
-            // Process Tf/Td operators *before* checking for images, since `get_image_bounds`
-            // needs self.cur_font_size to be accurate
-            let tokenize_end = tj_idx.min(et_idx);
-            let tokens = tokenize(&content.as_bytes()[cur_parse_idx..cur_parse_idx + tokenize_end]);
-
-            for (token_idx, token) in tokens.iter().enumerate() {
-                if let Token::Op(b"TJ") = token {
-                    break;
+        // Index in tokens where TJ started (this is the first `Token::Literal`).
+        let mut tj_start_idx: Option<usize> = None;
+        for (token_idx, token) in tokens.iter().enumerate() {
+            match token {
+                Token::Literal(_) | Token::Hex(_) if tj_start_idx.is_none() => {
+                    tj_start_idx = Some(token_idx);
                 }
-                if let Token::Op(b"ET") = token {
-                    break;
+                Token::Op(b"TJ") => {
+                    parsed += &self.process_tj_tokens(
+                        &tokens[tj_start_idx.unwrap()..token_idx],
+                        doc,
+                        page_id,
+                    )?;
+                    tj_start_idx = None;
                 }
-
-                if let Token::Op(b"Tf") = token 
-                    // Skip if there aren't enough tokens before this operator
-                    && let Ok([font_id_bytes, font_size_bytes]) =
+                Token::Op(b"Tf") => {
+                    if let Ok([font_id_bytes, font_size_bytes]) =
+                        // Skip if there aren't enough tokens before this operator
                         PdfParser::get_params_from_tokens(&tokens, token_idx)
                         && let Ok(font_id) = std::str::from_utf8(font_id_bytes)
                         && let Ok(font_size_str) = std::str::from_utf8(font_size_bytes)
                         && let Ok(font_name) = get_font_name(doc, page_id, font_id)
                         && let Ok(font_size) = font_size_str.parse::<f32>()
-                {
-                    self.cur_font = font_name.into();
-                    self.cur_font_id = font_id.into();
-                    self.cur_font_size = font_size;
+                    {
+                        self.cur_font = font_name.into();
+                        self.cur_font_id = font_id.into();
+                        self.cur_font_size = font_size;
 
-                    tf_history.push(FontSizeMarker {
-                        page_number,
-                        byte_index: parsed.len(),
-                        font_size: OrderedFloat(font_size),
-                        font_name: self.cur_font.clone(),
-                    });
+                        tf_history.push(FontSizeMarker {
+                            page_number,
+                            byte_index: parsed.len(),
+                            font_size: OrderedFloat(font_size),
+                            font_name: self.cur_font.clone(),
+                        });
+                    }
                 }
-
-                if let Token::Op(b"Td") = token {
+                Token::Op(b"Td") => {
                     // Skip if there aren't enough tokens before this operator
                     if let Ok([_x_bytes, vert_bytes]) =
                         PdfParser::get_params_from_tokens(&tokens, token_idx)
@@ -1003,63 +983,8 @@ impl PdfParser {
                         }
                     }
                 }
+                _ => {}
             }
-
-            // Now check for tables and images with updated font information
-            // Handle tables
-            if let Some((tbl_begin_idx, tbl_end_idx)) =
-                self.get_table_bounds(&content, cur_parse_idx + et_idx, doc, page_id)
-                && tbl_begin_idx < cur_parse_idx + tj_idx
-            {
-                // Skip over the table
-                cur_parse_idx = tbl_end_idx;
-                continue;
-            }
-
-            // Handle images. The TJ has to be after the next ET--otherwise, it's
-            // unlikely to be a caption. We assume here that figure captions occur after
-            // the figure itself.
-            if tj_idx > et_idx
-                && let Some(im_end_idx) = self.get_image_bounds(&content, cur_parse_idx + et_idx)
-            {
-                cur_parse_idx = im_end_idx;
-                continue;
-            }
-
-            let end_idx = content[cur_parse_idx..]
-                .find("TJ")
-                .ok_or(PdfError::ContentError)?;
-
-            // We need to match the ] immediately preceding TJ with its [, but papers have references
-            // that are written inside [], so a naive method doesn't work. We use a stack to find
-            // the matching opening bracket.
-            let mut begin_idx = end_idx;
-            let mut stack = Vec::with_capacity(50);
-            while let Some(val) =
-                content[cur_parse_idx..cur_parse_idx + begin_idx].rfind(|c| ['[', ']'].contains(&c))
-            {
-                let char_at_val = content.as_bytes()[cur_parse_idx + val] as char;
-                if char_at_val == ']' {
-                    stack.push(']');
-                } else if char_at_val == '[' {
-                    if stack.is_empty() {
-                        begin_idx = val + 1; // Start after the '['
-                        break;
-                    }
-                    if let Some(']') = stack.last() {
-                        stack.pop();
-                    }
-                }
-
-                begin_idx = val;
-            }
-
-            // Tokenize just the TJ array contents (between [ and ])
-            let tj_content = &content[cur_parse_idx + begin_idx..cur_parse_idx + end_idx];
-            let tokens = tokenize(tj_content.as_bytes());
-            parsed += &self.process_tj_tokens(&tokens, doc, page_id)?;
-
-            cur_parse_idx += end_idx + 2;
         }
 
         let mut edits = Vec::new();
@@ -1585,6 +1510,7 @@ mod tests {
         assert!(content.is_ok());
 
         let content = content.unwrap().text_content;
+        dbg!(&content);
         for op in [r"\int", r"\sum", r"\infty"] {
             assert!(content.contains(op));
         }
