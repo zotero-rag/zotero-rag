@@ -11,6 +11,7 @@ pub mod cli;
 pub mod common;
 pub mod config;
 pub mod state;
+pub mod tools;
 pub mod utils;
 
 // Re-export commonly used items

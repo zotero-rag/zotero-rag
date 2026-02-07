@@ -28,6 +28,7 @@ use zqa_rag::vector::lance::{
 
 use crate::cli::errors::CLIError;
 use crate::common::Context;
+use crate::tools::retrieval::RetrievalTool;
 use crate::{full_library_to_arrow, utils::library::parse_library_metadata};
 use arrow_ipc::reader::FileReader;
 use arrow_ipc::writer::FileWriter;
@@ -519,6 +520,35 @@ async fn run_query<O: Write, E: Write>(
 
     let mut set = JoinSet::new();
 
+    let embedding_config = ctx
+        .config
+        .get_embedding_config()
+        .ok_or(CLIError::ConfigError(
+            "Could not get embedding config".into(),
+        ))?;
+    let reranker_provider = ctx.config.reranker_provider.clone();
+
+    use zqa_rag::llm::tools::{ANTHROPIC_SCHEMA_KEY, GEMINI_SCHEMA_KEY, OPENAI_SCHEMA_KEY};
+    let schema_key = match model_provider.as_str() {
+        "anthropic" => ANTHROPIC_SCHEMA_KEY,
+        "gemini" => GEMINI_SCHEMA_KEY,
+        _ => OPENAI_SCHEMA_KEY,
+    }
+    .to_string();
+
+    let retrieval_tool = RetrievalTool {
+        embedding_config,
+        reranker_provider,
+        schema_key,
+    };
+
+    let chat_history = Arc::clone(&ctx.state.chat_history);
+    let history_lock = chat_history
+        .lock()
+        .expect("Could not obtain lock on chat history.");
+    let history_clone = history_lock.clone();
+    drop(history_lock);
+
     let summarization_start = Instant::now();
     for item in &search_results {
         let client = llm_client.clone();
@@ -526,14 +556,17 @@ async fn run_query<O: Write, E: Write>(
         let query_clone = query.clone();
         let metadata = item.metadata.clone();
 
+        let history = history_clone.clone();
+        let tool = retrieval_tool.clone();
+
         set.spawn(async move {
-            // TODO: Use `ctx.state` when we provide the model with tools to perform its own
-            // retrieval.
+            let tools: Vec<Box<dyn zqa_rag::llm::tools::Tool>> = vec![Box::new(tool)];
+
             let request = ChatRequest {
-                chat_history: Vec::new(),
+                chat_history: history,
                 max_tokens: None,
                 message: get_extraction_prompt(&query_clone, &text, &metadata),
-                tools: None,
+                tools: Some(&tools),
             };
 
             client.send_message(&request).await
