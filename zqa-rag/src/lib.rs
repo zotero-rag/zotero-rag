@@ -24,9 +24,6 @@
 #![allow(clippy::doc_markdown)]
 // Using `let _ =` is clearer than `let () =` for discarding unit values
 #![allow(clippy::ignored_unit_patterns)]
-// I disagree with this rule--what would users do knowing panic situations, if it's going to panic
-// anyway?
-#![allow(clippy::missing_panics_doc)]
 // I disagree that this is not readable.
 #![allow(clippy::items_after_statements)]
 // We will not run into these situations

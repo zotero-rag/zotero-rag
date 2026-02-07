@@ -54,6 +54,8 @@ This is a Rust-based Zotero RAG QA System for answering questions from academic 
 /// Description
 ```
 
+* See `STYLE.md` for the style guide.
+
 ### Debugging
 
 A few tests are provided specifically to help debugging when working with PDFs:

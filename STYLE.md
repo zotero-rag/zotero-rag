@@ -26,10 +26,16 @@
   - `# Arguments`, `# Returns`, `# Errors`, `# Panics`, `# Safety` sections as appropriate.
 - Section formatting:
   - Insert a blank `///` line after each section header (`# Arguments`, `# Returns`, `# Errors`, `# Panics`, `# Safety`).
-  - `# Arguments` and `# Errors` are always bulleted lists, even with a single item.
+  - `# Arguments`,  `# Panics`, and `# Errors` are always bulleted lists, even with a single item.
   - `# Returns` is a sentence for a single value; use bullets only if returning multiple values (e.g., tuples).
   - Add `# Panics` when the function can panic (e.g., uses `unwrap()`).
   - Add `# Safety` for any `unsafe` usage.
+
+- `# Arguments` bullet items should follow the format: 
+```rs
+/// * `arg_name` - Description
+```
+
 - Bulleted wrapping alignment:
   - Continuation lines align with the text, not the bullet:
 
@@ -92,3 +98,8 @@
   - Should focus entirely on performance (bug fixes are okay).
   - In general, LLMs and coding assistants should avoid making `perf` PRs.
   - This guidance is mostly restricted to `zqa-pdftools`; it does not apply to the other crates.
+- In `zqa-pdftools`, three convenience functions are provided as tests:
+  - `test_get_content_around_object` searches for text on a specific page of a document and gets some text around it.
+  - `test_font_properties` gets the font properties for a specific font on a page of a document.
+  - `test_pdf_content` gets the content stream of a page (defaults to first).
+  In any PR, it is okay to modify these, generally speaking, as long as the comments match the new code. These should remain `#[ignore]`d, however.

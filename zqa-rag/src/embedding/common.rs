@@ -46,6 +46,10 @@ pub struct FailedTexts {
 /// # Returns
 ///
 /// The dimensions of the embedding provider.
+///
+/// # Panics
+///
+/// * If an invalid embedding provider name is provided.
 #[must_use]
 pub fn get_embedding_dims_by_provider(embedding_name: &str) -> u32 {
     match embedding_name {
@@ -332,7 +336,7 @@ pub async fn compute_embeddings_async<
     let texts: Vec<Option<String>> = source_array.iter().map(|s| s.map(str::to_owned)).collect();
 
     log::info!("Processing {} input texts.", texts.len());
-    let bar = ProgressBar::new(texts.len().try_into().unwrap());
+    let bar = ProgressBar::new(texts.len() as u64);
 
     let mut all_embeddings: Vec<Vec<f32>> = Vec::new();
 
@@ -362,56 +366,63 @@ pub async fn compute_embeddings_async<
         // 3. If none are real, just push zeros for whole batch
         if cur_texts.is_empty() {
             all_embeddings.extend(std::iter::repeat_n(vec![0.0; embedding_dim], batch.len()));
-        } else {
-            let mut headers = HeaderMap::new();
-            headers.insert("Authorization", format!("Bearer {api_key}").parse()?);
-            headers.insert("Content-Type", "application/json".parse()?);
-            headers.insert("Accept", "application/json".parse()?);
+            bar.inc(batch_size as u64);
 
-            let start_time = Instant::now();
-            let request = T::from_texts(cur_texts);
-            let response = api_client.post_json(api_url, headers, &request).await?;
-
-            let body = response.text().await?;
-            log::debug!(
-                "{embedding_provider} embedding request took {:.1?}",
-                start_time.elapsed()
-            );
-
-            let api_response: U = serde_json::from_str(&body)?;
-
-            if api_response.is_success() {
-                let mut it = api_response.get_embeddings().unwrap().into_iter();
-
-                // 4. Weave the real embeddings back into the right spots, zero‐padding empties
-                let mut batch_embs = Vec::with_capacity(batch.len());
-                for &is_real in &mask {
-                    if is_real && let Some(embedding) = it.next() {
-                        batch_embs.push(embedding);
-                    } else {
-                        batch_embs.push(vec![0.0_f32; embedding_dim]);
-                    }
-                }
-                all_embeddings.extend(batch_embs);
-
-                total_masked += mask.iter().filter(|mask| !**mask).count();
-            } else {
-                eprintln!(
-                    "Got a 4xx response from the {} API: {}\n",
-                    embedding_provider,
-                    api_response
-                        .get_error_message()
-                        .unwrap_or(String::from("No error found."))
-                );
-                eprintln!("We tried sending the request: {request:#?}\n");
-
-                fail_count += batch.len();
-                failed_texts.extend(batch.iter().filter_map(|text| text.as_ref()).cloned());
-
-                let zeros: Vec<Vec<f32>> =
-                    std::iter::repeat_n(vec![0.0; embedding_dim], batch.len()).collect();
-                all_embeddings.extend(zeros);
+            if i < num_chunks - 1 {
+                tokio::time::sleep(Duration::from_secs(wait_after_request_s)).await;
             }
+            continue;
+        }
+
+        let mut headers = HeaderMap::new();
+        headers.insert("Authorization", format!("Bearer {api_key}").parse()?);
+        headers.insert("Content-Type", "application/json".parse()?);
+        headers.insert("Accept", "application/json".parse()?);
+
+        let start_time = Instant::now();
+        let request = T::from_texts(cur_texts);
+        let response = api_client.post_json(api_url, headers, &request).await?;
+
+        let body = response.text().await?;
+        log::debug!(
+            "{embedding_provider} embedding request took {:.1?}",
+            start_time.elapsed()
+        );
+
+        let api_response: U = serde_json::from_str(&body)?;
+
+        let (embeddings, error_message) = if api_response.is_success() {
+            (api_response.get_embeddings(), None)
+        } else {
+            (None, api_response.get_error_message())
+        };
+
+        if let Some(emb) = embeddings {
+            let mut it = emb.into_iter();
+
+            // 4. Weave the real embeddings back into the right spots, zero‐padding empties
+            let mut batch_embs = Vec::with_capacity(batch.len());
+            for &is_real in &mask {
+                if is_real && let Some(embedding) = it.next() {
+                    batch_embs.push(embedding);
+                } else {
+                    batch_embs.push(vec![0.0_f32; embedding_dim]);
+                }
+            }
+            all_embeddings.extend(batch_embs);
+
+            total_masked += mask.iter().filter(|mask| !**mask).count();
+        } else {
+            let error_message = error_message.unwrap_or_else(|| String::from("No error found."));
+            eprintln!("Got a 4xx response from the {embedding_provider} API: {error_message}\n",);
+            eprintln!("We tried sending the request: {request:#?}\n");
+
+            fail_count += batch.len();
+            failed_texts.extend(batch.iter().filter_map(|text| text.as_ref()).cloned());
+
+            let zeros: Vec<Vec<f32>> =
+                std::iter::repeat_n(vec![0.0; embedding_dim], batch.len()).collect();
+            all_embeddings.extend(zeros);
         }
 
         bar.inc(batch_size as u64);
@@ -442,8 +453,8 @@ pub async fn compute_embeddings_async<
     );
 
     // Convert to Arrow FixedSizeListArray
-    let flattened: Vec<f32> = all_embeddings.iter().flatten().copied().collect();
-    let values = arrow_array::Float32Array::from(flattened);
+    let flattened = all_embeddings.iter().flatten().copied();
+    let values = arrow_array::Float32Array::from_iter_values(flattened);
 
     let list_array = arrow_array::FixedSizeListArray::try_new(
         Arc::new(Field::new("item", DataType::Float32, true)),

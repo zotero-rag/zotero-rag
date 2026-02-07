@@ -179,7 +179,7 @@ impl EmbeddingApiResponse for VoyageAIResponse {
         match self {
             VoyageAIResponse::Error(_) => None,
             VoyageAIResponse::Success(res) => {
-                Some(res.data.iter().map(|v| v.embedding.clone()).collect())
+                Some(res.data.into_iter().map(|v| v.embedding).collect())
             }
         }
     }
