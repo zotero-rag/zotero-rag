@@ -42,16 +42,22 @@ impl Tool for RetrievalTool {
         let reranker = self.reranker_provider.clone();
 
         Box::pin(async move {
-            let input: RetrievalToolInput = serde_json::from_value(args).map_err(|e| format!("Invalid arguments: {e}"))?;
-            let items = vector_search(input.query, &embedding_config, reranker).await.map_err(|e| format!("Search failed: {e}"))?;
+            let input: RetrievalToolInput =
+                serde_json::from_value(args).map_err(|e| format!("Invalid arguments: {e}"))?;
+            let items = vector_search(input.query, &embedding_config, reranker)
+                .await
+                .map_err(|e| format!("Search failed: {e}"))?;
 
-            let results: Vec<Value> = items.into_iter().map(|item| {
-                json!({
-                    "title": item.metadata.title,
-                    "text": item.text,
-                    "authors": item.metadata.authors,
+            let results: Vec<Value> = items
+                .into_iter()
+                .map(|item| {
+                    json!({
+                        "title": item.metadata.title,
+                        "text": item.text,
+                        "authors": item.metadata.authors,
+                    })
                 })
-            }).collect();
+                .collect();
 
             Ok(json!(results))
         })
