@@ -27,8 +27,6 @@ pub(crate) enum StateError {
     FileWriteError,
     #[error("Serialization error: {0}")]
     SerializationError(String),
-    #[error("Failed to read input: {0}")]
-    InputReadError(String),
     #[error("Other error: {0}")]
     Other(String),
 }
@@ -180,28 +178,17 @@ pub(crate) fn check_or_create_first_run_file() -> Result<bool, StateError> {
 }
 
 /// Read a line of input.
-///
-/// # Errors
-///
-/// * `StateError::InputReadError` if reading from the input stream fails.
-fn read_line<R: BufRead>(reader: &mut R) -> Result<String, StateError> {
+fn read_line<R: BufRead>(reader: &mut R) -> String {
     let mut input = String::new();
-    reader
-        .read_line(&mut input)
-        .map_err(|e| StateError::InputReadError(format!("Failed to read input: {e}")))?;
+    reader.read_line(&mut input).expect("Failed to read input");
 
-    Ok(input)
+    input
 }
 
 /// Read a password from standard input.
-///
-/// # Errors
-///
-/// * `StateError::InputReadError` if reading the password fails (e.g., terminal cannot be set to raw mode).
-fn read_password<R: BufRead>(reader: &mut R, is_terminal: bool) -> Result<String, StateError> {
+fn read_password<R: BufRead>(reader: &mut R, is_terminal: bool) -> String {
     if is_terminal {
-        rpassword::read_password()
-            .map_err(|e| StateError::InputReadError(format!("Failed to read password: {e}")))
+        rpassword::read_password().expect("Failed to read password")
     } else {
         read_line(reader)
     }
@@ -214,26 +201,18 @@ fn read_password<R: BufRead>(reader: &mut R, is_terminal: bool) -> Result<String
 /// * `reader` - The input reader.
 /// * `default` - The default if Enter is pressed.
 /// * `valid_set` - The valid set of characters.
-///
-/// # Errors
-///
-/// * `StateError::InputReadError` if reading from the input stream fails.
-fn read_char<R: BufRead>(
-    reader: &mut R,
-    default: char,
-    valid_set: &[char],
-) -> Result<char, StateError> {
+fn read_char<R: BufRead>(reader: &mut R, default: char, valid_set: &[char]) -> char {
     loop {
         print!("> ");
-        let input = read_line(reader)?;
+        let input = read_line(reader);
         let choice = input.chars().next().unwrap_or(default).to_ascii_lowercase();
 
         if valid_set.contains(&choice) {
-            return Ok(choice);
+            return choice;
         }
 
         if choice == '\n' {
-            return Ok(default);
+            return default;
         }
     }
 }
@@ -245,21 +224,13 @@ fn read_char<R: BufRead>(
 /// * `reader` - The input reader.
 /// * `default` - The default value if Enter is pressed.
 /// * `bounds` - Lower and upper bounds to accept. Lower bound is inclusive, upper is exclusive.
-///
-/// # Errors
-///
-/// * `StateError::InputReadError` if reading from the input stream fails.
-fn read_number<R: BufRead>(
-    reader: &mut R,
-    default: u8,
-    bounds: (u8, u8),
-) -> Result<u8, StateError> {
+fn read_number<R: BufRead>(reader: &mut R, default: u8, bounds: (u8, u8)) -> u8 {
     loop {
         println!("> ");
-        let input = read_line(reader)?;
+        let input = read_line(reader);
         let input = input.trim();
         if input.is_empty() {
-            return Ok(default);
+            return default;
         }
 
         let choice = input.parse::<u8>();
@@ -267,7 +238,7 @@ fn read_number<R: BufRead>(
         match choice {
             Ok(num) => {
                 if bounds.0 <= num && num < bounds.1 {
-                    return Ok(num);
+                    return num;
                 }
                 println!("Choice must be in [{}, {}).", bounds.0, bounds.1);
             }
@@ -289,7 +260,6 @@ fn read_number<R: BufRead>(
 ///
 /// * `StateErrors::DirectoryError` if we could not get the config directory.
 /// * `StateErrors::SerializationError` if serialization to JSON failed.
-/// * `StateErrors::InputReadError` if reading user input fails.
 ///
 /// # Panics
 ///
@@ -309,7 +279,7 @@ pub(crate) fn oobe<R: BufRead>(reader: &mut R, is_terminal: bool) -> Result<(), 
     println!("Would you like to set up your configuration?");
     println!("[Y]es");
     println!("(N)o");
-    let choice = read_char(reader, 'y', &['y', 'n'])?;
+    let choice = read_char(reader, 'y', &['y', 'n']);
 
     if choice == 'n' {
         return Ok(());
@@ -321,10 +291,10 @@ pub(crate) fn oobe<R: BufRead>(reader: &mut R, is_terminal: bool) -> Result<(), 
     println!("(G)emini");
     println!("Open(R)outer");
     println!();
-    let model_provider = read_char(reader, 'a', &['a', 'o', 'g', 'r'])?;
+    let model_provider = read_char(reader, 'a', &['a', 'o', 'g', 'r']);
 
     println!("Enter your model provider's API key: ");
-    let model_api_key = read_password(reader, is_terminal)?.trim().to_string();
+    let model_api_key = read_password(reader, is_terminal).trim().to_string();
     println!();
 
     config.model_provider = match model_provider {
@@ -347,7 +317,7 @@ pub(crate) fn oobe<R: BufRead>(reader: &mut R, is_terminal: bool) -> Result<(), 
     println!("(O)penAI");
     println!("[V]oyage AI");
     println!();
-    let embedding_provider = read_char(reader, 'v', &['c', 'g', 'o', 'v'])?;
+    let embedding_provider = read_char(reader, 'v', &['c', 'g', 'o', 'v']);
 
     config.embedding_provider = match embedding_provider {
         'c' => "cohere",
@@ -365,7 +335,7 @@ pub(crate) fn oobe<R: BufRead>(reader: &mut R, is_terminal: bool) -> Result<(), 
     } else {
         println!("Enter your embedding provider's API key: ");
         println!();
-        let key = read_password(reader, is_terminal)?.trim().to_string();
+        let key = read_password(reader, is_terminal).trim().to_string();
         println!();
         key
     };
@@ -386,7 +356,7 @@ pub(crate) fn oobe<R: BufRead>(reader: &mut R, is_terminal: bool) -> Result<(), 
         }
     }
     println!();
-    let reranker_provider = read_char(reader, embedding_provider, &['c', 'v'])?;
+    let reranker_provider = read_char(reader, embedding_provider, &['c', 'v']);
     config.reranker_provider = match reranker_provider {
         'c' => "cohere",
         'v' => "voyageai",
@@ -399,7 +369,7 @@ pub(crate) fn oobe<R: BufRead>(reader: &mut R, is_terminal: bool) -> Result<(), 
     } else {
         println!("Enter your reranker provider's API key: ");
         println!();
-        let key = read_password(reader, is_terminal)?.trim().to_string();
+        let key = read_password(reader, is_terminal).trim().to_string();
         println!();
         key
     };
@@ -412,7 +382,7 @@ pub(crate) fn oobe<R: BufRead>(reader: &mut R, is_terminal: bool) -> Result<(), 
     println!(
         "{DIM_TEXT}A higher number can yield faster results, but can also result in being rate-limited. You should check what tier of API you have access to and check the TPM (tokens per minute) limit to make a choice here. As a rough estimate, your TPM limit divided by 150,000 is a somewhat reasonable estimate.{RESET}"
     );
-    let max_concurrent_requests = read_number(reader, 5, (1, 20))?;
+    let max_concurrent_requests = read_number(reader, 5, (1, 20));
     config.max_concurrent_requests = max_concurrent_requests as usize;
 
     // We can unwrap the provider configs since we initialized via `Default`, which sets them to a `Some(..)`.
