@@ -250,7 +250,7 @@ fn read_number(default: u8, bounds: (u8, u8)) -> u8 {
 ///
 /// # Panics
 ///
-/// If getting the config for the chosen provider fails.
+/// * If getting the config for the chosen provider fails.
 #[allow(clippy::too_many_lines)]
 pub(crate) fn oobe() -> Result<(), StateError> {
     // Here, we don't load the env because that's directory-specific.
