@@ -314,7 +314,7 @@ impl PdfParser {
     ///
     /// # Panics
     ///
-    /// If any of the keys in the font dictionary are not valid UTF-8.
+    /// * If any of the keys in the font dictionary are not valid UTF-8.
     #[allow(clippy::too_many_lines)]
     fn is_cid_keyed_font(
         &mut self,
@@ -1052,7 +1052,7 @@ impl PdfParser {
 ///
 /// # Panics
 ///
-/// If any of the keys in the font dictionary are not valid UTF-8.
+/// * If any of the keys in the font dictionary are not valid UTF-8.
 fn get_font<'a>(
     doc: &'a Document,
     page_id: PageID,
@@ -1096,7 +1096,7 @@ fn get_font<'a>(
 ///
 /// # Panics
 ///
-/// If any of the keys in the font dictionary are not valid UTF-8.
+/// * If any of the keys in the font dictionary are not valid UTF-8.
 fn get_font_name<'a>(
     doc: &'a Document,
     page_id: PageID,

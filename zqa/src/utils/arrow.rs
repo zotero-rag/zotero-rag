@@ -258,26 +258,6 @@ pub async fn full_library_to_arrow(
     .await
 }
 
-/// From a `RecordBatch`, return all values from a specified column as a `Vec<String>`.
-///
-/// # Arguments
-///
-/// * `batch`: A reference to a `RecordBatch`.
-/// * `column`: The index of the column to use.
-///
-/// # Returns
-///
-/// A `Vec<String>` containing all the items in the specified column of the `RecordBatch`.
-#[must_use]
-pub fn get_column_from_batch(batch: &RecordBatch, column: usize) -> Vec<String> {
-    let results = batch.column(column).as_string::<i32>();
-
-    results
-        .iter()
-        .filter_map(|s| Some(s?.to_string()))
-        .collect()
-}
-
 /// Perform vector search using a query and a specified embedding method.
 ///
 /// This function is a Zotero-specific wrapper for the `vector_search` function in the `rag` crate.

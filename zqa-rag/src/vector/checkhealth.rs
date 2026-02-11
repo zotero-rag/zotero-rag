@@ -321,27 +321,29 @@ pub async fn lancedb_health_check(
     }
 
     // Check 2: Table connectivity
-    let db_connection = connect(&db_uri).execute().await;
-    if let Err(e) = db_connection {
-        // Capture the error
-        result.table_accessible = Some(Err(LanceError::ConnectionError(e.to_string())));
+    let db = match connect(&db_uri).execute().await {
+        Ok(conn) => conn,
+        Err(e) => {
+            // Capture the error
+            result.table_accessible = Some(Err(LanceError::ConnectionError(e.to_string())));
 
-        // None of the future checks make sense here.
-        return Ok(result);
-    }
+            // None of the future checks make sense here.
+            return Ok(result);
+        }
+    };
 
     // Check 3: Table opening
-    let db = db_connection.unwrap();
-    let tbl = db.open_table(TABLE_NAME).execute().await;
-    if let Err(e) = tbl {
-        // Capture the error
-        result.table_accessible = Some(Err(LanceError::ConnectionError(e.to_string())));
+    let tbl = match db.open_table(TABLE_NAME).execute().await {
+        Ok(tbl) => tbl,
+        Err(e) => {
+            // Capture the error
+            result.table_accessible = Some(Err(LanceError::ConnectionError(e.to_string())));
 
-        // None of the future checks make sense here.
-        return Ok(result);
-    }
+            // None of the future checks make sense here.
+            return Ok(result);
+        }
+    };
 
-    let tbl = tbl.unwrap();
     result.table_accessible = Some(Ok(()));
 
     // Check 4: Row count

@@ -2,7 +2,7 @@ use crate::cli::placeholder::PlaceholderText;
 use crate::cli::prompts::{get_extraction_prompt, get_summarize_prompt};
 use crate::cli::readline::get_readline_config;
 use crate::state::{SavedChatHistory, save_conversation};
-use crate::utils::arrow::{DbFields, library_to_arrow, vector_search};
+use crate::utils::arrow::{DbFields, get_schema, library_to_arrow, vector_search};
 use crate::utils::library::{ZoteroItem, ZoteroItemSet, get_authors, get_new_library_items};
 use crate::utils::rag::ModelResponse;
 use arrow_array::{self, RecordBatch, RecordBatchIterator, StringArray};
@@ -22,8 +22,8 @@ use zqa_rag::llm::factory::{get_client_by_provider, get_client_with_config};
 use zqa_rag::vector::checkhealth::lancedb_health_check;
 use zqa_rag::vector::doctor::doctor as rag_doctor;
 use zqa_rag::vector::lance::{
-    create_or_update_indexes, db_statistics, delete_rows, get_zero_vector_records, insert_records,
-    lancedb_exists,
+    create_or_update_indexes, db_statistics, dedup_rows, delete_rows, get_zero_vector_records,
+    insert_records, lancedb_exists,
 };
 
 use crate::cli::errors::CLIError;
@@ -243,6 +243,20 @@ async fn fix_zero_embeddings<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Res
     writeln!(ctx.out, "Successfully fixed zero embeddings!\n",)?;
 
     Ok(())
+}
+
+async fn dedup<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Result<usize, CLIError> {
+    Ok(dedup_rows(
+        &ctx.config
+            .get_embedding_config()
+            .ok_or(CLIError::ConfigError(
+                "Could not get embedding config".into(),
+            ))?,
+        get_schema(&ctx.config.embedding_provider).await,
+        DbFields::Title.as_ref(),
+        DbFields::LibraryKey.as_ref(),
+    )
+    .await?)
 }
 
 /// Performs comprehensive health checks on the `LanceDB` database and reports status
@@ -830,6 +844,14 @@ pub(crate) async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<()
                             writeln!(&mut ctx.err, "Failed to write statistics to buffer. {e}")?;
                         }
                     }
+                    "/dedup" => match dedup(&mut ctx).await {
+                        Ok(ct) => {
+                            writeln!(&mut ctx.out, "Removed {ct} items.")?;
+                        }
+                        Err(e) => {
+                            writeln!(&mut ctx.err, "Deduplication failed: {e}")?;
+                        }
+                    },
                     "/quit" | "/exit" | "quit" | "exit" | "/new" => {
                         if ctx.state.dirty.load(atomic::Ordering::Relaxed) {
                             let chat_history = Arc::clone(&ctx.state.chat_history);
