@@ -23,6 +23,7 @@ use lancedb::{
     database::CreateTableMode, embeddings::EmbeddingDefinition, query::ExecutableQuery,
     query::QueryBase,
 };
+use std::collections::HashSet;
 use std::{fmt::Display, path::PathBuf, sync::Arc, time::Instant, vec::IntoIter};
 use thiserror::Error;
 
@@ -369,34 +370,23 @@ pub async fn dedup_rows(
         LanceError::InvalidStateError(format!("The table {TABLE_NAME} does not exist"))
     })?;
 
-    let stream = table.query().execute().await?;
-    let batches: Vec<RecordBatch> = stream.try_collect().await?;
-
     if let Some((by_idx, _)) = schema.column_with_name(by)
         && let Some((key_idx, _)) = schema.column_with_name(key)
     {
-        let pairs: Vec<(String, String)> = batches
-            .iter()
-            .flat_map(|batch| {
-                let by_values = get_column_from_batch(batch, by_idx);
-                let key_values = get_column_from_batch(batch, key_idx);
+        let mut stream = table.query().execute().await?;
+        let mut seen_by_values = HashSet::new();
+        let mut duplicate_keys = Vec::new();
 
-                by_values.into_iter().zip(key_values.into_iter())
-            })
-            .collect();
+        while let Some(batch) = stream.try_next().await? {
+            let by_values = get_column_from_batch(&batch, by_idx);
+            let key_values = get_column_from_batch(&batch, key_idx);
 
-        // Deduplicate: keep first occurrence of each 'by' value
-        let mut seen_by_values = std::collections::HashSet::new();
-        let duplicate_keys: Vec<String> = pairs
-            .into_iter()
-            .filter_map(|(by_val, key_val)| {
-                if seen_by_values.insert(by_val.clone()) {
-                    None
-                } else {
-                    Some(key_val)
+            for (by_val, key_val) in by_values.into_iter().zip(key_values.into_iter()) {
+                if !seen_by_values.insert(by_val) {
+                    duplicate_keys.push(key_val);
                 }
-            })
-            .collect();
+            }
+        }
 
         // Delete duplicate rows
         let deleted_count = duplicate_keys.len();
