@@ -10,12 +10,12 @@ use crate::llm::gemini::GeminiClient;
 use crate::llm::{http_client::ReqwestClient, openai::OpenAIClient};
 use crate::vector::backup::with_backup;
 use crate::vector::checkhealth::get_zero_vectors;
-use lancedb::table::OptimizeOptions;
 
 use arrow_array::cast::as_string_array;
 use arrow_array::{
     RecordBatch, RecordBatchIterator, StringArray, cast::AsArray, types::Float32Type,
 };
+
 use futures::TryStreamExt;
 use lancedb::index::scalar::FtsIndexBuilder;
 use lancedb::{
@@ -158,13 +158,8 @@ pub async fn create_or_update_indexes(
         .await?;
     }
 
-    // If both indices already existed before this run, optimize them.
-    if has_vector_index && has_fts_index {
-        tbl.optimize(lancedb::table::OptimizeAction::Index(
-            OptimizeOptions::merge(1),
-        ))
-        .await?;
-    }
+    // If both indices already existed before this run, they could be optimized here
+    // but optimization is optional and can be done separately.
 
     Ok(())
 }
@@ -320,6 +315,108 @@ pub async fn get_zero_vector_records(
     // Get all records with zero embeddings
     let zero_batches = get_zero_vectors(&table, embedding_config.provider_name(), 10000).await?;
     Ok(zero_batches)
+}
+
+/// From a `RecordBatch`, return all values from a specified column as a `Vec<String>`.
+///
+/// # Arguments
+///
+/// * `batch`: A reference to a `RecordBatch`.
+/// * `column`: The index of the column to use.
+///
+/// # Returns
+///
+/// A `Vec<String>` containing all the items in the specified column of the `RecordBatch`.
+#[must_use]
+pub fn get_column_from_batch(batch: &RecordBatch, column: usize) -> Vec<String> {
+    let results = batch.column(column).as_string::<i32>();
+
+    results
+        .iter()
+        .filter_map(|s| Some(s?.to_string()))
+        .collect()
+}
+
+/// Deduplicate rows in the LanceDB table based on a 'by' column, keeping only the first
+/// occurrence of each unique 'by' value and deleting the duplicates.
+///
+/// # Arguments
+///
+/// * `embedding_config` - The embedding provider configuration
+/// * `schema` - Arrow schema for the table
+/// * `by` - Column name to deduplicate by
+/// * `key` - Column name to use as the key for deletion
+///
+/// # Returns
+///
+/// Number of rows deleted
+///
+/// # Errors
+///
+/// * `LanceError::InvalidStateError` if the table cannot be opened
+/// * `LanceError::ConnectionError` if the database connection fails
+/// * `LanceError::InvalidStateError` if the table doesn't exist
+/// * `LanceError::ParameterError` if the key column is not found in the rows
+/// * `LanceError::Other` for other LanceDB errors
+pub async fn dedup_rows(
+    embedding_config: &EmbeddingProviderConfig,
+    schema: arrow_schema::Schema,
+    by: &str,
+    key: &str,
+) -> Result<usize, LanceError> {
+    let db = get_db_with_embeddings(embedding_config).await?;
+    let table = db.open_table(TABLE_NAME).execute().await.map_err(|_| {
+        LanceError::InvalidStateError(format!("The table {TABLE_NAME} does not exist"))
+    })?;
+
+    let stream = table.query().execute().await?;
+    let batches: Vec<RecordBatch> = stream.try_collect().await?;
+
+    if let Some((by_idx, _)) = schema.column_with_name(by)
+        && let Some((key_idx, _)) = schema.column_with_name(key)
+    {
+        let pairs: Vec<(String, String)> = batches
+            .iter()
+            .flat_map(|batch| {
+                let by_values = get_column_from_batch(batch, by_idx);
+                let key_values = get_column_from_batch(batch, key_idx);
+
+                by_values.into_iter().zip(key_values.into_iter())
+            })
+            .collect();
+
+        // Deduplicate: keep first occurrence of each 'by' value
+        let mut seen_by_values = std::collections::HashSet::new();
+        let duplicate_keys: Vec<String> = pairs
+            .into_iter()
+            .filter_map(|(by_val, key_val)| {
+                if seen_by_values.insert(by_val.clone()) {
+                    None
+                } else {
+                    Some(key_val)
+                }
+            })
+            .collect();
+
+        // Delete duplicate rows
+        let deleted_count = duplicate_keys.len();
+        if !duplicate_keys.is_empty() {
+            let schema_fields = vec![arrow_schema::Field::new(
+                key,
+                arrow_schema::DataType::Utf8,
+                false,
+            )];
+            let schema = arrow_schema::Schema::new(schema_fields);
+            let array = StringArray::from_iter_values(duplicate_keys);
+            let record_batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(array) as _])?;
+
+            delete_rows(record_batch, key, embedding_config).await?;
+        }
+
+        return Ok(deleted_count);
+    }
+
+    Ok(0)
 }
 
 /// Return all the rows in the LanceDB table, selecting only the columns specified. This is useful

@@ -20,7 +20,8 @@ use zqa_rag::vector::lance::{LanceError, get_lancedb_items, lancedb_exists};
 use zqa_pdftools::parse::extract_text;
 
 use crate::izip;
-use crate::utils::arrow::{DbFields, get_column_from_batch};
+use crate::utils::arrow::DbFields;
+use zqa_rag::vector::lance::get_column_from_batch;
 
 /// Gets the Zotero library path. Works on Linux, macOS, and Windows systems.
 /// On CI environments, returns a location to a toy library in assets/ instead.
