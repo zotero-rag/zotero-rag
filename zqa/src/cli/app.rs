@@ -253,8 +253,8 @@ async fn dedup<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Result<usize, CLI
                 "Could not get embedding config".into(),
             ))?,
         get_schema(&ctx.config.embedding_provider).await,
-        &DbFields::Title.as_ref(),
-        &DbFields::LibraryKey.as_ref(),
+        DbFields::Title.as_ref(),
+        DbFields::LibraryKey.as_ref(),
     )
     .await?)
 }
