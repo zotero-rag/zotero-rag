@@ -304,10 +304,39 @@ pub fn parse_library_metadata(
 /// # Arguments
 ///
 /// * `item` - The item whose metadata needs to be filled in
-fn get_authors_for_item(item: &mut ZoteroItem) -> Result<(), LibraryParsingError> {
+fn get_authors_for_item(
+    item: &mut ZoteroItem,
+    stmt: &mut rusqlite::Statement,
+) -> Result<(), LibraryParsingError> {
+    let library_key = &item.metadata.library_key;
+
+    let item_iter: Vec<String> = stmt
+        .query_map(rusqlite::params![library_key], |row| {
+            let first_name: String = row.get(0)?;
+            let last_name: String = row.get(1)?;
+
+            Ok(format!("{last_name}, {first_name}"))
+        })?
+        .filter_map(std::result::Result::ok)
+        .collect();
+
+    item.metadata.authors = Some(item_iter);
+
+    Ok(())
+}
+
+/// Given a set of `items`, set the authors metadata in-place.
+///
+/// # Arguments
+///
+/// * `items` - The items whose metadata needs to be filled in.
+///
+/// # Errors
+///
+/// * `LibraryParsingError::SqlError` if the operation failed for any items.
+pub fn get_authors(items: &mut [ZoteroItem]) -> Result<(), LibraryParsingError> {
     if let Some(path) = get_lib_path() {
         let conn = Connection::open(path.join("zotero.sqlite"))?;
-        let library_key = &item.metadata.library_key;
 
         let query = "SELECT c.firstName, c.lastName
             FROM items i
@@ -322,18 +351,11 @@ fn get_authors_for_item(item: &mut ZoteroItem) -> Result<(), LibraryParsingError
         "
         .to_string();
 
-        let mut stmt = conn.prepare(&query).unwrap();
-        let item_iter: Vec<String> = stmt
-            .query_map(rusqlite::params![library_key], |row| {
-                let first_name: String = row.get(0)?;
-                let last_name: String = row.get(1)?;
+        let mut stmt = conn.prepare(&query)?;
 
-                Ok(format!("{last_name}, {first_name}"))
-            })?
-            .filter_map(std::result::Result::ok)
-            .collect();
-
-        item.metadata.authors = Some(item_iter);
+        for item in items {
+            get_authors_for_item(item, &mut stmt)?;
+        }
 
         Ok(())
     } else {
@@ -341,23 +363,6 @@ fn get_authors_for_item(item: &mut ZoteroItem) -> Result<(), LibraryParsingError
             "Library not found when fetching authors.".into(),
         ))
     }
-}
-
-/// Given a set of `items`, set the authors metadata in-place.
-///
-/// # Arguments
-///
-/// * `items` - The items whose metadata needs to be filled in.
-///
-/// # Errors
-///
-/// * `LibraryParsingError::SqlError` if the operation failed for any items.
-pub fn get_authors(items: &mut [ZoteroItem]) -> Result<(), LibraryParsingError> {
-    for item in items {
-        get_authors_for_item(item)?;
-    }
-
-    Ok(())
 }
 
 /// Get the Unicode characters for each tick of the progress bar.
@@ -713,4 +718,5 @@ mod tests {
 
         assert_eq!(ticks, "⣾⣽⣻⢿⡿⣟⣯⣷");
     }
+
 }
