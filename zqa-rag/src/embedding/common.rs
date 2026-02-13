@@ -151,7 +151,7 @@ impl EmbeddingProviderConfig {
 /// string in a non-consuming way. A user may also choose to `map` their `Vec<RecordBatch>` with
 /// custom logic if they prefer (or if, for some reason, their struct's `AsRef<str>` is implemented
 /// with a different purpose, but the resulting string isn't useful for reranking purposes).
-pub trait Rerank<T: AsRef<str>> {
+pub trait Rerank<T: AsRef<str>>: Send + Sync {
     /// Rerank items using the provider.
     ///
     /// # Arguments:
