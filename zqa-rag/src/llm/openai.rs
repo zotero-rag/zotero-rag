@@ -681,6 +681,8 @@ mod tests {
     use dotenv::dotenv;
     use lancedb::embeddings::EmbeddingFunction;
     use std::sync::{Arc, Mutex};
+    use zqa_macros::test_eq;
+    use zqa_macros::test_ok;
 
     #[tokio::test]
     async fn test_request_works() {
@@ -700,7 +702,7 @@ mod tests {
             println!("OpenAI test error: {:?}", res.as_ref().err());
         }
 
-        assert!(res.is_ok());
+        test_ok!(res);
     }
 
     #[tokio::test]
@@ -749,16 +751,16 @@ mod tests {
             println!("OpenAI test error: {:?}", res.as_ref().err());
         }
 
-        assert!(res.is_ok());
+        test_ok!(res);
         let res = res.unwrap();
-        assert_eq!(res.content.len(), 1);
+        test_eq!(res.content.len(), 1);
         if let ContentType::Text(text) = &res.content[0] {
-            assert_eq!(text, "Hi there!");
+            test_eq!(text, "Hi there!");
         } else {
             panic!("Expected Text content type");
         }
-        assert_eq!(res.input_tokens, 5);
-        assert_eq!(res.output_tokens, 10);
+        test_eq!(res.input_tokens, 5);
+        test_eq!(res.output_tokens, 10);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
@@ -782,13 +784,13 @@ mod tests {
             println!("OpenAI embedding error: {:?}", embeddings.as_ref().err());
         }
 
-        assert!(embeddings.is_ok());
+        test_ok!(embeddings);
 
         let embeddings = embeddings.unwrap();
         let vector = arrow_array::cast::as_fixed_size_list_array(&embeddings);
 
-        assert_eq!(vector.len(), 6);
-        assert_eq!(vector.value_length(), DEFAULT_OPENAI_EMBEDDING_DIM as i32);
+        test_eq!(vector.len(), 6);
+        test_eq!(vector.value_length(), DEFAULT_OPENAI_EMBEDDING_DIM as i32);
     }
 
     #[tokio::test]
@@ -815,7 +817,7 @@ mod tests {
             println!("OpenAI test error: {:?}", res.as_ref().err());
         }
 
-        assert!(res.is_ok());
+        test_ok!(res);
         assert!(call_count.lock().unwrap().eq(&1_usize));
     }
 

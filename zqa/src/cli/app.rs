@@ -979,6 +979,7 @@ mod tests {
     use std::io::Cursor;
     use std::sync::Arc;
     use temp_env;
+    use zqa_macros::test_ok;
     use zqa_rag::constants::{
         DEFAULT_VOYAGE_EMBEDDING_DIM, DEFAULT_VOYAGE_EMBEDDING_MODEL, DEFAULT_VOYAGE_RERANK_MODEL,
     };
@@ -1064,7 +1065,7 @@ mod tests {
         let result =
             temp_env::async_with_vars([("LANCEDB_URI", Some(&db_uri))], embed(&mut ctx, false))
                 .await;
-        assert!(result.is_ok());
+        test_ok!(result);
 
         let output = String::from_utf8(ctx.out.into_inner()).unwrap();
         assert!(output.contains("Successfully parsed library!"));
@@ -1099,7 +1100,7 @@ mod tests {
         )
         .await;
 
-        assert!(result.is_ok());
+        test_ok!(result);
 
         let output = String::from_utf8(ctx.out.clone().into_inner()).unwrap();
         assert!(output.contains("Successfully parsed library!"));
@@ -1107,7 +1108,7 @@ mod tests {
         let stats =
             temp_env::async_with_vars([("LANCEDB_URI", Some(&db_uri))], stats(&mut ctx)).await;
         let output = String::from_utf8(ctx.out.into_inner()).unwrap();
-        assert!(stats.is_ok());
+        test_ok!(stats);
         assert!(output.contains("Table statistics:"));
         assert!(output.contains("Number of rows: 8"));
 
@@ -1137,7 +1138,7 @@ mod tests {
             process(&mut setup_ctx),
         )
         .await;
-        assert!(result.is_ok());
+        test_ok!(result);
 
         let mut ctx = create_test_context();
         let result = temp_env::async_with_vars(
@@ -1153,7 +1154,7 @@ mod tests {
             dbg!(e);
         }
 
-        assert!(result.is_ok());
+        test_ok!(result);
 
         let output = String::from_utf8(ctx.out.into_inner()).unwrap();
         assert!(output.len() > 20);
@@ -1190,7 +1191,7 @@ mod tests {
         )
         .await;
 
-        assert!(result.is_ok());
+        test_ok!(result);
 
         let output = String::from_utf8(ctx.out.into_inner()).unwrap();
         assert!(output.contains("Total token usage:"));
@@ -1239,7 +1240,7 @@ mod tests {
             process(&mut setup_ctx),
         )
         .await;
-        assert!(result.is_ok());
+        test_ok!(result);
 
         // Now run health check
         let mut ctx = create_test_context();

@@ -615,6 +615,7 @@ pub async fn parse_library(
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use zqa_macros::test_ok;
 
     use crate::common::setup_logger;
 
@@ -634,7 +635,7 @@ mod tests {
         dotenv().ok();
         let library_items = parse_library_metadata(None, None);
 
-        assert!(library_items.is_ok());
+        test_ok!(library_items);
         let items = library_items.unwrap();
         assert!(!items.is_empty());
     }
@@ -659,7 +660,7 @@ mod tests {
             assert!(lib_path.to_str().unwrap().contains("zqa"));
 
             let library_items = parse_library_metadata(None, None);
-            assert!(library_items.is_ok());
+            test_ok!(library_items);
 
             let items = library_items.unwrap();
             assert!(!items.is_empty());
@@ -691,7 +692,7 @@ mod tests {
             Some(5),
         )
         .await;
-        assert!(items.is_ok());
+        test_ok!(items);
 
         // Two of the items in the toy library are HTML files, so we actually
         // expect those to fail.
@@ -701,7 +702,7 @@ mod tests {
 
         // Now fetch authors from the Zotero DB
         let authors_result = get_authors(&mut items);
-        assert!(authors_result.is_ok());
+        test_ok!(authors_result);
         for item in items {
             assert!(item.metadata.authors.is_some());
         }

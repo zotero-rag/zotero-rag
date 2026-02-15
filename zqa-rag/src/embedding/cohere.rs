@@ -294,6 +294,8 @@ mod tests {
     use arrow_array::Array;
     use dotenv::dotenv;
     use std::sync::Arc;
+    use zqa_macros::test_eq;
+    use zqa_macros::test_ok;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
     async fn test_compute_embeddings() {
@@ -316,13 +318,13 @@ mod tests {
             println!("Cohere embedding error: {:?}", embeddings.as_ref().err());
         }
 
-        assert!(embeddings.is_ok());
+        test_ok!(embeddings);
 
         let embeddings = embeddings.unwrap();
         let vector = arrow_array::cast::as_fixed_size_list_array(&embeddings);
 
-        assert_eq!(vector.len(), 6);
-        assert_eq!(vector.value_length(), DEFAULT_COHERE_EMBEDDING_DIM as i32);
+        test_eq!(vector.len(), 6);
+        test_eq!(vector.value_length(), DEFAULT_COHERE_EMBEDDING_DIM as i32);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
@@ -344,9 +346,9 @@ mod tests {
             println!("Cohere reranker error: {:?}", reranked.as_ref().err());
         }
 
-        assert!(reranked.is_ok());
+        test_ok!(reranked);
 
         let reranked = reranked.unwrap();
-        assert_eq!(reranked.len(), array.len());
+        test_eq!(reranked.len(), array.len());
     }
 }

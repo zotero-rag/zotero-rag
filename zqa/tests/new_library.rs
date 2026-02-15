@@ -6,6 +6,7 @@ use std::env;
 use zqa::common::setup_logger;
 use zqa::config::{AnthropicConfig, Config, VoyageAIConfig};
 use zqa::full_library_to_arrow;
+use zqa_macros::test_ok;
 use zqa_rag::constants::{
     DEFAULT_MAX_CONCURRENT_REQUESTS, DEFAULT_MAX_RETRIES, DEFAULT_VOYAGE_EMBEDDING_DIM,
 };
@@ -45,7 +46,7 @@ async fn test_integration_works() {
     };
 
     let record_batch = full_library_to_arrow(&config, None, None).await;
-    assert!(record_batch.is_ok());
+    test_ok!(record_batch);
 
     let record_batch = record_batch.unwrap();
     let schema = record_batch.schema();
@@ -60,5 +61,5 @@ async fn test_integration_works() {
     )
     .await;
 
-    assert!(db.is_ok());
+    test_ok!(db);
 }

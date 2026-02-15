@@ -6883,9 +6883,14 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "toml",
+ "zqa-macros",
  "zqa-pdftools",
  "zqa-rag",
 ]
+
+[[package]]
+name = "zqa-macros"
+version = "0.1.0"
 
 [[package]]
 name = "zqa-pdftools"
@@ -6897,6 +6902,7 @@ dependencies = [
  "lopdf",
  "ordered-float 5.1.0",
  "thiserror 1.0.69",
+ "zqa-macros",
 ]
 
 [[package]]
@@ -6921,6 +6927,7 @@ dependencies = [
  "tempfile",
  "thiserror 1.0.69",
  "tokio",
+ "zqa-macros",
  "zqa-pdftools",
 ]
 

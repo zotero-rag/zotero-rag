@@ -25,6 +25,7 @@ serde = "1.0.219"
 serde_json = "1.0.140"
 thiserror = "1.0"
 tokio = "1.41.0"
+zqa-macros.workspace = true
 zqa-pdftools = { workspace = true }
 
 [dev-dependencies]
