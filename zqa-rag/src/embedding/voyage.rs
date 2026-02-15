@@ -329,8 +329,7 @@ mod tests {
     use arrow_array::Array;
     use dotenv::dotenv;
     use std::sync::Arc;
-    use zqa_macros::test_eq;
-    use zqa_macros::test_ok;
+    use zqa_macros::{test_eq, test_ok};
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
     async fn test_compute_embeddings() {

@@ -1305,9 +1305,7 @@ pub fn extract_text(file_path: &str) -> Result<ExtractedContent, Box<dyn Error>>
 mod tests {
     use std::path::PathBuf;
     use std::{env, fs};
-    use zqa_macros::test_ok;
-
-    use zqa_macros::{test_contains_all, test_eq};
+    use zqa_macros::{test_contains_all, test_eq, test_ok};
 
     use super::*;
 

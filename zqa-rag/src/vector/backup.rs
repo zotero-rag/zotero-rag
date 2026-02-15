@@ -167,8 +167,7 @@ mod tests {
     use lancedb::{connect, embeddings::EmbeddingDefinition};
     use serial_test::serial;
     use std::sync::Arc;
-    use zqa_macros::test_ok;
-    use zqa_macros::{test_contains, test_eq};
+    use zqa_macros::{test_contains, test_eq, test_ok};
 
     /// Helper function to set up a test database with some initial data
     async fn setup_test_db() -> Result<u64, LanceError> {

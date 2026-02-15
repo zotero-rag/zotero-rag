@@ -681,8 +681,7 @@ mod tests {
     use dotenv::dotenv;
     use lancedb::embeddings::EmbeddingFunction;
     use std::sync::{Arc, Mutex};
-    use zqa_macros::test_eq;
-    use zqa_macros::test_ok;
+    use zqa_macros::{test_eq, test_ok};
 
     #[tokio::test]
     async fn test_request_works() {

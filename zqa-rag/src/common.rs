@@ -77,8 +77,7 @@ mod tests {
         sync::{Arc, Mutex},
         time::Duration,
     };
-    use zqa_macros::test_eq;
-    use zqa_macros::test_ok;
+    use zqa_macros::{test_eq, test_ok};
 
     struct MockRateLimitClient {
         call_count: Arc<Mutex<usize>>,
