@@ -1305,6 +1305,9 @@ pub fn extract_text(file_path: &str) -> Result<ExtractedContent, Box<dyn Error>>
 mod tests {
     use std::path::PathBuf;
     use std::{env, fs};
+    use zqa_macros::test_ok;
+
+    use zqa_macros::{test_contains_all, test_eq};
 
     use super::*;
 
@@ -1327,12 +1330,7 @@ mod tests {
         let path = PathBuf::from("assets").join(file_name);
         let content = extract_text(path.to_str().unwrap()).unwrap().text_content;
 
-        for query in queries {
-            assert!(
-                content.contains(*query),
-                "content of {file_name} did not contain '{query}'\n\nContent was:\n{content}"
-            );
-        }
+        test_contains_all!(content, *queries);
     }
 
     #[test]
@@ -1458,28 +1456,27 @@ mod tests {
         let path = PathBuf::from("assets").join("sections.pdf");
         let content = extract_text(path.to_str().unwrap());
 
-        assert!(content.is_ok());
+        test_ok!(content);
 
         let content = content.unwrap();
         let text = content.text_content;
 
-        dbg!(&content.sections);
-        assert_eq!(content.sections.len(), 4);
+        test_eq!(content.sections.len(), 4);
 
-        assert_eq!(
+        test_eq!(
             text[content.sections.first().unwrap().byte_index..][..5].to_string(),
             "title"
         );
         // The author is, for now, incorrectly detected as a section.
-        assert_eq!(
+        test_eq!(
             text[content.sections.get(1).unwrap().byte_index..][..6].to_string(),
             "author"
         );
-        assert_eq!(
+        test_eq!(
             text[content.sections.get(2).unwrap().byte_index..][..9].to_string(),
             "1 section"
         );
-        assert_eq!(
+        test_eq!(
             text[content.sections.get(3).unwrap().byte_index..][..10].to_string(),
             "1.1 subsec"
         );
@@ -1525,7 +1522,7 @@ mod tests {
             .join("mono2micro.pdf");
         let content = extract_text(path.to_str().unwrap());
 
-        assert!(content.is_ok());
+        test_ok!(content);
 
         let content = content.unwrap();
         assert!(!content.sections.is_empty());
@@ -1574,7 +1571,7 @@ mod tests {
         let page_id = doc.page_iter().next().unwrap();
         let font_name = get_font_name(&doc, page_id, "F30").unwrap();
 
-        assert_eq!(font_name, "CMMI7");
+        test_eq!(font_name, "CMMI7");
     }
 
     #[test]
@@ -1582,7 +1579,7 @@ mod tests {
         let path = PathBuf::from("assets").join("symbols.pdf");
 
         let content = extract_text(path.to_str().unwrap());
-        assert!(content.is_ok());
+        test_ok!(content);
 
         let content = content.unwrap().text_content;
         for op in [r"\int", r"\sum", r"\infty"] {
@@ -1602,8 +1599,8 @@ mod tests {
 
         // The indices will not exactly line up, because "\n"s seem to be two separate characters. This is okay.
         let first_et = content.find("ET").unwrap();
-        assert_eq!(first_et, 342);
-        assert_eq!(
+        test_eq!(first_et, 342);
+        test_eq!(
             parser.get_table_bounds(&content, first_et, &doc, page_id),
             Some((305, 707))
         );
@@ -1614,7 +1611,7 @@ mod tests {
         let path = PathBuf::from("assets").join("table.pdf");
         let content = extract_text(path.to_str().unwrap());
 
-        assert!(content.is_ok());
+        test_ok!(content);
 
         let content = content.unwrap().text_content;
         let tests = ["r1c1", "r1c2", "r2c1", "r2c2"];
@@ -1644,7 +1641,7 @@ mod tests {
         let path = PathBuf::from("assets").join("images.pdf");
         let content = extract_text(path.to_str().unwrap());
 
-        assert!(content.is_ok());
+        test_ok!(content);
 
         let content = content.unwrap().text_content;
 
@@ -1666,7 +1663,7 @@ mod tests {
         let path = PathBuf::from("assets").join("hyperlinks.pdf");
         let content = extract_text(path.to_str().unwrap());
 
-        assert!(content.is_ok());
+        test_ok!(content);
 
         let content = content.unwrap().text_content;
 
@@ -1714,10 +1711,10 @@ mod tests {
 
         let result = PdfParser::get_params_from_tokens::<2>(&tokens, 2);
 
-        assert!(result.is_ok());
+        test_ok!(result);
         let [font_id, font_size] = result.unwrap();
-        assert_eq!(font_id, b"F28");
-        assert_eq!(font_size, b"12.0");
+        test_eq!(font_id, b"F28");
+        test_eq!(font_size, b"12.0");
     }
 
     #[test]
@@ -1731,9 +1728,9 @@ mod tests {
 
         let result = PdfParser::get_params_from_tokens::<2>(&tokens, 2);
 
-        assert!(result.is_ok());
+        test_ok!(result);
         let [x, y] = result.unwrap();
-        assert_eq!(x, b"100.5");
-        assert_eq!(y, b"-20.3");
+        test_eq!(x, b"100.5");
+        test_eq!(y, b"-20.3");
     }
 }

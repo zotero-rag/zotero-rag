@@ -498,10 +498,12 @@ impl<T: HttpClient + Default + std::fmt::Debug> EmbeddingFunction for AnthropicC
 #[cfg(test)]
 mod tests {
     use std::sync::{Arc, Mutex};
+    use zqa_macros::test_ok;
 
     use arrow_array::Array;
     use dotenv::dotenv;
     use lancedb::embeddings::EmbeddingFunction;
+    use zqa_macros::test_eq;
 
     use crate::constants::DEFAULT_OPENAI_EMBEDDING_DIM;
     use crate::llm::anthropic::{AnthropicTextResponseContent, DEFAULT_CLAUDE_MODEL};
@@ -532,7 +534,7 @@ mod tests {
             println!("Anthropic test error: {:?}", res.as_ref().err());
         }
 
-        assert!(res.is_ok());
+        test_ok!(res);
     }
 
     #[tokio::test]
@@ -580,15 +582,15 @@ mod tests {
             println!("Anthropic test error: {:?}", res.as_ref().err());
         }
 
-        assert!(res.is_ok());
+        test_ok!(res);
 
         let res = res.unwrap();
-        assert_eq!(res.input_tokens, 9);
-        assert_eq!(res.output_tokens, 13);
+        test_eq!(res.input_tokens, 9);
+        test_eq!(res.output_tokens, 13);
 
         let content = &res.content[0];
         if let ContentType::Text(text) = content {
-            assert_eq!(text, "Hi there! How can I help you today?");
+            test_eq!(text, "Hi there! How can I help you today?");
         } else {
             panic!("Expected Text content type");
         }
@@ -615,13 +617,13 @@ mod tests {
             println!("Anthropic embedding error: {:?}", embeddings.as_ref().err());
         }
 
-        assert!(embeddings.is_ok());
+        test_ok!(embeddings);
 
         let embeddings = embeddings.unwrap();
         let vector = arrow_array::cast::as_fixed_size_list_array(&embeddings);
 
-        assert_eq!(vector.len(), 6);
-        assert_eq!(vector.value_length(), DEFAULT_OPENAI_EMBEDDING_DIM as i32);
+        test_eq!(vector.len(), 6);
+        test_eq!(vector.value_length(), DEFAULT_OPENAI_EMBEDDING_DIM as i32);
     }
 
     #[tokio::test]
@@ -647,7 +649,7 @@ mod tests {
             println!("Anthropic test error: {:?}", res.as_ref().err());
         }
 
-        assert!(res.is_ok());
+        test_ok!(res);
         assert!(call_count.lock().unwrap().eq(&1_usize));
     }
 }

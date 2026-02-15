@@ -456,8 +456,10 @@ impl<T: HttpClient> ApiClient for OpenRouterClient<T> {
 #[cfg(test)]
 mod tests {
     use std::sync::{Arc, Mutex};
+    use zqa_macros::test_ok;
 
     use dotenv::dotenv;
+    use zqa_macros::test_eq;
 
     use super::*;
     use crate::llm::base::{ApiClient, ChatRequest};
@@ -483,7 +485,7 @@ mod tests {
             println!("OpenRouter test error: {:?}", res.as_ref().err());
         }
 
-        assert!(res.is_ok());
+        test_ok!(res);
     }
 
     #[tokio::test]
@@ -536,14 +538,14 @@ mod tests {
             println!("OpenRouter test error: {:?}", res.as_ref().err());
         }
 
-        assert!(res.is_ok());
+        test_ok!(res);
 
         let res = res.unwrap();
-        assert_eq!(res.input_tokens, 14);
-        assert_eq!(res.output_tokens, 163);
-        assert_eq!(res.content.len(), 1);
+        test_eq!(res.input_tokens, 14);
+        test_eq!(res.output_tokens, 163);
+        test_eq!(res.content.len(), 1);
         if let ContentType::Text(text) = &res.content[0] {
-            assert_eq!(text, "Hi there! How can I help you today?");
+            test_eq!(text, "Hi there! How can I help you today?");
         } else {
             panic!("Expected Text content type");
         }
@@ -575,7 +577,7 @@ mod tests {
             println!("OpenRouter test error: {:?}", res.as_ref().err());
         }
 
-        assert!(res.is_ok());
+        test_ok!(res);
         assert!(call_count.lock().unwrap().eq(&1_usize));
     }
 }

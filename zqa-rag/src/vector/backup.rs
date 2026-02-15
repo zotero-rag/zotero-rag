@@ -167,6 +167,8 @@ mod tests {
     use lancedb::{connect, embeddings::EmbeddingDefinition};
     use serial_test::serial;
     use std::sync::Arc;
+    use zqa_macros::test_ok;
+    use zqa_macros::{test_contains, test_eq};
 
     /// Helper function to set up a test database with some initial data
     async fn setup_test_db() -> Result<u64, LanceError> {
@@ -239,7 +241,7 @@ mod tests {
         let backup_metadata = create_backup().await.expect("Failed to create backup");
 
         assert!(backup_metadata.original_version.is_some());
-        assert_eq!(backup_metadata.original_version.unwrap(), initial_version);
+        test_eq!(backup_metadata.original_version.unwrap(), initial_version);
     }
 
     #[tokio::test]
@@ -265,7 +267,7 @@ mod tests {
 
         // Create backup
         let backup_metadata = create_backup().await.expect("Failed to create backup");
-        assert_eq!(backup_metadata.original_version.unwrap(), initial_version);
+        test_eq!(backup_metadata.original_version.unwrap(), initial_version);
 
         // Add more data (creates new version and adds 2 more rows)
         let new_version = add_data_to_db().await.expect("Failed to add data");
@@ -284,11 +286,7 @@ mod tests {
             .count_rows(None)
             .await
             .expect("Failed to get row count");
-        assert_eq!(
-            row_count_after_add,
-            initial_row_count + 2,
-            "Should have 2 more rows after adding data"
-        );
+        test_eq!(row_count_after_add, initial_row_count + 2);
 
         // Restore backup
         restore_backup(&backup_metadata)
@@ -307,10 +305,7 @@ mod tests {
             .await
             .expect("Failed to get row count");
 
-        assert_eq!(
-            final_row_count, initial_row_count,
-            "Row count should be restored to original after restore"
-        );
+        test_eq!(final_row_count, initial_row_count);
     }
 
     #[tokio::test]
@@ -342,8 +337,8 @@ mod tests {
         })
         .await;
 
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), 42);
+        test_ok!(result);
+        test_eq!(result.unwrap(), 42);
     }
 
     #[tokio::test]
@@ -390,10 +385,7 @@ mod tests {
             .await
             .expect("Failed to get row count");
 
-        assert_eq!(
-            final_row_count, initial_row_count,
-            "Row count should be restored after failed operation"
-        );
+        test_eq!(final_row_count, initial_row_count);
     }
 
     #[tokio::test]
@@ -407,10 +399,7 @@ mod tests {
 
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert!(
-            err.to_string().contains(error_message),
-            "Error message should be preserved"
-        );
+        test_contains!(err.to_string(), error_message);
     }
 
     #[tokio::test]
@@ -422,7 +411,7 @@ mod tests {
 
         let cloned = metadata.clone();
 
-        assert_eq!(metadata.original_version, cloned.original_version);
+        test_eq!(metadata.original_version, cloned.original_version);
     }
 
     #[tokio::test]

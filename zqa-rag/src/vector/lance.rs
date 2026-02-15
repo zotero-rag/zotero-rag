@@ -639,12 +639,14 @@ pub async fn create_or_update_indexes_with_backup(
 #[cfg(test)]
 mod tests {
     use std::env;
+    use zqa_macros::test_ok;
 
     use arrow_array::StringArray;
     use dotenv::dotenv;
     use futures::StreamExt;
     use lancedb::query::ExecutableQuery;
     use serial_test::serial;
+    use zqa_macros::test_eq;
 
     use crate::{
         config::{OpenAIConfig, VoyageAIConfig},
@@ -690,20 +692,20 @@ mod tests {
         )
         .await;
 
-        assert!(db.is_ok());
+        test_ok!(db);
         let db = db.unwrap();
 
         let tbl_names = db.table_names().execute().await;
-        assert!(tbl_names.is_ok());
-        assert_eq!(tbl_names.unwrap(), vec![TABLE_NAME]);
+        test_ok!(tbl_names);
+        test_eq!(tbl_names.unwrap(), vec![TABLE_NAME]);
 
         let tbl = db.open_table(TABLE_NAME).execute().await;
-        assert!(tbl.is_ok());
+        test_ok!(tbl);
 
         let tbl = tbl.unwrap();
         let tbl_values = tbl.query().execute().await;
 
-        assert!(tbl_values.is_ok());
+        test_ok!(tbl_values);
 
         let mut tbl_values = tbl_values.unwrap();
         let row = tbl_values.next().await;
@@ -711,7 +713,7 @@ mod tests {
         assert!(row.is_some());
         let row = row.unwrap();
 
-        assert!(row.is_ok());
+        test_ok!(row);
         let row = row.unwrap();
 
         for column in ["data_openai", "embeddings"] {
@@ -747,20 +749,20 @@ mod tests {
         )
         .await;
 
-        assert!(db.is_ok());
+        test_ok!(db);
         let db = db.unwrap();
 
         let tbl_names = db.table_names().execute().await;
-        assert!(tbl_names.is_ok());
-        assert_eq!(tbl_names.unwrap(), vec![TABLE_NAME]);
+        test_ok!(tbl_names);
+        test_eq!(tbl_names.unwrap(), vec![TABLE_NAME]);
 
         let tbl = db.open_table(TABLE_NAME).execute().await;
-        assert!(tbl.is_ok());
+        test_ok!(tbl);
 
         let tbl = tbl.unwrap();
         let tbl_values = tbl.query().execute().await;
 
-        assert!(tbl_values.is_ok());
+        test_ok!(tbl_values);
 
         let mut tbl_values = tbl_values.unwrap();
         let row = tbl_values.next().await;
@@ -768,7 +770,7 @@ mod tests {
         assert!(row.is_some());
         let row = row.unwrap();
 
-        assert!(row.is_ok());
+        test_ok!(row);
         let row = row.unwrap();
 
         for column in ["data_voyage", "embeddings"] {

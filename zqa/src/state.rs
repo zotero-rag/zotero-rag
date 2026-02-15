@@ -468,6 +468,7 @@ mod tests {
     use std::fs;
     use std::io::Cursor;
     use std::path::Component;
+    use zqa_macros::test_ok;
     use zqa_rag::llm::base::{ChatHistoryContent, ChatHistoryItem, USER_ROLE};
 
     use crate::state::{
@@ -478,7 +479,7 @@ mod tests {
     fn test_get_state_dir() {
         let state_dir = get_state_dir();
 
-        assert!(state_dir.is_ok());
+        test_ok!(state_dir);
         let state_dir = state_dir.unwrap();
 
         let mut components = state_dir.components();
@@ -515,7 +516,7 @@ mod tests {
 
             let result = save_conversation(&conversation);
             let state_dir = get_state_dir().unwrap();
-            assert!(result.is_ok());
+            test_ok!(result);
             assert!(state_dir.exists());
         });
     }
@@ -534,10 +535,10 @@ mod tests {
             };
 
             let result = save_conversation(&conversation);
-            assert!(result.is_ok());
+            test_ok!(result);
 
             let conversations = get_conversation_history();
-            assert!(conversations.is_ok());
+            test_ok!(conversations);
 
             let conversations = conversations.unwrap();
             assert!(conversations.is_some());

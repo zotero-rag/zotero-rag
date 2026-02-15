@@ -77,6 +77,8 @@ mod tests {
         sync::{Arc, Mutex},
         time::Duration,
     };
+    use zqa_macros::test_eq;
+    use zqa_macros::test_ok;
 
     struct MockRateLimitClient {
         call_count: Arc<Mutex<usize>>,
@@ -142,13 +144,13 @@ mod tests {
 
         let result = request_with_backoff(&client, "http://test.com", &headers, &request, 3).await;
 
-        assert!(result.is_ok());
+        test_ok!(result);
         let response = result.unwrap();
         assert!(response.status().is_success());
 
         // Verify we made 3 calls (2 failures + 1 success)
         let call_count = *client.call_count.lock().unwrap();
-        assert_eq!(call_count, 3);
+        test_eq!(call_count, 3);
     }
 
     #[tokio::test]
@@ -163,7 +165,7 @@ mod tests {
 
         // Verify we made max_retries + 1 calls (3 total: initial + 2 retries)
         let call_count = *client.call_count.lock().unwrap();
-        assert_eq!(call_count, 3);
+        test_eq!(call_count, 3);
     }
 
     #[tokio::test]
@@ -180,7 +182,7 @@ mod tests {
         let response = Response::from(http_response);
         let delay = calculate_backoff_delay(0, &response);
 
-        assert_eq!(delay, Duration::from_secs(5));
+        test_eq!(delay, Duration::from_secs(5));
     }
 
     #[tokio::test]

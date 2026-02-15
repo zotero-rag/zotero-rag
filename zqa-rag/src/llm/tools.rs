@@ -339,6 +339,7 @@ mod tests {
     use std::future::Future;
     use std::pin::Pin;
     use std::time::Instant;
+    use zqa_macros::test_eq;
 
     #[derive(Debug)]
     pub(crate) struct SlowTool {
@@ -417,7 +418,7 @@ mod tests {
         // Expect ~500ms for concurrent execution
         assert!(duration.as_millis() < 1000);
         // Ensure that we processed two tool calls
-        assert_eq!(chat_history.len(), 2);
-        assert_eq!(new_contents.len(), 2);
+        test_eq!(chat_history.len(), 2);
+        test_eq!(new_contents.len(), 2);
     }
 }
