@@ -28,7 +28,7 @@ macro_rules! test_contains {
             eprintln!("Assertion failed:");
             eprintln!("   provided vec: {:?}", left_val);
             eprintln!("  expected item: {:?}", right_val);
-            panic!("test_vec_contains failed");
+            panic!("test_contains failed");
         }
     };
 }
@@ -48,7 +48,7 @@ macro_rules! test_contains_all {
                 eprintln!("Assertion failed:");
                 eprintln!("  provided vec: {:?}", left_val);
                 eprintln!("  missing item: {:?}", val);
-                panic!("test_vec_contains_all failed");
+                panic!("test_contains_all failed");
             }
         }
     };
@@ -62,7 +62,7 @@ macro_rules! test_ok {
         match result {
             Ok(_) => {}
             Err(e) => {
-                panic!("expected {} to be `Ok`, got {e}", stringify!($value));
+                panic!("expected {} to be `Ok`, got {e:?}", stringify!($value));
             }
         }
     };
@@ -109,7 +109,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "test_vec_contains failed")]
+    #[should_panic(expected = "test_contains failed")]
     fn test_contains_failure() {
         test_contains!(vec![1, 2, 3], 4);
     }
@@ -151,13 +151,13 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "test_vec_contains_all failed")]
+    #[should_panic(expected = "test_contains_all failed")]
     fn test_contains_all_failure() {
         test_contains_all!(vec![1, 2, 3], vec![4, 5]);
     }
 
     #[test]
-    #[should_panic(expected = "test_vec_contains_all failed")]
+    #[should_panic(expected = "test_contains_all failed")]
     fn test_contains_all_partial_failure() {
         test_contains_all!(vec![1, 2, 3], vec![2, 5]);
     }

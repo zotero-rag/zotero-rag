@@ -456,10 +456,9 @@ impl<T: HttpClient> ApiClient for OpenRouterClient<T> {
 #[cfg(test)]
 mod tests {
     use std::sync::{Arc, Mutex};
-    use zqa_macros::test_ok;
 
     use dotenv::dotenv;
-    use zqa_macros::test_eq;
+    use zqa_macros::{test_eq, test_ok};
 
     use super::*;
     use crate::llm::base::{ApiClient, ChatRequest};

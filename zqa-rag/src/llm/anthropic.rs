@@ -498,12 +498,11 @@ impl<T: HttpClient + Default + std::fmt::Debug> EmbeddingFunction for AnthropicC
 #[cfg(test)]
 mod tests {
     use std::sync::{Arc, Mutex};
-    use zqa_macros::test_ok;
 
     use arrow_array::Array;
     use dotenv::dotenv;
     use lancedb::embeddings::EmbeddingFunction;
-    use zqa_macros::test_eq;
+    use zqa_macros::{test_eq, test_ok};
 
     use crate::constants::DEFAULT_OPENAI_EMBEDDING_DIM;
     use crate::llm::anthropic::{AnthropicTextResponseContent, DEFAULT_CLAUDE_MODEL};
