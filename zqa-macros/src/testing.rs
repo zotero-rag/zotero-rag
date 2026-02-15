@@ -26,7 +26,7 @@ macro_rules! test_contains {
 
         if !left_val.contains(right_val) {
             eprintln!("Assertion failed:");
-            eprintln!("   provided vec: {:?}", left_val);
+            eprintln!("   provided container: {:?}", left_val);
             eprintln!("  expected item: {:?}", right_val);
             panic!("test_contains failed");
         }
@@ -46,7 +46,7 @@ macro_rules! test_contains_all {
         for val in right_val {
             if !left_val.contains(val) {
                 eprintln!("Assertion failed:");
-                eprintln!("  provided vec: {:?}", left_val);
+                eprintln!("  provided container: {:?}", left_val);
                 eprintln!("  missing item: {:?}", val);
                 panic!("test_contains_all failed");
             }
