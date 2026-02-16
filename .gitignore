@@ -1,7 +1,6 @@
 /target
 .env
 .idea/
-.gemini/
 .claude/
 data/
 .DS_Store
