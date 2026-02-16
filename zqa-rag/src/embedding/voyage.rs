@@ -6,9 +6,7 @@ use crate::{
     constants::{
         DEFAULT_VOYAGE_EMBEDDING_DIM, DEFAULT_VOYAGE_EMBEDDING_MODEL, DEFAULT_VOYAGE_RERANK_MODEL,
     },
-    embedding::common::{
-        EmbeddingApiRequestTexts, EmbeddingApiResponse, Rerank, compute_embeddings_async,
-    },
+    embedding::common::{EmbeddingApiResponse, Rerank, compute_embeddings_async},
 };
 use std::{borrow::Cow, env, future::Future, pin::Pin, sync::Arc, time::Instant};
 
@@ -93,11 +91,20 @@ where
             tokio::runtime::Handle::current().block_on(compute_embeddings_async::<
                 VoyageAIRequest,
                 VoyageAIResponse,
+                _,
             >(
                 source,
                 "https://api.voyageai.com/v1/embeddings",
                 &api_key,
                 self.client.clone(),
+                |texts| VoyageAIRequest {
+                    input: texts,
+                    model: DEFAULT_VOYAGE_EMBEDDING_MODEL.to_string(),
+                    input_type: None, // Directly convert to vector
+                    truncation: true,
+                    output_dimension: DEFAULT_VOYAGE_EMBEDDING_DIM, // Matryoshka embeddings
+                    output_dtype: "float".to_string(),
+                },
                 EmbeddingProvider::VoyageAI.as_str().to_string(),
                 BATCH_SIZE,
                 WAIT_AFTER_REQUEST_S,
@@ -107,8 +114,7 @@ where
     }
 }
 
-/// A request to Voyage AI's embedding endpoint. This struct should not be created directly.
-/// Instead, use `from_texts` for good defaults.
+/// A request to Voyage AI's embedding endpoint.
 #[derive(Serialize, Debug, Deserialize)]
 struct VoyageAIRequest {
     pub input: Vec<String>,
@@ -117,19 +123,6 @@ struct VoyageAIRequest {
     truncation: bool,
     output_dimension: u32,
     output_dtype: String,
-}
-
-impl EmbeddingApiRequestTexts<VoyageAIRequest> for VoyageAIRequest {
-    fn from_texts(texts: Vec<String>) -> Self {
-        Self {
-            input: texts,
-            model: DEFAULT_VOYAGE_EMBEDDING_MODEL.to_string(),
-            input_type: None, // Directly convert to vector
-            truncation: true,
-            output_dimension: DEFAULT_VOYAGE_EMBEDDING_DIM, // Matryoshka embeddings
-            output_dtype: "float".to_string(),
-        }
-    }
 }
 
 #[derive(Serialize, Deserialize, Debug)]
