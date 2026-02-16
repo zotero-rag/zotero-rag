@@ -299,51 +299,6 @@ pub fn parse_library_metadata(
     }
 }
 
-/// Given a Zotero item, fetch the authors and fill them in-place. If authors could not be fetched,
-/// this does not make any changes, and returns `Ok(())` since we do not consider this a critical
-/// failure.
-///
-/// # Arguments
-///
-/// * `item` - The item whose metadata needs to be filled in
-fn get_authors_for_item(item: &mut ZoteroItem) -> Result<(), LibraryParsingError> {
-    if let Some(path) = get_lib_path() {
-        let conn = Connection::open(path.join("zotero.sqlite"))?;
-        let library_key = &item.metadata.library_key;
-
-        let query = "
-            SELECT GROUP_CONCAT(c.lastName || ', ' || c.firstName, ';') AS authors
-            FROM items i
-            LEFT JOIN itemAttachments ia ON i.itemID = ia.parentItemID
-            JOIN items i2 ON ia.itemID = i2.itemID
-            LEFT JOIN itemCreators ic ON i.itemID = ic.itemID
-            LEFT JOIN creators c ON ic.creatorID = c.creatorID
-            WHERE i2.key = ?1
-            GROUP BY i.key
-            ORDER BY MIN(ic.orderIndex);
-"
-        .to_string();
-
-        let mut stmt = conn.prepare(&query)?;
-        if let Some(row) = stmt.query(rusqlite::params![library_key])?.next()? {
-            let authors: String = row.get(0)?;
-            let split_authors: Vec<_> = authors
-                .split(';')
-                .map(str::trim)
-                .map(String::from)
-                .collect();
-
-            item.metadata.authors = Some(split_authors);
-        }
-
-        Ok(())
-    } else {
-        Err(LibraryParsingError::SqlError(
-            "Library not found when fetching authors.".into(),
-        ))
-    }
-}
-
 /// Given a set of `items`, set the authors metadata in-place.
 ///
 /// # Arguments
@@ -354,8 +309,35 @@ fn get_authors_for_item(item: &mut ZoteroItem) -> Result<(), LibraryParsingError
 ///
 /// * `LibraryParsingError::SqlError` if the operation failed for any items.
 pub fn get_authors(items: &mut [ZoteroItem]) -> Result<(), LibraryParsingError> {
-    for item in items {
-        get_authors_for_item(item)?;
+    if let Some(path) = get_lib_path() {
+        let conn = Connection::open(path.join("zotero.sqlite"))?;
+
+        let query = "
+            SELECT GROUP_CONCAT(c.lastName || ', ' || c.firstName, ';') AS authors
+            FROM items i
+            LEFT JOIN itemAttachments ia ON i.itemID = ia.parentItemID
+            JOIN items i2 ON ia.itemID = i2.itemID
+            LEFT JOIN itemCreators ic ON i.itemID = ic.itemID
+            LEFT JOIN creators c ON ic.creatorID = c.creatorID
+            WHERE i2.key = ?1
+            GROUP BY i.key
+            ORDER BY MIN(ic.orderIndex);"
+            .to_string();
+
+        let mut stmt = conn.prepare(&query)?;
+        for item in items {
+            let library_key = &item.metadata.library_key;
+            if let Some(row) = stmt.query(rusqlite::params![library_key])?.next()? {
+                let authors: String = row.get(0)?;
+                let split_authors: Vec<_> = authors
+                    .split(';')
+                    .map(str::trim)
+                    .map(String::from)
+                    .collect();
+
+                item.metadata.authors = Some(split_authors);
+            }
+        }
     }
 
     Ok(())
