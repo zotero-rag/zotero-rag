@@ -312,6 +312,40 @@ pub fn get_authors(items: &mut [ZoteroItem]) -> Result<(), LibraryParsingError> 
     if let Some(path) = get_lib_path() {
         let conn = Connection::open(path.join("zotero.sqlite"))?;
 
+        // For some reason, the `key` field in the `items` table (what we call `library_key`) seems
+        // to not completely be a key. Specifically, there are separate keys per item depending on
+        // whether you want the file path or the authors; the item metadata is stored with the file
+        // path, but to get the authors, you need a different key. To save you some debugging
+        // effort, here are some SQL queries that are useful here:
+        //
+        // ```sql
+        // SELECT DISTINCT
+        //   ia.path AS filePath,
+        //   i.key AS authorKey,
+        //   i2.key AS filePathKey
+        // FROM items i
+        // LEFT JOIN itemAttachments ia ON i.itemID = ia.parentItemID
+        // JOIN items i2 ON ia.itemID = i2.itemID;
+        // ```
+        // This gives you the file path and the `key`s associated with that item's author and file path.
+        //
+        // ```sql
+        //  SELECT c.firstName, c.lastName
+        //    FROM items i
+        //    JOIN itemData id ON i.itemID = id.itemID
+        //    JOIN fields f ON id.fieldID = f.fieldID
+        //    JOIN itemCreators ic ON i.itemID = ic.itemID
+        //    JOIN creators c ON ic.creatorID = c.creatorID
+        //    WHERE i.key = 'RQRBISX9'
+        //    AND f.fieldName = 'title'
+        //    ORDER BY ic.orderIndex;
+        // ```
+        // For a given (author-associated) key, this gives you the ordered first and last name pairs of
+        // the authors for that paper.
+        //
+        // The query below basically just uses the ideas from the above two queries, except that it
+        // does away with having to deal with one row per author per paper by using `GROUP_CONCAT`.
+
         let query = "
             SELECT GROUP_CONCAT(c.lastName || ', ' || c.firstName, ';') AS authors
             FROM items i
