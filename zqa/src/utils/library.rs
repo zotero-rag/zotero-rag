@@ -299,7 +299,9 @@ pub fn parse_library_metadata(
     }
 }
 
-/// Given a Zotero item, fetch the authors and fill them in-place.
+/// Given a Zotero item, fetch the authors and fill them in-place. If authors could not be fetched,
+/// this does not make any changes, and returns `Ok(())` since we do not consider this a critical
+/// failure.
 ///
 /// # Arguments
 ///
@@ -310,25 +312,21 @@ fn get_authors_for_item(item: &mut ZoteroItem) -> Result<(), LibraryParsingError
         let library_key = &item.metadata.library_key;
 
         let query = "
-            SELECT DISTINCT
-                ia.path AS filePath,
-                i.key AS authorKey,
-                i2.key AS filePathKey,
-                GROUP_CONCAT(c.lastName || ', ' || c.firstName, '; ') AS authors
+            SELECT GROUP_CONCAT(c.lastName || ', ' || c.firstName, ';') AS authors
             FROM items i
             LEFT JOIN itemAttachments ia ON i.itemID = ia.parentItemID
             JOIN items i2 ON ia.itemID = i2.itemID
             LEFT JOIN itemCreators ic ON i.itemID = ic.itemID
             LEFT JOIN creators c ON ic.creatorID = c.creatorID
             WHERE i2.key = ?1
-            GROUP BY ia.path, i.key, i2.key
+            GROUP BY i.key
             ORDER BY MIN(ic.orderIndex);
 "
         .to_string();
 
-        let mut stmt = conn.prepare(&query).unwrap();
+        let mut stmt = conn.prepare(&query)?;
         if let Some(row) = stmt.query(rusqlite::params![library_key])?.next()? {
-            let authors: String = row.get(3)?;
+            let authors: String = row.get(0)?;
             let split_authors: Vec<_> = authors
                 .split(';')
                 .map(str::trim)
@@ -724,15 +722,17 @@ mod tests {
             vec!["Croitoru", "Ristea", "Ionescu", "Sebe"],
         ];
 
-        for (i, item) in items.iter().enumerate() {
+        for ((item, &expected_title), expected_author_list) in
+            items.iter().zip(&expected_titles).zip(&expected_authors)
+        {
             assert!(item.metadata.authors.is_some());
-            let authors = item.metadata.authors.clone().unwrap();
+            let authors = item.metadata.authors.as_ref().unwrap();
 
-            test_contains!(item.metadata.title, *expected_titles.get(i).unwrap());
+            test_contains!(item.metadata.title, expected_title);
+            test_eq!(authors.len(), expected_author_list.len());
 
-            for (j, author) in authors.iter().enumerate() {
-                let exp_author = expected_authors.get(i).unwrap().get(j).unwrap();
-                test_contains!(author, *exp_author);
+            for (author, &expected_author) in authors.iter().zip(expected_author_list) {
+                test_contains!(author, expected_author);
             }
         }
     }
