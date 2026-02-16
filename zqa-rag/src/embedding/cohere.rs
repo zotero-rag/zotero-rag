@@ -1,7 +1,7 @@
 //! Functions, structs, and trait implementations for interacting with the Cohere API. This module
 //! includes support for embedding only.
 
-use super::common::{EmbeddingApiRequestTexts, EmbeddingApiResponse};
+use super::common::EmbeddingApiResponse;
 use crate::{
     capabilities::EmbeddingProvider,
     constants::{
@@ -76,11 +76,20 @@ where
             tokio::runtime::Handle::current().block_on(compute_embeddings_async::<
                 CohereEmbedRequest,
                 CohereAIResponse,
+                _,
             >(
                 source,
                 "https://api.cohere.com/v2/embed",
                 &api_key,
                 self.client.clone(),
+                |texts| CohereEmbedRequest {
+                    texts,
+                    model: DEFAULT_COHERE_EMBEDDING_MODEL.to_string(),
+                    input_type: "search_document".into(),
+                    output_dimension: DEFAULT_COHERE_EMBEDDING_DIM,
+                    // Requesting float vectors explicitly for newer APIs; ignored by older
+                    embedding_types: Some(vec!["float".into()]),
+                },
                 EmbeddingProvider::Cohere.as_str().to_string(),
                 BATCH_SIZE,
                 WAIT_AFTER_REQUEST_S,
@@ -97,21 +106,8 @@ struct CohereEmbedRequest {
     model: String,
     input_type: String,
     output_dimension: u32,
-    // Requesting float vectors explicitly for newer APIs; ignored by older
     #[serde(skip_serializing_if = "Option::is_none")]
     embedding_types: Option<Vec<String>>,
-}
-
-impl EmbeddingApiRequestTexts<CohereEmbedRequest> for CohereEmbedRequest {
-    fn from_texts(texts: Vec<String>) -> Self {
-        Self {
-            texts,
-            model: DEFAULT_COHERE_EMBEDDING_MODEL.to_string(),
-            input_type: "search_document".into(),
-            output_dimension: DEFAULT_COHERE_EMBEDDING_DIM,
-            embedding_types: Some(vec!["float".into()]),
-        }
-    }
 }
 
 /// The embeddings returned by the Cohere API.
