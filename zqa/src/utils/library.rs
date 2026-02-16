@@ -372,6 +372,10 @@ pub fn get_authors(items: &mut [ZoteroItem]) -> Result<(), LibraryParsingError> 
                 item.metadata.authors = Some(split_authors);
             }
         }
+    } else {
+        return Err(LibraryParsingError::SqlError(
+            "Library not found when fetching authors.".into(),
+        ));
     }
 
     Ok(())
