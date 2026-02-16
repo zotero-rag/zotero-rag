@@ -308,8 +308,8 @@ pub async fn compute_embeddings_async<T, U, F>(
 ) -> Result<Arc<dyn arrow_array::Array>, LLMError>
 where
     T: Serialize + Send + Sync + std::fmt::Debug,
-    U: EmbeddingApiResponse + for<'de> Deserialize<'de> + std::fmt::Debug,
-    F: Fn(Vec<String>) -> T,
+    U: EmbeddingApiResponse + for<'de> Deserialize<'de> + std::fmt::Debug + Send,
+    F: Fn(Vec<String>) -> T + Send,
 {
     let source_array = arrow_array::cast::as_string_array(&source);
     let texts: Vec<Option<String>> = source_array.iter().map(|s| s.map(str::to_owned)).collect();
