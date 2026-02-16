@@ -309,31 +309,34 @@ fn get_authors_for_item(item: &mut ZoteroItem) -> Result<(), LibraryParsingError
         let conn = Connection::open(path.join("zotero.sqlite"))?;
         let library_key = &item.metadata.library_key;
 
-        let query = "SELECT c.firstName, c.lastName
+        let query = "
+            SELECT DISTINCT
+                ia.path AS filePath,
+                i.key AS authorKey,
+                i2.key AS filePathKey,
+                GROUP_CONCAT(c.lastName || ', ' || c.firstName, '; ') AS authors
             FROM items i
-            JOIN itemData id ON i.itemID = id.itemID
-            JOIN fields f ON id.fieldID = f.fieldID
-            JOIN itemDataValues idv ON id.valueID = idv.valueID
-            JOIN itemCreators ic ON i.itemID = ic.itemID
-            JOIN creators c ON ic.creatorID = c.creatorID
-            WHERE i.key = ?1
-            AND f.fieldName = 'title'
-            ORDER BY ic.orderIndex
-        "
+            LEFT JOIN itemAttachments ia ON i.itemID = ia.parentItemID
+            JOIN items i2 ON ia.itemID = i2.itemID
+            LEFT JOIN itemCreators ic ON i.itemID = ic.itemID
+            LEFT JOIN creators c ON ic.creatorID = c.creatorID
+            WHERE i2.key = ?1
+            GROUP BY ia.path, i.key, i2.key
+            ORDER BY MIN(ic.orderIndex);
+"
         .to_string();
 
         let mut stmt = conn.prepare(&query).unwrap();
-        let item_iter: Vec<String> = stmt
-            .query_map(rusqlite::params![library_key], |row| {
-                let first_name: String = row.get(0)?;
-                let last_name: String = row.get(1)?;
+        if let Some(row) = stmt.query(rusqlite::params![library_key])?.next()? {
+            let authors: String = row.get(3)?;
+            let split_authors: Vec<_> = authors
+                .split(';')
+                .map(str::trim)
+                .map(String::from)
+                .collect();
 
-                Ok(format!("{last_name}, {first_name}"))
-            })?
-            .filter_map(std::result::Result::ok)
-            .collect();
-
-        item.metadata.authors = Some(item_iter);
+            item.metadata.authors = Some(split_authors);
+        }
 
         Ok(())
     } else {
@@ -615,7 +618,7 @@ pub async fn parse_library(
 #[cfg(test)]
 mod tests {
     use std::fs;
-    use zqa_macros::test_ok;
+    use zqa_macros::{test_contains, test_eq, test_ok};
 
     use crate::common::setup_logger;
 
@@ -689,7 +692,7 @@ mod tests {
                 reranker: DEFAULT_VOYAGE_RERANK_MODEL.into(),
             }),
             Some(0),
-            Some(5),
+            Some(7),
         )
         .await;
         test_ok!(items);
@@ -698,13 +701,39 @@ mod tests {
         // expect those to fail.
         let mut items = items.unwrap();
         assert!(!items.is_empty());
-        assert!((0..=5).contains(&items.len()));
+        test_eq!(items.len(), 5);
 
         // Now fetch authors from the Zotero DB
         let authors_result = get_authors(&mut items);
         test_ok!(authors_result);
-        for item in items {
+
+        // Check the titles/authors are in the expected order and pairs.
+        // The parsing might change; we only care about keywords
+        let expected_titles = [
+            "An expert system",
+            "Online Learning Rate Adaptation",
+            "Mono2Micro",
+            "Anomaly Detection",
+            "Learning Rate Curriculum",
+        ];
+        let expected_authors = [
+            vec!["Yedida", "Krishna", "Kalia", "Menzies", "Xiao", "Vukovic"],
+            vec!["Baydin", "Cornish", "Rubio", "Schmidt", "Wood"],
+            vec!["Krishna", "Xiao", "Vukovic", "Kalia", "Sinha", "Banerjee"],
+            vec!["Yedida", "Mehendale", "Challa", "Danda", "Sarkar", "Saha"],
+            vec!["Croitoru", "Ristea", "Ionescu", "Sebe"],
+        ];
+
+        for (i, item) in items.iter().enumerate() {
             assert!(item.metadata.authors.is_some());
+            let authors = item.metadata.authors.clone().unwrap();
+
+            test_contains!(item.metadata.title, *expected_titles.get(i).unwrap());
+
+            for (j, author) in authors.iter().enumerate() {
+                let exp_author = expected_authors.get(i).unwrap().get(j).unwrap();
+                test_contains!(author, *exp_author);
+            }
         }
     }
 
