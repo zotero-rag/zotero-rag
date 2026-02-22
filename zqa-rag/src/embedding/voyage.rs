@@ -2,18 +2,20 @@
 //! includes support for both embedding only.
 
 use crate::{
-    capabilities::EmbeddingProvider,
+    capabilities::{BatchAPIProvider, EmbeddingProvider},
     constants::{
         DEFAULT_VOYAGE_EMBEDDING_DIM, DEFAULT_VOYAGE_EMBEDDING_MODEL, DEFAULT_VOYAGE_RERANK_MODEL,
     },
     embedding::common::{EmbeddingApiResponse, Rerank, compute_embeddings_async},
 };
-use std::{borrow::Cow, env, future::Future, pin::Pin, sync::Arc, time::Instant};
+use std::{borrow::Cow, env, fs, future::Future, os, pin::Pin, sync::Arc, time::Instant};
 
 use arrow_schema::{DataType, Field};
 use http::HeaderMap;
 use lancedb::embeddings::EmbeddingFunction;
+use reqwest::multipart::Form;
 use serde::{Deserialize, Serialize};
+use serde_jsonlines::write_json_lines;
 
 use crate::llm::errors::LLMError;
 use crate::llm::http_client::{HttpClient, ReqwestClient};
@@ -312,6 +314,75 @@ impl<T: HttpClient, U: AsRef<str> + Send + Clone> Rerank<U> for VoyageAIClient<T
             Ok(res)
         })
     }
+}
+
+#[derive(Serialize)]
+pub(crate) struct VoyageAIEmbeddingBatchRequestBody {
+    input: Vec<String>,
+}
+
+#[derive(Serialize)]
+pub(crate) struct VoyageAIEmbeddingBatchRequest {
+    custom_id: String,
+    body: VoyageAIEmbeddingBatchRequestBody,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct VoyageAIEmbeddingBatchResponse {
+    id: String,
+    created_at: String,
+    expires_at: String,
+}
+
+impl<T> BatchAPIProvider for VoyageAIClient<T>
+where
+    T: HttpClient,
+{
+    type BatchInput = Vec<VoyageAIEmbeddingBatchRequest>;
+    type BatchSubmitResponse = VoyageAIEmbeddingBatchResponse;
+
+    async fn submit_job(
+        &self,
+        request: Self::BatchInput,
+    ) -> Pin<Box<dyn Future<Output = Result<Self::BatchSubmitResponse, LLMError>> + Send + '_>>
+    {
+        Box::pin(async move {
+            const FILES_API_URL: &str = "https://api.voyageai.com/v1/files";
+
+            let tmp_file = std::env::temp_dir().join("batch.jsonl");
+            write_json_lines(&tmp_file, &request)?;
+
+            let api_key = if let Some(ref config) = self.config {
+                config.api_key.clone()
+            } else {
+                env::var("VOYAGE_AI_API_KEY")?
+            };
+
+            let mut headers = HeaderMap::new();
+            headers.insert("Authorization", format!("Bearer {api_key}").parse()?);
+
+            let form_data = Form::new()
+                .text("purpose", "batch")
+                .file("file", tmp_file)
+                .await?;
+
+            let res = self
+                .client
+                .post_form(FILES_API_URL, headers, form_data)
+                .await?;
+
+            let response = res.text().await?;
+            let response: VoyageAIEmbeddingBatchResponse = serde_json::from_str(&response)
+                .map_err(|e| {
+                    log::warn!("Error deserializing Voyage AI reranker response: {e}");
+                    LLMError::DeserializationError(e.to_string())
+                })?;
+
+            Ok(response)
+        })
+    }
+
+    async fn get_job_status(&self) -> crate::capabilities::BatchJobState {}
 }
 
 #[cfg(test)]

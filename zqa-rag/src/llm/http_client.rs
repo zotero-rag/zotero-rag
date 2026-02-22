@@ -4,7 +4,7 @@
 //! `MockHttpClient` implementation for testing.
 
 use http;
-use reqwest::header::HeaderMap;
+use reqwest::{header::HeaderMap, multipart::Form};
 use std::{future::Future, pin::Pin};
 
 /// A trait that represents an HTTP client for making requests to LLM providers.
@@ -28,6 +28,20 @@ pub trait HttpClient: Send + Sync {
         headers: HeaderMap,
         body: &'a T,
     ) -> Pin<Box<dyn Future<Output = Result<reqwest::Response, reqwest::Error>> + Send + 'a>>;
+
+    /// Submit a request with a `multipart/form-data` body to `url` with the specified `headers`.
+    ///
+    /// # Arguments
+    ///
+    /// * `url` - The URL to send the request to.
+    /// * `headers` - The headers to include in the request.
+    /// * `form_data` - The form data of the request.
+    fn post_form(
+        &self,
+        url: &str,
+        headers: HeaderMap,
+        form_data: Form,
+    ) -> Pin<Box<dyn Future<Output = Result<reqwest::Response, reqwest::Error>> + Send>>;
 }
 
 /// A default implementation of the `HttpClient` trait using the `reqwest` crate.
@@ -56,6 +70,22 @@ impl HttpClient for ReqwestClient {
                 .post(url)
                 .json(&body)
                 .headers(headers)
+                .send()
+                .await
+        })
+    }
+
+    fn post_form(
+        &self,
+        url: &str,
+        headers: HeaderMap,
+        form_data: Form,
+    ) -> Pin<Box<dyn Future<Output = Result<reqwest::Response, reqwest::Error>> + Send>> {
+        Box::pin(async move {
+            self.client
+                .get(url)
+                .headers(headers)
+                .form(&form_data)
                 .send()
                 .await
         })
@@ -110,5 +140,15 @@ impl<T: serde::Serialize + Send + Sync + Clone> HttpClient for MockHttpClient<T>
 
             Ok(reqwest::Response::from(http_response))
         })
+    }
+
+    fn post_form(
+        &self,
+        url: &str,
+        headers: HeaderMap,
+        form_data: Form,
+    ) -> Pin<Box<dyn Future<Output = Result<reqwest::Response, reqwest::Error>> + Send>> {
+        // Form data is ignored in the mock, so we can reuse the impl
+        self.post_json(url, headers, form_data)
     }
 }
