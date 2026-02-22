@@ -2,7 +2,12 @@
 //! providers exposed through this crate have which capabilities. Note that it is possible for a
 //! provider to not have all the capabilities listed here, if that API endpoint is not (yet) supported.
 
+use std::pin::Pin;
+
+use serde::{Deserialize, Serialize};
 use zqa_pdftools::chunk::ChunkingStrategy;
+
+use crate::llm::errors::LLMError;
 
 /// Providers of models that can generate text. Clients for these providers should implement
 /// the `ApiClient` trait. Generally speaking, for this reason, these structs and all their trait
@@ -104,6 +109,68 @@ impl EmbeddingProvider {
             }
             // include a buffer for approximation errors; actual limit is 2048
             EmbeddingProvider::Gemini => ChunkingStrategy::SectionBased(1500),
+        }
+    }
+}
+
+/// Providers of batch APIs generally show jobs as being in certain states. Not every such provider
+/// may implement all these states, so you should not make such an assumption; however, certain
+/// basic assumptions can be made, e.g., a job cannot be completed before it is created. These
+/// assumptions are encoded via the [`PartialOrd`] trait.
+///
+/// Moreover, it is not correct to assume that the states here are a union of all the states that
+/// the various batch API providers can produce; [`BatchAPIProvider`]s will sometimes logically
+/// merge states; e.g., Voyage AI's [batch
+/// lifecycle](https://docs.voyageai.com/docs/batch-inference#batch-lifecycle) has a "finalizing"
+/// state, but the [`crate::embedding::voyage::VoyageAIClient`] changes this to
+/// [BatchJobState::InProgress`].
+pub enum BatchJobState {
+    /// The batch job has been created, but it may not have started processing.
+    Created,
+    /// The batch job is in progress.
+    InProgress,
+    ///The results of the batch job are ready.
+    Completed,
+    /// The batch job has failed validation.
+    Failed,
+    /// A request has been made to cancel the job, but it has not yet canceled.
+    Canceling,
+    /// The batch job has been canceled.
+    Canceled,
+}
+
+/// A provider of a batch API.
+#[allow(async_fn_in_trait)]
+pub trait BatchAPIProvider {
+    /// The embedding batch creation request
+    type BatchInput: Serialize;
+    /// The embedding batch creation response
+    type BatchSubmitResponse: for<'de> Deserialize<'de>;
+
+    /// Submit a job to the batch API.
+    async fn submit_job(
+        &self,
+        request: Self::BatchInput,
+    ) -> Pin<Box<dyn Future<Output = Result<Self::BatchSubmitResponse, LLMError>> + Send + '_>>;
+    /// Check the status of a submitted batch job.
+    async fn get_job_status(&self) -> BatchJobState;
+}
+
+/// Providers of batch embedding APIs. Structs corresponding to these should implement
+/// [`BatchAPIProvider`]. By definition, this enum is a subset of [`EmbeddingProvider`].
+#[derive(Clone, Debug)]
+pub enum BatchEmbeddingProvider {
+    /// Voyage AI batch API provider
+    VoyageAI,
+}
+
+impl BatchEmbeddingProvider {
+    /// Return a string representation of the provider.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        // Oh boy, what enum variant will we get, I wonder
+        match self {
+            BatchEmbeddingProvider::VoyageAI => "voyageai",
         }
     }
 }

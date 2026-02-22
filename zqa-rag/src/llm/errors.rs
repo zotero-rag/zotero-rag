@@ -42,6 +42,9 @@ pub enum LLMError {
     /// A request timeout error.
     #[error("Request timed out")]
     TimeoutError,
+    /// An IO error, which in our case is usually a failed form data creation
+    #[error("IO error")]
+    IOError(#[from] std::io::Error),
 }
 
 /// From<...> implementations begin here
