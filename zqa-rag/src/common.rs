@@ -133,6 +133,25 @@ mod tests {
                 }
             })
         }
+
+        fn get_json<'a>(
+            &'a self,
+            url: &'a str,
+            headers: HeaderMap,
+        ) -> Pin<Box<dyn Future<Output = Result<reqwest::Response, reqwest::Error>> + Send + 'a>>
+        {
+            self.post_json(url, headers, &())
+        }
+
+        fn post_form<'a>(
+            &'a self,
+            url: &'a str,
+            headers: HeaderMap,
+            _form_data: reqwest::multipart::Form,
+        ) -> Pin<Box<dyn Future<Output = Result<reqwest::Response, reqwest::Error>> + Send + '_>>
+        {
+            self.post_json(url, headers, &())
+        }
     }
 
     #[tokio::test]
