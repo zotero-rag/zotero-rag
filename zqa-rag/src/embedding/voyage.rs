@@ -581,8 +581,8 @@ where
         let res = self.client.get_json(files_api_url, headers).await?;
         let body = res.text().await?;
 
-        let tmp_file = std::env::temp_dir().join("batch_results.jsonl");
-        std::fs::write(tmp_file.clone(), body)?;
+        let tmp_file = tempfile::NamedTempFile::new()?;
+        tokio::fs::write(tmp_file.path(), body).await?;
 
         Ok(json_lines::<VoyageAIBatchResult, _>(tmp_file)?
             .filter_map(std::result::Result::ok)
@@ -627,7 +627,7 @@ where
         // Part 1 - use the Files API to upload a JSONL file
         const FILES_API_URL: &str = "https://api.voyageai.com/v1/files";
 
-        let tmp_file = std::env::temp_dir().join("batch.jsonl");
+        let tmp_file = tempfile::NamedTempFile::new()?;
         write_json_lines(&tmp_file, &request)?;
 
         let api_key = if let Some(ref config) = self.config {
@@ -651,7 +651,7 @@ where
 
         let response = res.text().await?;
         let response: VoyageAIFilesResponse = serde_json::from_str(&response).map_err(|e| {
-            log::warn!("Error deserializing Voyage AI reranker response: {e}");
+            log::warn!("Error deserializing Voyage AI Files API response: {e}");
             LLMError::DeserializationError(e.to_string())
         })?;
 
@@ -668,7 +668,7 @@ where
 
         let response = res.text().await?;
         let response: VoyageAIFilesResponse = serde_json::from_str(&response).map_err(|e| {
-            log::warn!("Error deserializing Voyage AI reranker response: {e}");
+            log::warn!("Error deserializing Voyage AI Batch API response: {e}");
             LLMError::DeserializationError(e.to_string())
         })?;
 

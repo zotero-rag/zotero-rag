@@ -99,7 +99,7 @@ impl HttpClient for ReqwestClient {
     ) -> Pin<Box<dyn Future<Output = Result<reqwest::Response, reqwest::Error>> + Send + '_>> {
         Box::pin(async move {
             self.client
-                .get(url)
+                .post(url)
                 .headers(headers)
                 .multipart(form_data)
                 .send()
