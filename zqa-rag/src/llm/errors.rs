@@ -45,6 +45,9 @@ pub enum LLMError {
     /// An IO error, which in our case is usually a failed form data creation
     #[error("IO error")]
     IOError(#[from] std::io::Error),
+    /// For embeddings, signifies that a batch is not yet ready, but a response was requested.
+    #[error("Batch {0} has not yet completed.")]
+    BatchNotCompleted(String),
 }
 
 /// From<...> implementations begin here
