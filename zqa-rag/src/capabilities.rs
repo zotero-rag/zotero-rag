@@ -3,6 +3,7 @@
 //! provider to not have all the capabilities listed here, if that API endpoint is not (yet) supported.
 
 use serde::{Deserialize, Serialize};
+use std::cmp::Ordering;
 use zqa_pdftools::chunk::ChunkingStrategy;
 
 use crate::llm::errors::LLMError;
@@ -121,7 +122,8 @@ impl EmbeddingProvider {
 /// merge states; e.g., Voyage AI's [batch
 /// lifecycle](https://docs.voyageai.com/docs/batch-inference#batch-lifecycle) has a "finalizing"
 /// state, but the [`crate::embedding::voyage::VoyageAIClient`] changes this to
-/// [BatchJobState::InProgress`].
+/// [`BatchJobState::InProgress`].
+#[derive(PartialEq, Eq)]
 pub enum BatchJobState {
     /// The batch job has been created, but it may not have started processing.
     Created,
@@ -135,6 +137,48 @@ pub enum BatchJobState {
     Canceling,
     /// The batch job has been canceled.
     Canceled,
+}
+
+impl PartialOrd for BatchJobState {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        if self == other {
+            return Some(Ordering::Equal);
+        }
+
+        // Main progression: Created < InProgress < Completed
+        // Cancellation branch: Created/InProgress < Canceling < Canceled
+        match (self, other) {
+            // Failed is incomparable to all other states
+            (BatchJobState::Failed, _) | (_, BatchJobState::Failed) 
+            // Completed vs Canceling/Canceled: incomparable (different terminal branches)
+            | (BatchJobState::Completed, BatchJobState::Canceling)
+            | (BatchJobState::Completed, BatchJobState::Canceled)
+            | (BatchJobState::Canceling, BatchJobState::Completed)
+            | (BatchJobState::Canceled, BatchJobState::Completed) => None,
+
+            (BatchJobState::Created, BatchJobState::InProgress)
+            | (BatchJobState::Created, BatchJobState::Completed)
+            | (BatchJobState::Created, BatchJobState::Canceling)
+            | (BatchJobState::Created, BatchJobState::Canceled)
+            | (BatchJobState::InProgress, BatchJobState::Completed)
+            | (BatchJobState::InProgress, BatchJobState::Canceling)
+            | (BatchJobState::InProgress, BatchJobState::Canceled)
+            | (BatchJobState::Canceling, BatchJobState::Canceled) => Some(Ordering::Less),
+
+            (BatchJobState::InProgress, BatchJobState::Created)
+            | (BatchJobState::Completed, BatchJobState::Created)
+            | (BatchJobState::Canceling, BatchJobState::Created)
+            | (BatchJobState::Canceled, BatchJobState::Created)
+            | (BatchJobState::Completed, BatchJobState::InProgress)
+            | (BatchJobState::Canceling, BatchJobState::InProgress)
+            | (BatchJobState::Canceled, BatchJobState::InProgress)
+            | (BatchJobState::Canceled, BatchJobState::Canceling) => Some(Ordering::Greater),
+
+
+            // Equal case already handled above
+            _ => unreachable!(),
+        }
+    }
 }
 
 /// A provider of a batch API.
