@@ -357,6 +357,7 @@ pub struct VoyageAIFilesRequest {
 
 /// A response from the Voyage AI Files API.
 #[derive(Deserialize)]
+#[allow(dead_code)]
 pub struct VoyageAIFilesResponse {
     /// The file ID, used to refer to input, output, and error files. This starts with "file-".
     id: String,
@@ -377,7 +378,7 @@ pub(crate) struct VoyageAIBatchRequestParams<'a> {
     output_dimension: usize,
 }
 
-impl<'a> Default for VoyageAIBatchRequestParams<'a> {
+impl Default for VoyageAIBatchRequestParams<'_> {
     fn default() -> Self {
         Self {
             model: DEFAULT_VOYAGE_EMBEDDING_MODEL,
@@ -410,11 +411,12 @@ pub(crate) struct VoyageAIBatchRequest<'a> {
     input_file_id: String,
 }
 
-impl<'a> VoyageAIBatchRequest<'a> {
+impl VoyageAIBatchRequest<'_> {
     /// Add a file ID to the current batch request.
     fn with_file_id(mut self, file_id: &str) -> Self {
         self.input_file_id = file_id.into();
-        return self;
+
+        self
     }
 }
 
@@ -461,6 +463,7 @@ impl From<VoyageAIBatchStatus> for BatchJobState {
 
 /// A response to a request checking the status of a batch.
 #[derive(Deserialize)]
+#[allow(dead_code)]
 pub struct VoyageAIBatchStatusResponse {
     /// The batch ID.
     id: String,
@@ -486,6 +489,7 @@ pub struct VoyageAIBatchStatusResponse {
 
 /// The `response` field of the response from the Batch API.
 #[derive(Deserialize)]
+#[allow(dead_code)]
 pub struct VoyageAIBatchResultResponse {
     /// The HTTP status code from the embedding endpoint
     status_code: usize,
@@ -496,6 +500,7 @@ pub struct VoyageAIBatchResultResponse {
 /// The response from the Batch API. This is not to be confused as the *raw* output from the Batch
 /// API, but the result of calling the *Files API* using the `file_id` obtained from the Batch API.
 #[derive(Deserialize)]
+#[allow(dead_code)]
 pub struct VoyageAIBatchResult {
     /// The ID of the batch containing this result
     batch_id: String,
@@ -580,7 +585,7 @@ where
         std::fs::write(tmp_file.clone(), body)?;
 
         Ok(json_lines::<VoyageAIBatchResult, _>(tmp_file)?
-            .filter_map(|x| x.ok())
+            .filter_map(std::result::Result::ok)
             .collect::<Vec<_>>())
     }
 }
