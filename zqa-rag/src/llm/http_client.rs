@@ -11,6 +11,22 @@ use std::{future::Future, pin::Pin};
 /// This abstraction enables real HTTP requests to API endpoints while also
 /// supporting mock implementations for testing.
 pub trait HttpClient: Send + Sync {
+    /// Send a GET request to the specified URL with the given headers.
+    ///
+    /// # Arguments
+    ///
+    /// * `url` - The URL to send the request to.
+    /// * `headers` - The headers to include in the request.
+    ///
+    /// # Returns
+    ///
+    /// A `Future` that resolves to a `Result` containing the response from the server.
+    fn get_json<'a>(
+        &'a self,
+        url: &'a str,
+        headers: HeaderMap,
+    ) -> Pin<Box<dyn Future<Output = Result<reqwest::Response, reqwest::Error>> + Send + 'a>>;
+
     /// Send a POST request to the specified URL with the given body and headers.
     ///
     /// # Arguments:
@@ -36,12 +52,12 @@ pub trait HttpClient: Send + Sync {
     /// * `url` - The URL to send the request to.
     /// * `headers` - The headers to include in the request.
     /// * `form_data` - The form data of the request.
-    fn post_form(
-        &self,
-        url: &str,
+    fn post_form<'a>(
+        &'a self,
+        url: &'a str,
         headers: HeaderMap,
         form_data: Form,
-    ) -> Pin<Box<dyn Future<Output = Result<reqwest::Response, reqwest::Error>> + Send>>;
+    ) -> Pin<Box<dyn Future<Output = Result<reqwest::Response, reqwest::Error>> + Send + '_>>;
 }
 
 /// A default implementation of the `HttpClient` trait using the `reqwest` crate.
@@ -75,20 +91,28 @@ impl HttpClient for ReqwestClient {
         })
     }
 
-    fn post_form(
-        &self,
-        url: &str,
+    fn post_form<'a>(
+        &'a self,
+        url: &'a str,
         headers: HeaderMap,
         form_data: Form,
-    ) -> Pin<Box<dyn Future<Output = Result<reqwest::Response, reqwest::Error>> + Send>> {
+    ) -> Pin<Box<dyn Future<Output = Result<reqwest::Response, reqwest::Error>> + Send + '_>> {
         Box::pin(async move {
             self.client
                 .get(url)
                 .headers(headers)
-                .form(&form_data)
+                .multipart(form_data)
                 .send()
                 .await
         })
+    }
+
+    fn get_json<'a>(
+        &'a self,
+        url: &'a str,
+        headers: HeaderMap,
+    ) -> Pin<Box<dyn Future<Output = Result<reqwest::Response, reqwest::Error>> + Send + 'a>> {
+        Box::pin(async move { self.client.get(url).headers(headers).send().await })
     }
 }
 
@@ -142,13 +166,22 @@ impl<T: serde::Serialize + Send + Sync + Clone> HttpClient for MockHttpClient<T>
         })
     }
 
-    fn post_form(
-        &self,
-        url: &str,
+    fn post_form<'a>(
+        &'a self,
+        url: &'a str,
         headers: HeaderMap,
-        form_data: Form,
-    ) -> Pin<Box<dyn Future<Output = Result<reqwest::Response, reqwest::Error>> + Send>> {
-        // Form data is ignored in the mock, so we can reuse the impl
-        self.post_json(url, headers, form_data)
+        _form_data: Form,
+    ) -> Pin<Box<dyn Future<Output = Result<reqwest::Response, reqwest::Error>> + Send + '_>> {
+        // We can use dummy data as a placeholder for the body
+        self.post_json(url, headers, &None::<usize>)
+    }
+
+    fn get_json<'a>(
+        &'a self,
+        url: &'a str,
+        headers: HeaderMap,
+    ) -> Pin<Box<dyn Future<Output = Result<reqwest::Response, reqwest::Error>> + Send + 'a>> {
+        // We can use dummy data as a placeholder for the body
+        self.post_json(url, headers, &None::<usize>)
     }
 }

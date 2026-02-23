@@ -2,8 +2,6 @@
 //! providers exposed through this crate have which capabilities. Note that it is possible for a
 //! provider to not have all the capabilities listed here, if that API endpoint is not (yet) supported.
 
-use std::pin::Pin;
-
 use serde::{Deserialize, Serialize};
 use zqa_pdftools::chunk::ChunkingStrategy;
 
@@ -146,14 +144,20 @@ pub trait BatchAPIProvider {
     type BatchInput: Serialize;
     /// The embedding batch creation response
     type BatchSubmitResponse: for<'de> Deserialize<'de>;
+    /// The embedding results
+    type BatchResults: for<'de> Deserialize<'de>;
 
     /// Submit a job to the batch API.
-    async fn submit_job(
+    async fn submit_batch(
         &self,
         request: Self::BatchInput,
-    ) -> Pin<Box<dyn Future<Output = Result<Self::BatchSubmitResponse, LLMError>> + Send + '_>>;
+    ) -> Result<Self::BatchSubmitResponse, LLMError>;
+
     /// Check the status of a submitted batch job.
-    async fn get_job_status(&self) -> BatchJobState;
+    async fn get_batch_status(&self, batch_id: &str) -> Result<BatchJobState, LLMError>;
+
+    /// Get the results of a completed batch job.
+    async fn get_batch_results(&self, batch_id: &str) -> Result<Self::BatchResults, LLMError>;
 }
 
 /// Providers of batch embedding APIs. Structs corresponding to these should implement
