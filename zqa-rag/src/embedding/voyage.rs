@@ -356,7 +356,7 @@ pub struct VoyageAIFilesRequest {
 }
 
 /// A response from the Voyage AI Files API.
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize, Clone)]
 #[allow(dead_code)]
 pub struct VoyageAIFilesResponse {
     /// The file ID, used to refer to input, output, and error files. This starts with "file-".
@@ -386,6 +386,15 @@ impl Default for VoyageAIBatchRequestParams<'_> {
             output_dimension: DEFAULT_VOYAGE_EMBEDDING_DIM as usize,
         }
     }
+}
+
+/// A response from the Voyage AI Batch API (POST /v1/batches). This is distinct from
+/// [`VoyageAIFilesResponse`], which is returned by the Files API.
+#[derive(Deserialize, Serialize, Clone)]
+#[allow(dead_code)]
+pub struct VoyageAIBatchCreateResponse {
+    /// The batch ID, used to check status and retrieve results.
+    pub(crate) id: String,
 }
 
 /// A request to the Voyage AI Batch API. This assumes a call to the Files API has been made,
@@ -434,7 +443,7 @@ impl<'a> Default for VoyageAIBatchRequest<'a> {
 /// The status of a batch.
 ///
 /// See also: [Documentation](https://docs.voyageai.com/docs/batch-inference#batch-lifecycle).
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(rename_all = "snake_case")]
 enum VoyageAIBatchStatus {
     Validating,
@@ -462,7 +471,7 @@ impl From<VoyageAIBatchStatus> for BatchJobState {
 }
 
 /// A response to a request checking the status of a batch.
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize, Clone)]
 #[allow(dead_code)]
 pub struct VoyageAIBatchStatusResponse {
     /// The batch ID.
@@ -488,7 +497,7 @@ pub struct VoyageAIBatchStatusResponse {
 }
 
 /// The `response` field of the response from the Batch API.
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize)]
 #[allow(dead_code)]
 pub struct VoyageAIBatchResultResponse {
     /// The HTTP status code from the embedding endpoint
@@ -499,7 +508,7 @@ pub struct VoyageAIBatchResultResponse {
 
 /// The response from the Batch API. This is not to be confused as the *raw* output from the Batch
 /// API, but the result of calling the *Files API* using the `file_id` obtained from the Batch API.
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize)]
 #[allow(dead_code)]
 pub struct VoyageAIBatchResult {
     /// The ID of the batch containing this result
@@ -595,7 +604,7 @@ where
     T: HttpClient,
 {
     type BatchInput = Vec<VoyageAIFilesRequest>;
-    type BatchSubmitResponse = VoyageAIFilesResponse;
+    type BatchSubmitResponse = VoyageAIBatchCreateResponse;
     type BatchResults = (
         Option<Vec<VoyageAIBatchResult>>,
         Option<Vec<VoyageAIBatchResult>>,
@@ -607,7 +616,7 @@ where
     /// 1. The input requests are serialized as JSONL and uploaded via the Files API.
     /// 2. A batch job is created referencing the uploaded file ID.
     ///
-    /// Returns a [`VoyageAIFilesResponse`] containing the batch ID, which can be passed to
+    /// Returns a [`VoyageAIBatchCreateResponse`] containing the batch ID, which can be passed to
     /// [`BatchAPIProvider::get_batch_status`] and [`BatchAPIProvider::get_batch_results`].
     ///
     /// # Errors
@@ -667,10 +676,11 @@ where
             .await?;
 
         let response = res.text().await?;
-        let response: VoyageAIFilesResponse = serde_json::from_str(&response).map_err(|e| {
-            log::warn!("Error deserializing Voyage AI Batch API response: {e}");
-            LLMError::DeserializationError(e.to_string())
-        })?;
+        let response: VoyageAIBatchCreateResponse =
+            serde_json::from_str(&response).map_err(|e| {
+                log::warn!("Error deserializing Voyage AI Batch API response: {e}");
+                LLMError::DeserializationError(e.to_string())
+            })?;
 
         Ok(response)
     }
@@ -721,9 +731,11 @@ where
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::capabilities::{BatchAPIProvider, BatchJobState};
+    use crate::constants::{DEFAULT_VOYAGE_EMBEDDING_DIM, DEFAULT_VOYAGE_EMBEDDING_MODEL};
     use crate::embedding::common::Rerank;
-    use crate::embedding::voyage::{DEFAULT_VOYAGE_EMBEDDING_DIM, VoyageAIClient};
-    use crate::llm::http_client::ReqwestClient;
+    use crate::llm::http_client::{MockHttpClient, ReqwestClient};
     use arrow_array::Array;
     use dotenv::dotenv;
     use std::sync::Arc;
@@ -782,5 +794,214 @@ mod tests {
 
         let reranked = reranked.unwrap();
         test_eq!(reranked.len(), array.len());
+    }
+
+    #[test]
+    fn test_batch_status_validating_maps_to_created() {
+        let state: BatchJobState = VoyageAIBatchStatus::Validating.into();
+        test_eq!(state, BatchJobState::Created);
+    }
+
+    #[test]
+    fn test_batch_status_in_progress_maps_to_in_progress() {
+        let state: BatchJobState = VoyageAIBatchStatus::InProgress.into();
+        test_eq!(state, BatchJobState::InProgress);
+    }
+
+    #[test]
+    fn test_batch_status_finalizing_maps_to_in_progress() {
+        let state: BatchJobState = VoyageAIBatchStatus::Finalizing.into();
+        test_eq!(state, BatchJobState::InProgress);
+    }
+
+    #[test]
+    fn test_batch_status_completed_maps_to_completed() {
+        let state: BatchJobState = VoyageAIBatchStatus::Completed.into();
+        test_eq!(state, BatchJobState::Completed);
+    }
+
+    #[test]
+    fn test_batch_status_failed_maps_to_failed() {
+        let state: BatchJobState = VoyageAIBatchStatus::Failed.into();
+        test_eq!(state, BatchJobState::Failed);
+    }
+
+    #[test]
+    fn test_batch_status_cancelling_maps_to_canceling() {
+        let state: BatchJobState = VoyageAIBatchStatus::Cancelling.into();
+        test_eq!(state, BatchJobState::Canceling);
+    }
+
+    #[test]
+    fn test_batch_status_cancelled_maps_to_canceled() {
+        let state: BatchJobState = VoyageAIBatchStatus::Cancelled.into();
+        test_eq!(state, BatchJobState::Canceled);
+    }
+
+    /// `get_batch_status` deserializes a `VoyageAIBatchStatusResponse` and converts the status
+    /// field to a `BatchJobState`.
+    #[tokio::test]
+    async fn test_get_batch_status_completed() {
+        let mock_response = VoyageAIBatchStatusResponse {
+            id: "batch-xyz".to_string(),
+            input_file_id: "file-abc123".to_string(),
+            status: VoyageAIBatchStatus::Completed,
+            created_at: "2024-01-01T00:00:00Z".to_string(),
+            in_progress_at: None,
+            completed_at: Some("2024-01-01T01:00:00Z".to_string()),
+            failed_at: None,
+            output_file_id: Some("file-out-1".to_string()),
+            error_file_id: None,
+        };
+
+        let client = VoyageAIClient {
+            client: MockHttpClient::new(mock_response),
+            config: Some(crate::config::VoyageAIConfig {
+                api_key: "test-key".to_string(),
+                embedding_model: DEFAULT_VOYAGE_EMBEDDING_MODEL.to_string(),
+                embedding_dims: DEFAULT_VOYAGE_EMBEDDING_DIM as usize,
+                reranker: "rerank-2".to_string(),
+            }),
+        };
+
+        let result = BatchAPIProvider::get_batch_status(&client, "batch-xyz").await;
+        test_ok!(result);
+        test_eq!(result.unwrap(), BatchJobState::Completed);
+    }
+
+    #[tokio::test]
+    async fn test_get_batch_status_in_progress() {
+        let mock_response = VoyageAIBatchStatusResponse {
+            id: "batch-xyz".to_string(),
+            input_file_id: "file-abc123".to_string(),
+            status: VoyageAIBatchStatus::InProgress,
+            created_at: "2024-01-01T00:00:00Z".to_string(),
+            in_progress_at: Some("2024-01-01T00:05:00Z".to_string()),
+            completed_at: None,
+            failed_at: None,
+            output_file_id: None,
+            error_file_id: None,
+        };
+
+        let client = VoyageAIClient {
+            client: MockHttpClient::new(mock_response),
+            config: Some(crate::config::VoyageAIConfig {
+                api_key: "test-key".to_string(),
+                embedding_model: DEFAULT_VOYAGE_EMBEDDING_MODEL.to_string(),
+                embedding_dims: DEFAULT_VOYAGE_EMBEDDING_DIM as usize,
+                reranker: "rerank-2".to_string(),
+            }),
+        };
+
+        let result = BatchAPIProvider::get_batch_status(&client, "batch-xyz").await;
+        test_ok!(result);
+        test_eq!(result.unwrap(), BatchJobState::InProgress);
+    }
+
+    /// When `get_batch_results` is called on a batch that is not yet in a terminal state,
+    /// it should return `LLMError::BatchNotCompleted`.
+    #[tokio::test]
+    async fn test_get_batch_results_not_completed_returns_error() {
+        let mock_response = VoyageAIBatchStatusResponse {
+            id: "batch-xyz".to_string(),
+            input_file_id: "file-abc123".to_string(),
+            status: VoyageAIBatchStatus::InProgress,
+            created_at: "2024-01-01T00:00:00Z".to_string(),
+            in_progress_at: Some("2024-01-01T00:05:00Z".to_string()),
+            completed_at: None,
+            failed_at: None,
+            output_file_id: None,
+            error_file_id: None,
+        };
+
+        let client = VoyageAIClient {
+            client: MockHttpClient::new(mock_response),
+            config: Some(crate::config::VoyageAIConfig {
+                api_key: "test-key".to_string(),
+                embedding_model: DEFAULT_VOYAGE_EMBEDDING_MODEL.to_string(),
+                embedding_dims: DEFAULT_VOYAGE_EMBEDDING_DIM as usize,
+                reranker: "rerank-2".to_string(),
+            }),
+        };
+
+        let result = BatchAPIProvider::get_batch_results(&client, "batch-xyz").await;
+        assert!(result.is_err(), "Expected BatchNotCompleted error, got Ok");
+
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, crate::llm::errors::LLMError::BatchNotCompleted(_)),
+            "Expected BatchNotCompleted, got {err:?}"
+        );
+    }
+
+    /// Submits a small batch job and immediately checks its status. The job should be in a
+    /// non-completed state right after submission (Created or InProgress).
+    #[tokio::test]
+    async fn test_live_submit_batch_and_check_status() {
+        dotenv().ok();
+
+        let client = VoyageAIClient::<ReqwestClient>::default();
+
+        let request = vec![
+            VoyageAIFilesRequest {
+                custom_id: "live-req-1".to_string(),
+                body: VoyageAIFilesRequestBody {
+                    input: vec!["Hello, World!".to_string(), "A second string".to_string()],
+                },
+            },
+            VoyageAIFilesRequest {
+                custom_id: "live-req-2".to_string(),
+                body: VoyageAIFilesRequestBody {
+                    input: vec!["A third string".to_string()],
+                },
+            },
+        ];
+
+        let submit_result = client.submit_batch(request).await;
+        test_ok!(submit_result);
+
+        let batch_id = submit_result.unwrap().id;
+
+        let status_result = BatchAPIProvider::get_batch_status(&client, &batch_id).await;
+        test_ok!(status_result);
+
+        let state = status_result.unwrap();
+        assert!(
+            state == BatchJobState::Created || state == BatchJobState::InProgress,
+            "Expected Created or InProgress immediately after submission, got {state:?}"
+        );
+    }
+
+    /// Same check for `Validating` status (also non-terminal).
+    #[tokio::test]
+    async fn test_get_batch_results_validating_returns_error() {
+        let mock_response = VoyageAIBatchStatusResponse {
+            id: "batch-validating".to_string(),
+            input_file_id: "file-abc123".to_string(),
+            status: VoyageAIBatchStatus::Validating,
+            created_at: "2024-01-01T00:00:00Z".to_string(),
+            in_progress_at: None,
+            completed_at: None,
+            failed_at: None,
+            output_file_id: None,
+            error_file_id: None,
+        };
+
+        let client = VoyageAIClient {
+            client: MockHttpClient::new(mock_response),
+            config: Some(crate::config::VoyageAIConfig {
+                api_key: "test-key".to_string(),
+                embedding_model: DEFAULT_VOYAGE_EMBEDDING_MODEL.to_string(),
+                embedding_dims: DEFAULT_VOYAGE_EMBEDDING_DIM as usize,
+                reranker: "rerank-2".to_string(),
+            }),
+        };
+
+        let result = BatchAPIProvider::get_batch_results(&client, "batch-validating").await;
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            crate::llm::errors::LLMError::BatchNotCompleted(_)
+        ));
     }
 }
