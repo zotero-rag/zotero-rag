@@ -123,7 +123,7 @@ impl EmbeddingProvider {
 /// lifecycle](https://docs.voyageai.com/docs/batch-inference#batch-lifecycle) has a "finalizing"
 /// state, but the [`crate::embedding::voyage::VoyageAIClient`] changes this to
 /// [`BatchJobState::InProgress`].
-#[derive(PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum BatchJobState {
     /// The batch job has been created, but it may not have started processing.
     Created,
@@ -149,31 +149,38 @@ impl PartialOrd for BatchJobState {
         // Cancellation branch: Created/InProgress < Canceling < Canceled
         match (self, other) {
             // Failed is incomparable to all other states
-            (BatchJobState::Failed, _) | (_, BatchJobState::Failed) 
-            // Completed vs Canceling/Canceled: incomparable (different terminal branches)
-            | (BatchJobState::Completed, BatchJobState::Canceling)
-            | (BatchJobState::Completed, BatchJobState::Canceled)
-            | (BatchJobState::Canceling, BatchJobState::Completed)
-            | (BatchJobState::Canceled, BatchJobState::Completed) => None,
+            (BatchJobState::Failed, _)
+            | (_, BatchJobState::Failed)
+            | (BatchJobState::Completed, BatchJobState::Canceling | BatchJobState::Canceled)
+            | (BatchJobState::Canceling | BatchJobState::Canceled, BatchJobState::Completed) => {
+                None
+            }
 
-            (BatchJobState::Created, BatchJobState::InProgress)
-            | (BatchJobState::Created, BatchJobState::Completed)
-            | (BatchJobState::Created, BatchJobState::Canceling)
-            | (BatchJobState::Created, BatchJobState::Canceled)
-            | (BatchJobState::InProgress, BatchJobState::Completed)
-            | (BatchJobState::InProgress, BatchJobState::Canceling)
-            | (BatchJobState::InProgress, BatchJobState::Canceled)
+            (
+                BatchJobState::Created,
+                BatchJobState::InProgress
+                | BatchJobState::Completed
+                | BatchJobState::Canceling
+                | BatchJobState::Canceled,
+            )
+            | (
+                BatchJobState::InProgress,
+                BatchJobState::Completed | BatchJobState::Canceling | BatchJobState::Canceled,
+            )
             | (BatchJobState::Canceling, BatchJobState::Canceled) => Some(Ordering::Less),
 
-            (BatchJobState::InProgress, BatchJobState::Created)
-            | (BatchJobState::Completed, BatchJobState::Created)
-            | (BatchJobState::Canceling, BatchJobState::Created)
-            | (BatchJobState::Canceled, BatchJobState::Created)
-            | (BatchJobState::Completed, BatchJobState::InProgress)
-            | (BatchJobState::Canceling, BatchJobState::InProgress)
-            | (BatchJobState::Canceled, BatchJobState::InProgress)
+            (
+                BatchJobState::InProgress
+                | BatchJobState::Completed
+                | BatchJobState::Canceling
+                | BatchJobState::Canceled,
+                BatchJobState::Created,
+            )
+            | (
+                BatchJobState::Completed | BatchJobState::Canceling | BatchJobState::Canceled,
+                BatchJobState::InProgress,
+            )
             | (BatchJobState::Canceled, BatchJobState::Canceling) => Some(Ordering::Greater),
-
 
             // Equal case already handled above
             _ => unreachable!(),
