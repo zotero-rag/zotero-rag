@@ -369,7 +369,7 @@ pub struct VoyageAIFilesResponse {
 
 /// The embedding parameters for a batch request.
 #[derive(Serialize)]
-pub(crate) struct VoyageAIBatchRequestParams<'a> {
+pub struct VoyageAIBatchRequestParams<'a> {
     /// The model used. Defaults to [`crate::constants::DEFAULT_VOYAGE_EMBEDDING_MODEL`].
     model: &'a str,
     /// The input type. This is set to "document".
@@ -402,14 +402,14 @@ pub struct VoyageAIBatchCreateResponse {
 ///
 /// # Construction example
 ///
-/// ```rs
+/// ```rust
 /// # use zqa_rag::embedding::voyage::{VoyageAIBatchRequest, VoyageAIBatchRequestParams};
 ///
 /// let request = VoyageAIBatchRequest::default()
 ///     .with_file_id("file-123");
 /// ```
 #[derive(Serialize)]
-pub(crate) struct VoyageAIBatchRequest<'a> {
+pub struct VoyageAIBatchRequest<'a> {
     /// The Voyage AI embedding endpoint. Defaults to "/v1/embeddings".
     endpoint: &'a str,
     /// The completion window. Defaults to "12h".
@@ -422,7 +422,7 @@ pub(crate) struct VoyageAIBatchRequest<'a> {
 
 impl VoyageAIBatchRequest<'_> {
     /// Add a file ID to the current batch request.
-    fn with_file_id(mut self, file_id: &str) -> Self {
+    pub fn with_file_id(mut self, file_id: &str) -> Self {
         self.input_file_id = file_id.into();
 
         self
@@ -501,7 +501,7 @@ pub struct VoyageAIBatchStatusResponse {
 #[allow(dead_code)]
 pub struct VoyageAIBatchResultResponse {
     /// The HTTP status code from the embedding endpoint
-    status_code: usize,
+    status_code: u16,
     /// The embeddings
     body: VoyageAISuccess,
 }
