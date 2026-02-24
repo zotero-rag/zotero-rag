@@ -422,6 +422,7 @@ pub struct VoyageAIBatchRequest<'a> {
 
 impl VoyageAIBatchRequest<'_> {
     /// Add a file ID to the current batch request.
+    #[must_use]
     pub fn with_file_id(mut self, file_id: &str) -> Self {
         self.input_file_id = file_id.into();
 
