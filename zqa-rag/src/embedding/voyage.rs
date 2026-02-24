@@ -332,7 +332,7 @@ impl<T: HttpClient, U: AsRef<str> + Send + Clone> Rerank<U> for VoyageAIClient<T
 
 /// The `body` field for a request to the Voyage AI Files API.
 #[derive(Serialize)]
-pub(crate) struct VoyageAIFilesRequestBody {
+pub struct VoyageAIFilesRequestBody {
     /// A list of input texts that belong to one "group".
     input: Vec<String>,
 }
@@ -350,9 +350,9 @@ pub(crate) struct VoyageAIFilesRequestBody {
 #[derive(Serialize)]
 pub struct VoyageAIFilesRequest {
     /// A unique ID assigned to each request
-    custom_id: String,
+    pub custom_id: String,
     /// One or more inputs as part of this request.
-    body: VoyageAIFilesRequestBody,
+    pub body: VoyageAIFilesRequestBody,
 }
 
 /// A response from the Voyage AI Files API.
@@ -360,11 +360,11 @@ pub struct VoyageAIFilesRequest {
 #[allow(dead_code)]
 pub struct VoyageAIFilesResponse {
     /// The file ID, used to refer to input, output, and error files. This starts with "file-".
-    id: String,
+    pub id: String,
     /// An ISO 8601 extended format string with time zone offset.
-    created_at: String,
+    pub created_at: String,
     /// An ISO 8601 extended format string with time zone offset.
-    expires_at: String,
+    pub expires_at: String,
 }
 
 /// The embedding parameters for a batch request.
@@ -394,7 +394,7 @@ impl Default for VoyageAIBatchRequestParams<'_> {
 #[allow(dead_code)]
 pub struct VoyageAIBatchCreateResponse {
     /// The batch ID, used to check status and retrieve results.
-    pub(crate) id: String,
+    pub id: String,
 }
 
 /// A request to the Voyage AI Batch API. This assumes a call to the Files API has been made,
@@ -403,7 +403,7 @@ pub struct VoyageAIBatchCreateResponse {
 /// # Construction example
 ///
 /// ```rust
-/// # use zqa_rag::embedding::voyage::{VoyageAIBatchRequest, VoyageAIBatchRequestParams};
+/// # use zqa_rag::embedding::voyage::VoyageAIBatchRequest;
 ///
 /// let request = VoyageAIBatchRequest::default()
 ///     .with_file_id("file-123");
@@ -594,9 +594,15 @@ where
         let tmp_file = tempfile::NamedTempFile::new()?;
         tokio::fs::write(tmp_file.path(), body).await?;
 
-        Ok(json_lines::<VoyageAIBatchResult, _>(tmp_file)?
-            .filter_map(std::result::Result::ok)
-            .collect::<Vec<_>>())
+        tokio::task::spawn_blocking(move || {
+            Ok::<_, LLMError>(
+                json_lines::<VoyageAIBatchResult, _>(tmp_file)?
+                    .filter_map(std::result::Result::ok)
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .await
+        .map_err(|e| LLMError::GenericLLMError(e.to_string()))?
     }
 }
 
