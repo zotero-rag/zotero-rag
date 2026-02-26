@@ -4,7 +4,7 @@ pub(crate) enum Token<'a> {
     Number(&'a [u8]),
     Literal(&'a [u8]), // Inside (..) in TJ blocks
     Hex(&'a [u8]),     // Inside <..> in TJ blocks
-    Name(&'a [u8]),    // Name tokens, like "/F28"
+    Name(&'a [u8]),    // Name tokens, like "/F28". Does *not* include the "/".
 }
 
 impl<'a> std::fmt::Debug for Token<'a> {

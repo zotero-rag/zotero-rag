@@ -563,53 +563,75 @@ impl PdfParser {
             .map_err(|_| PdfError::InternalError("Failed to convert params vec to array".into()))
     }
 
-    /// Given a string `content` and a position `pos`, look *from* `pos` and search for an image.
-    /// If an image is detected, attempt to return the position of the end of the caption. Note
-    /// that this means that the returned position will be inside a `BT`...`ET`. This function
-    /// assumes the position given to it is the position of an `ET`.
+    /// Given a sequence of `tokens` and an index `pos` of an `/Im` into that sequence, look *from*
+    /// `pos` and attempt to return the position of the first token after the image's caption.
+    /// Specifically, the token pointed to will be right after a `TJ` token.
     ///
-    /// # Returns:
-    /// * `Some(idx)` where `idx` is the index of the space after the TJ where the image caption is
-    ///   shown.
-    /// * `None` if no image is detected.
-    #[allow(clippy::similar_names)]
-    #[allow(dead_code)]
-    fn get_image_bounds(&self, content: &str, pos: usize) -> Option<usize> {
-        let bt_idx = content[pos..].find("BT")? + pos;
-        content[pos..bt_idx].find("/Im")?;
-
-        let mut tj_idx = content[bt_idx..].find("TJ")? + bt_idx;
-
-        /* If a caption is long enough, it will line-break and go to the next line. In pdflatex,
-         * the line spacing between these two depends on the \baselineskip value. We currently
-         * assume that \baselineskip is always 1.2 (which is the default), and parse lines accordingly. */
-        loop {
-            /* Find the next Td that is:
-             *  1. After the current TJ
-             *  2. Before the next TJ that is also before the next ET. */
-            let next_et_idx = content[tj_idx..].find("ET")? + tj_idx;
-            let Some(next_tj_idx) = content[tj_idx + 2..next_et_idx].find("TJ") else {
-                // If there is no TJ before the next ET, the caption has ended.
-                return Some(tj_idx + 2); // +2 for len("TJ")
-            };
-
-            let Some(next_td_idx) = content[tj_idx..tj_idx + 2 + next_tj_idx].find("Td") else {
-                // There's no vertical spacing after, so this condition does not apply.
-                return Some(tj_idx + 2);
-            };
-
-            let y = self
-                .get_params::<2>(content, tj_idx + next_td_idx)
-                .ok()
-                .and_then(|[_, y]| y.parse::<f32>().ok())?;
-
-            if y.abs() <= self.cur_font_size * self.cur_baselineskip {
-                // This is a line break, keep skipping.
-                tj_idx = next_tj_idx + tj_idx + 2;
-            } else {
-                return Some(tj_idx + 2);
-            }
+    /// # Returns
+    ///
+    /// `Some(idx)` where `idx` is the position of the first token after the caption.
+    fn get_image_bounds(&self, tokens: &[Token<'_>], pos: usize) -> Option<usize> {
+        if pos >= tokens.len() {
+            return None;
         }
+        if let Token::Name(name) = &tokens[pos] {
+            if !name.starts_with(b"Im") {
+                return None;
+            }
+        } else {
+            return None;
+        }
+
+        let mut i = pos + 1;
+        while i < tokens.len() {
+            // Find a `TJ`
+            while i < tokens.len() && tokens[i] != Token::Op(b"TJ") {
+                i += 1;
+            }
+            i += 1; // Go past the `TJ`
+            let tj_idx = i;
+
+            /* Go until one of the following conditions is met:
+             *  1. We find an `ET` - return `None`.
+             *  2. We find a `TJ`, but haven't yet found a `Td` - return `i + 1`.
+             *  3. We find a `Td` before a `TJ` - break
+             */
+            while i < tokens.len() {
+                match tokens[i] {
+                    Token::Op(b"ET") => {
+                        return Some(tj_idx);
+                    }
+                    Token::Op(b"TJ") => {
+                        return Some(i + 1);
+                    }
+                    Token::Op(b"Td") => {
+                        break;
+                    }
+                    _ => i += 1,
+                }
+            }
+
+            if i >= tokens.len() {
+                return Some(tj_idx);
+            }
+
+            // Get the params for this `Td`.
+            let Some(y) = Self::get_params_from_tokens(tokens, i)
+                .ok()
+                .and_then(|[y]| Some(std::str::from_utf8(y).ok()?))
+                .and_then(|y| Some(y.parse::<f32>().ok()?))
+            else {
+                return Some(tj_idx);
+            };
+
+            if y.abs() > self.cur_font_size * self.cur_baselineskip {
+                return Some(tj_idx + 1);
+            }
+
+            i += 1; // Move past the `Td`
+        }
+
+        None
     }
 
     /// Checks for a font change command (`/F`) within a specified range of the content string
@@ -931,12 +953,21 @@ impl PdfParser {
         // Keep track of vertical movements (second arg of Td) and associated positions
         let mut y_history: Vec<(usize, f32)> = Vec::new();
 
+        let mut token_idx = 0;
+
         // Index in tokens where TJ started (this is the first `Token::Literal`).
         let mut tj_start_idx: Option<usize> = None;
-        for (token_idx, token) in tokens.iter().enumerate() {
+        while token_idx < tokens.len() {
+            let token = &tokens[token_idx];
             match token {
                 Token::Literal(_) | Token::Hex(_) if tj_start_idx.is_none() => {
                     tj_start_idx = Some(token_idx);
+                }
+                Token::Name(name) if name.starts_with(b"Im") => {
+                    if let Some(idx) = self.get_image_bounds(&tokens, token_idx) {
+                        token_idx = idx;
+                        continue;
+                    }
                 }
                 Token::Op(b"TJ") => {
                     parsed += &self.process_tj_tokens(
@@ -985,6 +1016,8 @@ impl PdfParser {
                 }
                 _ => {}
             }
+
+            token_idx += 1;
         }
 
         let mut edits = Vec::new();
@@ -1578,11 +1611,13 @@ mod tests {
         // non-tokenizer-based parser. I'll get back to this later.
         let tests = ["Figure", "Caption", "is", "good"];
         for text in tests {
+            dbg!(&text);
             assert!(!content.contains(text));
         }
 
         let tests = ["begin1", "end1", "begin2", "end2"];
         for text in tests {
+            dbg!(&text);
             assert!(content.contains(text));
         }
     }
