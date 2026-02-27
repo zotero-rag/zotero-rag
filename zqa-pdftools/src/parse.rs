@@ -815,6 +815,39 @@ impl PdfParser {
         Ok(result)
     }
 
+    /// Given a token slice and an index `pos` of an `ET` token, look *around* `pos` and search for
+    /// likely boundaries for a table. This function uses the heuristic that tables are likely to be
+    /// near `ET` blocks, because tables typically have some graphics (lines for borders, etc.).
+    /// Under this assumption, this function looks at `Td` commands starting from the `BT` at `bt_pos`
+    /// up to `pos`, accumulating their movements to form a reference position `(first_x, first_y)`.
+    /// It then scans forward from `pos`, comparing the first `Td` in each subsequent `BT` block against
+    /// that reference using Euclidean distance. If the distance is below `self.thresholds.table_alignment`,
+    /// those BT blocks are considered part of the same table.
+    ///
+    /// Early-exit heuristics prevent false positives:
+    /// - If the current BT block has no `Td` operators, we cannot form a reference position.
+    /// - If the current BT block has more than `self.thresholds.tbl_td` `Td` operators, it is
+    ///   likely a paragraph rather than a table cell, and we return `None`.
+    ///
+    /// We do not need to keep a running track of where we are by adding the `Td` movements across
+    /// `BT`..`ET` blocks: from the PDF Reference Manual, Section 7.2.3:
+    ///
+    /// >  Each time a text object begins, the current point is set to the origin of the page's
+    /// >  coordinate system.
+    ///
+    /// # Arguments
+    ///
+    /// * `tokens` - The full token slice for the page.
+    /// * `pos` - The index of the `ET` token at the end of the current BT block.
+    /// * `bt_pos` - The index of the `BT` token that opened the current block.
+    ///
+    /// # Returns
+    ///
+    /// * `Some((start_idx, end_idx))`, where `start_idx` is the token index of the first `Td`
+    ///   inside the current BT block (i.e., where the table content begins), and `end_idx` is the
+    ///   token index of the `BT` that starts the first non-matching block after the table (i.e.,
+    ///   where the caller should resume processing).
+    /// * `None` if no table is detected.
     fn get_table_bounds_new(
         &mut self,
         tokens: &[Token<'_>],
@@ -881,6 +914,8 @@ impl PdfParser {
                             bt_count += 1;
                             last_matching_bt_pos = cur_bt_pos.unwrap();
                             cur_bt_pos = None; // consume this BT; wait for next one
+
+                        // TODO: Handle fonts
                         } else if bt_count > 0 {
                             // We've found the end of the table
                             return Some((first_td_idx + 1, cur_bt_pos.unwrap()));
