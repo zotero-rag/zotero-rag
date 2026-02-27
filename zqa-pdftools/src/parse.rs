@@ -27,6 +27,9 @@ const ASCII_PLUS: u8 = b'+';
 pub const DEFAULT_SAME_WORD_THRESHOLD: f32 = 60.0;
 /// The default distance threshold to check alignment efforts in a table.
 pub const DEFAULT_TABLE_EUCLIDEAN_THRESHOLD: f32 = 40.0;
+/// The default number of `Td`s within a `BT` after which the `BT..ET` block is declared to be a
+/// paragraph as opposed to a table.
+pub const DEFAULT_TBL_TD_THRESHOLD: usize = 5;
 
 /// A wrapper for all PDF parsing errors
 #[derive(Debug, thiserror::Error)]
@@ -59,18 +62,21 @@ impl From<Utf8Error> for PdfError {
 
 /// Configuration for PDF parsing
 #[derive(Debug)]
-struct PdfParserConfig {
+struct PdfParserThresholds {
     /// Threshold for determining when to join words
-    same_word_threshold: f32,
+    same_word: f32,
     /// Euclidean distance threshold between `Td` alignment to declare a table
-    table_alignment_threshold: f32,
+    table_alignment: f32,
+    /// Threshold number of `Td`s within a text block to declare a paragraph as opposed to a table
+    tbl_td: usize,
 }
 
-impl Default for PdfParserConfig {
+impl Default for PdfParserThresholds {
     fn default() -> Self {
         Self {
-            same_word_threshold: DEFAULT_SAME_WORD_THRESHOLD,
-            table_alignment_threshold: DEFAULT_TABLE_EUCLIDEAN_THRESHOLD,
+            same_word: DEFAULT_SAME_WORD_THRESHOLD,
+            table_alignment: DEFAULT_TABLE_EUCLIDEAN_THRESHOLD,
+            tbl_td: DEFAULT_TBL_TD_THRESHOLD,
         }
     }
 }
@@ -149,7 +155,7 @@ static OCTAL_REPLACEMENTS: LazyLock<HashMap<&str, &str>> = LazyLock::new(|| {
 
 struct PdfParser {
     /// The config
-    config: PdfParserConfig,
+    thresholds: PdfParserThresholds,
     /// The current font we're using. This is not the font string in the dictionary (e.g. "F28"),
     /// but rather the font's name itself (e.g. "CMMI10").
     cur_font: String,
@@ -249,7 +255,7 @@ fn get_script_marker_edits(y_history: &[(usize, f32)], parsed: &mut String) -> V
 
 impl Default for PdfParser {
     fn default() -> Self {
-        Self::new(PdfParserConfig::default())
+        Self::new(PdfParserThresholds::default())
     }
 }
 
@@ -270,9 +276,9 @@ impl PdfParser {
     /// # Arguments
     ///
     /// * `config` - The configuration to use for parsing
-    fn new(config: PdfParserConfig) -> Self {
+    fn new(config: PdfParserThresholds) -> Self {
         Self {
-            config,
+            thresholds: config,
             cur_font: String::new(),
             cur_font_id: String::new(),
             cur_font_size: 12.0,   // Doesn't really matter
@@ -282,7 +288,7 @@ impl PdfParser {
     }
 
     fn with_default_config() -> Self {
-        Self::new(PdfParserConfig::default())
+        Self::new(PdfParserThresholds::default())
     }
 
     /// Checks if a given font in a specific page of a document is a CID-keyed font.
@@ -618,8 +624,8 @@ impl PdfParser {
             // Get the params for this `Td`.
             let Some(y) = Self::get_params_from_tokens(tokens, i)
                 .ok()
-                .and_then(|[y]| Some(std::str::from_utf8(y).ok()?))
-                .and_then(|y| Some(y.parse::<f32>().ok()?))
+                .and_then(|[y]| std::str::from_utf8(y).ok())
+                .and_then(|y| y.parse::<f32>().ok())
             else {
                 return Some(tj_idx);
             };
@@ -717,7 +723,7 @@ impl PdfParser {
         }
 
         let cur_font = self.cur_font.clone();
-        let same_word_threshold = self.config.same_word_threshold;
+        let same_word_threshold = self.thresholds.same_word;
 
         let font_encoding = self.is_cid_keyed_font(doc, page_id, &font_id)?;
         let mut i = 0;
@@ -807,6 +813,96 @@ impl PdfParser {
         }
 
         Ok(result)
+    }
+
+    fn get_table_bounds_new(
+        &mut self,
+        tokens: &[Token<'_>],
+        pos: usize,
+        bt_pos: usize,
+    ) -> Option<(usize, usize)> {
+        if bt_pos >= tokens.len() || pos >= tokens.len() || pos <= bt_pos {
+            return None;
+        }
+
+        let (mut first_x, mut first_y) = (0.0, 0.0);
+        let mut first_td_idx: Option<usize> = None;
+        let mut td_count = 0;
+        let mut i = bt_pos;
+
+        while i < pos {
+            if let Token::Op(b"Td") = tokens[i]
+                && i > 1
+                && let Token::Number(_) = tokens[i - 2]
+                && let Token::Number(_) = tokens[i - 1]
+            {
+                first_x += tokens[i - 2].parse::<f32>()?;
+                first_y += tokens[i - 1].parse::<f32>()?;
+                first_td_idx = Some(i);
+                td_count += 1;
+            }
+
+            i += 1;
+        }
+
+        // If there were no Td operators in the current BT block, we can't determine a reference
+        // position, so we can't detect a table.
+        let first_td_idx = first_td_idx?;
+
+        // If there are too many Td operators, this is likely a paragraph, not a table boundary.
+        // Tables typically have just a few Td operators per BT block (for positioning).
+        if td_count > self.thresholds.tbl_td {
+            return None;
+        }
+
+        // How many `BT`s have we skipped?
+        let mut bt_count = 0;
+
+        let mut cur_bt_pos: Option<usize> = None;
+        let mut last_matching_bt_pos = 0;
+
+        while i < tokens.len() {
+            match tokens[i] {
+                Token::Op(b"BT") => {
+                    cur_bt_pos = Some(i);
+                }
+                Token::Op(b"Td") => {
+                    if cur_bt_pos.is_some()
+                        && i > 1
+                        && let Token::Number(_) = tokens[i - 2]
+                        && let Token::Number(_) = tokens[i - 1]
+                    {
+                        let cur_x: f32 = tokens[i - 2].parse()?;
+                        let cur_y: f32 = tokens[i - 1].parse()?;
+
+                        let distance =
+                            ((cur_x - first_x).powi(2) + (cur_y - first_y).powi(2)).sqrt();
+                        if distance < self.thresholds.table_alignment {
+                            bt_count += 1;
+                            last_matching_bt_pos = cur_bt_pos.unwrap();
+                            cur_bt_pos = None; // consume this BT; wait for next one
+                        } else if bt_count > 0 {
+                            // We've found the end of the table
+                            return Some((first_td_idx + 1, cur_bt_pos.unwrap()));
+                        } else {
+                            return None;
+                        }
+                    }
+                }
+                _ => (),
+            }
+
+            i += 1;
+        }
+
+        if bt_count > 0 {
+            // If we've processed at least one BT and reached the end, return what we have
+            log::debug!("Could not find a BT, is the table at the end of the page?");
+            return Some((first_td_idx + 1, last_matching_bt_pos));
+        }
+
+        // Not a table
+        None
     }
 
     /// Given a string `content` and a position `pos`, look *around* `pos` and search for likely
@@ -914,7 +1010,7 @@ impl PdfParser {
 
             let distance = ((cur_x - first_x).powi(2) + (cur_y - first_y).powi(2)).sqrt();
 
-            if distance < self.config.table_alignment_threshold {
+            if distance < self.thresholds.table_alignment {
                 bt_count += 1;
 
                 // Before we move, check if the font has changed
@@ -954,6 +1050,10 @@ impl PdfParser {
         let mut y_history: Vec<(usize, f32)> = Vec::new();
 
         let mut token_idx = 0;
+        let mut bt_pos = 0;
+        // Length of `parsed` at the time the current BT was seen; used to rewind
+        // if we later detect that the BT block was a table.
+        let mut parsed_len_at_bt = 0;
 
         // Index in tokens where TJ started (this is the first `Token::Literal`).
         let mut tj_start_idx: Option<usize> = None;
@@ -967,6 +1067,27 @@ impl PdfParser {
                     if let Some(idx) = self.get_image_bounds(&tokens, token_idx) {
                         token_idx = idx;
                         continue;
+                    }
+                }
+                Token::Op(b"BT") => {
+                    bt_pos = token_idx;
+                    parsed_len_at_bt = parsed.len();
+                }
+                Token::Op(b"ET") => {
+                    if let Some((_tbl_begin_idx, tbl_end_idx)) =
+                        self.get_table_bounds_new(&tokens, token_idx, bt_pos)
+                    {
+                        // Rewind any content that was already parsed from this BT block,
+                        // and drop any history entries that reference rewound positions.
+                        parsed.truncate(parsed_len_at_bt);
+                        tf_history.retain(|m| m.byte_index <= parsed_len_at_bt);
+                        y_history.retain(|(idx, _)| *idx <= parsed_len_at_bt);
+                        // tbl_end_idx points to a BT token; update bt tracking state
+                        // since we're jumping over the BT token itself.
+                        bt_pos = tbl_end_idx;
+                        parsed_len_at_bt = parsed.len();
+                        token_idx = tbl_end_idx;
+                        tj_start_idx = None;
                     }
                 }
                 Token::Op(b"TJ") => {
@@ -1578,6 +1699,7 @@ mod tests {
         let content = content.unwrap().text_content;
         let tests = ["r1c1", "r1c2", "r2c1", "r2c2"];
         for text in tests {
+            dbg!(&text);
             assert!(!content.contains(text));
         }
     }
@@ -1594,6 +1716,7 @@ mod tests {
         // the older version, where it failed to capture the entirety of the first subtable.
         let tests = ["foo", "bar", "baz", "quux1"];
         for text in tests {
+            dbg!(&text);
             assert!(!content.contains(text));
         }
     }
@@ -1607,9 +1730,7 @@ mod tests {
 
         let content = content.unwrap().text_content;
 
-        // NOTE: This should also ignore "caption" and "HERE", which is a regression from the older
-        // non-tokenizer-based parser. I'll get back to this later.
-        let tests = ["Figure", "Caption", "is", "good"];
+        let tests = ["Figure", "Caption", "is", "good", "caption", "HERE"];
         for text in tests {
             dbg!(&text);
             assert!(!content.contains(text));

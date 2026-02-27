@@ -1,3 +1,5 @@
+use std::str::FromStr;
+
 #[derive(PartialEq, Eq)]
 pub(crate) enum Token<'a> {
     Op(&'a [u8]), // PDF operators, e.g., "TJ", "Td", "Tf"
@@ -7,7 +9,7 @@ pub(crate) enum Token<'a> {
     Name(&'a [u8]),    // Name tokens, like "/F28". Does *not* include the "/".
 }
 
-impl<'a> std::fmt::Debug for Token<'a> {
+impl std::fmt::Debug for Token<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let (name, bytes) = match self {
             Self::Op(b) => ("Op", b),
@@ -17,6 +19,15 @@ impl<'a> std::fmt::Debug for Token<'a> {
             Self::Name(b) => ("Name", b),
         };
         write!(f, "{}({})", name, String::from_utf8_lossy(bytes))
+    }
+}
+
+impl Token<'_> {
+    pub(crate) fn parse<T: FromStr>(&self) -> Option<T> {
+        match self {
+            Token::Number(bytes) => std::str::from_utf8(bytes).ok()?.parse::<T>().ok(),
+            _ => None,
+        }
     }
 }
 
