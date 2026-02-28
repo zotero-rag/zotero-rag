@@ -767,7 +767,7 @@ impl PdfParser {
     ///
     /// # Returns
     ///
-    /// * `Some((start_idx, end_idx))`, where `start_idx` is the token index of the first `Td`
+    /// * `Some((start_idx, end_idx))`, where `start_idx` is the token index of the last `Td`
     ///   inside the current BT block (i.e., where the table content begins), and `end_idx` is the
     ///   token index of the `BT` that starts the first non-matching block after the table (i.e.,
     ///   where the caller should resume processing).
@@ -805,7 +805,7 @@ impl PdfParser {
 
         // If there were no Td operators in the current BT block, we can't determine a reference
         // position, so we can't detect a table.
-        let first_td_idx = first_acc_td_idx?;
+        let first_acc_td_idx = first_acc_td_idx?;
 
         // If there are too many Td operators, this is likely a paragraph, not a table boundary.
         // Tables typically have just a few Td operators per BT block (for positioning).
@@ -839,7 +839,7 @@ impl PdfParser {
                             cur_bt_pos = None; // consume this BT; wait for next one
                         } else if bt_count > 0 {
                             // We've found the end of the table
-                            return Some((first_td_idx + 1, cur_bt_pos.unwrap()));
+                            return Some((first_acc_td_idx + 1, cur_bt_pos.unwrap()));
                         } else {
                             return None;
                         }
@@ -854,7 +854,7 @@ impl PdfParser {
         if bt_count > 0 {
             // If we've processed at least one BT and reached the end, return what we have
             log::debug!("Could not find a BT, is the table at the end of the page?");
-            return Some((first_td_idx + 1, tokens.len()));
+            return Some((first_acc_td_idx + 1, tokens.len()));
         }
 
         // Not a table
@@ -908,7 +908,7 @@ impl PdfParser {
                     parsed_len_at_bt = parsed.len();
                 }
                 Token::Op(b"ET") => {
-                    if let Some((_tbl_begin_idx, tbl_end_idx)) =
+                    if let Some((_, tbl_end_idx)) =
                         self.get_table_bounds(&tokens, token_idx, bt_pos)
                     {
                         // Rewind any content that was already parsed from this BT block,
