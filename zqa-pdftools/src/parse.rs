@@ -1509,8 +1509,10 @@ mod tests {
         let content = get_raw_content_stream(&doc, 0).unwrap();
         let tokens = tokenize(content.as_bytes());
 
-        let mut config = PdfParserThresholds::default();
-        config.tbl_td = 10;
+        let config = PdfParserThresholds {
+            tbl_td: 10,
+            ..Default::default()
+        };
         let mut parser = PdfParser::new(config);
 
         test_eq!(parser.get_table_bounds(&tokens, 69, 0), Some((61, 167)));
