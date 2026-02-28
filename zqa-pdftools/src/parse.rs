@@ -27,6 +27,9 @@ const ASCII_PLUS: u8 = b'+';
 pub const DEFAULT_SAME_WORD_THRESHOLD: f32 = 60.0;
 /// The default distance threshold to check alignment efforts in a table.
 pub const DEFAULT_TABLE_EUCLIDEAN_THRESHOLD: f32 = 40.0;
+/// The default number of `Td`s within a `BT` after which the `BT..ET` block is declared to be a
+/// paragraph as opposed to a table.
+pub const DEFAULT_TBL_TD_THRESHOLD: usize = 5;
 
 /// A wrapper for all PDF parsing errors
 #[derive(Debug, thiserror::Error)]
@@ -59,18 +62,21 @@ impl From<Utf8Error> for PdfError {
 
 /// Configuration for PDF parsing
 #[derive(Debug)]
-struct PdfParserConfig {
+struct PdfParserThresholds {
     /// Threshold for determining when to join words
-    same_word_threshold: f32,
+    same_word: f32,
     /// Euclidean distance threshold between `Td` alignment to declare a table
-    table_alignment_threshold: f32,
+    table_alignment: f32,
+    /// Threshold number of `Td`s within a text block to declare a paragraph as opposed to a table
+    tbl_td: usize,
 }
 
-impl Default for PdfParserConfig {
+impl Default for PdfParserThresholds {
     fn default() -> Self {
         Self {
-            same_word_threshold: DEFAULT_SAME_WORD_THRESHOLD,
-            table_alignment_threshold: DEFAULT_TABLE_EUCLIDEAN_THRESHOLD,
+            same_word: DEFAULT_SAME_WORD_THRESHOLD,
+            table_alignment: DEFAULT_TABLE_EUCLIDEAN_THRESHOLD,
+            tbl_td: DEFAULT_TBL_TD_THRESHOLD,
         }
     }
 }
@@ -149,7 +155,7 @@ static OCTAL_REPLACEMENTS: LazyLock<HashMap<&str, &str>> = LazyLock::new(|| {
 
 struct PdfParser {
     /// The config
-    config: PdfParserConfig,
+    thresholds: PdfParserThresholds,
     /// The current font we're using. This is not the font string in the dictionary (e.g. "F28"),
     /// but rather the font's name itself (e.g. "CMMI10").
     cur_font: String,
@@ -249,7 +255,7 @@ fn get_script_marker_edits(y_history: &[(usize, f32)], parsed: &mut String) -> V
 
 impl Default for PdfParser {
     fn default() -> Self {
-        Self::new(PdfParserConfig::default())
+        Self::new(PdfParserThresholds::default())
     }
 }
 
@@ -270,9 +276,9 @@ impl PdfParser {
     /// # Arguments
     ///
     /// * `config` - The configuration to use for parsing
-    fn new(config: PdfParserConfig) -> Self {
+    fn new(config: PdfParserThresholds) -> Self {
         Self {
-            config,
+            thresholds: config,
             cur_font: String::new(),
             cur_font_id: String::new(),
             cur_font_size: 12.0,   // Doesn't really matter
@@ -282,7 +288,7 @@ impl PdfParser {
     }
 
     fn with_default_config() -> Self {
-        Self::new(PdfParserConfig::default())
+        Self::new(PdfParserThresholds::default())
     }
 
     /// Checks if a given font in a specific page of a document is a CID-keyed font.
@@ -486,31 +492,6 @@ impl PdfParser {
         }
     }
 
-    /// Get the `N` whitespace-separated words in `content` before position `pos`. This is used to
-    /// get the operators for a PDF command.
-    ///
-    /// # Errors
-    /// * `PdfError::InternalError` if `N` > number of words in `content[..pos]`
-    #[allow(clippy::unused_self)]
-    fn get_params<'a, const N: usize>(
-        &self,
-        content: &'a str,
-        pos: usize,
-    ) -> Result<[&'a str; N], PdfError> {
-        let mut params = [""; N];
-        let mut start_pos = pos - 1;
-
-        for i in 0..N {
-            let idx = content[..start_pos].rfind([' ', '/', '\n', '\t']).ok_or(
-                PdfError::InternalError("No valid separator in content at {start_pos}".into()),
-            )? + 1;
-            params[N - 1 - i] = &content[idx..start_pos];
-            start_pos = idx - 1;
-        }
-
-        Ok(params)
-    }
-
     /// Extract N number tokens that appear immediately before an operator token.
     ///
     /// This scans backwards through the token slice to find the N numbers that precede
@@ -562,102 +543,75 @@ impl PdfParser {
             .map_err(|_| PdfError::InternalError("Failed to convert params vec to array".into()))
     }
 
-    /// Given a string `content` and a position `pos`, look *from* `pos` and search for an image.
-    /// If an image is detected, attempt to return the position of the end of the caption. Note
-    /// that this means that the returned position will be inside a `BT`...`ET`. This function
-    /// assumes the position given to it is the position of an `ET`.
+    /// Given a sequence of `tokens` and an index `pos` of an `/Im` into that sequence, look *from*
+    /// `pos` and attempt to return the position of the first token after the image's caption.
+    /// Specifically, the token pointed to will be right after a `TJ` token.
     ///
-    /// # Returns:
-    /// * `Some(idx)` where `idx` is the index of the space after the TJ where the image caption is
-    ///   shown.
-    /// * `None` if no image is detected.
-    #[allow(clippy::similar_names)]
-    fn get_image_bounds(&self, content: &str, pos: usize) -> Option<usize> {
-        let bt_idx = content[pos..].find("BT")? + pos;
-        content[pos..bt_idx].find("/Im")?;
-
-        let mut tj_idx = content[bt_idx..].find("TJ")? + bt_idx;
-
-        /* If a caption is long enough, it will line-break and go to the next line. In pdflatex,
-         * the line spacing between these two depends on the \baselineskip value. We currently
-         * assume that \baselineskip is always 1.2 (which is the default), and parse lines accordingly. */
-        loop {
-            /* Find the next Td that is:
-             *  1. After the current TJ
-             *  2. Before the next TJ that is also before the next ET. */
-            let next_et_idx = content[tj_idx..].find("ET")? + tj_idx;
-            let Some(next_tj_idx) = content[tj_idx + 2..next_et_idx].find("TJ") else {
-                // If there is no TJ before the next ET, the caption has ended.
-                return Some(tj_idx + 2); // +2 for len("TJ")
-            };
-
-            let Some(next_td_idx) = content[tj_idx..tj_idx + 2 + next_tj_idx].find("Td") else {
-                // There's no vertical spacing after, so this condition does not apply.
-                return Some(tj_idx + 2);
-            };
-
-            let y = self
-                .get_params::<2>(content, tj_idx + next_td_idx)
-                .ok()
-                .and_then(|[_, y]| y.parse::<f32>().ok())?;
-
-            if y.abs() <= self.cur_font_size * self.cur_baselineskip {
-                // This is a line break, keep skipping.
-                tj_idx = next_tj_idx + tj_idx + 2;
-            } else {
-                return Some(tj_idx + 2);
+    /// # Returns
+    ///
+    /// `Some(idx)` where `idx` is the position of the first token after the caption.
+    fn get_image_bounds(&self, tokens: &[Token<'_>], pos: usize) -> Option<usize> {
+        if pos >= tokens.len() {
+            return None;
+        }
+        if let Token::Name(name) = &tokens[pos] {
+            if !name.starts_with(b"Im") {
+                return None;
             }
-        }
-    }
-
-    /// Checks for a font change command (`/F`) within a specified range of the content string
-    /// and updates the parser's current font state accordingly.
-    ///
-    /// This function searches for `/F` font resource references (e.g., `/F28`) within the
-    /// given range `[start_idx, end_idx)` of the content string. If a font change is detected,
-    /// it extracts the font ID, resolves the font name using the document's font dictionary,
-    /// and updates both `self.cur_font` and `self.cur_font_id`.
-    ///
-    /// # Arguments
-    ///
-    /// * `doc` - The `lopdf::Document` object containing font information
-    /// * `page_id` - The page ID where the font is referenced
-    /// * `content` - The PDF content stream as a string
-    /// * `start_idx` - The starting index of the range to search
-    /// * `end_idx` - The ending index of the range to search
-    fn check_and_update_font(
-        &mut self,
-        doc: &Document,
-        page_id: PageID,
-        content: &str,
-        start_idx: usize,
-        end_idx: usize,
-    ) {
-        let slice = &content[start_idx..end_idx];
-        let Some(font_begin_idx) = slice.find("/F") else {
-            return;
-        };
-
-        // Find the space after the font ID
-        let Some(space_offset) = slice[font_begin_idx..].find(' ') else {
-            // No space found in slice - this /F might be inside text content, skip it
-            return;
-        };
-        let font_end_idx = font_begin_idx + space_offset;
-
-        let font_id = &slice[font_begin_idx + 1..font_end_idx];
-
-        // Skip empty font IDs or IDs that don't start with an alphanumeric character
-        // Valid font IDs look like "F28", "F1", etc.
-        if font_id.is_empty() || !font_id.starts_with(|c: char| c.is_ascii_alphanumeric()) {
-            return;
+        } else {
+            return None;
         }
 
-        // Try to get the font name - if it fails, this might not be a valid font reference
-        if let Ok(font_name) = get_font_name(doc, page_id, font_id) {
-            self.cur_font = font_name.to_string();
-            self.cur_font_id = font_id.to_string();
+        let mut i = pos + 1;
+        while i < tokens.len() {
+            // Find a `TJ`
+            while i < tokens.len() && tokens[i] != Token::Op(b"TJ") {
+                i += 1;
+            }
+            i += 1; // Go past the `TJ`
+            let tj_idx = i;
+
+            /* Go until one of the following conditions is met:
+             *  1. We find an `ET` - return `None`.
+             *  2. We find a `TJ`, but haven't yet found a `Td` - return `i + 1`.
+             *  3. We find a `Td` before a `TJ` - break
+             */
+            while i < tokens.len() {
+                match tokens[i] {
+                    Token::Op(b"ET") => {
+                        return Some(tj_idx);
+                    }
+                    Token::Op(b"TJ") => {
+                        return Some(i + 1);
+                    }
+                    Token::Op(b"Td") => {
+                        break;
+                    }
+                    _ => i += 1,
+                }
+            }
+
+            if i >= tokens.len() {
+                return Some(tj_idx);
+            }
+
+            // Get the params for this `Td`.
+            let Some(y) = Self::get_params_from_tokens(tokens, i)
+                .ok()
+                .and_then(|[y]| std::str::from_utf8(y).ok())
+                .and_then(|y| y.parse::<f32>().ok())
+            else {
+                return Some(tj_idx);
+            };
+
+            if y.abs() > self.cur_font_size * self.cur_baselineskip {
+                return Some(tj_idx);
+            }
+
+            i += 1; // Move past the `Td`
         }
+
+        None
     }
 
     /// Process a TJ block given its tokens, extracting text with proper spacing.
@@ -693,7 +647,7 @@ impl PdfParser {
         }
 
         let cur_font = self.cur_font.clone();
-        let same_word_threshold = self.config.same_word_threshold;
+        let same_word_threshold = self.thresholds.same_word;
 
         let font_encoding = self.is_cid_keyed_font(doc, page_id, &font_id)?;
         let mut i = 0;
@@ -785,16 +739,19 @@ impl PdfParser {
         Ok(result)
     }
 
-    /// Given a string `content` and a position `pos`, look *around* `pos` and search for likely
-    /// boundaries for a table. This function uses the heuristic that tables are likely to be
+    /// Given a token slice and an index `pos` of an `ET` token, look *around* `pos` and search for
+    /// likely boundaries for a table. This function uses the heuristic that tables are likely to be
     /// near `ET` blocks, because tables typically have some graphics (lines for borders, etc.).
-    /// Under this assumption, this function looks at `Td` commands starting from the *previous*
-    /// `BT` from `pos`, and compares the position described there to positions in subsequent `Td`
-    /// commands starting from `pos`, using the Euclidean distance. If this distance is below a
-    /// threshold, it is assumed that these are alignment efforts.
+    /// Under this assumption, this function looks at `Td` commands starting from the `BT` at `bt_pos`
+    /// up to `pos`, accumulating their movements to form a reference position `(first_x, first_y)`.
+    /// It then scans forward from `pos`, comparing the first `Td` in each subsequent `BT` block against
+    /// that reference using Euclidean distance. If the distance is below `self.thresholds.table_alignment`,
+    /// those BT blocks are considered part of the same table.
     ///
-    /// We need to use *all* the `Td`s from the previous `BT` since LaTeX can use one `BT`..`ET`
-    /// block for both non-table and table content.
+    /// Early-exit heuristics prevent false positives:
+    /// - If the current BT block has no `Td` operators, we cannot form a reference position.
+    /// - If the current BT block has more than `self.thresholds.tbl_td` `Td` operators, it is
+    ///   likely a paragraph rather than a table cell, and we return `None`.
     ///
     /// We do not need to keep a running track of where we are by adding the `Td` movements across
     /// `BT`..`ET` blocks: from the PDF Reference Manual, Section 7.2.3:
@@ -802,108 +759,106 @@ impl PdfParser {
     /// >  Each time a text object begins, the current point is set to the origin of the page's
     /// >  coordinate system.
     ///
-    /// This function also updates the font accordingly, since it is possible for the font to
-    /// change within the bounds returned. Therefore, the core parsing method itself can safely
-    /// assume that `self.cur_font` is accurate if it skipped over the returned bounds.
+    /// # Arguments
+    ///
+    /// * `tokens` - The full token slice for the page.
+    /// * `pos` - The index of the `ET` token at the end of the current BT block.
+    /// * `bt_pos` - The index of the `BT` token that opened the current block.
     ///
     /// # Returns
     ///
-    /// * `Some((start_idx, end_idx))`, where `start_idx` is the index of the `BT` command where it is suspected that
-    ///   the table begins, and `end_idx` is the index of the `ET` command where the table is suspected to end.
-    /// * If no table is detected, returns `None`.
+    /// * `Some((start_idx, end_idx))`, where `start_idx` is the token index of the last `Td`
+    ///   inside the current BT block (i.e., where the table content begins), and `end_idx` is the
+    ///   token index of the `BT` that starts the first non-matching block after the table (i.e.,
+    ///   where the caller should resume processing).
+    /// * `None` if no table is detected.
     fn get_table_bounds(
-        &mut self,
-        content: &str,
+        &self,
+        tokens: &[Token<'_>],
         pos: usize,
-        doc: &Document,
-        page_id: PageID,
+        bt_pos: usize,
     ) -> Option<(usize, usize)> {
-        let bt_idx = content[..pos].rfind("BT")?; // First `BT` we see
-        let first_td_idx = content[..pos].rfind("Td")?;
-
-        // Collect all the `Td`s after the previous `BT` up to where we are. LaTeX is free to use a
-        // single BT..ET block for non-table and table content, so the table might start from one
-        // of the intermediate `Td`s.
-        let mut td_positions = content[bt_idx..pos]
-            .split("Td")
-            .filter_map(|s| {
-                self.get_params::<2>(s, s.len() - 1)
-                    .ok()
-                    .and_then(|[x, y]| x.parse::<f32>().ok().zip(y.parse::<f32>().ok()))
-            })
-            .collect::<Vec<_>>();
-
-        if td_positions.is_empty() {
+        if bt_pos >= tokens.len() || pos >= tokens.len() || pos <= bt_pos {
             return None;
         }
 
-        // Accumulate `Td`s, since these are movements
-        for i in 1..td_positions.len() {
-            td_positions[i] = (
-                td_positions[i].0 + td_positions[i - 1].0,
-                td_positions[i].1 + td_positions[i - 1].1,
-            );
+        let (mut first_x, mut first_y) = (0.0, 0.0);
+        // Index of the *last* `Td` in the text block (holds accumulated position)
+        let mut first_acc_td_idx: Option<usize> = None;
+        let mut td_count = 0;
+        let mut i = bt_pos;
+
+        while i < pos {
+            if let Token::Op(b"Td") = tokens[i]
+                && i > 1
+                && let Token::Number(_) = tokens[i - 2]
+                && let Token::Number(_) = tokens[i - 1]
+            {
+                first_x += tokens[i - 2].parse::<f32>()?;
+                first_y += tokens[i - 1].parse::<f32>()?;
+                first_acc_td_idx = Some(i);
+                td_count += 1;
+            }
+
+            i += 1;
         }
 
-        // The "first" (x, y) is the accumulated movements so far; see the function's documentation
-        // pointing to Section 7.2.3 of the PDF reference manual for reasoning.
-        let (first_x, first_y) = td_positions[td_positions.len() - 1];
+        // If there were no Td operators in the current BT block, we can't determine a reference
+        // position, so we can't detect a table.
+        let first_acc_td_idx = first_acc_td_idx?;
 
-        // Running position in `content`
-        let mut cur_pos = pos;
+        // If there are too many Td operators, this is likely a paragraph, not a table boundary.
+        // Tables typically have just a few Td operators per BT block (for positioning).
+        if td_count > self.thresholds.tbl_td {
+            return None;
+        }
 
         // How many `BT`s have we skipped?
         let mut bt_count = 0;
 
-        loop {
-            // Try to find the next BT
-            let Some(next_bt) = content[cur_pos..].find("BT") else {
-                if bt_count > 0 {
-                    // If we've processed at least one BT and reached the end, return what we have
-                    log::debug!("Could not find a BT, is the table at the end of the page?");
-                    return Some((bt_idx, cur_pos));
+        let mut cur_bt_pos: Option<usize> = None;
+
+        while i < tokens.len() {
+            match tokens[i] {
+                Token::Op(b"BT") => {
+                    cur_bt_pos = Some(i);
                 }
+                Token::Op(b"Td") => {
+                    if cur_bt_pos.is_some()
+                        && i > 1
+                        && let Token::Number(_) = tokens[i - 2]
+                        && let Token::Number(_) = tokens[i - 1]
+                    {
+                        let cur_x: f32 = tokens[i - 2].parse()?;
+                        let cur_y: f32 = tokens[i - 1].parse()?;
 
-                // Not a table
-                return None;
-            };
-            let next_bt_pos = cur_pos + next_bt;
-
-            // Try to find a Td command after this BT
-            let Some(td_offset) = content[next_bt_pos..].find("Td") else {
-                log::debug!("Could not find a Td after a BT, ignoring possible table.");
-                return None;
-            };
-
-            // Calculate current alignment position
-            let cur_td_idx = next_bt_pos + td_offset;
-
-            let params_result = self.get_params::<2>(content, cur_td_idx).ok();
-            let Some((cur_x, cur_y)) = params_result
-                .and_then(|[x, y]| Some((x.parse::<f32>().ok()?, y.parse::<f32>().ok()?)))
-            else {
-                // Could not parse parameters
-                log::info!("Could not parse Td parameters, ignoring possible table.");
-                return None;
-            };
-
-            let distance = ((cur_x - first_x).powi(2) + (cur_y - first_y).powi(2)).sqrt();
-
-            if distance < self.config.table_alignment_threshold {
-                bt_count += 1;
-
-                // Before we move, check if the font has changed
-                self.check_and_update_font(doc, page_id, content, 0, content.len() - 1);
-
-                cur_pos = cur_td_idx;
-            } else if bt_count > 0 {
-                // We've found the end of the table
-                return Some((first_td_idx + 3, next_bt_pos)); // +3 for "Td " length
-            } else {
-                // Not a table
-                return None;
+                        let distance =
+                            ((cur_x - first_x).powi(2) + (cur_y - first_y).powi(2)).sqrt();
+                        if distance < self.thresholds.table_alignment {
+                            bt_count += 1;
+                            cur_bt_pos = None; // consume this BT; wait for next one
+                        } else if bt_count > 0 {
+                            // We've found the end of the table
+                            return Some((first_acc_td_idx + 1, cur_bt_pos.unwrap()));
+                        } else {
+                            return None;
+                        }
+                    }
+                }
+                _ => (),
             }
+
+            i += 1;
         }
+
+        if bt_count > 0 {
+            // If we've processed at least one BT and reached the end, return what we have
+            log::debug!("Could not find a BT, is the table at the end of the page?");
+            return Some((first_acc_td_idx + 1, tokens.len()));
+        }
+
+        // Not a table
+        None
     }
 
     /// The actual PDF parser itself. Parses UTF-8 encoded code points in a best-effort manner,
@@ -919,75 +874,85 @@ impl PdfParser {
         let content = doc
             .get_page_content(page_id)
             .map_err(|_| PdfError::ContentError)?;
-        let content = String::from_utf8_lossy(&content).to_string();
-        let mut cur_parse_idx = 0;
         let mut parsed = String::new();
 
-        // TODO: Use tokenizer for parsing
+        let tokens = tokenize(&content);
 
         // Keep track of the font sizes markers (from Tf) and associated positions
         let mut tf_history: Vec<FontSizeMarker> = Vec::new();
         // Keep track of vertical movements (second arg of Td) and associated positions
         let mut y_history: Vec<(usize, f32)> = Vec::new();
 
-        /* A loop over TJ blocks. The broad idea is:
-         * 1. Look for tables/images--and skip them.
-         * 2. Handle super/sub-scripts and footnotes.
-         * 3. Handle math fonts to parse equations.
-         * 4. Iterate over parenthesized blocks in the TJ to parse text. */
-        loop {
-            /* We need to look for an ET so that we can exclude tables/images. However, it is possible to
-             * find an ET that is a table but is too far away to worry about for now; so we actually need to
-             * look for both an ET and a TJ. *However*, it is also possible for the immediate TJ to be part of
-             * the table that we are trying to avoid. So the following code isn't particularly efficient, but it
-             * should cover all the cases. */
-            let Some(tj_idx) = content[cur_parse_idx..].find("TJ") else {
-                // No more TJs, so nothing left to parse.
-                break;
-            };
+        let mut token_idx = 0;
+        let mut bt_pos = 0;
+        // Length of `parsed` at the time the current BT was seen; used to rewind
+        // if we later detect that the BT block was a table.
+        let mut parsed_len_at_bt = 0;
 
-            // Generally, we *should* find an ET here, since we already found a TJ (which means
-            // there's a text block to end).
-            let et_idx = content[cur_parse_idx..].find("ET").unwrap_or(usize::MAX);
-            if et_idx == usize::MAX {
-                break;
-            }
-
-            // Process Tf/Td operators *before* checking for images, since `get_image_bounds`
-            // needs self.cur_font_size to be accurate
-            let tokenize_end = tj_idx.min(et_idx);
-            let tokens = tokenize(&content.as_bytes()[cur_parse_idx..cur_parse_idx + tokenize_end]);
-
-            for (token_idx, token) in tokens.iter().enumerate() {
-                if let Token::Op(b"TJ") = token {
-                    break;
+        // Index in tokens where TJ started (this is the first `Token::Literal`).
+        let mut tj_start_idx: Option<usize> = None;
+        while token_idx < tokens.len() {
+            let token = &tokens[token_idx];
+            match token {
+                Token::Literal(_) | Token::Hex(_) if tj_start_idx.is_none() => {
+                    tj_start_idx = Some(token_idx);
                 }
-                if let Token::Op(b"ET") = token {
-                    break;
+                Token::Name(name) if name.starts_with(b"Im") => {
+                    if let Some(idx) = self.get_image_bounds(&tokens, token_idx) {
+                        token_idx = idx;
+                        continue;
+                    }
                 }
-
-                if let Token::Op(b"Tf") = token 
-                    // Skip if there aren't enough tokens before this operator
-                    && let Ok([font_id_bytes, font_size_bytes]) =
+                Token::Op(b"BT") => {
+                    bt_pos = token_idx;
+                    parsed_len_at_bt = parsed.len();
+                }
+                Token::Op(b"ET") => {
+                    if let Some((_, tbl_end_idx)) =
+                        self.get_table_bounds(&tokens, token_idx, bt_pos)
+                    {
+                        // Rewind any content that was already parsed from this BT block,
+                        // and drop any history entries that reference rewound positions.
+                        parsed.truncate(parsed_len_at_bt);
+                        tf_history.retain(|m| m.byte_index <= parsed_len_at_bt);
+                        y_history.retain(|(idx, _)| *idx <= parsed_len_at_bt);
+                        // tbl_end_idx points to a BT token; update bt tracking state
+                        // since we're jumping over the BT token itself.
+                        bt_pos = tbl_end_idx;
+                        parsed_len_at_bt = parsed.len();
+                        token_idx = tbl_end_idx;
+                        tj_start_idx = None;
+                    }
+                }
+                Token::Op(b"TJ") => {
+                    if let Some(start_idx) = tj_start_idx {
+                        parsed +=
+                            &self.process_tj_tokens(&tokens[start_idx..token_idx], doc, page_id)?;
+                        tj_start_idx = None;
+                    }
+                }
+                Token::Op(b"Tf") => {
+                    if let Ok([font_id_bytes, font_size_bytes]) =
+                        // Skip if there aren't enough tokens before this operator
                         PdfParser::get_params_from_tokens(&tokens, token_idx)
                         && let Ok(font_id) = std::str::from_utf8(font_id_bytes)
                         && let Ok(font_size_str) = std::str::from_utf8(font_size_bytes)
                         && let Ok(font_name) = get_font_name(doc, page_id, font_id)
                         && let Ok(font_size) = font_size_str.parse::<f32>()
-                {
-                    self.cur_font = font_name.into();
-                    self.cur_font_id = font_id.into();
-                    self.cur_font_size = font_size;
+                    {
+                        self.cur_font = font_name.into();
+                        self.cur_font_id = font_id.into();
+                        self.cur_font_size = font_size;
 
-                    tf_history.push(FontSizeMarker {
-                        page_number,
-                        byte_index: parsed.len(),
-                        font_size: OrderedFloat(font_size),
-                        font_name: self.cur_font.clone(),
-                    });
+                        tf_history.push(FontSizeMarker {
+                            page_number,
+                            byte_index: parsed.len(),
+                            font_size: OrderedFloat(font_size),
+                            font_name: self.cur_font.clone(),
+                        });
+                    }
                 }
-
-                if let Token::Op(b"Td") = token {
+                Token::Op(b"Td") => {
                     // Skip if there aren't enough tokens before this operator
                     if let Ok([_x_bytes, vert_bytes]) =
                         PdfParser::get_params_from_tokens(&tokens, token_idx)
@@ -1003,63 +968,10 @@ impl PdfParser {
                         }
                     }
                 }
+                _ => {}
             }
 
-            // Now check for tables and images with updated font information
-            // Handle tables
-            if let Some((tbl_begin_idx, tbl_end_idx)) =
-                self.get_table_bounds(&content, cur_parse_idx + et_idx, doc, page_id)
-                && tbl_begin_idx < cur_parse_idx + tj_idx
-            {
-                // Skip over the table
-                cur_parse_idx = tbl_end_idx;
-                continue;
-            }
-
-            // Handle images. The TJ has to be after the next ET--otherwise, it's
-            // unlikely to be a caption. We assume here that figure captions occur after
-            // the figure itself.
-            if tj_idx > et_idx
-                && let Some(im_end_idx) = self.get_image_bounds(&content, cur_parse_idx + et_idx)
-            {
-                cur_parse_idx = im_end_idx;
-                continue;
-            }
-
-            let end_idx = content[cur_parse_idx..]
-                .find("TJ")
-                .ok_or(PdfError::ContentError)?;
-
-            // We need to match the ] immediately preceding TJ with its [, but papers have references
-            // that are written inside [], so a naive method doesn't work. We use a stack to find
-            // the matching opening bracket.
-            let mut begin_idx = end_idx;
-            let mut stack = Vec::with_capacity(50);
-            while let Some(val) =
-                content[cur_parse_idx..cur_parse_idx + begin_idx].rfind(|c| ['[', ']'].contains(&c))
-            {
-                let char_at_val = content.as_bytes()[cur_parse_idx + val] as char;
-                if char_at_val == ']' {
-                    stack.push(']');
-                } else if char_at_val == '[' {
-                    if stack.is_empty() {
-                        begin_idx = val + 1; // Start after the '['
-                        break;
-                    }
-                    if let Some(']') = stack.last() {
-                        stack.pop();
-                    }
-                }
-
-                begin_idx = val;
-            }
-
-            // Tokenize just the TJ array contents (between [ and ])
-            let tj_content = &content[cur_parse_idx + begin_idx..cur_parse_idx + end_idx];
-            let tokens = tokenize(tj_content.as_bytes());
-            parsed += &self.process_tj_tokens(&tokens, doc, page_id)?;
-
-            cur_parse_idx += end_idx + 2;
+            token_idx += 1;
         }
 
         let mut edits = Vec::new();
@@ -1276,7 +1188,7 @@ pub fn extract_text(file_path: &str) -> Result<ExtractedContent, Box<dyn Error>>
             .unwrap_or(&(levels.len() - 1));
     }
 
-    sections.retain(|f| f.level < 3);
+    sections.retain(|f| f.level < 4);
 
     compute_parent_indices(&mut sections);
 
@@ -1459,7 +1371,7 @@ mod tests {
         let content = content.unwrap();
         let text = content.text_content;
 
-        test_eq!(content.sections.len(), 4);
+        test_eq!(content.sections.len(), 5);
 
         test_eq!(
             text[content.sections.first().unwrap().byte_index..][..5].to_string(),
@@ -1477,6 +1389,10 @@ mod tests {
         test_eq!(
             text[content.sections.get(3).unwrap().byte_index..][..10].to_string(),
             "1.1 subsec"
+        );
+        assert_eq!(
+            text[content.sections.get(4).unwrap().byte_index..][..15].to_string(),
+            "1.1.1 subsubsec"
         );
     }
 
@@ -1580,6 +1496,7 @@ mod tests {
         test_ok!(content);
 
         let content = content.unwrap().text_content;
+        dbg!(&content);
         for op in [r"\int", r"\sum", r"\infty"] {
             assert!(content.contains(op));
         }
@@ -1590,18 +1507,16 @@ mod tests {
         let path = PathBuf::from("assets").join("table.pdf");
 
         let doc = Document::load(&path).unwrap();
-        let page_id = doc.page_iter().next().unwrap();
         let content = get_raw_content_stream(&doc, 0).unwrap();
+        let tokens = tokenize(content.as_bytes());
 
-        let mut parser = PdfParser::with_default_config();
+        let config = PdfParserThresholds {
+            tbl_td: 10,
+            ..Default::default()
+        };
+        let parser = PdfParser::new(config);
 
-        // The indices will not exactly line up, because "\n"s seem to be two separate characters. This is okay.
-        let first_et = content.find("ET").unwrap();
-        test_eq!(first_et, 342);
-        test_eq!(
-            parser.get_table_bounds(&content, first_et, &doc, page_id),
-            Some((305, 707))
-        );
+        test_eq!(parser.get_table_bounds(&tokens, 69, 0), Some((61, 167)));
     }
 
     #[test]
@@ -1614,6 +1529,7 @@ mod tests {
         let content = content.unwrap().text_content;
         let tests = ["r1c1", "r1c2", "r2c1", "r2c2"];
         for text in tests {
+            dbg!(&text);
             assert!(!content.contains(text));
         }
     }
@@ -1630,6 +1546,7 @@ mod tests {
         // the older version, where it failed to capture the entirety of the first subtable.
         let tests = ["foo", "bar", "baz", "quux1"];
         for text in tests {
+            dbg!(&text);
             assert!(!content.contains(text));
         }
     }
@@ -1643,15 +1560,15 @@ mod tests {
 
         let content = content.unwrap().text_content;
 
-        // NOTE: This should also ignore "caption" and "HERE", which is a regression from the older
-        // non-tokenizer-based parser. I'll get back to this later.
-        let tests = ["Figure", "Caption", "is", "good"];
+        let tests = ["Figure", "Caption", "is", "good", "caption", "HERE"];
         for text in tests {
+            dbg!(&text);
             assert!(!content.contains(text));
         }
 
         let tests = ["begin1", "end1", "begin2", "end2"];
         for text in tests {
+            dbg!(&text);
             assert!(content.contains(text));
         }
     }
