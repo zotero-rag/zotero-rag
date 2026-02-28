@@ -773,7 +773,7 @@ impl PdfParser {
     ///   where the caller should resume processing).
     /// * `None` if no table is detected.
     fn get_table_bounds(
-        &mut self,
+        &self,
         tokens: &[Token<'_>],
         pos: usize,
         bt_pos: usize,
@@ -783,7 +783,8 @@ impl PdfParser {
         }
 
         let (mut first_x, mut first_y) = (0.0, 0.0);
-        let mut first_td_idx: Option<usize> = None;
+        // Index of the *last* `Td` in the text block (holds accumulated position)
+        let mut first_acc_td_idx: Option<usize> = None;
         let mut td_count = 0;
         let mut i = bt_pos;
 
@@ -795,7 +796,7 @@ impl PdfParser {
             {
                 first_x += tokens[i - 2].parse::<f32>()?;
                 first_y += tokens[i - 1].parse::<f32>()?;
-                first_td_idx = Some(i);
+                first_acc_td_idx = Some(i);
                 td_count += 1;
             }
 
@@ -804,7 +805,7 @@ impl PdfParser {
 
         // If there were no Td operators in the current BT block, we can't determine a reference
         // position, so we can't detect a table.
-        let first_td_idx = first_td_idx?;
+        let first_td_idx = first_acc_td_idx?;
 
         // If there are too many Td operators, this is likely a paragraph, not a table boundary.
         // Tables typically have just a few Td operators per BT block (for positioning).
@@ -1513,7 +1514,7 @@ mod tests {
             tbl_td: 10,
             ..Default::default()
         };
-        let mut parser = PdfParser::new(config);
+        let parser = PdfParser::new(config);
 
         test_eq!(parser.get_table_bounds(&tokens, 69, 0), Some((61, 167)));
     }
