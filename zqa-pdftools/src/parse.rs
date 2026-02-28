@@ -1390,7 +1390,7 @@ pub fn extract_text(file_path: &str) -> Result<ExtractedContent, Box<dyn Error>>
             .unwrap_or(&(levels.len() - 1));
     }
 
-    sections.retain(|f| f.level < 3);
+    sections.retain(|f| f.level < 4);
 
     compute_parent_indices(&mut sections);
 
@@ -1577,8 +1577,7 @@ mod tests {
         let content = content.unwrap();
         let text = content.text_content;
 
-        dbg!(&content.sections);
-        assert_eq!(content.sections.len(), 4);
+        assert_eq!(content.sections.len(), 5);
 
         assert_eq!(
             text[content.sections.first().unwrap().byte_index..][..5].to_string(),
@@ -1596,6 +1595,10 @@ mod tests {
         assert_eq!(
             text[content.sections.get(3).unwrap().byte_index..][..10].to_string(),
             "1.1 subsec"
+        );
+        assert_eq!(
+            text[content.sections.get(4).unwrap().byte_index..][..15].to_string(),
+            "1.1.1 subsubsec"
         );
     }
 
