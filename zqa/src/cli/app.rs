@@ -886,10 +886,7 @@ pub(crate) async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<()
                             &mut ctx.out,
                             "/new\t\tSave the current conversation and switch to a new one."
                         )?;
-                        writeln!(
-                            &mut ctx.out,
-                            "/resume\t\tResume a previous conversation."
-                        )?;
+                        writeln!(&mut ctx.out, "/resume\t\tResume a previous conversation.")?;
                         writeln!(&mut ctx.out, "/index\t\tCreate or update indices.")?;
                         writeln!(
                             &mut ctx.out,
@@ -1385,12 +1382,16 @@ mod tests {
                 },
                 ChatHistoryItem {
                     role: ASSISTANT_ROLE.into(),
-                    content: vec![ChatHistoryContent::Text("Attention is a mechanism...".into())],
+                    content: vec![ChatHistoryContent::Text(
+                        "Attention is a mechanism...".into(),
+                    )],
                 },
             ];
             let history_b = vec![ChatHistoryItem {
                 role: USER_ROLE.into(),
-                content: vec![ChatHistoryContent::Text("Tell me about transformers.".into())],
+                content: vec![ChatHistoryContent::Text(
+                    "Tell me about transformers.".into(),
+                )],
             }];
 
             save_conversation(&SavedChatHistory {
