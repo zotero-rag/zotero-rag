@@ -605,63 +605,13 @@ impl PdfParser {
             };
 
             if y.abs() > self.cur_font_size * self.cur_baselineskip {
-                return Some(tj_idx + 1);
+                return Some(tj_idx);
             }
 
             i += 1; // Move past the `Td`
         }
 
         None
-    }
-
-    /// Checks for a font change command (`/F`) within a specified range of the content string
-    /// and updates the parser's current font state accordingly.
-    ///
-    /// This function searches for `/F` font resource references (e.g., `/F28`) within the
-    /// given range `[start_idx, end_idx)` of the content string. If a font change is detected,
-    /// it extracts the font ID, resolves the font name using the document's font dictionary,
-    /// and updates both `self.cur_font` and `self.cur_font_id`.
-    ///
-    /// # Arguments
-    ///
-    /// * `doc` - The `lopdf::Document` object containing font information
-    /// * `page_id` - The page ID where the font is referenced
-    /// * `content` - The PDF content stream as a string
-    /// * `start_idx` - The starting index of the range to search
-    /// * `end_idx` - The ending index of the range to search
-    fn check_and_update_font(
-        &mut self,
-        doc: &Document,
-        page_id: PageID,
-        content: &str,
-        start_idx: usize,
-        end_idx: usize,
-    ) {
-        let slice = &content[start_idx..end_idx];
-        let Some(font_begin_idx) = slice.find("/F") else {
-            return;
-        };
-
-        // Find the space after the font ID
-        let Some(space_offset) = slice[font_begin_idx..].find(' ') else {
-            // No space found in slice - this /F might be inside text content, skip it
-            return;
-        };
-        let font_end_idx = font_begin_idx + space_offset;
-
-        let font_id = &slice[font_begin_idx + 1..font_end_idx];
-
-        // Skip empty font IDs or IDs that don't start with an alphanumeric character
-        // Valid font IDs look like "F28", "F1", etc.
-        if font_id.is_empty() || !font_id.starts_with(|c: char| c.is_ascii_alphanumeric()) {
-            return;
-        }
-
-        // Try to get the font name - if it fails, this might not be a valid font reference
-        if let Ok(font_name) = get_font_name(doc, page_id, font_id) {
-            self.cur_font = font_name.to_string();
-            self.cur_font_id = font_id.to_string();
-        }
     }
 
     /// Process a TJ block given its tokens, extracting text with proper spacing.
@@ -822,7 +772,7 @@ impl PdfParser {
     ///   token index of the `BT` that starts the first non-matching block after the table (i.e.,
     ///   where the caller should resume processing).
     /// * `None` if no table is detected.
-    fn get_table_bounds_new(
+    fn get_table_bounds(
         &mut self,
         tokens: &[Token<'_>],
         pos: usize,
@@ -866,7 +816,6 @@ impl PdfParser {
         let mut bt_count = 0;
 
         let mut cur_bt_pos: Option<usize> = None;
-        let mut last_matching_bt_pos = 0;
 
         while i < tokens.len() {
             match tokens[i] {
@@ -886,7 +835,6 @@ impl PdfParser {
                             ((cur_x - first_x).powi(2) + (cur_y - first_y).powi(2)).sqrt();
                         if distance < self.thresholds.table_alignment {
                             bt_count += 1;
-                            last_matching_bt_pos = cur_bt_pos.unwrap();
                             cur_bt_pos = None; // consume this BT; wait for next one
                         } else if bt_count > 0 {
                             // We've found the end of the table
@@ -905,7 +853,7 @@ impl PdfParser {
         if bt_count > 0 {
             // If we've processed at least one BT and reached the end, return what we have
             log::debug!("Could not find a BT, is the table at the end of the page?");
-            return Some((first_td_idx + 1, last_matching_bt_pos));
+            return Some((first_td_idx + 1, tokens.len()));
         }
 
         // Not a table
@@ -960,7 +908,7 @@ impl PdfParser {
                 }
                 Token::Op(b"ET") => {
                     if let Some((_tbl_begin_idx, tbl_end_idx)) =
-                        self.get_table_bounds_new(&tokens, token_idx, bt_pos)
+                        self.get_table_bounds(&tokens, token_idx, bt_pos)
                     {
                         // Rewind any content that was already parsed from this BT block,
                         // and drop any history entries that reference rewound positions.
@@ -976,12 +924,11 @@ impl PdfParser {
                     }
                 }
                 Token::Op(b"TJ") => {
-                    parsed += &self.process_tj_tokens(
-                        &tokens[tj_start_idx.unwrap()..token_idx],
-                        doc,
-                        page_id,
-                    )?;
-                    tj_start_idx = None;
+                    if let Some(start_idx) = tj_start_idx {
+                        parsed +=
+                            &self.process_tj_tokens(&tokens[start_idx..token_idx], doc, page_id)?;
+                        tj_start_idx = None;
+                    }
                 }
                 Token::Op(b"Tf") => {
                     if let Ok([font_id_bytes, font_size_bytes]) =
@@ -1566,7 +1513,7 @@ mod tests {
         config.tbl_td = 10;
         let mut parser = PdfParser::new(config);
 
-        test_eq!(parser.get_table_bounds_new(&tokens, 69, 0), Some((61, 167)));
+        test_eq!(parser.get_table_bounds(&tokens, 69, 0), Some((61, 167)));
     }
 
     #[test]
