@@ -735,8 +735,8 @@ async fn stats<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Result<(), CLIErr
 /// # Errors
 ///
 /// * `CLIError::IOError` - If `writeln!` or reading input fails.
-/// * `CLIError::StateError` - If conversations could not be loaded or saving the current
-///   conversation fails.
+/// * `CLIError::MutexPoisoningError` - If a lock on the context chat history could not be
+///   obtained.
 fn resume<O: Write, E: Write, R: BufRead>(
     ctx: &mut Context<O, E>,
     reader: &mut R,
@@ -1403,7 +1403,8 @@ mod tests {
 
             save_conversation(&SavedChatHistory {
                 history: history_b.clone(),
-                date: Local::now(),
+                // Avoid same filename
+                date: Local::now() + chrono::Duration::seconds(1),
                 title: "Conversation B".into(),
             })
             .unwrap();
