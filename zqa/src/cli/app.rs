@@ -28,13 +28,14 @@ use zqa_rag::vector::lance::{
 
 use crate::cli::errors::CLIError;
 use crate::common::Context;
+use crate::state::get_conversation_history;
 use crate::{full_library_to_arrow, utils::library::parse_library_metadata};
 use arrow_ipc::reader::FileReader;
 use arrow_ipc::writer::FileWriter;
 use std::sync::{Arc, Mutex, atomic};
 use std::{
     fs::File,
-    io::{self, Write},
+    io::{self, BufRead, Write},
     time::Instant,
 };
 
@@ -719,6 +720,96 @@ async fn stats<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Result<(), CLIErr
     Ok(())
 }
 
+/// Resume a previous conversation selected by the user.
+///
+/// Displays a numbered list of saved conversations, prompts for a selection, and loads the
+/// chosen conversation into the current session. If the current session is dirty, it is saved
+/// first.
+///
+/// # Arguments
+///
+/// * `ctx` - A `Context` object that contains CLI args and objects that implement
+///   `std::io::Write` for `stdout` and `stderr`.
+/// * `reader` - A buffered reader used to read the user's selection.
+///
+/// # Errors
+///
+/// * `CLIError::IOError` - If `writeln!` or reading input fails.
+/// * `CLIError::StateError` - If conversations could not be loaded or saving the current
+///   conversation fails.
+fn resume<O: Write, E: Write, R: BufRead>(
+    ctx: &mut Context<O, E>,
+    reader: &mut R,
+) -> Result<(), CLIError> {
+    match get_conversation_history() {
+        Err(e) => {
+            writeln!(&mut ctx.err, "Failed to load conversations: {e}")?;
+        }
+        Ok(None) => {
+            writeln!(&mut ctx.out, "No saved conversations found.")?;
+        }
+        Ok(Some(ref v)) if v.is_empty() => {
+            writeln!(&mut ctx.out, "No saved conversations found.")?;
+        }
+        Ok(Some(mut histories)) => {
+            histories.sort_by(|a, b| b.date.cmp(&a.date));
+
+            writeln!(&mut ctx.out)?;
+            writeln!(&mut ctx.out, "Saved conversations:")?;
+            for (i, h) in histories.iter().enumerate() {
+                let msg_count = h.history.len();
+                writeln!(
+                    &mut ctx.out,
+                    "  [{}] {} ({} message{})",
+                    i + 1,
+                    h.title,
+                    msg_count,
+                    if msg_count == 1 { "" } else { "s" }
+                )?;
+            }
+            writeln!(&mut ctx.out)?;
+            write!(&mut ctx.out, "Enter a number (1-{}): ", histories.len())?;
+            ctx.out.flush()?;
+
+            let mut input = String::new();
+            reader.read_line(&mut input)?;
+            let input = input.trim();
+
+            match input.parse::<usize>() {
+                Ok(n) if n >= 1 && n <= histories.len() => {
+                    if ctx.state.dirty.load(atomic::Ordering::Relaxed) {
+                        let chat_history = Arc::clone(&ctx.state.chat_history);
+                        let history = chat_history.lock()?;
+                        let date = Local::now();
+                        let conversation = SavedChatHistory {
+                            history: history.clone(),
+                            date,
+                            title: format!("Conversation on {}", date.format("%Y-%m-%d %H:%M")),
+                        };
+                        if let Err(e) = save_conversation(&conversation)
+                            && let Err(write_err) =
+                                writeln!(&mut ctx.err, "Error saving conversation: {e}")
+                        {
+                            log::error!("Failed to write to stderr: {write_err}");
+                        }
+                    }
+
+                    let selected = histories.swap_remove(n - 1);
+                    let title = selected.title.clone();
+                    ctx.state.chat_history = Arc::new(Mutex::new(selected.history));
+                    ctx.state.dirty.store(false, atomic::Ordering::Relaxed);
+                    writeln!(&mut ctx.out, "Resumed: {title}")?;
+                }
+                _ => {
+                    writeln!(&mut ctx.err, "Invalid selection.")?;
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
 /// The core CLI implementation that implements a REPL for user commands.
 ///
 /// # Arguments
@@ -795,6 +886,10 @@ pub(crate) async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<()
                             &mut ctx.out,
                             "/new\t\tSave the current conversation and switch to a new one."
                         )?;
+                        writeln!(
+                            &mut ctx.out,
+                            "/resume\t\tResume a previous conversation."
+                        )?;
                         writeln!(&mut ctx.out, "/index\t\tCreate or update indices.")?;
                         writeln!(
                             &mut ctx.out,
@@ -852,6 +947,13 @@ pub(crate) async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<()
                             writeln!(&mut ctx.err, "Deduplication failed: {e}")?;
                         }
                     },
+                    "/resume" => {
+                        let stdin = io::stdin();
+                        let mut reader = stdin.lock();
+                        if let Err(e) = resume(&mut ctx, &mut reader) {
+                            writeln!(&mut ctx.err, "Error resuming conversation: {e}")?;
+                        }
+                    }
                     "/quit" | "/exit" | "quit" | "exit" | "/new" => {
                         if ctx.state.dirty.load(atomic::Ordering::Relaxed) {
                             let chat_history = Arc::clone(&ctx.state.chat_history);
@@ -969,20 +1071,23 @@ pub(crate) async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<()
 
 #[cfg(test)]
 mod tests {
-    use crate::cli::app::{BATCH_ITER_FILE, checkhealth, embed, search_for_papers, stats};
+    use crate::cli::app::{BATCH_ITER_FILE, checkhealth, embed, resume, search_for_papers, stats};
     use crate::common::State;
     use crate::config::{Config, VoyageAIConfig};
+    use crate::state::{SavedChatHistory, save_conversation};
     use arrow_array::{RecordBatch, StringArray};
     use arrow_ipc::writer::FileWriter;
+    use chrono::Local;
     use serial_test::serial;
     use std::fs::{self, File};
     use std::io::Cursor;
     use std::sync::Arc;
     use temp_env;
-    use zqa_macros::test_ok;
+    use zqa_macros::{test_contains, test_eq, test_ok};
     use zqa_rag::constants::{
         DEFAULT_VOYAGE_EMBEDDING_DIM, DEFAULT_VOYAGE_EMBEDDING_MODEL, DEFAULT_VOYAGE_RERANK_MODEL,
     };
+    use zqa_rag::llm::base::{ASSISTANT_ROLE, ChatHistoryContent, ChatHistoryItem, USER_ROLE};
 
     use crate::{
         cli::app::{process, run_query},
@@ -1250,9 +1355,92 @@ mod tests {
         })
         .await;
 
-        assert!(output.contains("LanceDB Health Check Results"));
-        assert!(output.contains("directory exists"));
-        assert!(output.contains("Table is accessible"));
-        assert!(output.contains("Table has"));
+        test_contains!(output, "LanceDB Health Check Results");
+        test_contains!(output, "directory exists");
+        test_contains!(output, "Table is accessible");
+        test_contains!(output, "Table has");
+    }
+
+    #[test]
+    fn test_resume_no_conversations() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        temp_env::with_var("ZQA_STATE_DIR", Some(temp_dir.path()), || {
+            let mut ctx = create_test_context();
+            let mut reader = Cursor::new("");
+            resume(&mut ctx, &mut reader).unwrap();
+
+            let output = String::from_utf8(ctx.out.into_inner()).unwrap();
+            test_contains!(output, "No saved conversations found.");
+        });
+    }
+
+    #[test]
+    fn test_resume_loads_selected_conversation() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        temp_env::with_var("ZQA_STATE_DIR", Some(temp_dir.path()), || {
+            let history_a = vec![
+                ChatHistoryItem {
+                    role: USER_ROLE.into(),
+                    content: vec![ChatHistoryContent::Text("What is attention?".into())],
+                },
+                ChatHistoryItem {
+                    role: ASSISTANT_ROLE.into(),
+                    content: vec![ChatHistoryContent::Text("Attention is a mechanism...".into())],
+                },
+            ];
+            let history_b = vec![ChatHistoryItem {
+                role: USER_ROLE.into(),
+                content: vec![ChatHistoryContent::Text("Tell me about transformers.".into())],
+            }];
+
+            save_conversation(&SavedChatHistory {
+                history: history_a.clone(),
+                date: Local::now(),
+                title: "Conversation A".into(),
+            })
+            .unwrap();
+
+            save_conversation(&SavedChatHistory {
+                history: history_b.clone(),
+                date: Local::now(),
+                title: "Conversation B".into(),
+            })
+            .unwrap();
+
+            let mut ctx = create_test_context();
+            // The list is sorted reverse-chronologically; B was saved last so it's [1].
+            let mut reader = Cursor::new("1\n");
+            resume(&mut ctx, &mut reader).unwrap();
+
+            let out = String::from_utf8(ctx.out.into_inner()).unwrap();
+            test_contains!(out, "Resumed:");
+
+            let loaded = ctx.state.chat_history.lock().unwrap();
+            test_eq!(loaded.len(), history_b.len());
+            assert!(!ctx.state.dirty.load(std::sync::atomic::Ordering::Relaxed));
+        });
+    }
+
+    #[test]
+    fn test_resume_invalid_selection() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        temp_env::with_var("ZQA_STATE_DIR", Some(temp_dir.path()), || {
+            save_conversation(&SavedChatHistory {
+                history: vec![ChatHistoryItem {
+                    role: USER_ROLE.into(),
+                    content: vec![ChatHistoryContent::Text("Hello".into())],
+                }],
+                date: Local::now(),
+                title: "Only Conversation".into(),
+            })
+            .unwrap();
+
+            let mut ctx = create_test_context();
+            let mut reader = Cursor::new("99\n");
+            resume(&mut ctx, &mut reader).unwrap();
+
+            let err = String::from_utf8(ctx.err.into_inner()).unwrap();
+            test_contains!(err, "Invalid selection.");
+        });
     }
 }
