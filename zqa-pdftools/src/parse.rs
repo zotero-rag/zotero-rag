@@ -492,32 +492,6 @@ impl PdfParser {
         }
     }
 
-    /// Get the `N` whitespace-separated words in `content` before position `pos`. This is used to
-    /// get the operators for a PDF command.
-    ///
-    /// # Errors
-    /// * `PdfError::InternalError` if `N` > number of words in `content[..pos]`
-    #[allow(clippy::unused_self)]
-    #[allow(dead_code)]
-    fn get_params<'a, const N: usize>(
-        &self,
-        content: &'a str,
-        pos: usize,
-    ) -> Result<[&'a str; N], PdfError> {
-        let mut params = [""; N];
-        let mut start_pos = pos - 1;
-
-        for i in 0..N {
-            let idx = content[..start_pos].rfind([' ', '/', '\n', '\t']).ok_or(
-                PdfError::InternalError("No valid separator in content at {start_pos}".into()),
-            )? + 1;
-            params[N - 1 - i] = &content[idx..start_pos];
-            start_pos = idx - 1;
-        }
-
-        Ok(params)
-    }
-
     /// Extract N number tokens that appear immediately before an operator token.
     ///
     /// This scans backwards through the token slice to find the N numbers that precede
@@ -914,8 +888,6 @@ impl PdfParser {
                             bt_count += 1;
                             last_matching_bt_pos = cur_bt_pos.unwrap();
                             cur_bt_pos = None; // consume this BT; wait for next one
-
-                        // TODO: Handle fonts
                         } else if bt_count > 0 {
                             // We've found the end of the table
                             return Some((first_td_idx + 1, cur_bt_pos.unwrap()));
@@ -938,128 +910,6 @@ impl PdfParser {
 
         // Not a table
         None
-    }
-
-    /// Given a string `content` and a position `pos`, look *around* `pos` and search for likely
-    /// boundaries for a table. This function uses the heuristic that tables are likely to be
-    /// near `ET` blocks, because tables typically have some graphics (lines for borders, etc.).
-    /// Under this assumption, this function looks at `Td` commands starting from the *previous*
-    /// `BT` from `pos`, and compares the position described there to positions in subsequent `Td`
-    /// commands starting from `pos`, using the Euclidean distance. If this distance is below a
-    /// threshold, it is assumed that these are alignment efforts.
-    ///
-    /// We need to use *all* the `Td`s from the previous `BT` since LaTeX can use one `BT`..`ET`
-    /// block for both non-table and table content.
-    ///
-    /// We do not need to keep a running track of where we are by adding the `Td` movements across
-    /// `BT`..`ET` blocks: from the PDF Reference Manual, Section 7.2.3:
-    ///
-    /// >  Each time a text object begins, the current point is set to the origin of the page's
-    /// >  coordinate system.
-    ///
-    /// This function also updates the font accordingly, since it is possible for the font to
-    /// change within the bounds returned. Therefore, the core parsing method itself can safely
-    /// assume that `self.cur_font` is accurate if it skipped over the returned bounds.
-    ///
-    /// # Returns
-    ///
-    /// * `Some((start_idx, end_idx))`, where `start_idx` is the index of the `BT` command where it is suspected that
-    ///   the table begins, and `end_idx` is the index of the `ET` command where the table is suspected to end.
-    /// * If no table is detected, returns `None`.
-    #[allow(dead_code)]
-    fn get_table_bounds(
-        &mut self,
-        content: &str,
-        pos: usize,
-        doc: &Document,
-        page_id: PageID,
-    ) -> Option<(usize, usize)> {
-        let bt_idx = content[..pos].rfind("BT")?; // First `BT` we see
-        let first_td_idx = content[..pos].rfind("Td")?;
-
-        // Collect all the `Td`s after the previous `BT` up to where we are. LaTeX is free to use a
-        // single BT..ET block for non-table and table content, so the table might start from one
-        // of the intermediate `Td`s.
-        let mut td_positions = content[bt_idx..pos]
-            .split("Td")
-            .filter_map(|s| {
-                self.get_params::<2>(s, s.len() - 1)
-                    .ok()
-                    .and_then(|[x, y]| x.parse::<f32>().ok().zip(y.parse::<f32>().ok()))
-            })
-            .collect::<Vec<_>>();
-
-        if td_positions.is_empty() {
-            return None;
-        }
-
-        // Accumulate `Td`s, since these are movements
-        for i in 1..td_positions.len() {
-            td_positions[i] = (
-                td_positions[i].0 + td_positions[i - 1].0,
-                td_positions[i].1 + td_positions[i - 1].1,
-            );
-        }
-
-        // The "first" (x, y) is the accumulated movements so far; see the function's documentation
-        // pointing to Section 7.2.3 of the PDF reference manual for reasoning.
-        let (first_x, first_y) = td_positions[td_positions.len() - 1];
-
-        // Running position in `content`
-        let mut cur_pos = pos;
-
-        // How many `BT`s have we skipped?
-        let mut bt_count = 0;
-
-        loop {
-            // Try to find the next BT
-            let Some(next_bt) = content[cur_pos..].find("BT") else {
-                if bt_count > 0 {
-                    // If we've processed at least one BT and reached the end, return what we have
-                    log::debug!("Could not find a BT, is the table at the end of the page?");
-                    return Some((bt_idx, cur_pos));
-                }
-
-                // Not a table
-                return None;
-            };
-            let next_bt_pos = cur_pos + next_bt;
-
-            // Try to find a Td command after this BT
-            let Some(td_offset) = content[next_bt_pos..].find("Td") else {
-                log::debug!("Could not find a Td after a BT, ignoring possible table.");
-                return None;
-            };
-
-            // Calculate current alignment position
-            let cur_td_idx = next_bt_pos + td_offset;
-
-            let params_result = self.get_params::<2>(content, cur_td_idx).ok();
-            let Some((cur_x, cur_y)) = params_result
-                .and_then(|[x, y]| Some((x.parse::<f32>().ok()?, y.parse::<f32>().ok()?)))
-            else {
-                // Could not parse parameters
-                log::info!("Could not parse Td parameters, ignoring possible table.");
-                return None;
-            };
-
-            let distance = ((cur_x - first_x).powi(2) + (cur_y - first_y).powi(2)).sqrt();
-
-            if distance < self.thresholds.table_alignment {
-                bt_count += 1;
-
-                // Before we move, check if the font has changed
-                self.check_and_update_font(doc, page_id, content, 0, content.len() - 1);
-
-                cur_pos = cur_td_idx;
-            } else if bt_count > 0 {
-                // We've found the end of the table
-                return Some((first_td_idx + 3, next_bt_pos)); // +3 for "Td " length
-            } else {
-                // Not a table
-                return None;
-            }
-        }
     }
 
     /// The actual PDF parser itself. Parses UTF-8 encoded code points in a best-effort manner,
@@ -1709,18 +1559,14 @@ mod tests {
         let path = PathBuf::from("assets").join("table.pdf");
 
         let doc = Document::load(&path).unwrap();
-        let page_id = doc.page_iter().next().unwrap();
         let content = get_raw_content_stream(&doc, 0).unwrap();
+        let tokens = tokenize(content.as_bytes());
 
-        let mut parser = PdfParser::with_default_config();
+        let mut config = PdfParserThresholds::default();
+        config.tbl_td = 10;
+        let mut parser = PdfParser::new(config);
 
-        // The indices will not exactly line up, because "\n"s seem to be two separate characters. This is okay.
-        let first_et = content.find("ET").unwrap();
-        test_eq!(first_et, 342);
-        test_eq!(
-            parser.get_table_bounds(&content, first_et, &doc, page_id),
-            Some((305, 707))
-        );
+        test_eq!(parser.get_table_bounds_new(&tokens, 69, 0), Some((61, 167)));
     }
 
     #[test]
