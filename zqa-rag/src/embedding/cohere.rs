@@ -1,7 +1,7 @@
 //! Functions, structs, and trait implementations for interacting with the Cohere API. This module
 //! includes support for embedding only.
 
-use super::common::{EmbeddingApiRequestTexts, EmbeddingApiResponse};
+use super::common::EmbeddingApiResponse;
 use crate::{
     capabilities::EmbeddingProvider,
     constants::{
@@ -76,11 +76,20 @@ where
             tokio::runtime::Handle::current().block_on(compute_embeddings_async::<
                 CohereEmbedRequest,
                 CohereAIResponse,
+                _,
             >(
                 source,
                 "https://api.cohere.com/v2/embed",
                 &api_key,
                 self.client.clone(),
+                |texts| CohereEmbedRequest {
+                    texts,
+                    model: DEFAULT_COHERE_EMBEDDING_MODEL.to_string(),
+                    input_type: "search_document".into(),
+                    output_dimension: DEFAULT_COHERE_EMBEDDING_DIM,
+                    // Requesting float vectors explicitly for newer APIs; ignored by older
+                    embedding_types: Some(vec!["float".into()]),
+                },
                 EmbeddingProvider::Cohere.as_str().to_string(),
                 BATCH_SIZE,
                 WAIT_AFTER_REQUEST_S,
@@ -97,21 +106,8 @@ struct CohereEmbedRequest {
     model: String,
     input_type: String,
     output_dimension: u32,
-    // Requesting float vectors explicitly for newer APIs; ignored by older
     #[serde(skip_serializing_if = "Option::is_none")]
     embedding_types: Option<Vec<String>>,
-}
-
-impl EmbeddingApiRequestTexts<CohereEmbedRequest> for CohereEmbedRequest {
-    fn from_texts(texts: Vec<String>) -> Self {
-        Self {
-            texts,
-            model: DEFAULT_COHERE_EMBEDDING_MODEL.to_string(),
-            input_type: "search_document".into(),
-            output_dimension: DEFAULT_COHERE_EMBEDDING_DIM,
-            embedding_types: Some(vec!["float".into()]),
-        }
-    }
 }
 
 /// The embeddings returned by the Cohere API.
@@ -294,6 +290,7 @@ mod tests {
     use arrow_array::Array;
     use dotenv::dotenv;
     use std::sync::Arc;
+    use zqa_macros::{test_eq, test_ok};
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
     async fn test_compute_embeddings() {
@@ -316,13 +313,13 @@ mod tests {
             println!("Cohere embedding error: {:?}", embeddings.as_ref().err());
         }
 
-        assert!(embeddings.is_ok());
+        test_ok!(embeddings);
 
         let embeddings = embeddings.unwrap();
         let vector = arrow_array::cast::as_fixed_size_list_array(&embeddings);
 
-        assert_eq!(vector.len(), 6);
-        assert_eq!(vector.value_length(), DEFAULT_COHERE_EMBEDDING_DIM as i32);
+        test_eq!(vector.len(), 6);
+        test_eq!(vector.value_length(), DEFAULT_COHERE_EMBEDDING_DIM as i32);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
@@ -344,9 +341,9 @@ mod tests {
             println!("Cohere reranker error: {:?}", reranked.as_ref().err());
         }
 
-        assert!(reranked.is_ok());
+        test_ok!(reranked);
 
         let reranked = reranked.unwrap();
-        assert_eq!(reranked.len(), array.len());
+        test_eq!(reranked.len(), array.len());
     }
 }

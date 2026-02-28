@@ -299,50 +299,6 @@ pub fn parse_library_metadata(
     }
 }
 
-/// Given a Zotero item, fetch the authors and fill them in-place.
-///
-/// # Arguments
-///
-/// * `item` - The item whose metadata needs to be filled in
-fn get_authors_for_item(item: &mut ZoteroItem) -> Result<(), LibraryParsingError> {
-    if let Some(path) = get_lib_path() {
-        let conn = Connection::open(path.join("zotero.sqlite"))?;
-        let library_key = &item.metadata.library_key;
-
-        let query = "SELECT c.firstName, c.lastName
-            FROM items i
-            JOIN itemData id ON i.itemID = id.itemID
-            JOIN fields f ON id.fieldID = f.fieldID
-            JOIN itemDataValues idv ON id.valueID = idv.valueID
-            JOIN itemCreators ic ON i.itemID = ic.itemID
-            JOIN creators c ON ic.creatorID = c.creatorID
-            WHERE i.key = ?1
-            AND f.fieldName = 'title'
-            ORDER BY ic.orderIndex
-        "
-        .to_string();
-
-        let mut stmt = conn.prepare(&query).unwrap();
-        let item_iter: Vec<String> = stmt
-            .query_map(rusqlite::params![library_key], |row| {
-                let first_name: String = row.get(0)?;
-                let last_name: String = row.get(1)?;
-
-                Ok(format!("{last_name}, {first_name}"))
-            })?
-            .filter_map(std::result::Result::ok)
-            .collect();
-
-        item.metadata.authors = Some(item_iter);
-
-        Ok(())
-    } else {
-        Err(LibraryParsingError::SqlError(
-            "Library not found when fetching authors.".into(),
-        ))
-    }
-}
-
 /// Given a set of `items`, set the authors metadata in-place.
 ///
 /// # Arguments
@@ -353,8 +309,73 @@ fn get_authors_for_item(item: &mut ZoteroItem) -> Result<(), LibraryParsingError
 ///
 /// * `LibraryParsingError::SqlError` if the operation failed for any items.
 pub fn get_authors(items: &mut [ZoteroItem]) -> Result<(), LibraryParsingError> {
-    for item in items {
-        get_authors_for_item(item)?;
+    if let Some(path) = get_lib_path() {
+        let conn = Connection::open(path.join("zotero.sqlite"))?;
+
+        // For some reason, the `key` field in the `items` table (what we call `library_key`) seems
+        // to not completely be a key. Specifically, there are separate keys per item depending on
+        // whether you want the file path or the authors; the item metadata is stored with the file
+        // path, but to get the authors, you need a different key. To save you some debugging
+        // effort, here are some SQL queries that are useful here:
+        //
+        // ```sql
+        // SELECT DISTINCT
+        //   ia.path AS filePath,
+        //   i.key AS authorKey,
+        //   i2.key AS filePathKey
+        // FROM items i
+        // LEFT JOIN itemAttachments ia ON i.itemID = ia.parentItemID
+        // JOIN items i2 ON ia.itemID = i2.itemID;
+        // ```
+        // This gives you the file path and the `key`s associated with that item's author and file path.
+        //
+        // ```sql
+        //  SELECT c.firstName, c.lastName
+        //    FROM items i
+        //    JOIN itemData id ON i.itemID = id.itemID
+        //    JOIN fields f ON id.fieldID = f.fieldID
+        //    JOIN itemCreators ic ON i.itemID = ic.itemID
+        //    JOIN creators c ON ic.creatorID = c.creatorID
+        //    WHERE i.key = 'RQRBISX9'
+        //    AND f.fieldName = 'title'
+        //    ORDER BY ic.orderIndex;
+        // ```
+        // For a given (author-associated) key, this gives you the ordered first and last name pairs of
+        // the authors for that paper.
+        //
+        // The query below basically just uses the ideas from the above two queries, except that it
+        // does away with having to deal with one row per author per paper by using `GROUP_CONCAT`.
+
+        let query = "
+            SELECT GROUP_CONCAT(c.lastName || ', ' || c.firstName, ';') AS authors
+            FROM items i
+            LEFT JOIN itemAttachments ia ON i.itemID = ia.parentItemID
+            JOIN items i2 ON ia.itemID = i2.itemID
+            LEFT JOIN itemCreators ic ON i.itemID = ic.itemID
+            LEFT JOIN creators c ON ic.creatorID = c.creatorID
+            WHERE i2.key = ?1
+            GROUP BY i.key
+            ORDER BY MIN(ic.orderIndex);"
+            .to_string();
+
+        let mut stmt = conn.prepare(&query)?;
+        for item in items {
+            let library_key = &item.metadata.library_key;
+            if let Some(row) = stmt.query(rusqlite::params![library_key])?.next()? {
+                let authors: String = row.get(0)?;
+                let split_authors: Vec<_> = authors
+                    .split(';')
+                    .map(str::trim)
+                    .map(String::from)
+                    .collect();
+
+                item.metadata.authors = Some(split_authors);
+            }
+        }
+    } else {
+        return Err(LibraryParsingError::SqlError(
+            "Library not found when fetching authors.".into(),
+        ));
     }
 
     Ok(())
@@ -615,6 +636,7 @@ pub async fn parse_library(
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use zqa_macros::{test_contains, test_eq, test_ok};
 
     use crate::common::setup_logger;
 
@@ -634,7 +656,7 @@ mod tests {
         dotenv().ok();
         let library_items = parse_library_metadata(None, None);
 
-        assert!(library_items.is_ok());
+        test_ok!(library_items);
         let items = library_items.unwrap();
         assert!(!items.is_empty());
     }
@@ -659,7 +681,7 @@ mod tests {
             assert!(lib_path.to_str().unwrap().contains("zqa"));
 
             let library_items = parse_library_metadata(None, None);
-            assert!(library_items.is_ok());
+            test_ok!(library_items);
 
             let items = library_items.unwrap();
             assert!(!items.is_empty());
@@ -688,22 +710,50 @@ mod tests {
                 reranker: DEFAULT_VOYAGE_RERANK_MODEL.into(),
             }),
             Some(0),
-            Some(5),
+            Some(7),
         )
         .await;
-        assert!(items.is_ok());
+        test_ok!(items);
 
         // Two of the items in the toy library are HTML files, so we actually
         // expect those to fail.
         let mut items = items.unwrap();
         assert!(!items.is_empty());
-        assert!((0..=5).contains(&items.len()));
+        test_eq!(items.len(), 5);
 
         // Now fetch authors from the Zotero DB
         let authors_result = get_authors(&mut items);
-        assert!(authors_result.is_ok());
-        for item in items {
+        test_ok!(authors_result);
+
+        // Check the titles/authors are in the expected order and pairs.
+        // The parsing might change; we only care about keywords
+        let expected_titles = [
+            "An expert system",
+            "Online Learning Rate Adaptation",
+            "Mono2Micro",
+            "Anomaly Detection",
+            "Learning Rate Curriculum",
+        ];
+        let expected_authors = [
+            vec!["Yedida", "Krishna", "Kalia", "Menzies", "Xiao", "Vukovic"],
+            vec!["Baydin", "Cornish", "Rubio", "Schmidt", "Wood"],
+            vec!["Krishna", "Xiao", "Vukovic", "Kalia", "Sinha", "Banerjee"],
+            vec!["Yedida", "Mehendale", "Challa", "Danda", "Sarkar", "Saha"],
+            vec!["Croitoru", "Ristea", "Ionescu", "Sebe"],
+        ];
+
+        for ((item, &expected_title), expected_author_list) in
+            items.iter().zip(&expected_titles).zip(&expected_authors)
+        {
             assert!(item.metadata.authors.is_some());
+            let authors = item.metadata.authors.as_ref().unwrap();
+
+            test_contains!(item.metadata.title, expected_title);
+            test_eq!(authors.len(), expected_author_list.len());
+
+            for (author, &expected_author) in authors.iter().zip(expected_author_list) {
+                test_contains!(author, expected_author);
+            }
         }
     }
 

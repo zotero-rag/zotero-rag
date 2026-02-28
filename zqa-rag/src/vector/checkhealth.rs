@@ -385,6 +385,7 @@ mod tests {
     use serial_test::serial;
     use std::env;
     use std::sync::Arc;
+    use zqa_macros::test_ok;
 
     #[tokio::test]
     #[serial]
@@ -396,7 +397,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(format!("rag/{}", get_db_uri()));
 
         let result = lancedb_health_check("voyageai").await;
-        assert!(result.is_ok());
+        test_ok!(result);
 
         let health_result = result.unwrap();
         assert!(!health_result.directory_exists);
@@ -444,7 +445,7 @@ mod tests {
 
         // Now test health check
         let result = lancedb_health_check("voyageai").await;
-        assert!(result.is_ok());
+        test_ok!(result);
 
         let health_result = result.unwrap();
         assert!(health_result.directory_exists);

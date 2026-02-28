@@ -686,6 +686,7 @@ impl<T: HttpClient + Default + std::fmt::Debug> EmbeddingFunction for GeminiClie
 #[cfg(test)]
 mod tests {
     use std::sync::Mutex;
+    use zqa_macros::test_ok;
 
     use super::*;
     use crate::llm::base::{ApiClient, ChatHistoryItem, ChatRequest};
@@ -694,6 +695,7 @@ mod tests {
     use arrow_array::Array;
     use dotenv::dotenv;
     use lancedb::embeddings::EmbeddingFunction;
+    use zqa_macros::test_eq;
 
     #[tokio::test]
     async fn test_send_message_with_mock() {
@@ -735,16 +737,16 @@ mod tests {
             tools: None,
         };
         let res = client.send_message(&request).await;
-        assert!(res.is_ok());
+        test_ok!(res);
         let res = res.unwrap();
-        assert_eq!(res.content.len(), 1);
+        test_eq!(res.content.len(), 1);
         if let ContentType::Text(text) = &res.content[0] {
-            assert_eq!(text, "Hello from Gemini!");
+            test_eq!(text, "Hello from Gemini!");
         } else {
             panic!("Expected Text content type");
         }
-        assert_eq!(res.input_tokens, 7);
-        assert_eq!(res.output_tokens, 11);
+        test_eq!(res.input_tokens, 7);
+        test_eq!(res.output_tokens, 11);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
@@ -776,12 +778,12 @@ mod tests {
         let array = arrow_array::StringArray::from(vec!["A", "B", " ", "C"]);
         let embeddings = client.compute_source_embeddings(Arc::new(array));
 
-        assert!(embeddings.is_ok());
+        test_ok!(embeddings);
         let embeddings = embeddings.unwrap();
         let vector = arrow_array::cast::as_fixed_size_list_array(&embeddings);
-        assert_eq!(vector.len(), 4);
+        test_eq!(vector.len(), 4);
         // With mock 3-length vectors, value_length should be 3
-        assert_eq!(vector.value_length(), 3);
+        test_eq!(vector.value_length(), 3);
     }
 
     #[tokio::test]
@@ -805,13 +807,13 @@ mod tests {
             println!("Gemini embedding error: {:?}", embeddings.as_ref().err());
         }
 
-        assert!(embeddings.is_ok());
+        test_ok!(embeddings);
 
         let embeddings = embeddings.unwrap();
         let vector = arrow_array::cast::as_fixed_size_list_array(&embeddings);
 
-        assert_eq!(vector.len(), 6);
-        assert_eq!(vector.value_length(), DEFAULT_GEMINI_EMBEDDING_DIM as i32);
+        test_eq!(vector.len(), 6);
+        test_eq!(vector.value_length(), DEFAULT_GEMINI_EMBEDDING_DIM as i32);
     }
 
     #[tokio::test]
@@ -832,7 +834,7 @@ mod tests {
             println!("Gemini test error: {:?}", res.as_ref().err());
         }
 
-        assert!(res.is_ok());
+        test_ok!(res);
     }
 
     #[tokio::test]
@@ -859,6 +861,6 @@ mod tests {
             println!("Gemini test error: {:?}", res.as_ref().err());
         }
 
-        assert!(res.is_ok());
+        test_ok!(res);
     }
 }

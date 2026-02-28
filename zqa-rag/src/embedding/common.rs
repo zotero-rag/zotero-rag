@@ -229,30 +229,6 @@ pub enum RerankProviderConfig {
     Cohere(crate::config::CohereConfig),
 }
 
-/// A trait expected to be implemented by requests to embedding providers. Typically, you want to
-/// use this by making the struct generic over itself, like so:
-///
-/// ```rs
-/// struct ExampleEmbeddingRequest {
-///     texts: Vec<String>,
-///     model: String
-/// }
-///
-/// impl EmbeddingApiRequestTexts<ExampleEmbeddingRequest> for ExampleEmbeddingRequest {
-///     fn from_texts(texts: Vec<String>) -> Self {
-///         Self {
-///             texts,
-///             model: "example-model".into()
-///         }
-///     }
-/// }
-/// ```
-///
-pub trait EmbeddingApiRequestTexts<T> {
-    /// Create an instance of `T` from a vector of texts.
-    fn from_texts(texts: Vec<String>) -> T;
-}
-
 /// A trait intended to be used for responses from embedding provider APIs. Typically, these APIs
 /// return different structures for successful (200) vs. non-successful (4xx or 5xx) requests. The
 /// pattern this repo uses is to have an untagged enum as the response struct that `serde`
@@ -319,19 +295,22 @@ pub trait EmbeddingApiResponse {
 /// * `LLMError::InvalidHeaderError` - If header values cannot be parsed
 /// * `LLMError::GenericLLMError` - If other HTTP errors occur or Arrow array creation fails
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
-pub async fn compute_embeddings_async<
-    T: EmbeddingApiRequestTexts<T> + Serialize + Send + Sync + std::fmt::Debug,
-    U: EmbeddingApiResponse + for<'de> Deserialize<'de> + std::fmt::Debug,
->(
+pub async fn compute_embeddings_async<T, U, F>(
     source: Arc<dyn arrow_array::Array>,
     api_url: &str,
     api_key: &str,
     api_client: impl HttpClient,
+    make_request: F,
     embedding_provider: String,
     batch_size: usize,
     wait_after_request_s: u64,
     embedding_dim: usize,
-) -> Result<Arc<dyn arrow_array::Array>, LLMError> {
+) -> Result<Arc<dyn arrow_array::Array>, LLMError>
+where
+    T: Serialize + Send + Sync + std::fmt::Debug,
+    U: EmbeddingApiResponse + for<'de> Deserialize<'de> + std::fmt::Debug + Send,
+    F: Fn(Vec<String>) -> T + Send,
+{
     let source_array = arrow_array::cast::as_string_array(&source);
     let texts: Vec<Option<String>> = source_array.iter().map(|s| s.map(str::to_owned)).collect();
 
@@ -380,7 +359,7 @@ pub async fn compute_embeddings_async<
         headers.insert("Accept", "application/json".parse()?);
 
         let start_time = Instant::now();
-        let request = T::from_texts(cur_texts);
+        let request = make_request(cur_texts);
         let response = api_client.post_json(api_url, headers, &request).await?;
 
         let body = response.text().await?;

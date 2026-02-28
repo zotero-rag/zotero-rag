@@ -42,6 +42,12 @@ pub enum LLMError {
     /// A request timeout error.
     #[error("Request timed out")]
     TimeoutError,
+    /// An IO error, which in our case is usually a failed form data creation
+    #[error("IO error")]
+    IOError(#[from] std::io::Error),
+    /// For embeddings, signifies that a batch is not yet ready, but a response was requested.
+    #[error("Batch {0} has not yet completed.")]
+    BatchNotCompleted(String),
 }
 
 /// From<...> implementations begin here
