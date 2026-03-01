@@ -1,0 +1,72 @@
+name: Lint Commits
+permissions:
+  contents: read
+
+on:
+  pull_request:
+    branches: [ master ]
+
+jobs:
+  lintcommit:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Lint commit messages
+        run: |
+          ALLOWED_TYPES="build|ci|chore|docs|feat|fix|perf|refactor|revert|test"
+          PATTERN="^(${ALLOWED_TYPES})(\([^)]+\))?!?: .+"
+          FAILED=0
+
+          while IFS= read -r subject; do
+            [ -z "$subject" ] && continue
+
+            # Check total length
+            if [ ${#subject} -gt 80 ]; then
+              echo "ERROR: commit message too long (${#subject} > 80 chars): $subject"
+              FAILED=1
+              continue
+            fi
+
+            # Check overall format (type, optional scope, colon, space, description)
+            if ! echo "$subject" | grep -qP "^(${ALLOWED_TYPES})(\([^)]+\))?!?: .+"; then
+              echo "ERROR: invalid commit message format: $subject"
+              echo "       Expected: type(scope): description"
+              echo "       Allowed types: build, ci, chore, docs, feat, fix, perf, refactor, revert, test"
+              FAILED=1
+              continue
+            fi
+
+            # Extract description (everything after ': ')
+            desc="${subject#*: }"
+
+            # Description must not be empty
+            if [ -z "$desc" ] || [ "$desc" = "$subject" ]; then
+              echo "ERROR: empty description: $subject"
+              FAILED=1
+              continue
+            fi
+
+            # Description must not end with a period
+            if echo "$desc" | grep -qP '\.$'; then
+              echo "ERROR: description must not end with a period: $subject"
+              FAILED=1
+              continue
+            fi
+
+            # Description must not start with a capital letter (ALL_CAPS is allowed)
+            first_char="${desc:0:1}"
+            if echo "$first_char" | grep -qP '[A-Z]' && ! echo "$desc" | grep -qP '^[A-Z][A-Z0-9_]+(\s|$)'; then
+              echo "ERROR: description must not start with a capital letter: $subject"
+              FAILED=1
+              continue
+            fi
+
+            echo "OK: $subject"
+          done < <(git log --format=%s origin/master..HEAD)
+
+          exit $FAILED
