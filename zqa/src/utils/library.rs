@@ -635,7 +635,6 @@ pub async fn parse_library(
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
     use zqa_macros::{test_eq, test_ok};
 
     use crate::common::setup_logger;
@@ -648,7 +647,6 @@ mod tests {
             DEFAULT_VOYAGE_EMBEDDING_DIM, DEFAULT_VOYAGE_EMBEDDING_MODEL,
             DEFAULT_VOYAGE_RERANK_MODEL,
         },
-        vector::lance::TABLE_NAME,
     };
 
     #[test]
@@ -715,9 +713,16 @@ mod tests {
 
         dotenv().ok();
         let _ = setup_logger(log::LevelFilter::Info);
-        let _ = fs::remove_dir_all(TABLE_NAME);
-        let _ = fs::remove_dir_all(format!("zqa/{TABLE_NAME}"));
-        let _ = fs::remove_dir_all(format!("zqa-rag/{TABLE_NAME}"));
+
+        let tmp = tempfile::tempdir().unwrap();
+        let db_uri = tmp
+            .path()
+            .join("lancedb-table")
+            .to_str()
+            .unwrap()
+            .to_string();
+        // SAFETY: single-threaded async test, no concurrent env var access
+        unsafe { env::set_var("LANCEDB_URI", &db_uri) };
 
         let items = parse_library(
             &EmbeddingProviderConfig::VoyageAI(VoyageAIConfig {
