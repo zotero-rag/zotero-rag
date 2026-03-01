@@ -717,7 +717,7 @@ mod tests {
         let _ = setup_logger(log::LevelFilter::Info);
         let _ = fs::remove_dir_all(TABLE_NAME);
         let _ = fs::remove_dir_all(format!("zqa/{TABLE_NAME}"));
-        let _ = fs::remove_dir_all(format!("rag/{TABLE_NAME}"));
+        let _ = fs::remove_dir_all(format!("zqa-rag/{TABLE_NAME}"));
 
         let items = parse_library(
             &EmbeddingProviderConfig::VoyageAI(VoyageAIConfig {

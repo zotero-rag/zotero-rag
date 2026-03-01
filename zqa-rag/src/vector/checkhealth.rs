@@ -394,7 +394,7 @@ mod tests {
 
         // Clean up any existing data
         let _ = std::fs::remove_dir_all(get_db_uri());
-        let _ = std::fs::remove_dir_all(format!("rag/{}", get_db_uri()));
+        let _ = std::fs::remove_dir_all(format!("zqa-rag/{}", get_db_uri()));
 
         let result = lancedb_health_check("voyageai").await;
         test_ok!(result);
