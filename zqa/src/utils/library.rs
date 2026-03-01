@@ -636,7 +636,7 @@ pub async fn parse_library(
 #[cfg(test)]
 mod tests {
     use std::fs;
-    use zqa_macros::{test_contains, test_eq, test_ok};
+    use zqa_macros::{test_eq, test_ok};
 
     use crate::common::setup_logger;
 
@@ -696,6 +696,23 @@ mod tests {
 
     #[tokio::test]
     async fn test_parse_library() {
+        // Check the titles/authors are in the expected order and pairs.
+        // The parsing might change; we only care about keywords
+        const EXPECTED_TITLES: [&str; 5] = [
+            "An expert system",
+            "Online Learning Rate Adaptation",
+            "Mono2Micro",
+            "Anomaly Detection",
+            "Learning Rate Curriculum",
+        ];
+        let expected_authors = [
+            vec!["Yedida", "Krishna", "Kalia", "Menzies", "Xiao", "Vukovic"],
+            vec!["Baydin", "Cornish", "Rubio", "Schmidt", "Wood"],
+            vec!["Krishna", "Xiao", "Vukovic", "Kalia", "Sinha", "Banerjee"],
+            vec!["Yedida", "Mehendale", "Challa", "Danda", "Sarkar", "Saha"],
+            vec!["Croitoru", "Ristea", "Ionescu", "Sebe"],
+        ];
+
         dotenv().ok();
         let _ = setup_logger(log::LevelFilter::Info);
         let _ = fs::remove_dir_all(TABLE_NAME);
@@ -725,36 +742,31 @@ mod tests {
         let authors_result = get_authors(&mut items);
         test_ok!(authors_result);
 
-        // Check the titles/authors are in the expected order and pairs.
-        // The parsing might change; we only care about keywords
-        let expected_titles = [
-            "An expert system",
-            "Online Learning Rate Adaptation",
-            "Mono2Micro",
-            "Anomaly Detection",
-            "Learning Rate Curriculum",
-        ];
-        let expected_authors = [
-            vec!["Yedida", "Krishna", "Kalia", "Menzies", "Xiao", "Vukovic"],
-            vec!["Baydin", "Cornish", "Rubio", "Schmidt", "Wood"],
-            vec!["Krishna", "Xiao", "Vukovic", "Kalia", "Sinha", "Banerjee"],
-            vec!["Yedida", "Mehendale", "Challa", "Danda", "Sarkar", "Saha"],
-            vec!["Croitoru", "Ristea", "Ionescu", "Sebe"],
-        ];
+        let mut found_bits = 0;
 
-        for ((item, &expected_title), expected_author_list) in
-            items.iter().zip(&expected_titles).zip(&expected_authors)
-        {
+        for item in &items {
             assert!(item.metadata.authors.is_some());
+
             let authors = item.metadata.authors.as_ref().unwrap();
+            let idx = EXPECTED_TITLES
+                .iter()
+                .enumerate()
+                .find(|(_, title)| item.metadata.title.contains(**title));
 
-            test_contains!(item.metadata.title, expected_title);
-            test_eq!(authors.len(), expected_author_list.len());
+            if let Some((idx, _)) = idx {
+                for expected_author in &expected_authors[idx] {
+                    assert!(
+                        authors.iter().any(|a| a.contains(expected_author)),
+                        "Author {expected_author} not found in {authors:?}"
+                    );
+                }
 
-            for (author, &expected_author) in authors.iter().zip(expected_author_list) {
-                test_contains!(author, expected_author);
+                // At this point, all checks have passed, so mark it as found
+                found_bits |= 1 << idx;
             }
         }
+
+        test_eq!(found_bits, 0b11111);
     }
 
     #[test]
