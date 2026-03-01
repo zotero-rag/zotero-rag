@@ -11,6 +11,20 @@ pub struct PlaceholderText {
     pub placeholder_text: String,
 }
 
+const SLASH_COMMANDS: &[&str] = &[
+    "/help",
+    "/sync",
+    "/embed",
+    "/embed fix",
+    "/dedup",
+    "/doctor",
+    "/new",
+    "/resume",
+    "/index",
+    "/stats",
+    "/exit",
+];
+
 /// Handles completions for the `PlaceholderText` Helper. Note that for showing dimmed
 /// placeholders, we don't need to support completions at all.
 impl Completer for PlaceholderText {
@@ -18,10 +32,19 @@ impl Completer for PlaceholderText {
 
     fn complete(
         &self,
-        _line: &str,
+        line: &str,
         _pos: usize,
         _ctx: &rustyline::Context<'_>,
     ) -> rustyline::Result<(usize, Vec<Self::Candidate>)> {
+        if line.starts_with('/') {
+            let candidates: Vec<String> = SLASH_COMMANDS
+                .iter()
+                .filter(|cmd| cmd.starts_with(line))
+                .map(std::string::ToString::to_string)
+                .collect();
+            return Ok((0, candidates));
+        }
+
         Ok((0, Vec::new()))
     }
 }
@@ -31,11 +54,17 @@ impl Completer for PlaceholderText {
 impl Hinter for PlaceholderText {
     type Hint = String;
 
-    fn hint(&self, _line: &str, pos: usize, _ctx: &rustyline::Context<'_>) -> Option<Self::Hint> {
-        match pos {
-            0 => Some(self.placeholder_text.clone()),
-            _ => None,
+    fn hint(&self, line: &str, pos: usize, _ctx: &rustyline::Context<'_>) -> Option<Self::Hint> {
+        if pos == 0 {
+            return Some(self.placeholder_text.clone());
         }
+        if line.starts_with('/') {
+            return SLASH_COMMANDS
+                .iter()
+                .find(|cmd| cmd.starts_with(line) && **cmd != line)
+                .map(|cmd| cmd[pos..].to_string());
+        }
+        None
     }
 }
 
