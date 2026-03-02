@@ -64,6 +64,28 @@ Note that if the user requests references to be in a different format (e.g., MLA
 reference format instead of APA.")
 }
 
+/// Get the "title" prompt, which generates a short title for a conversation.
+///
+/// # Arguments
+///
+/// * `conversation` - The conversation text to generate a title for
+///
+/// # Returns
+///
+/// * `prompt` - The prompt for generating a title
+#[must_use]
+pub fn get_title_prompt(conversation: &str) -> String {
+    format!(
+        "You are given a conversation between a user and an AI assistant. Generate a short, \
+descriptive title for this conversation in 5 words or fewer. The title should capture the \
+main topic. Respond with only the title text, no quotes or punctuation.
+
+<conversation>
+{conversation}
+</conversation>"
+    )
+}
+
 /// Get the "summarization" prompt, which takes the excerpts from each search result and then asks
 /// the LLM to generate a researched answer to the user query.
 ///
