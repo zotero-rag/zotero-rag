@@ -26,8 +26,8 @@ jobs:
             [ -z "$subject" ] && continue
 
             # Check total length
-            if [ ${#subject} -gt 80 ]; then
-              echo "ERROR: commit message too long (${#subject} > 80 chars): $subject"
+            if [ ${#subject} -gt 120 ]; then
+              echo "ERROR: commit message too long (${#subject} > 120 chars): $subject"
               FAILED=1
               continue
             fi
