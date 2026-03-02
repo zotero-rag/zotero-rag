@@ -1,5 +1,5 @@
 use crate::cli::placeholder::PlaceholderText;
-use crate::cli::prompts::{get_extraction_prompt, get_summarize_prompt};
+use crate::cli::prompts::{get_extraction_prompt, get_summarize_prompt, get_title_prompt};
 use crate::cli::readline::get_readline_config;
 use crate::state::{SavedChatHistory, save_conversation};
 use crate::utils::arrow::{DbFields, get_schema, library_to_arrow, vector_search};
@@ -555,6 +555,33 @@ async fn run_query<O: Write, E: Write>(
         });
     }
 
+    // Spawn a background title generation task from the query alone, in parallel with summarization.
+    // Only generate a title if we don't already have one (i.e., first query in the conversation).
+    let title_slot = Arc::clone(&ctx.state.title);
+    if title_slot.lock()?.is_none()
+        && let Some(small_config) = ctx.config.get_small_model_config()
+        && let Ok(small_client) = get_client_with_config(small_config)
+    {
+        let prompt = get_title_prompt(&query);
+        tokio::spawn(async move {
+            let request = ChatRequest {
+                chat_history: Vec::new(),
+                max_tokens: Some(20),
+                message: prompt,
+                tools: None,
+            };
+            if let Ok(response) = small_client.send_message(&request).await {
+                let title = ModelResponse::from(&response.content).to_string();
+                let title = title.trim().to_string();
+                if !title.is_empty()
+                    && let Ok(mut slot) = title_slot.lock()
+                {
+                    *slot = Some(title);
+                }
+            }
+        });
+    }
+
     let results: Vec<Result<CompletionApiResponse, LLMError>> = set.join_all().await;
     let summarization_duration = summarization_start.elapsed();
     writeln!(
@@ -784,7 +811,15 @@ fn resume<O: Write, E: Write, R: BufRead>(
                         let conversation = SavedChatHistory {
                             history: history.clone(),
                             date,
-                            title: format!("Conversation on {}", date.format("%Y-%m-%d %H:%M")),
+                            title: ctx
+                                .state
+                                .title
+                                .lock()
+                                .expect("title lock poisoned")
+                                .clone()
+                                .unwrap_or_else(|| {
+                                    format!("Conversation on {}", date.format("%Y-%m-%d %H:%M"))
+                                }),
                         };
                         if let Err(e) = save_conversation(&conversation)
                             && let Err(write_err) =
@@ -960,7 +995,15 @@ pub(crate) async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<()
                             let conversation = SavedChatHistory {
                                 history: history.clone(),
                                 date,
-                                title: format!("Conversation on {}", date.format("%Y-%m-%d %H:%M")),
+                                title: ctx
+                                    .state
+                                    .title
+                                    .lock()
+                                    .expect("title lock poisoned")
+                                    .clone()
+                                    .unwrap_or_else(|| {
+                                        format!("Conversation on {}", date.format("%Y-%m-%d %H:%M"))
+                                    }),
                             };
 
                             if let Err(e) = save_conversation(&conversation)
@@ -974,6 +1017,7 @@ pub(crate) async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<()
                         if command == "/new" {
                             ctx.state.dirty.store(false, atomic::Ordering::Relaxed);
                             ctx.state.chat_history = Arc::new(Mutex::new(Vec::new()));
+                            ctx.state.title = Arc::new(Mutex::new(None));
                         } else {
                             break;
                         }
@@ -1044,7 +1088,9 @@ pub(crate) async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<()
                     let conversation = SavedChatHistory {
                         history: history.clone(),
                         date,
-                        title: format!("Conversation on {}", date.format("%Y-%m-%d %H:%M")),
+                        title: ctx.state.title.lock()?.clone().unwrap_or_else(|| {
+                            format!("Conversation on {}", date.format("%Y-%m-%d %H:%M"))
+                        }),
                     };
 
                     if let Err(e) = save_conversation(&conversation)
