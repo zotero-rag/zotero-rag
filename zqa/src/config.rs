@@ -257,31 +257,30 @@ impl Config {
 
     /// Get the LLM client configuration using the small model variant. Falls back to the regular
     /// model if no small model is configured.
-    #[must_use]
     pub fn get_small_model_config(&self) -> Option<LLMClientConfig> {
-        match self.model_provider.as_str() {
-            "anthropic" => self.anthropic.as_ref().map(|cfg| {
-                let mut rag_cfg: zqa_rag::config::AnthropicConfig = cfg.clone().into();
-                rag_cfg.model = cfg.model_small.clone().unwrap_or(rag_cfg.model);
-                LLMClientConfig::Anthropic(rag_cfg)
-            }),
-            "openai" => self.openai.as_ref().map(|cfg| {
-                let mut rag_cfg: zqa_rag::config::OpenAIConfig = cfg.clone().into();
-                rag_cfg.model = cfg.model_small.clone().unwrap_or(rag_cfg.model);
-                LLMClientConfig::OpenAI(rag_cfg)
-            }),
-            "gemini" => self.gemini.as_ref().map(|cfg| {
-                let mut rag_cfg: zqa_rag::config::GeminiConfig = cfg.clone().into();
-                rag_cfg.model = cfg.model_small.clone().unwrap_or(rag_cfg.model);
-                LLMClientConfig::Gemini(rag_cfg)
-            }),
-            "openrouter" => self.openrouter.as_ref().map(|cfg| {
-                let mut rag_cfg: zqa_rag::config::OpenRouterConfig = cfg.clone().into();
-                rag_cfg.model = cfg.model_small.clone().unwrap_or(rag_cfg.model);
-                LLMClientConfig::OpenRouter(rag_cfg)
-            }),
+        let mut client_config = self.get_generation_config()?;
+
+        let small_model_name = match self.model_provider.as_str() {
+            "anthropic" => self.anthropic.as_ref().and_then(|c| c.model_small.as_ref()),
+            "openai" => self.openai.as_ref().and_then(|c| c.model_small.as_ref()),
+            "gemini" => self.gemini.as_ref().and_then(|c| c.model_small.as_ref()),
+            "openrouter" => self
+                .openrouter
+                .as_ref()
+                .and_then(|c| c.model_small.as_ref()),
             _ => None,
+        };
+
+        if let Some(small_model_name) = small_model_name {
+            match &mut client_config {
+                LLMClientConfig::Anthropic(c) => c.model = small_model_name.clone(),
+                LLMClientConfig::OpenAI(c) => c.model = small_model_name.clone(),
+                LLMClientConfig::Gemini(c) => c.model = small_model_name.clone(),
+                LLMClientConfig::OpenRouter(c) => c.model = small_model_name.clone(),
+            }
         }
+
+        Some(client_config)
     }
 
     #[must_use]
