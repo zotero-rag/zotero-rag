@@ -9,6 +9,9 @@ pub const DEFAULT_MAX_RETRIES: usize = 3;
 /// Default OpenAI model for chat completions
 pub const DEFAULT_OPENAI_MODEL: &str = "gpt-5.2";
 
+/// Default OpenAI model for conversation title generation
+pub const DEFAULT_OPENAI_MODEL_SMALL: &str = "gpt-5-mini";
+
 /// Default OpenAI generation max tokens
 pub const DEFAULT_OPENAI_MAX_TOKENS: u32 = 8192;
 
@@ -21,11 +24,17 @@ pub const DEFAULT_OPENAI_EMBEDDING_MODEL: &str = "text-embedding-3-small";
 /// Default Anthropic model for chat completions
 pub const DEFAULT_ANTHROPIC_MODEL: &str = "claude-sonnet-4-6";
 
+/// Default Anthropic model for conversation title generation
+pub const DEFAULT_ANTHROPIC_MODEL_SMALL: &str = "claude-haiku-4-5";
+
 /// Default maximum tokens for Anthropic requests
 pub const DEFAULT_ANTHROPIC_MAX_TOKENS: u32 = 64000;
 
 /// Default Gemini model for chat completions
 pub const DEFAULT_GEMINI_MODEL: &str = "gemini-3.1-pro-preview";
+
+/// Default Gemini model for conversation title generation
+pub const DEFAULT_GEMINI_MODEL_SMALL: &str = "gemini-3-flash-preview";
 
 /// Gemini gemini-embedding-001 dimension
 pub const DEFAULT_GEMINI_EMBEDDING_DIM: u32 = 3072;
@@ -35,6 +44,9 @@ pub const DEFAULT_GEMINI_EMBEDDING_MODEL: &str = "gemini-embedding-001";
 
 /// Default OpenRouter model
 pub const DEFAULT_OPENROUTER_MODEL: &str = "anthropic/claude-sonnet-4.6";
+
+/// Default OpenRouter model for conversation title generation
+pub const DEFAULT_OPENROUTER_MODEL_SMALL: &str = "anthropic/claude-haiku-4.5";
 
 /// Default Cohere dimensions
 pub const DEFAULT_COHERE_EMBEDDING_DIM: u32 = 1536;

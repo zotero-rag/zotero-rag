@@ -34,6 +34,7 @@ async fn test_integration_works() {
         openrouter: None,
         anthropic: Some(AnthropicConfig {
             model: Some("claude-sonnet-4-5".into()),
+            model_small: Some("claude-haiku-4-5".into()),
             api_key: env::var("ANTHROPIC_API_KEY").unwrap().into(),
             max_tokens: 8192,
         }),

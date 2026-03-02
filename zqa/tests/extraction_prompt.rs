@@ -91,7 +91,8 @@ async fn test_extraction_prompt_openai() {
 
     // Create OpenAI client config
     let config = OpenAIConfig {
-        model: Some("gpt-5-mini-2025-08-07".to_string()),
+        model: Some("gpt-5-mini".to_string()),
+        model_small: Some("gpt-5-mini".to_string()),
         api_key: Some(api_key),
         max_tokens: 8192,
         embedding_model: None,
@@ -120,7 +121,8 @@ async fn test_extraction_prompt_anthropic() {
 
     // Create Anthropic client config
     let config = AnthropicConfig {
-        model: Some("claude-haiku-4-5-20251001".to_string()),
+        model: Some("claude-haiku-4-5".to_string()),
+        model_small: Some("claude-haiku-4-5".to_string()),
         api_key: Some(api_key),
         max_tokens: 8192,
     };
@@ -148,7 +150,8 @@ async fn test_extraction_prompt_gemini() {
 
     // Create Gemini client config
     let config = GeminiConfig {
-        model: Some("gemini-2.5-flash".to_string()),
+        model: Some("gemini-3-flash".to_string()),
+        model_small: Some("gemini-3-flash".to_string()),
         api_key: Some(api_key),
         embedding_model: None,
         embedding_dims: None,
