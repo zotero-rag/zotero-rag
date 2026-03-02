@@ -1,1 +1,2 @@
 zqa/assets/** linguist-vendored
+*.tmpl linguist-generated=true
