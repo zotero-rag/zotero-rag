@@ -811,15 +811,9 @@ fn resume<O: Write, E: Write, R: BufRead>(
                         let conversation = SavedChatHistory {
                             history: history.clone(),
                             date,
-                            title: ctx
-                                .state
-                                .title
-                                .lock()
-                                .expect("title lock poisoned")
-                                .clone()
-                                .unwrap_or_else(|| {
-                                    format!("Conversation on {}", date.format("%Y-%m-%d %H:%M"))
-                                }),
+                            title: ctx.state.title.lock()?.clone().unwrap_or_else(|| {
+                                format!("Conversation on {}", date.format("%Y-%m-%d %H:%M"))
+                            }),
                         };
                         if let Err(e) = save_conversation(&conversation)
                             && let Err(write_err) =
@@ -995,15 +989,9 @@ pub(crate) async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<()
                             let conversation = SavedChatHistory {
                                 history: history.clone(),
                                 date,
-                                title: ctx
-                                    .state
-                                    .title
-                                    .lock()
-                                    .expect("title lock poisoned")
-                                    .clone()
-                                    .unwrap_or_else(|| {
-                                        format!("Conversation on {}", date.format("%Y-%m-%d %H:%M"))
-                                    }),
+                                title: ctx.state.title.lock()?.clone().unwrap_or_else(|| {
+                                    format!("Conversation on {}", date.format("%Y-%m-%d %H:%M"))
+                                }),
                             };
 
                             if let Err(e) = save_conversation(&conversation)
