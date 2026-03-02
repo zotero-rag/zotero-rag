@@ -6,11 +6,13 @@ use thiserror;
 use thiserror::Error;
 use zqa_rag::config::LLMClientConfig;
 use zqa_rag::constants::{
-    DEFAULT_ANTHROPIC_MAX_TOKENS, DEFAULT_ANTHROPIC_MODEL, DEFAULT_COHERE_EMBEDDING_DIM,
-    DEFAULT_COHERE_EMBEDDING_MODEL, DEFAULT_COHERE_RERANK_MODEL, DEFAULT_GEMINI_EMBEDDING_DIM,
-    DEFAULT_GEMINI_EMBEDDING_MODEL, DEFAULT_GEMINI_MODEL, DEFAULT_MAX_CONCURRENT_REQUESTS,
-    DEFAULT_MAX_RETRIES, DEFAULT_OPENAI_MAX_TOKENS, DEFAULT_OPENAI_MODEL, DEFAULT_OPENROUTER_MODEL,
-    DEFAULT_VOYAGE_EMBEDDING_DIM, DEFAULT_VOYAGE_EMBEDDING_MODEL, DEFAULT_VOYAGE_RERANK_MODEL,
+    DEFAULT_ANTHROPIC_MAX_TOKENS, DEFAULT_ANTHROPIC_MODEL, DEFAULT_ANTHROPIC_MODEL_SMALL,
+    DEFAULT_COHERE_EMBEDDING_DIM, DEFAULT_COHERE_EMBEDDING_MODEL, DEFAULT_COHERE_RERANK_MODEL,
+    DEFAULT_GEMINI_EMBEDDING_DIM, DEFAULT_GEMINI_EMBEDDING_MODEL, DEFAULT_GEMINI_MODEL,
+    DEFAULT_GEMINI_MODEL_SMALL, DEFAULT_MAX_CONCURRENT_REQUESTS, DEFAULT_MAX_RETRIES,
+    DEFAULT_OPENAI_MAX_TOKENS, DEFAULT_OPENAI_MODEL, DEFAULT_OPENAI_MODEL_SMALL,
+    DEFAULT_OPENROUTER_MODEL, DEFAULT_OPENROUTER_MODEL_SMALL, DEFAULT_VOYAGE_EMBEDDING_DIM,
+    DEFAULT_VOYAGE_EMBEDDING_MODEL, DEFAULT_VOYAGE_RERANK_MODEL,
 };
 use zqa_rag::constants::{DEFAULT_OPENAI_EMBEDDING_DIM, DEFAULT_OPENAI_EMBEDDING_MODEL};
 use zqa_rag::embedding::common::EmbeddingProviderConfig;
@@ -31,18 +33,21 @@ use zqa_rag::embedding::common::EmbeddingProviderConfig;
 /// # above and have the settings for that provider applied.
 /// [anthropic]
 /// model = "claude-sonnet-4-5"
+/// model_small = "claude-haiku-4-5"
 /// api_key = "sk-ant-..."
 /// max_tokens = 64000
 ///
 /// [openai]
 /// model = "gpt-5.2"
+/// model_small = "gpt-5-mini"
 /// api_key = "sk-proj-..."
 /// max_tokens = 8192
 /// embedding_model = "text-embedding-3-small"
 /// embedding_dims = 1536
 ///
 /// [gemini]
-/// model = "gemini-2.5-pro"
+/// model = "gemini-3.1-pro-preview"
+/// model_small = "gemini-3-flash-preview"
 /// api_key = "AI..."
 /// embedding_model = "gemini-embedding-001"
 /// embedding_dims = 3072
@@ -62,6 +67,7 @@ use zqa_rag::embedding::common::EmbeddingProviderConfig;
 /// [openrouter]
 /// api_key = "..."
 /// model = "anthropic/claude-sonnet-4.5"
+/// model_small = "anthropic/claude-haiku-4.5"
 /// ```
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Config {
@@ -139,6 +145,9 @@ impl Config {
             // The max tokens is not exposed as an env option.
             anthropic_config.model.replace_with_env("ANTHROPIC_MODEL");
             anthropic_config
+                .model_small
+                .replace_with_env("ANTHROPIC_MODEL_SMALL");
+            anthropic_config
                 .api_key
                 .replace_with_env("ANTHROPIC_API_KEY");
         }
@@ -147,6 +156,9 @@ impl Config {
         if let Some(openai_config) = &mut self.openai {
             // The max tokens and embedding dims are not exposed as env options.
             openai_config.model.replace_with_env("OPENAI_MODEL");
+            openai_config
+                .model_small
+                .replace_with_env("OPENAI_MODEL_SMALL");
             openai_config.api_key.replace_with_env("OPENAI_API_KEY");
             openai_config
                 .embedding_model
@@ -157,6 +169,9 @@ impl Config {
         if let Some(gemini_config) = &mut self.gemini {
             // embedding_dims is not exposed as an env option
             gemini_config.model.replace_with_env("GEMINI_MODEL");
+            gemini_config
+                .model_small
+                .replace_with_env("GEMINI_MODEL_SMALL");
             // GEMINI_API_KEY has priority over GOOGLE_API_KEY
             gemini_config.api_key.replace_with_env("GOOGLE_API_KEY");
             gemini_config.api_key.replace_with_env("GEMINI_API_KEY");
@@ -190,6 +205,9 @@ impl Config {
         // OpenRouter options
         if let Some(openrouter_config) = &mut self.openrouter {
             openrouter_config.model.replace_with_env("OPENROUTER_MODEL");
+            openrouter_config
+                .model_small
+                .replace_with_env("OPENROUTER_MODEL_SMALL");
             openrouter_config
                 .api_key
                 .replace_with_env("OPENROUTER_API_KEY");
@@ -280,6 +298,9 @@ pub struct AnthropicConfig {
     /// Model name (e.g., "claude-sonnet-4-5")
     pub model: Option<String>,
 
+    /// Small model name, used for generating conversation titles
+    pub model_small: Option<String>,
+
     /// API key
     pub api_key: Option<String>,
 
@@ -292,6 +313,7 @@ impl Default for AnthropicConfig {
     fn default() -> Self {
         Self {
             model: Some(DEFAULT_ANTHROPIC_MODEL.into()),
+            model_small: Some(DEFAULT_ANTHROPIC_MODEL_SMALL.into()),
             max_tokens: DEFAULT_ANTHROPIC_MAX_TOKENS,
             api_key: None,
         }
@@ -303,6 +325,9 @@ impl Default for AnthropicConfig {
 pub struct OpenAIConfig {
     /// Model name (e.g., "gpt-5.2")
     pub model: Option<String>,
+
+    /// Small model name, used for generating conversation titles
+    pub model_small: Option<String>,
 
     /// API key
     pub api_key: Option<String>,
@@ -322,6 +347,7 @@ impl Default for OpenAIConfig {
     fn default() -> Self {
         Self {
             model: Some(DEFAULT_OPENAI_MODEL.into()),
+            model_small: Some(DEFAULT_OPENAI_MODEL_SMALL.into()),
             max_tokens: DEFAULT_OPENAI_MAX_TOKENS,
             embedding_model: Some(DEFAULT_OPENAI_EMBEDDING_MODEL.into()),
             embedding_dims: Some(DEFAULT_OPENAI_EMBEDDING_DIM as usize),
@@ -335,6 +361,9 @@ impl Default for OpenAIConfig {
 pub struct GeminiConfig {
     /// Model name (e.g., "gemini-2.5-pro")
     pub model: Option<String>,
+
+    /// Small model name, used for generating conversation titles
+    pub model_small: Option<String>,
 
     /// API key
     pub api_key: Option<String>,
@@ -350,6 +379,7 @@ impl Default for GeminiConfig {
     fn default() -> Self {
         Self {
             model: Some(DEFAULT_GEMINI_MODEL.into()),
+            model_small: Some(DEFAULT_GEMINI_MODEL_SMALL.into()),
             embedding_model: Some(DEFAULT_GEMINI_EMBEDDING_MODEL.into()),
             embedding_dims: Some(DEFAULT_GEMINI_EMBEDDING_DIM as usize),
             api_key: None,
@@ -417,6 +447,9 @@ pub struct OpenRouterConfig {
     /// Generation model
     pub model: Option<String>,
 
+    /// Small model name, used for generating conversation titles
+    pub model_small: Option<String>,
+
     /// API key
     pub api_key: Option<String>,
 }
@@ -425,6 +458,7 @@ impl Default for OpenRouterConfig {
     fn default() -> Self {
         Self {
             model: Some(DEFAULT_OPENROUTER_MODEL.into()),
+            model_small: Some(DEFAULT_OPENROUTER_MODEL_SMALL.into()),
             api_key: None,
         }
     }
@@ -616,13 +650,15 @@ impl From<OpenRouterConfig> for zqa_rag::config::OpenRouterConfig {
                 .expect("OpenRouter API key not found. Please set it in your config file or as OPENROUTER_API_KEY."),
             model: config
                 .model
-                .unwrap_or_else(|| "anthropic/claude-sonnet-4.5".to_string()),
+                .unwrap_or(DEFAULT_OPENROUTER_MODEL.into())
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use zqa_macros::test_eq;
+
     use super::*;
 
     #[test]
@@ -636,6 +672,7 @@ mod tests {
 
             [anthropic]
             model = "claude-sonnet-4-5"
+            model_small = "claude-sonnet-4"
             api_key = "sk-ant-test"
             max_tokens = 64000
 
@@ -653,18 +690,19 @@ mod tests {
         "#;
 
         let config: Config = toml::from_str(toml_str).unwrap();
-        assert_eq!(config.model_provider, "anthropic");
-        assert_eq!(config.embedding_provider, "voyageai");
-        assert_eq!(config.max_concurrent_requests, 5);
-        assert_eq!(config.max_retries, 3);
+        test_eq!(config.model_provider, "anthropic");
+        test_eq!(config.embedding_provider, "voyageai");
+        test_eq!(config.max_concurrent_requests, 5);
+        test_eq!(config.max_retries, 3);
 
         let anthropic = config.anthropic.unwrap();
-        assert_eq!(anthropic.model, Some("claude-sonnet-4-5".into()));
-        assert_eq!(anthropic.max_tokens, 64_000);
+        test_eq!(anthropic.model, Some("claude-sonnet-4-5".into()));
+        test_eq!(anthropic.model_small, Some("claude-sonnet-4".into()));
+        test_eq!(anthropic.max_tokens, 64_000);
 
         let voyageai = config.voyageai.unwrap();
-        assert_eq!(voyageai.reranker.unwrap(), "rerank-2.5");
-        assert_eq!(voyageai.embedding_model.unwrap(), "voyage-3-large");
+        test_eq!(voyageai.reranker.unwrap(), "rerank-2.5");
+        test_eq!(voyageai.embedding_model.unwrap(), "voyage-3-large");
     }
 
     #[test]
@@ -674,9 +712,9 @@ mod tests {
         "#;
 
         let config: Config = toml::from_str(toml_str).unwrap();
-        assert_eq!(config.model_provider, "openai");
-        assert_eq!(config.embedding_provider, "voyageai"); // default
-        assert_eq!(config.max_concurrent_requests, 5); // default
+        test_eq!(config.model_provider, "openai");
+        test_eq!(config.embedding_provider, "voyageai"); // default
+        test_eq!(config.max_concurrent_requests, 5); // default
     }
 }
 

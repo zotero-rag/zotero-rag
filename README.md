@@ -107,18 +107,21 @@ max_retries = 3  # Max retries when network requests fail
 # above and have the settings for that provider applied.
 [anthropic]
 model = "claude-sonnet-4-5"
+model_small = "claude-haiku-4-5"
 api_key = "sk-ant-..."
 max_tokens = 64000
 
 [openai]
 model = "gpt-5.2"
+model_small = "gpt-5-mini"
 api_key = "sk-proj-..."
 max_tokens = 8192
 embedding_model = "text-embedding-3-small"
 embedding_dims = 1536
 
 [gemini]
-model = "gemini-2.5-pro"
+model = "gemini-3.1-pro-preview"
+model_small = "gemini-3-flash-preview"
 api_key = "AI..."
 embedding_model = "gemini-embedding-001"
 embedding_dims = 3072
@@ -138,6 +141,7 @@ api_key = "..."
 [openrouter]
 api_key = "..."
 model = "anthropic/claude-sonnet-4.5"
+model_small = "anthropic/claude-haiku-4.5"
 ```
 
 ### Set up environment variables
@@ -146,20 +150,29 @@ Create a `.env` in the root of the project with the following structure:
 
 ```
 ANTHROPIC_API_KEY=
-ANTHROPIC_MODEL=claude-sonnet-4-5
+ANTHROPIC_MODEL=
+ANTHROPIC_MODEL_SMALL=
+
 OPENAI_API_KEY=
-OPENAI_EMBEDDING_MODEL=text-embedding-3-small
-OPENAI_MODEL=o4-mini-2025-04-16
+OPENAI_EMBEDDING_MODEL=
+OPENAI_MODEL=
+OPENAI_MODEL_SMALL=
+
 VOYAGE_AI_API_KEY=
-VOYAGE_AI_MODEL=voyage-3-large
-VOYAGE_AI_RERANK_MODEL=rerank-2.5
+VOYAGE_AI_MODEL=
+VOYAGE_AI_RERANK_MODEL=
+
 COHERE_API_KEY=
 COHERE_MODEL=
-COHERE_RERANKER=rerank-v3.5
+COHERE_RERANKER=
+
 GEMINI_API_KEY=
-GEMINI_MODEL=gemini-2.5-pro
-GEMINI_EMBEDDING_MODEL=gemini-embedding-001
+GEMINI_MODEL=
+GEMINI_MODEL_SMALL=
+GEMINI_EMBEDDING_MODEL=
+
 OPENROUTER_MODEL=
+OPENROUTER_MODEL_SMALL=
 OPENROUTER_API_KEY=
 
 MAX_CONCURRENT_REQUESTS=5
