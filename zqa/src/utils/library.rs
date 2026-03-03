@@ -2,6 +2,7 @@ use arrow_array::RecordBatch;
 use directories::UserDirs;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use rusqlite::Connection;
+use serde::Serialize;
 use std::collections::HashSet;
 use std::env;
 use std::fmt::Write;
@@ -49,7 +50,7 @@ fn get_lib_path() -> Option<PathBuf> {
 }
 
 /// Metadata for items in the Zotero library.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ZoteroItemMetadata {
     pub library_key: String,
     pub title: String,
@@ -73,7 +74,7 @@ impl Hash for ZoteroItemMetadata {
 }
 
 /// A Zotero library item. Includes full-text from parsing PDFs when they exist.
-#[derive(Clone)]
+#[derive(Clone, Serialize)]
 pub struct ZoteroItem {
     pub metadata: ZoteroItemMetadata,
     pub text: String,
