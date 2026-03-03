@@ -64,3 +64,93 @@ impl Tool for RetrievalTool {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use zqa_rag::embedding::common::EmbeddingProviderConfig;
+
+    fn make_tool(schema_key: &str) -> RetrievalTool {
+        // Build a minimal tool; the embedding config is only used in `call`, not in the metadata
+        // methods, so we use a dummy VoyageAI config here.
+        use zqa_rag::constants::{
+            DEFAULT_VOYAGE_EMBEDDING_DIM, DEFAULT_VOYAGE_EMBEDDING_MODEL,
+            DEFAULT_VOYAGE_RERANK_MODEL,
+        };
+
+        RetrievalTool {
+            embedding_config: EmbeddingProviderConfig::VoyageAI(zqa_rag::config::VoyageAIConfig {
+                api_key: String::new(),
+                embedding_model: DEFAULT_VOYAGE_EMBEDDING_MODEL.into(),
+                embedding_dims: DEFAULT_VOYAGE_EMBEDDING_DIM as usize,
+                reranker: DEFAULT_VOYAGE_RERANK_MODEL.into(),
+            }),
+            reranker_provider: "voyageai".into(),
+            schema_key: schema_key.into(),
+        }
+    }
+
+    #[test]
+    fn test_name() {
+        let tool = make_tool("input_schema");
+        assert_eq!(tool.name(), "retrieval_tool");
+    }
+
+    #[test]
+    fn test_description() {
+        let tool = make_tool("input_schema");
+        assert_eq!(
+            tool.description(),
+            "Retrieves relevant papers from the user's Zotero library based on a search query"
+        );
+    }
+
+    #[test]
+    fn test_schema_key() {
+        for key in ["input_schema", "parameters", "parametersJsonSchema"] {
+            let tool = make_tool(key);
+            assert_eq!(tool.schema_key(), key);
+        }
+    }
+
+    #[test]
+    fn test_parameters_contains_query_field() {
+        let tool = make_tool("input_schema");
+        let schema = tool.parameters();
+        let schema_value = serde_json::to_value(&schema).unwrap();
+        let properties = &schema_value["properties"];
+        assert!(
+            properties.get("query").is_some(),
+            "Expected 'query' in parameters schema, got: {schema_value}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_call_returns_error_on_invalid_args() {
+        let tool = make_tool("input_schema");
+        // Pass an object that is missing the required `query` field.
+        let result = tool.call(json!({"not_query": "value"})).await;
+        assert!(result.is_err(), "Expected error on invalid args");
+        let err = result.unwrap_err();
+        assert!(
+            err.contains("Invalid arguments"),
+            "Unexpected error message: {err}"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_call_returns_results_key() {
+        dotenv::dotenv().ok();
+        let _ = crate::common::setup_logger(log::LevelFilter::Info);
+
+        let tool = make_tool("input_schema");
+        let result = tool.call(json!({"query": "machine learning"})).await;
+        assert!(result.is_ok(), "call failed: {:?}", result.err());
+        let value = result.unwrap();
+        assert!(
+            value.get("results").is_some(),
+            "Expected 'results' key in output, got: {value}"
+        );
+    }
+}
