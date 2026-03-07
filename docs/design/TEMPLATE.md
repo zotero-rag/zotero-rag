@@ -52,4 +52,4 @@ Keep code to a minimum. Only use pseudo-code to describe novel algorithms, or li
 
 ### Verbiage
 
-Prefer a relatively formal tone. An informal is fine, but keep it consistent. In-jokes or other humorous comments are allowed as long as they do not detract from the main content.
+Prefer a relatively formal tone. An informal tone is fine, but keep it consistent. In-jokes or other humorous comments are allowed as long as they do not detract from the main content.
