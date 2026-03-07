@@ -44,6 +44,8 @@ List alternative designs that could have reasonably achieved similar outcomes. F
 
 ## Guidelines
 
+This section contains guidelines for you as an author of the design doc. Remove this section in your final doc.
+
 ### Code and Pseudo-code Guidelines
 
 Keep code to a minimum. Only use pseudo-code to describe novel algorithms, or link to external prototypes that prove the implementability of the design.
