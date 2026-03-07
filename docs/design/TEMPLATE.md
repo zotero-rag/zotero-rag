@@ -37,7 +37,6 @@ Sketch out the exposed API if applicable. Avoid copy-pasting formal/verbose inte
 
 Optional. Discuss how and in what rough form data is stored. Avoid copy-pasting complete schema definitions. Highlight trade-offs and relevant design choices.
 
-
 ## Rejected Alternatives
 
 List alternative designs that could have reasonably achieved similar outcomes. Focus on the trade-offs of each and explain explicitly why the chosen design is the best solution for the project's goals over these alternatives.
@@ -52,4 +51,4 @@ Keep code to a minimum. Only use pseudo-code to describe novel algorithms, or li
 
 ### Verbiage
 
-Prefer a relatively formal tone. An informal is fine, but keep it consistent. In-jokes or other humorous comments are allowed as long as they do not detract from the main content.
+Prefer a relatively formal tone. An informal tone is fine, but keep it consistent. In-jokes or other humorous comments are allowed as long as they do not detract from the main content.
