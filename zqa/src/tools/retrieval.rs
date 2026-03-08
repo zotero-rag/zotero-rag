@@ -11,17 +11,34 @@ use crate::utils::{
     terminal::{DIM_TEXT, RESET},
 };
 
+pub(crate) const RETRIEVAL_TOOL_NAME: &str = "retrieval_tool";
+
 /// A tool to perform vector search and reranking.
 #[derive(Debug)]
-#[allow(dead_code)]
 pub(crate) struct RetrievalTool {
     /// The embedding provider configuration. Note that this must be the same embedding provider
     /// used when initially creating the database.
-    pub embedding_config: EmbeddingProviderConfig,
+    pub(crate) embedding_config: EmbeddingProviderConfig,
     /// The reranker provider to use.
-    pub reranker_provider: String,
+    pub(crate) reranker_provider: String,
     /// The key used by the API to describe the tool's parameters.
-    pub schema_key: String,
+    pub(crate) schema_key: String,
+}
+
+impl RetrievalTool {
+    /// Create a new instance of the [`RetrievalTool`] given an embedding config, the name of a
+    /// reranker provider, and a schema key.
+    pub(crate) fn new(
+        embedding_config: EmbeddingProviderConfig,
+        reranker_provider: String,
+        schema_key: String,
+    ) -> Self {
+        Self {
+            embedding_config,
+            reranker_provider,
+            schema_key,
+        }
+    }
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -32,7 +49,7 @@ pub struct RetrievalToolInput {
 
 impl Tool for RetrievalTool {
     fn name(&self) -> String {
-        "retrieval_tool".into()
+        RETRIEVAL_TOOL_NAME.into()
     }
 
     fn description(&self) -> String {
@@ -121,22 +138,22 @@ mod tests {
     fn make_tool(schema_key: &str) -> RetrievalTool {
         // Build a minimal tool; the embedding config is only used in `call`, not in the metadata
         // methods, so we use a dummy VoyageAI config here.
-        RetrievalTool {
-            embedding_config: EmbeddingProviderConfig::VoyageAI(zqa_rag::config::VoyageAIConfig {
+        RetrievalTool::new(
+            EmbeddingProviderConfig::VoyageAI(zqa_rag::config::VoyageAIConfig {
                 api_key: String::new(),
                 embedding_model: DEFAULT_VOYAGE_EMBEDDING_MODEL.into(),
                 embedding_dims: DEFAULT_VOYAGE_EMBEDDING_DIM as usize,
                 reranker: DEFAULT_VOYAGE_RERANK_MODEL.into(),
             }),
-            reranker_provider: "voyageai".into(),
-            schema_key: schema_key.into(),
-        }
+            "voyageai".into(),
+            schema_key.into(),
+        )
     }
 
     #[test]
     fn test_name() {
         let tool = make_tool("input_schema");
-        assert_eq!(tool.name(), "retrieval_tool");
+        assert_eq!(tool.name(), RETRIEVAL_TOOL_NAME);
     }
 
     #[test]

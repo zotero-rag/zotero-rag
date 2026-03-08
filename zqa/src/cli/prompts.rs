@@ -1,3 +1,5 @@
+use crate::tools::retrieval::RETRIEVAL_TOOL_NAME;
+use crate::tools::summarization::SUMMARIZATION_TOOL_NAME;
 use crate::utils::library::ZoteroItemMetadata;
 
 /// Get the "extraction" prompt, which extracts the relevant parts of a retrieved paper. This is
@@ -93,53 +95,47 @@ The title should capture the main topic. Respond with only the title text, no qu
 /// # Arguments
 ///
 /// * `query` - The user query to answer
-/// * `excerpts` - The excerpts from each search result
 ///
 /// # Returns
 ///
 /// * `prompt` - The prompt for answering the user query
 #[must_use]
-pub fn get_summarize_prompt(query: &str, excerpts: &[&String]) -> String {
-    let search_results = excerpts
-        .iter()
-        .map(|res| format!("<search_result>{res}</search_result>"))
-        .collect::<Vec<_>>()
-        .join("\n");
-
+pub fn get_summarize_prompt(query: &str) -> String {
     format!(
         "You are given a user question and excerpts from papers that are relevant in answering the question.
 Each paper that was used as a reference may have multiple excerpts that potentially answer the user's
-question. Use these search results to draft an answer to the user query. Here are some guidelines:
+question. Use these search results to draft an answer to the user query. 
+
+You have access to tools to help retrieve results and summarize results from the user's Zotero library. Your
+answer MUST be grounded in these results.
+* The `{RETRIEVAL_TOOL_NAME}` will retrieve metadata of papers that seem relevant, but not their contents.
+* The `{SUMMARIZATION_TOOL_NAME}` takes a list of paper IDs (which you can get from the `{RETRIEVAL_TOOL_NAME}`),
+and for each paper, produces a list of passages that are most relevant to the user's query.
+
+Here are some guidelines when replying:
 
 1. Your answer must maintain a scholarly, formal tone. Write your answer as though it were part of a research
-paper discussing relevant work.
+paper discussing relevant work. However, if the user asks for a different tone or format, you should follow
+those instructions instead.
 2. In the (rare) event that the user query asks an unsolved problem, summarize the relevant work from
 the search results, but preface your answer by politely explaining that the problem is known to be
 unsolved. Unsolved problems do *not* include problems currently under active study, and only include known-unsolved
 problems (e.g., solving the Halting problem).
-3. Each set of excerpts from a paper is wrapped in <search_result>...</search_result>. Each such search
-result will include an APA-style citation to the paper from which relevant excerpts are taken. Within
-each <search_result>, you will find the paper title, authors, and excerpts, possibly including references to other
-papers. The end of each <search_result> will have references to papers that have been cited.
-4. It is important that your answer ends with a \"References:\" section. You should list all cited references
+3. It is important that your answer ends with a \"References:\" section. You should list all cited references
 here in APA format.
-5. When using the excerpts to write your answer, ignore numbering in citations; use APA-style citations
+4. When using the excerpts to write your answer, ignore numbering in citations; use APA-style citations
 throughout. You should change numbered citations to be in APA format instead.
-6. If the user requests references to be in a different format (e.g., MLA, Chicago, etc.), use that format instead.
-7. In certain places, the excerpts may have an equation marked with \"possible fix\". This indicates that a different
+5. If the user requests references to be in a different format (e.g., MLA, Chicago, etc.), use that format instead.
+This includes numbered formats: if the user prefers a numbered citation style, use that instead.
+6. In certain places, the excerpts may have an equation marked with \"possible fix\". This indicates that a different
 agent found a malformed equation, and attempted to fix it. If this fixed version appears correct, use that instead.
-8. Format the answer depending on the user's request. For example, if the user requests a summary of prior work on a
+7. Format the answer depending on the user's request. For example, if the user requests a summary of prior work on a
 problem, it is appropriate to use Markdown-formatted sections. In other cases, a user may ask a question with a
 straightforward answer (based on the search results). In this case, it is usually better to answer the question
 directly.
-9. Not all search results and excerpts may be relevant. You do *not* need to use *all* the excerpts and search results.
+8. Not all search results and excerpts may be relevant. You do *not* need to use *all* the excerpts and search results.
 Instead, use excerpts and search results that have relevant information to the user's query. If you are unsure, err
 on the side of *inclusion*. It is better to erroneously include a paper than to falsely ignore one.
 
-Here is the user query: <user_query>{query}</user_query>.
-Here are the search results:
-
-<search_results>
-{search_results}
-</search_results>")
+Here is the user query: <user_query>{query}</user_query>.")
 }

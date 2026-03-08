@@ -1,7 +1,11 @@
 use schemars::{JsonSchema, schema_for};
 use serde::Deserialize;
 use serde_json::json;
-use std::{future::Future, pin::Pin};
+use std::{
+    future::Future,
+    pin::Pin,
+    sync::{Arc, Mutex},
+};
 use tokio::task::JoinSet;
 use zqa_rag::{
     llm::{
@@ -22,13 +26,30 @@ use crate::{
     },
 };
 
+pub(crate) const SUMMARIZATION_TOOL_NAME: &str = "summarization_tool";
+
 /// A tool to summarize Zotero papers with a specified ID.
-#[derive(Debug)]
-#[allow(dead_code)]
+#[derive(Debug, Clone)]
 pub(crate) struct SummarizationTool {
     pub(crate) llm_client: LLMClient,
     /// The key used by the API to describe the tool's parameters.
     pub(crate) schema_key: String,
+    /// The input tokens used
+    pub(crate) input_tokens: Arc<Mutex<u32>>,
+    /// The output tokens used
+    pub(crate) output_tokens: Arc<Mutex<u32>>,
+}
+
+impl SummarizationTool {
+    /// Create a new [`SummarizationTool`] instance, given an LLM client and a schema key.
+    pub fn new(llm_client: LLMClient, schema_key: String) -> Self {
+        Self {
+            llm_client,
+            schema_key,
+            input_tokens: Arc::new(Mutex::new(0)),
+            output_tokens: Arc::new(Mutex::new(0)),
+        }
+    }
 }
 
 /// The input to `SummarizationTool`.
@@ -42,7 +63,7 @@ pub(crate) struct SummarizationToolInput {
 
 impl Tool for SummarizationTool {
     fn name(&self) -> String {
-        "summarization_tool".into()
+        SUMMARIZATION_TOOL_NAME.into()
     }
 
     fn description(&self) -> String {
@@ -115,6 +136,14 @@ impl Tool for SummarizationTool {
                     Ok(response) => {
                         let summary = Into::<ModelResponse>::into(response.content).to_string();
                         summaries.push(summary);
+
+                        // Update token counts (with error handling for mutex poisoning)
+                        if let Ok(mut input_tokens) = self.input_tokens.lock() {
+                            *input_tokens += response.input_tokens;
+                        }
+                        if let Ok(mut output_tokens) = self.output_tokens.lock() {
+                            *output_tokens += response.output_tokens;
+                        }
                     }
                     Err(e) => {
                         log::warn!("Summarization failed: {e}");
@@ -158,16 +187,13 @@ mod tests {
             max_tokens: 8192,
         });
 
-        SummarizationTool {
-            llm_client: LLMClient::Anthropic(client),
-            schema_key: schema_key.to_string(),
-        }
+        SummarizationTool::new(LLMClient::Anthropic(client), schema_key.to_string())
     }
 
     #[test]
     fn test_name() {
         let tool = make_tool("input_schema");
-        test_eq!(tool.name(), "summarization_tool");
+        test_eq!(tool.name(), SUMMARIZATION_TOOL_NAME);
     }
 
     #[test]
