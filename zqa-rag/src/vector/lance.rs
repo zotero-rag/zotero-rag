@@ -569,6 +569,12 @@ pub async fn search_by_key(key_col: &str, key: &str) -> Option<RecordBatch> {
 /// # Returns
 ///
 /// The rows with the specified `values`.
+///
+/// # Errors
+///
+/// * `LanceError::ConnectionError` - If the DB connection failed.
+/// * `LanceError::InvalidStateError` - If opening the table failed.
+/// * `LanceError::Other` - If query execution failed.
 pub async fn search_by_column(
     col: &str,
     values: &[impl AsRef<str> + Display],

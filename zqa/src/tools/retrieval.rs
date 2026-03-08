@@ -13,6 +13,7 @@ use crate::utils::{
 
 /// A tool to perform vector search and reranking.
 #[derive(Debug)]
+#[allow(dead_code)]
 pub(crate) struct RetrievalTool {
     /// The embedding provider configuration. Note that this must be the same embedding provider
     /// used when initially creating the database.
@@ -62,11 +63,8 @@ impl Tool for RetrievalTool {
 
             get_authors(&mut results).map_err(|e| format!("Failed to get authors: {e}"))?;
             log::info!(
-                "{}",
-                format!(
-                    "{DIM_TEXT}Vector search took {}s{RESET}.",
-                    start.elapsed().as_secs()
-                )
+                "{DIM_TEXT}Vector search took {}s{RESET}.",
+                start.elapsed().as_secs()
             );
 
             let tool_results = results
@@ -76,8 +74,7 @@ impl Tool for RetrievalTool {
                         .metadata
                         .authors
                         .as_deref()
-                        .map(|v| v.join(", "))
-                        .unwrap_or("Unknown".into());
+                        .map_or("Unknown".into(), |v| v.join(", "));
 
                     format!(
                         "Title: {}\nAuthors: {}\nItem ID: {}",

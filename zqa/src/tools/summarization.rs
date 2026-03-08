@@ -24,6 +24,7 @@ use crate::{
 
 /// A tool to summarize Zotero papers with a specified ID.
 #[derive(Debug)]
+#[allow(dead_code)]
 pub(crate) struct SummarizationTool {
     pub(crate) llm_client: LLMClient,
     /// The key used by the API to describe the tool's parameters.
