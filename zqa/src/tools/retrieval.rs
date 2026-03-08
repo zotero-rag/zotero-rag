@@ -1,18 +1,25 @@
+use core::fmt;
+use std::time::Instant;
+
 use schemars::{JsonSchema, schema_for};
 use serde::Deserialize;
 use serde_json::json;
 use zqa_rag::{embedding::common::EmbeddingProviderConfig, llm::tools::Tool};
 
-use crate::utils::{arrow::vector_search, library::ZoteroItem};
+use crate::utils::{
+    arrow::vector_search,
+    library::get_authors,
+    terminal::{DIM_TEXT, RESET},
+};
 
 #[derive(Debug)]
-pub struct RetrievalTool {
+pub(crate) struct RetrievalTool {
     /// The embedding provider configuration. Note that this must be the same embedding provider
     /// used when initially creating the database.
     pub embedding_config: EmbeddingProviderConfig,
     /// The reranker provider to use.
     pub reranker_provider: String,
-    /// The key used by the API to describe the tool's parameters.
+    /// The key used by the API to describe the tool’s parameters.
     pub schema_key: String,
 }
 
@@ -43,20 +50,38 @@ impl Tool for RetrievalTool {
         &self,
         args: serde_json::Value,
     ) -> std::pin::Pin<Box<dyn Future<Output = Result<serde_json::Value, String>> + Send>> {
+        let start = Instant::now();
         let embedding_config = self.embedding_config.clone();
         let reranker_provider = self.reranker_provider.clone();
-
         Box::pin(async move {
             let input: RetrievalToolInput =
                 serde_json::from_value(args).map_err(|e| format!("Invalid arguments: {e}"))?;
-            let results = vector_search(input.query, &embedding_config, reranker_provider)
+            let mut results = vector_search(input.query, &embedding_config, reranker_provider)
                 .await
                 .map_err(|e| format!("Search failed: {e}"))?;
 
-            let tool_results: Vec<String> = results
-                .into_iter()
-                .filter_map(|item| serde_json::to_string_pretty::<ZoteroItem>(&item).ok())
-                .collect();
+            get_authors(&mut results).map_err(|e| format!("Failed to get authors: {e}"))?;
+            log::info!(
+                "{}",
+                format!(
+                    "{DIM_TEXT}Vector search took {}s{RESET}.",
+                    start.elapsed().as_secs()
+                )
+            );
+
+            let tool_results = results
+                .iter()
+                .map(|item| {
+                    let authors: String = item
+                        .metadata
+                        .authors
+                        .as_deref()
+                        .map(|v| v.join(", "))
+                        .unwrap_or("Unknown".into());
+
+                    format!("Title: {}\nAuthors: {}", &item.metadata.title, authors)
+                })
+                .collect::<Vec<_>>();
 
             Ok(json!({
                 "results": tool_results
@@ -69,16 +94,14 @@ impl Tool for RetrievalTool {
 mod tests {
     use super::*;
     use serde_json::json;
+    use zqa_rag::constants::{
+        DEFAULT_VOYAGE_EMBEDDING_DIM, DEFAULT_VOYAGE_EMBEDDING_MODEL, DEFAULT_VOYAGE_RERANK_MODEL,
+    };
     use zqa_rag::embedding::common::EmbeddingProviderConfig;
 
     fn make_tool(schema_key: &str) -> RetrievalTool {
         // Build a minimal tool; the embedding config is only used in `call`, not in the metadata
         // methods, so we use a dummy VoyageAI config here.
-        use zqa_rag::constants::{
-            DEFAULT_VOYAGE_EMBEDDING_DIM, DEFAULT_VOYAGE_EMBEDDING_MODEL,
-            DEFAULT_VOYAGE_RERANK_MODEL,
-        };
-
         RetrievalTool {
             embedding_config: EmbeddingProviderConfig::VoyageAI(zqa_rag::config::VoyageAIConfig {
                 api_key: String::new(),
