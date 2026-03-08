@@ -139,7 +139,6 @@ pub async fn doctor(embedding_provider: &str, stdout: &mut impl Write) -> Result
             && row_count > 10000
         {
             symptom(stdout, "there were no indices with > 10k rows.")?;
-            // TODO: /index is not an implemented command yet.
             help(stdout, "run /index to create indices.")?;
         }
     } else {

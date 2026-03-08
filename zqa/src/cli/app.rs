@@ -1,7 +1,9 @@
 use crate::cli::placeholder::PlaceholderText;
-use crate::cli::prompts::{get_extraction_prompt, get_summarize_prompt, get_title_prompt};
+use crate::cli::prompts::{get_summarize_prompt, get_title_prompt};
 use crate::cli::readline::get_readline_config;
 use crate::state::{SavedChatHistory, save_conversation};
+use crate::tools::retrieval::RetrievalTool;
+use crate::tools::summarization::SummarizationTool;
 use crate::utils::arrow::{DbFields, get_schema, library_to_arrow, vector_search};
 use crate::utils::library::{ZoteroItem, ZoteroItemSet, get_authors, get_new_library_items};
 use crate::utils::rag::ModelResponse;
@@ -10,15 +12,13 @@ use arrow_schema::Schema;
 use chrono::Local;
 use lancedb::embeddings::EmbeddingDefinition;
 use rustyline::error::ReadlineError;
-use tokio::task::JoinSet;
 use zqa_rag::capabilities::ModelProvider;
 use zqa_rag::config::LLMClientConfig;
 use zqa_rag::llm::base::{
-    ASSISTANT_ROLE, ApiClient, ChatHistoryContent, ChatHistoryItem, ChatRequest,
-    CompletionApiResponse, ContentType, USER_ROLE,
+    ASSISTANT_ROLE, ApiClient, ChatHistoryContent, ChatHistoryItem, ChatRequest, USER_ROLE,
 };
-use zqa_rag::llm::errors::LLMError;
 use zqa_rag::llm::factory::{get_client_by_provider, get_client_with_config};
+use zqa_rag::llm::tools::{ANTHROPIC_SCHEMA_KEY, GEMINI_SCHEMA_KEY, OPENAI_SCHEMA_KEY, Tool};
 use zqa_rag::vector::checkhealth::lancedb_health_check;
 use zqa_rag::vector::doctor::doctor as rag_doctor;
 use zqa_rag::vector::lance::{
@@ -407,6 +407,7 @@ pub(crate) async fn process<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Resu
 /// # Returns
 ///
 /// The thousands-separated string
+#[allow(dead_code)]
 fn format_number(num: u32) -> String {
     num.to_string()
         .as_bytes()
@@ -463,6 +464,7 @@ async fn search_for_papers<O: Write, E: Write>(
 ///
 /// # Arguments
 ///
+/// * `query` - The user query.
 /// * `ctx` - A `Context` object that contains CLI args and objects that implement
 ///   `std::io::Write` for `stdout` and `stderr`.
 #[allow(clippy::too_many_lines)]
@@ -471,26 +473,6 @@ async fn run_query<O: Write, E: Write>(
     ctx: &mut Context<O, E>,
 ) -> Result<(), CLIError> {
     let model_provider = ctx.config.model_provider.clone();
-
-    let vector_search_start = Instant::now();
-    let mut search_results = vector_search(
-        query.clone(),
-        &ctx.config
-            .get_embedding_config()
-            .ok_or(CLIError::ConfigError(
-                "Could not get embedding config".into(),
-            ))?,
-        ctx.config.reranker_provider.clone(),
-    )
-    .await?;
-    let _ = get_authors(&mut search_results);
-
-    let vector_search_duration = vector_search_start.elapsed();
-    writeln!(
-        &mut ctx.err,
-        "{DIM_TEXT}Vector search completed in {vector_search_duration:.2?}{RESET}"
-    )?;
-
     if !ModelProvider::contains(&model_provider) {
         return Err(CLIError::LLMError(format!(
             "Model provider {model_provider} is not valid."
@@ -527,28 +509,19 @@ async fn run_query<O: Write, E: Write>(
     }
     .unwrap_or_else(|| get_client_by_provider(&model_provider).unwrap());
 
-    let mut set = JoinSet::new();
-
-    let summarization_start = Instant::now();
-    for item in &search_results {
-        let client = llm_client.clone();
-        let text = item.text.clone();
-        let query_clone = query.clone();
-        let metadata = item.metadata.clone();
-
-        set.spawn(async move {
-            // TODO: Use `ctx.state` when we provide the model with tools to perform its own
-            // retrieval.
-            let request = ChatRequest {
-                chat_history: Vec::new(),
-                max_tokens: None,
-                message: get_extraction_prompt(&query_clone, &text, &metadata),
-                tools: None,
-            };
-
-            client.send_message(&request).await
-        });
+    let embedding_config = ctx
+        .config
+        .get_embedding_config()
+        .ok_or(CLIError::ConfigError(
+            "Could not get embedding config".into(),
+        ))?;
+    let reranker_provider = ctx.config.reranker_provider.clone();
+    let schema_key = match model_provider.as_str() {
+        "anthropic" => ANTHROPIC_SCHEMA_KEY,
+        "gemini" => GEMINI_SCHEMA_KEY,
+        _ => OPENAI_SCHEMA_KEY,
     }
+    .to_string();
 
     // Spawn a background title generation task from the query alone, in parallel with summarization.
     // Only generate a title if we don't already have one (i.e., first query in the conversation).
@@ -577,80 +550,14 @@ async fn run_query<O: Write, E: Write>(
         });
     }
 
-    let results: Vec<Result<CompletionApiResponse, LLMError>> = set.join_all().await;
-    let summarization_duration = summarization_start.elapsed();
-    writeln!(
-        &mut ctx.err,
-        "{DIM_TEXT}Summarization completed in {summarization_duration:.2?}{RESET}"
-    )?;
+    let mut total_input_tokens: u32 = 0;
+    let mut total_output_tokens: u32 = 0;
 
-    if ctx.args.print_summaries && ctx.args.log_level >= log::LevelFilter::Info {
-        for (paper, summary_result) in search_results.iter().zip(results.iter()) {
-            if let Ok(summary) = summary_result {
-                let title = &paper.metadata.title;
-                let summary_text = ModelResponse::from(&summary.content).to_string();
-                log::info!("Paper: {title}");
-                log::info!("Summary: {summary_text}");
-            }
-        }
-    }
-
-    let err_results = results
-        .iter()
-        .filter_map(|res| res.as_ref().err())
-        .collect::<Vec<_>>();
-
-    if !err_results.is_empty() {
-        writeln!(
-            &mut ctx.err,
-            "{}/{} LLM requests failed:",
-            err_results.len(),
-            search_results.len()
-        )?;
-        writeln!(
-            &mut ctx.err,
-            "Here is why the first one failed (the others may be similar):"
-        )?;
-        if let Some(first_error) = err_results.first() {
-            writeln!(&mut ctx.err, "\t{first_error}")?;
-        }
-    }
-
-    let (ok_contents, mut total_input_tokens, mut total_output_tokens) = results
-        .iter()
-        .filter_map(|res| res.as_ref().ok())
-        .fold((Vec::new(), 0, 0), |mut acc, res| {
-            acc.0.push(res.content.clone());
-            acc.1 += res.input_tokens;
-            acc.2 += res.output_tokens;
-            acc
-        });
-
-    let search_results = ok_contents
-        .iter()
-        .map(|res| {
-            format!(
-                "<search_result>{}</search_result>",
-                ModelResponse::from(res)
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    log::debug!("Search results:\n{search_results}\n");
-
-    let texts = ok_contents
-        .iter()
-        .map(|v| {
-            v.iter()
-                .filter_map(|f| match f {
-                    ContentType::Text(s) => Some(s),
-                    ContentType::ToolCall(_) => None,
-                })
-                .collect::<Vec<_>>()
-        })
-        .filter(|v| !v.is_empty())
-        .flatten() // We should only have one here anyway
-        .collect::<Vec<_>>();
+    let retrieval_tool =
+        RetrievalTool::new(embedding_config, reranker_provider, schema_key.clone());
+    let summarization_tool = SummarizationTool::new(llm_client.clone(), schema_key);
+    let summarization_tool_clone = summarization_tool.clone();
+    let tools: Vec<Box<dyn Tool>> = vec![Box::new(retrieval_tool), Box::new(summarization_tool)];
 
     let chat_history = Arc::clone(&ctx.state.chat_history);
     let request = {
@@ -660,8 +567,8 @@ async fn run_query<O: Write, E: Write>(
         ChatRequest {
             chat_history: history.clone(),
             max_tokens: None,
-            message: get_summarize_prompt(&query, &texts),
-            tools: None,
+            message: get_summarize_prompt(&query),
+            tools: Some(&tools),
         }
     };
 
@@ -681,7 +588,14 @@ async fn run_query<O: Write, E: Write>(
             writeln!(&mut ctx.out, "{model_response_text}")?;
 
             total_input_tokens += response.input_tokens;
+            if let Ok(summarization_input_tokens) = summarization_tool_clone.input_tokens.lock() {
+                total_input_tokens += *summarization_input_tokens;
+            }
+
             total_output_tokens += response.output_tokens;
+            if let Ok(summarization_output_tokens) = summarization_tool_clone.output_tokens.lock() {
+                total_output_tokens += *summarization_output_tokens;
+            }
 
             // Update state - re-acquire lock
             let mut history = chat_history
