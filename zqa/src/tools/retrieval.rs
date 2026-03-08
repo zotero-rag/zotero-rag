@@ -1,4 +1,3 @@
-use core::fmt;
 use std::time::Instant;
 
 use schemars::{JsonSchema, schema_for};
@@ -12,6 +11,7 @@ use crate::utils::{
     terminal::{DIM_TEXT, RESET},
 };
 
+/// A tool to perform vector search and reranking.
 #[derive(Debug)]
 pub(crate) struct RetrievalTool {
     /// The embedding provider configuration. Note that this must be the same embedding provider
@@ -19,7 +19,7 @@ pub(crate) struct RetrievalTool {
     pub embedding_config: EmbeddingProviderConfig,
     /// The reranker provider to use.
     pub reranker_provider: String,
-    /// The key used by the API to describe the tool’s parameters.
+    /// The key used by the API to describe the tool's parameters.
     pub schema_key: String,
 }
 
@@ -79,7 +79,10 @@ impl Tool for RetrievalTool {
                         .map(|v| v.join(", "))
                         .unwrap_or("Unknown".into());
 
-                    format!("Title: {}\nAuthors: {}", &item.metadata.title, authors)
+                    format!(
+                        "Title: {}\nAuthors: {}\nItem ID: {}",
+                        &item.metadata.title, authors, &item.metadata.library_key
+                    )
                 })
                 .collect::<Vec<_>>();
 
