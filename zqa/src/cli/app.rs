@@ -29,6 +29,7 @@ use zqa_rag::vector::lance::{
 use crate::cli::errors::CLIError;
 use crate::common::Context;
 use crate::state::get_conversation_history;
+use crate::utils::terminal::{DIM_TEXT, RESET};
 use crate::{full_library_to_arrow, utils::library::parse_library_metadata};
 use arrow_ipc::reader::FileReader;
 use arrow_ipc::writer::FileWriter;
@@ -44,12 +45,6 @@ use std::{
 /// and can simply retry the embedding. Note that this is *not* supposed to be user-facing
 /// and all interaction with it is meant for use by the CLI.
 const BATCH_ITER_FILE: &str = "batch_iter.bin";
-
-/// ANSI escape code for dimming text
-const DIM_TEXT: &str = "\x1b[2m";
-
-/// ANSI escape code for resetting text formatting
-const RESET: &str = "\x1b[0m";
 
 /// Embed text from PDFs parsed, in case this step previously failed. This function reads
 /// the `BATCH_ITER_FILE` and uses the data in there to compute embeddings and write out
@@ -1101,7 +1096,7 @@ pub(crate) async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<()
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use crate::cli::app::{BATCH_ITER_FILE, checkhealth, embed, resume, search_for_papers, stats};
     use crate::common::State;
     use crate::config::{Config, VoyageAIConfig};
@@ -1125,7 +1120,7 @@ mod tests {
         common::{Args, Context},
     };
 
-    fn get_config() -> Config {
+    pub(crate) fn get_config() -> Config {
         let mut config = Config {
             voyageai: Some(VoyageAIConfig {
                 reranker: Some(DEFAULT_VOYAGE_RERANK_MODEL.into()),
@@ -1142,7 +1137,7 @@ mod tests {
 
     /// Create a default `Context` object where the output and error streams are buffers that can
     /// be written into. This allows for the output to be easily inspected in tests.
-    fn create_test_context() -> Context<Cursor<Vec<u8>>, Cursor<Vec<u8>>> {
+    pub(crate) fn create_test_context() -> Context<Cursor<Vec<u8>>, Cursor<Vec<u8>>> {
         let args = Args {
             tui: false,
             print_summaries: false,
