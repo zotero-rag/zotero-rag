@@ -514,6 +514,85 @@ pub async fn vector_search(
     Ok(batches)
 }
 
+/// Given the name of the key column and the value of a row's key, return the row with that key if
+/// it exists, or `None` otherwise. The returned row is returned as a single `RecordBatch`.
+///
+/// Technically, there's nothing *requiring* you to specify a key as a column name; you could very
+/// well specify any arbitrary column and use this, but note that even if multiple rows match, this
+/// limits the result to one item, and that returned value may change across LanceDB versions, so
+/// you should not rely on that behavior.
+///
+/// # Arguments
+///
+/// * `key_col` - The name of the column that's the DB key.
+/// * `key` - The value of the key for the row to retrieve.
+///
+/// # Returns
+///
+/// The row with the specified `key`, if it exists.
+pub async fn search_by_key(key_col: &str, key: &str) -> Option<RecordBatch> {
+    let db = connect(&get_db_uri())
+        .execute()
+        .await
+        .map_err(|e| LanceError::ConnectionError(e.to_string()))
+        .ok()?;
+
+    let tbl = db
+        .open_table(TABLE_NAME)
+        .execute()
+        .await
+        .map_err(|_| {
+            LanceError::InvalidStateError(format!("The table {TABLE_NAME} does not exist"))
+        })
+        .ok()?;
+
+    let stream = tbl
+        .query()
+        .only_if(format!("{key_col} = {key}"))
+        .limit(1)
+        .execute()
+        .await
+        .ok()?;
+
+    let batches: Vec<_> = stream.try_collect().await.ok()?;
+
+    batches.first().cloned()
+}
+
+/// Given the name of a column and some values, return the rows with any matching values.
+///
+/// # Arguments
+///
+/// * `col` - The name of the column that's the DB key.
+/// * `values` - The values to match.
+///
+/// # Returns
+///
+/// The rows with the specified `values`.
+pub async fn search_by_column(
+    col: &str,
+    values: &[impl AsRef<str> + Display],
+) -> Result<Vec<RecordBatch>, LanceError> {
+    let db = connect(&get_db_uri())
+        .execute()
+        .await
+        .map_err(|e| LanceError::ConnectionError(e.to_string()))?;
+
+    let tbl = db.open_table(TABLE_NAME).execute().await.map_err(|_| {
+        LanceError::InvalidStateError(format!("The table {TABLE_NAME} does not exist"))
+    })?;
+
+    let queries = values
+        .as_ref()
+        .iter()
+        .map(|key| format!("{col} = {key}"))
+        .collect::<Vec<_>>()
+        .join(" OR ");
+
+    let stream = tbl.query().only_if(queries).execute().await?;
+    stream.try_collect().await.map_err(Into::into)
+}
+
 /// Creates and initializes a LanceDB table for vector storage.
 ///
 /// Connects to LanceDB at the default location, creates a table named `TABLE_NAME`,
