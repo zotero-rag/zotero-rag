@@ -407,7 +407,6 @@ pub(crate) async fn process<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Resu
 /// # Returns
 ///
 /// The thousands-separated string
-#[allow(dead_code)]
 fn format_number(num: u32) -> String {
     num.to_string()
         .as_bytes()
@@ -1031,7 +1030,7 @@ pub(crate) mod tests {
 
     use crate::{
         cli::app::{process, run_query},
-        common::{Args, Context},
+        common::Context,
     };
 
     pub(crate) fn get_config() -> Config {
@@ -1052,11 +1051,6 @@ pub(crate) mod tests {
     /// Create a default `Context` object where the output and error streams are buffers that can
     /// be written into. This allows for the output to be easily inspected in tests.
     pub(crate) fn create_test_context() -> Context<Cursor<Vec<u8>>, Cursor<Vec<u8>>> {
-        let args = Args {
-            tui: false,
-            print_summaries: false,
-            log_level: log::LevelFilter::Off,
-        };
         let out_buf: Vec<u8> = Vec::new();
         let out = Cursor::new(out_buf);
 
@@ -1068,7 +1062,6 @@ pub(crate) mod tests {
         Context {
             state: State::default(),
             config,
-            args,
             out,
             err,
         }

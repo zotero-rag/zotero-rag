@@ -128,7 +128,6 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let context = Context {
         state: State::default(),
         config,
-        args,
         out: stdout(),
         err: stderr(),
     };
