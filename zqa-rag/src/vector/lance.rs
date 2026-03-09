@@ -899,4 +899,135 @@ mod tests {
 
         assert!(db.is_err());
     }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_search_by_key() {
+        dotenv().ok();
+
+        // First create a table with test data
+        let schema = arrow_schema::Schema::new(vec![
+            arrow_schema::Field::new("id", arrow_schema::DataType::Utf8, false),
+            arrow_schema::Field::new("content", arrow_schema::DataType::Utf8, false),
+        ]);
+        let id_data = StringArray::from(vec!["key1", "key2", "key3"]);
+        let content_data = StringArray::from(vec!["Content 1", "Content 2", "Content 3"]);
+        let record_batch = RecordBatch::try_new(
+            Arc::new(schema),
+            vec![Arc::new(id_data), Arc::new(content_data)],
+        ).unwrap();
+        let batches = vec![Ok(record_batch.clone())];
+        let reader = RecordBatchIterator::new(batches.into_iter(), record_batch.schema());
+
+        let _db = insert_records(
+            reader,
+            None,
+            &EmbeddingProviderConfig::OpenAI(OpenAIConfig {
+                api_key: env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY not set"),
+                model: DEFAULT_OPENAI_MODEL.into(),
+                max_tokens: 8192,
+                embedding_model: DEFAULT_OPENAI_EMBEDDING_MODEL.into(),
+                embedding_dims: DEFAULT_OPENAI_EMBEDDING_DIM as usize,
+            }),
+            EmbeddingDefinition::new("content", "openai", Some("embeddings")),
+        )
+        .await
+        .unwrap();
+
+        // Test finding an existing key
+        let result = search_by_key("id", "key2").await;
+        test_ok!(result);
+        let result = result.unwrap();
+        assert!(result.is_some());
+
+        let batch = result.unwrap();
+        let id_column = batch.column_by_name("id").unwrap();
+        let id_array = as_string_array(id_column);
+        test_eq!(id_array.value(0), "key2");
+
+        // Test finding a non-existent key
+        let result = search_by_key("id", "nonexistent").await;
+        test_ok!(result);
+        assert!(result.unwrap().is_none());
+
+        // Test with SQL injection attempt (should be escaped)
+        let result = search_by_key("id", "'; DROP TABLE data; --").await;
+        test_ok!(result);
+        assert!(result.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_search_by_column() {
+        dotenv().ok();
+
+        // First create a table with test data
+        let schema = arrow_schema::Schema::new(vec![
+            arrow_schema::Field::new("category", arrow_schema::DataType::Utf8, false),
+            arrow_schema::Field::new("item", arrow_schema::DataType::Utf8, false),
+        ]);
+        let category_data = StringArray::from(vec!["fruit", "vegetable", "fruit", "grain"]);
+        let item_data = StringArray::from(vec!["apple", "carrot", "banana", "rice"]);
+        let record_batch = RecordBatch::try_new(
+            Arc::new(schema),
+            vec![Arc::new(category_data), Arc::new(item_data)],
+        ).unwrap();
+        let batches = vec![Ok(record_batch.clone())];
+        let reader = RecordBatchIterator::new(batches.into_iter(), record_batch.schema());
+
+        let _db = insert_records(
+            reader,
+            None,
+            &EmbeddingProviderConfig::OpenAI(OpenAIConfig {
+                api_key: env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY not set"),
+                model: DEFAULT_OPENAI_MODEL.into(),
+                max_tokens: 8192,
+                embedding_model: DEFAULT_OPENAI_EMBEDDING_MODEL.into(),
+                embedding_dims: DEFAULT_OPENAI_EMBEDDING_DIM as usize,
+            }),
+            EmbeddingDefinition::new("item", "openai", Some("embeddings")),
+        )
+        .await
+        .unwrap();
+
+        // Test finding multiple matching values
+        let values = vec!["fruit", "grain"];
+        let result = search_by_column("category", &values).await;
+        test_ok!(result);
+        let batches = result.unwrap();
+
+        // Should find 3 records: 2 fruits and 1 grain
+        let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        test_eq!(total_rows, 3);
+
+        // Test finding single value
+        let values = vec!["vegetable"];
+        let result = search_by_column("category", &values).await;
+        test_ok!(result);
+        let batches = result.unwrap();
+        let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        test_eq!(total_rows, 1);
+
+        // Test with empty values array
+        let values: Vec<&str> = vec![];
+        let result = search_by_column("category", &values).await;
+        test_ok!(result);
+        let batches = result.unwrap();
+        assert!(batches.is_empty());
+
+        // Test with non-existent values
+        let values = vec!["nonexistent"];
+        let result = search_by_column("category", &values).await;
+        test_ok!(result);
+        let batches = result.unwrap();
+        let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        test_eq!(total_rows, 0);
+
+        // Test with SQL injection attempt (should be escaped)
+        let values = vec!["'; DROP TABLE data; --"];
+        let result = search_by_column("category", &values).await;
+        test_ok!(result);
+        // Should not crash and return empty results
+        assert!(result.is_ok());
+    }
 }
