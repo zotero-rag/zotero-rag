@@ -18,7 +18,7 @@ jobs:
 
       - name: Lint commit messages
         run: |
-          ALLOWED_TYPES="build|ci|chore|docs|feat|fix|perf|refactor|revert|test"
+          ALLOWED_TYPES="build|ci|chore|docs|feat|fix|perf|refactor|revert|test|lint"
           PATTERN="^(${ALLOWED_TYPES})(\([^)]+\))?!?: .+"
           FAILED=0
 
