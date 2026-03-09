@@ -68,8 +68,8 @@ impl Tool for SummarizationTool {
     /// # Returns
     ///
     /// A JSON object with a `"summaries"` key mapping to a list of summary strings,
-    /// one per successfully processed paper. Papers that fail to summarize are silently
-    /// skipped.
+    /// one per successfully processed paper, and an `"errors"` key mapping to a list
+    /// of error messages for papers that failed to summarize.
     fn call<'a>(
         &'a self,
         args: serde_json::Value,
@@ -107,14 +107,25 @@ impl Tool for SummarizationTool {
             let summarization_results: Vec<Result<CompletionApiResponse, LLMError>> =
                 set.join_all().await;
 
-            let tool_result = summarization_results
-                .iter()
-                .filter_map(|f| f.as_ref().ok())
-                .map(|res| Into::<ModelResponse>::into(res.content.clone()).to_string())
-                .collect::<Vec<_>>();
+            let mut summaries = Vec::new();
+            let mut errors = Vec::new();
+
+            for result in summarization_results {
+                match result {
+                    Ok(response) => {
+                        let summary = Into::<ModelResponse>::into(response.content).to_string();
+                        summaries.push(summary);
+                    }
+                    Err(e) => {
+                        log::warn!("Summarization failed: {e}");
+                        errors.push(e.to_string());
+                    }
+                }
+            }
 
             Ok(json!({
-                "summaries": tool_result
+                "summaries": summaries,
+                "errors": errors
             }))
         })
     }
