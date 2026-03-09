@@ -3,6 +3,8 @@ permissions:
   contents: read
 
 on:
+  push:
+    branches: [ "master" ]
   pull_request:
     branches: [ master ]
 
@@ -67,6 +69,6 @@ jobs:
             fi
 
             echo "OK: $subject"
-          done < <(git log --format=%s origin/master..HEAD)
+          done < <(git log --no-merges --format=%s origin/master..HEAD)
 
           exit $FAILED
