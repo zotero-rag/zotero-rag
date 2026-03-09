@@ -48,9 +48,6 @@ pub(crate) struct Context<OutStream: Write, ErrStream: Write> {
     pub(crate) state: State,
     /// Config from TOML and env
     pub(crate) config: Config,
-    /// CLI arguments passed
-    #[allow(dead_code)]
-    pub(crate) args: Args,
     /// Abstraction for `stdout()`
     pub(crate) out: OutStream,
     /// Abstraction for `stderr()`
