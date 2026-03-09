@@ -57,6 +57,19 @@ impl Tool for SummarizationTool {
         schema_for!(SummarizationToolInput)
     }
 
+    /// Executes the summarization tool by fetching passages for the given paper IDs
+    /// and summarizing each one in parallel using the configured LLM client.
+    ///
+    /// # Arguments
+    ///
+    /// * `args` - A JSON value deserializable into [`SummarizationToolInput`], containing
+    ///   a query string and a list of Zotero item IDs to summarize.
+    ///
+    /// # Returns
+    ///
+    /// A JSON object with a `"summaries"` key mapping to a list of summary strings,
+    /// one per successfully processed paper. Papers that fail to summarize are silently
+    /// skipped.
     fn call<'a>(
         &'a self,
         args: serde_json::Value,
@@ -73,10 +86,10 @@ impl Tool for SummarizationTool {
             let items: Vec<ZoteroItem> = batches.into();
 
             let mut set = JoinSet::new();
-            for item in &items {
+            for item in items {
                 let client = self.llm_client.clone();
-                let text = item.text.clone();
-                let metadata = item.metadata.clone();
+                let text = item.text;
+                let metadata = item.metadata;
                 let query_cloned = input.query.clone();
 
                 set.spawn(async move {

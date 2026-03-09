@@ -548,7 +548,7 @@ pub async fn search_by_key(key_col: &str, key: &str) -> Option<RecordBatch> {
 
     let stream = tbl
         .query()
-        .only_if(format!("{key_col} = {key}"))
+        .only_if(format!("{key_col} = '{}'", key.replace('\'', "''")))
         .limit(1)
         .execute()
         .await
@@ -579,6 +579,10 @@ pub async fn search_by_column(
     col: &str,
     values: &[impl AsRef<str> + Display],
 ) -> Result<Vec<RecordBatch>, LanceError> {
+    if values.is_empty() {
+        return Ok(Vec::new());
+    }
+
     let db = connect(&get_db_uri())
         .execute()
         .await
@@ -589,9 +593,8 @@ pub async fn search_by_column(
     })?;
 
     let queries = values
-        .as_ref()
         .iter()
-        .map(|key| format!("{col} = {key}"))
+        .map(|key| format!("{col} = '{}'", key.as_ref().replace('\'', "''")))
         .collect::<Vec<_>>()
         .join(" OR ");
 

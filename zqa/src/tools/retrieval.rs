@@ -47,6 +47,20 @@ impl Tool for RetrievalTool {
         schema_for!(RetrievalToolInput)
     }
 
+    /// Executes a vector search against LanceDB using the provided query arguments,
+    /// then enriches the results with author metadata.
+    ///
+    /// # Arguments
+    ///
+    /// * `args` - A JSON value expected to deserialize into [`RetrievalToolInput`],
+    ///   containing a `query` string.
+    ///
+    /// # Returns
+    ///
+    /// A JSON object with a `results` key mapping to a list of formatted strings,
+    /// each containing the title, authors, and item ID of a matching paper.
+    /// Returns an error string if argument deserialization, vector search, or author
+    /// retrieval fails.
     fn call(
         &self,
         args: serde_json::Value,
@@ -63,8 +77,8 @@ impl Tool for RetrievalTool {
 
             get_authors(&mut results).map_err(|e| format!("Failed to get authors: {e}"))?;
             log::info!(
-                "{DIM_TEXT}Vector search took {}s{RESET}.",
-                start.elapsed().as_secs()
+                "{DIM_TEXT}Vector search took {}ms{RESET}.",
+                start.elapsed().as_millis()
             );
 
             let tool_results = results
