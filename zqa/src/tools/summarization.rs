@@ -133,6 +133,8 @@ impl Tool for SummarizationTool {
 
 #[cfg(test)]
 mod tests {
+    use std::env;
+
     use super::*;
     use crate::cli::app::process;
     use crate::cli::app::tests::create_test_context;
@@ -151,7 +153,7 @@ mod tests {
 
     fn make_tool(schema_key: &str) -> SummarizationTool {
         let client = AnthropicClient::<ReqwestClient>::with_config(AnthropicConfig {
-            api_key: env!("ANTHROPIC_API_KEY").into(),
+            api_key: env::var("ANTHROPIC_API_KEY").unwrap(),
             model: DEFAULT_ANTHROPIC_MODEL_SMALL.into(),
             max_tokens: 8192,
         });
