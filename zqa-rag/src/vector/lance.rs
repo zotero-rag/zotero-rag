@@ -915,7 +915,8 @@ mod tests {
         let record_batch = RecordBatch::try_new(
             Arc::new(schema),
             vec![Arc::new(id_data), Arc::new(content_data)],
-        ).unwrap();
+        )
+        .unwrap();
         let batches = vec![Ok(record_batch.clone())];
         let reader = RecordBatchIterator::new(batches.into_iter(), record_batch.schema());
 
@@ -971,7 +972,8 @@ mod tests {
         let record_batch = RecordBatch::try_new(
             Arc::new(schema),
             vec![Arc::new(category_data), Arc::new(item_data)],
-        ).unwrap();
+        )
+        .unwrap();
         let batches = vec![Ok(record_batch.clone())];
         let reader = RecordBatchIterator::new(batches.into_iter(), record_batch.schema());
 
@@ -997,7 +999,7 @@ mod tests {
         let batches = result.unwrap();
 
         // Should find 3 records: 2 fruits and 1 grain
-        let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        let total_rows: usize = batches.iter().map(arrow_array::RecordBatch::num_rows).sum();
         test_eq!(total_rows, 3);
 
         // Test finding single value
@@ -1005,7 +1007,7 @@ mod tests {
         let result = search_by_column("category", &values).await;
         test_ok!(result);
         let batches = result.unwrap();
-        let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        let total_rows: usize = batches.iter().map(arrow_array::RecordBatch::num_rows).sum();
         test_eq!(total_rows, 1);
 
         // Test with empty values array
@@ -1020,7 +1022,7 @@ mod tests {
         let result = search_by_column("category", &values).await;
         test_ok!(result);
         let batches = result.unwrap();
-        let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        let total_rows: usize = batches.iter().map(arrow_array::RecordBatch::num_rows).sum();
         test_eq!(total_rows, 0);
 
         // Test with SQL injection attempt (should be escaped)
