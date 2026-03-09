@@ -529,22 +529,21 @@ pub async fn vector_search(
 ///
 /// # Returns
 ///
-/// The row with the specified `key`, if it exists.
-pub async fn search_by_key(key_col: &str, key: &str) -> Option<RecordBatch> {
+/// The row with the specified `key`, if it exists, or `None` if no matching row was found.
+///
+/// # Errors
+///
+/// Returns a [`LanceError`] if the database connection fails, the table cannot be opened,
+/// the query cannot be executed, or the result stream cannot be collected.
+pub async fn search_by_key(key_col: &str, key: &str) -> Result<Option<RecordBatch>, LanceError> {
     let db = connect(&get_db_uri())
         .execute()
         .await
-        .map_err(|e| LanceError::ConnectionError(e.to_string()))
-        .ok()?;
+        .map_err(|e| LanceError::ConnectionError(e.to_string()))?;
 
-    let tbl = db
-        .open_table(TABLE_NAME)
-        .execute()
-        .await
-        .map_err(|_| {
-            LanceError::InvalidStateError(format!("The table {TABLE_NAME} does not exist"))
-        })
-        .ok()?;
+    let tbl = db.open_table(TABLE_NAME).execute().await.map_err(|_| {
+        LanceError::InvalidStateError(format!("The table {TABLE_NAME} does not exist"))
+    })?;
 
     let stream = tbl
         .query()
@@ -552,11 +551,14 @@ pub async fn search_by_key(key_col: &str, key: &str) -> Option<RecordBatch> {
         .limit(1)
         .execute()
         .await
-        .ok()?;
+        .map_err(|e| LanceError::QueryError(e.to_string()))?;
 
-    let batches: Vec<_> = stream.try_collect().await.ok()?;
+    let batches: Vec<_> = stream
+        .try_collect()
+        .await
+        .map_err(|e| LanceError::QueryError(e.to_string()))?;
 
-    batches.first().cloned()
+    Ok(batches.first().cloned())
 }
 
 /// Given the name of a column and some values, return the rows with any matching values.
