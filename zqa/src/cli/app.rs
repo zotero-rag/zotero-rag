@@ -312,7 +312,7 @@ async fn doctor<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Result<(), CLIEr
 ///
 /// * `ctx` - A `Context` object that contains CLI args and objects that implement
 ///   `std::io::Write` for `stdout` and `stderr`.
-async fn process<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Result<(), CLIError> {
+pub(crate) async fn process<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Result<(), CLIError> {
     const WARNING_THRESHOLD: usize = 100;
 
     let item_metadata =
