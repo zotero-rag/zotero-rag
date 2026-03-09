@@ -169,7 +169,7 @@ struct AnthropicToolUseResult {
     /// The ID of the tool call request that this is a result for.
     tool_use_id: String,
     /// The result from the tool call.
-    content: serde_json::Value,
+    content: String,
 }
 
 /// A part of an Anthropic API response denoting some text from the model.
@@ -226,7 +226,7 @@ impl From<ChatHistoryContent> for AnthropicResponseContent {
             ChatHistoryContent::ToolCallResponse(res) => Self::ToolResult(AnthropicToolUseResult {
                 r#type: "tool_result".into(),
                 tool_use_id: res.id,
-                content: res.result,
+                content: res.result.to_string(),
             }),
         }
     }
