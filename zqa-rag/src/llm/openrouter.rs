@@ -467,7 +467,7 @@ mod tests {
 
     use super::*;
     use crate::llm::base::{ApiClient, ChatRequest};
-    use crate::llm::http_client::{MockHttpClient, ReqwestClient};
+    use crate::llm::http_client::{MockHttpClient, ReqwestClient, SequentialMockHttpClient};
     use crate::llm::tools::test_utils::MockTool;
 
     #[tokio::test]
@@ -589,5 +589,100 @@ mod tests {
 
         test_ok!(res);
         assert!(call_count.lock().unwrap().eq(&1_usize));
+    }
+
+    #[tokio::test]
+    async fn test_callbacks_fire() {
+        dotenv().ok();
+
+        let tool_call_response = OpenRouterResponse {
+            id: "resp-1".into(),
+            model: "openai/gpt-5.2".into(),
+            provider: "OpenAI".into(),
+            object: "chat.completion".into(),
+            created: 0,
+            usage: OpenRouterUsageStats {
+                prompt_tokens: 10,
+                completion_tokens: 5,
+                total_tokens: 15,
+            },
+            choices: vec![OpenRouterResponseChoices {
+                message: OpenRouterResponseMessage {
+                    role: "assistant".into(),
+                    content: None,
+                    tool_calls: Some(vec![OpenRouterToolCall {
+                        id: "call-1".into(),
+                        r#type: "function".into(),
+                        function: OpenRouterFunction {
+                            name: "mock_tool".into(),
+                            arguments: r#"{"name":"Alice"}"#.into(),
+                        },
+                    }]),
+                    refusal: None,
+                },
+                finish_reason: "tool_calls".into(),
+                logprobs: None,
+                index: 0,
+            }],
+        };
+        let text_response = OpenRouterResponse {
+            id: "resp-2".into(),
+            model: "openai/gpt-5.2".into(),
+            provider: "OpenAI".into(),
+            object: "chat.completion".into(),
+            created: 0,
+            usage: OpenRouterUsageStats {
+                prompt_tokens: 20,
+                completion_tokens: 8,
+                total_tokens: 28,
+            },
+            choices: vec![OpenRouterResponseChoices {
+                message: OpenRouterResponseMessage {
+                    role: "assistant".into(),
+                    content: Some("Done!".into()),
+                    tool_calls: None,
+                    refusal: None,
+                },
+                finish_reason: "stop".into(),
+                logprobs: None,
+                index: 0,
+            }],
+        };
+
+        let call_count = Arc::new(Mutex::new(0_usize));
+        let tool = MockTool {
+            call_count: Arc::clone(&call_count),
+            schema_key: "parameters".into(),
+        };
+
+        let tool_call_count = Arc::new(Mutex::new(0_usize));
+        let tool_call_count_cb = Arc::clone(&tool_call_count);
+        let text_segments: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let text_segments_cb = Arc::clone(&text_segments);
+
+        let request = ChatRequest {
+            chat_history: Vec::new(),
+            max_tokens: Some(1024),
+            message: "Test".into(),
+            tools: Some(&[Box::new(tool)]),
+            on_tool_call: Some(Arc::new(move |_| {
+                *tool_call_count_cb.lock().unwrap() += 1;
+            })),
+            on_text: Some(Arc::new(move |s| {
+                text_segments_cb.lock().unwrap().push(s.to_string());
+            })),
+        };
+
+        let mock_client = OpenRouterClient {
+            client: SequentialMockHttpClient::new([tool_call_response, text_response]),
+            config: None,
+        };
+        let res = mock_client.send_message(&request).await;
+        test_ok!(res);
+
+        test_eq!(*tool_call_count.lock().unwrap(), 1_usize);
+        let texts = text_segments.lock().unwrap();
+        test_eq!(texts.len(), 1);
+        test_eq!(texts[0].as_str(), "Done!");
     }
 }

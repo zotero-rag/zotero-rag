@@ -848,6 +848,7 @@ mod tests {
     }
 
     use super::{OpenAIRequestInput, OpenAIRequestToolCallInputItem, process_openai_tool_calls};
+    use crate::llm::http_client::SequentialMockHttpClient;
     use crate::llm::tools::Tool;
     use crate::llm::tools::get_owned_tools;
     use crate::llm::tools::test_utils::MockToolInput;
@@ -930,5 +931,81 @@ mod tests {
             duration < delay * 2,
             "Expected concurrent execution, took {duration:?}",
         );
+    }
+
+    #[tokio::test]
+    async fn test_callbacks_fire() {
+        dotenv().ok();
+
+        let tool_call_response = OpenAIResponse {
+            id: "resp-1".into(),
+            created_at: 0,
+            model: "gpt-5".into(),
+            usage: OpenAIUsage {
+                input_tokens: 10,
+                output_tokens: 5,
+                total_tokens: 15,
+            },
+            output: vec![OpenAIOutput::FunctionCall {
+                call_id: "call-1".into(),
+                name: "mock_tool".into(),
+                arguments: serde_json::json!({"name": "Alice"}),
+            }],
+        };
+        let text_response = OpenAIResponse {
+            id: "resp-2".into(),
+            created_at: 0,
+            model: "gpt-5".into(),
+            usage: OpenAIUsage {
+                input_tokens: 20,
+                output_tokens: 8,
+                total_tokens: 28,
+            },
+            output: vec![OpenAIOutput::Message {
+                id: "msg-1".into(),
+                status: "completed".into(),
+                role: "assistant".into(),
+                content: vec![OpenAIContent {
+                    r#type: "output_text".into(),
+                    text: Some("Done!".into()),
+                }],
+            }],
+        };
+
+        let call_count = Arc::new(Mutex::new(0_usize));
+        let tool = MockTool {
+            call_count: Arc::clone(&call_count),
+            schema_key: OPENAI_SCHEMA_KEY.into(),
+        };
+
+        let tool_call_count = Arc::new(Mutex::new(0_usize));
+        let tool_call_count_cb = Arc::clone(&tool_call_count);
+        let text_segments: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let text_segments_cb = Arc::clone(&text_segments);
+
+        let request = ChatRequest {
+            chat_history: Vec::new(),
+            max_tokens: Some(1024),
+            message: "Test".into(),
+            tools: Some(&[Box::new(tool)]),
+            on_tool_call: Some(Arc::new(move |_| {
+                *tool_call_count_cb.lock().unwrap() += 1;
+            })),
+            on_text: Some(Arc::new(move |s| {
+                text_segments_cb.lock().unwrap().push(s.to_string());
+            })),
+        };
+
+        let mock_client = OpenAIClient {
+            client: SequentialMockHttpClient::new([tool_call_response, text_response]),
+            config: None,
+        };
+        let res = mock_client.send_message(&request).await;
+        test_ok!(res);
+
+        test_eq!(*tool_call_count.lock().unwrap(), 1_usize);
+        let texts = text_segments.lock().unwrap();
+        test_eq!(texts.len(), 1);
+        test_eq!(texts[0].as_str(), "Done!");
     }
 }

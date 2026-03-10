@@ -690,12 +690,12 @@ impl<T: HttpClient + Default + std::fmt::Debug> EmbeddingFunction for GeminiClie
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Mutex;
+    use std::sync::{Arc, Mutex};
     use zqa_macros::test_ok;
 
     use super::*;
     use crate::llm::base::{ApiClient, ChatHistoryItem, ChatRequest};
-    use crate::llm::http_client::MockHttpClient;
+    use crate::llm::http_client::{MockHttpClient, SequentialMockHttpClient};
     use crate::llm::tools::test_utils::MockTool;
     use arrow_array::Array;
     use dotenv::dotenv;
@@ -873,5 +873,89 @@ mod tests {
         }
 
         test_ok!(res);
+    }
+
+    #[tokio::test]
+    async fn test_callbacks_fire() {
+        dotenv().ok();
+
+        let tool_call_response = GeminiResponseBody {
+            candidates: vec![GeminiResponseCandidate {
+                content: GeminiContent {
+                    role: "model".into(),
+                    parts: vec![GeminiPart::FunctionCall {
+                        function_call: GeminiFunctionCall {
+                            id: Some("call-1".into()),
+                            name: "mock_tool".into(),
+                            args: serde_json::json!({"name": "Alice"}),
+                        },
+                        thought_signature: None,
+                    }],
+                },
+                finish_reason: "STOP".into(),
+            }],
+            usage_metadata: GeminiUsageMetadata {
+                prompt_token_count: 10,
+                candidates_token_count: 5,
+                total_token_count: 15,
+                thoughts_token_count: None,
+                prompt_tokens_details: None,
+            },
+        };
+        let text_response = GeminiResponseBody {
+            candidates: vec![GeminiResponseCandidate {
+                content: GeminiContent {
+                    role: "model".into(),
+                    parts: vec![GeminiPart::Text {
+                        text: "Done!".into(),
+                        thought_signature: None,
+                    }],
+                },
+                finish_reason: "STOP".into(),
+            }],
+            usage_metadata: GeminiUsageMetadata {
+                prompt_token_count: 20,
+                candidates_token_count: 8,
+                total_token_count: 28,
+                thoughts_token_count: None,
+                prompt_tokens_details: None,
+            },
+        };
+
+        let call_count = Arc::new(Mutex::new(0_usize));
+        let tool = MockTool {
+            call_count: Arc::clone(&call_count),
+            schema_key: "parametersJsonSchema".into(),
+        };
+
+        let tool_call_count = Arc::new(Mutex::new(0_usize));
+        let tool_call_count_cb = Arc::clone(&tool_call_count);
+        let text_segments: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let text_segments_cb = Arc::clone(&text_segments);
+
+        let request = ChatRequest {
+            chat_history: Vec::new(),
+            max_tokens: Some(1024),
+            message: "Test".into(),
+            tools: Some(&[Box::new(tool)]),
+            on_tool_call: Some(Arc::new(move |_| {
+                *tool_call_count_cb.lock().unwrap() += 1;
+            })),
+            on_text: Some(Arc::new(move |s| {
+                text_segments_cb.lock().unwrap().push(s.to_string());
+            })),
+        };
+
+        let mock_client = GeminiClient {
+            client: SequentialMockHttpClient::new([tool_call_response, text_response]),
+            config: None,
+        };
+        let res = mock_client.send_message(&request).await;
+        test_ok!(res);
+
+        test_eq!(*tool_call_count.lock().unwrap(), 1_usize);
+        let texts = text_segments.lock().unwrap();
+        test_eq!(texts.len(), 1);
+        test_eq!(texts[0].as_str(), "Done!");
     }
 }
