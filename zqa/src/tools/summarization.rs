@@ -119,6 +119,8 @@ impl Tool for SummarizationTool {
                         max_tokens: None,
                         message: get_extraction_prompt(&query_cloned, &text, &metadata),
                         tools: None, // We ARE the tool :3
+                        on_tool_call: None,
+                        on_text: None,
                     };
 
                     client.send_message(&request).await

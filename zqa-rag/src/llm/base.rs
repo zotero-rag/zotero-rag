@@ -1,10 +1,11 @@
 //! User-facing structs and traits for working with LLMs, including tool calling support. Most
 //! structs used by the clients can be converted to/from the structs here.
 
-use crate::llm::tools::Tool;
+use crate::llm::tools::{CallbackFn, Tool};
 
 use super::errors::LLMError;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 /// The user role.
 pub const USER_ROLE: &str = "user";
@@ -78,6 +79,10 @@ pub struct ChatRequest<'a> {
     pub message: String,
     /// The tools to use
     pub tools: Option<&'a [Box<dyn Tool>]>,
+    /// Optional callback invoked each time a tool call completes.
+    pub on_tool_call: Option<Arc<CallbackFn<ToolUseStats>>>,
+    /// Optional callback invoked each time a text chunk is produced.
+    pub on_text: Option<Arc<CallbackFn<str>>>,
 }
 
 /// A structure dedicated to a single tool call. This contains the tool called, the arguments

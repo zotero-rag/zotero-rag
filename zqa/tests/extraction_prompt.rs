@@ -35,6 +35,8 @@ async fn run_extraction_test(client: zqa_rag::llm::factory::LLMClient, provider_
         max_tokens: None,
         message: prompt,
         tools: None,
+        on_tool_call: None,
+        on_text: None,
     };
 
     let result = client.send_message(&request).await;

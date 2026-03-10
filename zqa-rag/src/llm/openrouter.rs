@@ -405,6 +405,8 @@ impl<T: HttpClient> ApiClient for OpenRouterClient<T> {
                         "Model returned tool calls, but no tools were provided.".to_string(),
                     )
                 })?,
+                request.on_tool_call.as_ref(),
+                request.on_text.as_ref(),
             )
             .await?;
 
@@ -442,6 +444,9 @@ impl<T: HttpClient> ApiClient for OpenRouterClient<T> {
         if let Some(text) = &choice.message.content
             && !text.is_empty()
         {
+            if let Some(cb) = request.on_text.as_ref() {
+                cb(text);
+            }
             contents.push(ContentType::Text(text.clone()));
         }
 
@@ -475,6 +480,8 @@ mod tests {
             max_tokens: Some(1024),
             message: "Hello!".to_owned(),
             tools: None,
+            on_tool_call: None,
+            on_text: None,
         };
 
         let res = client.send_message(&request).await;
@@ -528,6 +535,8 @@ mod tests {
             max_tokens: Some(1024),
             message: "Hello!".to_owned(),
             tools: None,
+            on_tool_call: None,
+            on_text: None,
         };
 
         let res = mock_client.send_message(&request).await;
@@ -567,6 +576,8 @@ mod tests {
             message: "Call the mock_tool function with the name parameter set to 'Alice'"
                 .to_owned(),
             tools: Some(&[Box::new(tool)]),
+            on_tool_call: None,
+            on_text: None,
         };
 
         let res = client.send_message(&request).await;

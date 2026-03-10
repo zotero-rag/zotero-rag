@@ -15,7 +15,8 @@ use rustyline::error::ReadlineError;
 use zqa_rag::capabilities::ModelProvider;
 use zqa_rag::config::LLMClientConfig;
 use zqa_rag::llm::base::{
-    ASSISTANT_ROLE, ApiClient, ChatHistoryContent, ChatHistoryItem, ChatRequest, USER_ROLE,
+    ASSISTANT_ROLE, ApiClient, ChatHistoryContent, ChatHistoryItem, ChatRequest, ToolUseStats,
+    USER_ROLE,
 };
 use zqa_rag::llm::factory::{get_client_by_provider, get_client_with_config};
 use zqa_rag::llm::tools::{ANTHROPIC_SCHEMA_KEY, GEMINI_SCHEMA_KEY, OPENAI_SCHEMA_KEY, Tool};
@@ -536,6 +537,8 @@ async fn run_query<O: Write, E: Write>(
                 max_tokens: Some(20),
                 message: prompt,
                 tools: None,
+                on_tool_call: None,
+                on_text: None,
             };
             if let Ok(response) = small_client.send_message(&request).await {
                 let title = ModelResponse::from(&response.content).to_string();
@@ -559,6 +562,15 @@ async fn run_query<O: Write, E: Write>(
     let tools: Vec<Box<dyn Tool>> = vec![Box::new(retrieval_tool), Box::new(summarization_tool)];
 
     let chat_history = Arc::clone(&ctx.state.chat_history);
+
+    let on_tool_call: Arc<dyn Fn(&ToolUseStats) + Send + Sync + 'static> =
+        Arc::new(move |stats: &ToolUseStats| {
+            let _ = writeln!(io::stderr(), "{}🗸 {}{}", DIM_TEXT, stats.tool_name, RESET);
+        });
+    let on_text: Arc<dyn Fn(&str) + Send + Sync + 'static> = Arc::new(move |text: &str| {
+        let _ = writeln!(io::stdout(), "{text}");
+    });
+
     let request = {
         let history = chat_history
             .lock()
@@ -568,6 +580,8 @@ async fn run_query<O: Write, E: Write>(
             max_tokens: None,
             message: get_summarize_prompt(&query),
             tools: Some(&tools),
+            on_tool_call: Some(on_tool_call),
+            on_text: Some(on_text),
         }
     };
 
@@ -581,10 +595,7 @@ async fn run_query<O: Write, E: Write>(
                 "{DIM_TEXT}Final draft completed in {final_draft_duration:.2?}{RESET}"
             )?;
 
-            writeln!(&mut ctx.out, "\n-----")?;
-
             let model_response_text = ModelResponse::from(&response.content).to_string();
-            writeln!(&mut ctx.out, "{model_response_text}")?;
 
             total_input_tokens += response.input_tokens;
             if let Ok(summarization_input_tokens) = summarization_tool_clone.input_tokens.lock() {

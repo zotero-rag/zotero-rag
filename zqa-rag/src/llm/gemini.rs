@@ -551,6 +551,8 @@ impl<T: HttpClient> ApiClient for GeminiClient<T> {
                 &mut contents,
                 &converted_contents,
                 &owned_tools.function_declarations,
+                request.on_tool_call.as_ref(),
+                request.on_text.as_ref(),
             )
             .await?;
 
@@ -581,6 +583,9 @@ impl<T: HttpClient> ApiClient for GeminiClient<T> {
         // Process the final response (which has no tool calls) to extract text content
         for content in &response.content.parts {
             if let GeminiPart::Text { text, .. } = content {
+                if let Some(cb) = request.on_text.as_ref() {
+                    cb(text);
+                }
                 contents.push(ContentType::Text(text.clone()));
             }
         }
@@ -735,6 +740,8 @@ mod tests {
             }],
             max_tokens: Some(256),
             tools: None,
+            on_tool_call: None,
+            on_text: None,
         };
         let res = client.send_message(&request).await;
         test_ok!(res);
@@ -826,6 +833,8 @@ mod tests {
             max_tokens: Some(1024),
             message: "Hello!".to_owned(),
             tools: None,
+            on_tool_call: None,
+            on_text: None,
         };
         let res = client.send_message(&request).await;
 
@@ -852,6 +861,8 @@ mod tests {
             max_tokens: Some(1024),
             message: "This is a test. Call the `mock_tool`, passing in a `name`, and ensure it returns a greeting".into(),
             tools: Some(&[Box::new(tool)]),
+            on_tool_call: None,
+            on_text: None,
         };
 
         let res = client.send_message(&request).await;
