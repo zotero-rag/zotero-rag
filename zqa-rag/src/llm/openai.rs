@@ -609,7 +609,7 @@ impl<T: HttpClient> ApiClient for OpenAIClient<T> {
             match content {
                 OpenAIOutput::Message { content, .. } => {
                     if let Some(ct) = content.first() {
-                        let text = ct.text.clone().unwrap();
+                        let text = ct.text.clone().unwrap_or_default();
                         if let Some(cb) = request.on_text.as_ref() {
                             cb(&text);
                         }

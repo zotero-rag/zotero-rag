@@ -19,7 +19,9 @@ use zqa_rag::llm::base::{
     USER_ROLE,
 };
 use zqa_rag::llm::factory::{get_client_by_provider, get_client_with_config};
-use zqa_rag::llm::tools::{ANTHROPIC_SCHEMA_KEY, GEMINI_SCHEMA_KEY, OPENAI_SCHEMA_KEY, Tool};
+use zqa_rag::llm::tools::{
+    ANTHROPIC_SCHEMA_KEY, CallbackFn, GEMINI_SCHEMA_KEY, OPENAI_SCHEMA_KEY, Tool,
+};
 use zqa_rag::vector::checkhealth::lancedb_health_check;
 use zqa_rag::vector::doctor::doctor as rag_doctor;
 use zqa_rag::vector::lance::{
@@ -563,11 +565,10 @@ async fn run_query<O: Write, E: Write>(
 
     let chat_history = Arc::clone(&ctx.state.chat_history);
 
-    let on_tool_call: Arc<dyn Fn(&ToolUseStats) + Send + Sync + 'static> =
-        Arc::new(move |stats: &ToolUseStats| {
-            let _ = writeln!(io::stderr(), "{}🗸 {}{}", DIM_TEXT, stats.tool_name, RESET);
-        });
-    let on_text: Arc<dyn Fn(&str) + Send + Sync + 'static> = Arc::new(move |text: &str| {
+    let on_tool_call: Arc<CallbackFn<ToolUseStats>> = Arc::new(move |stats: &ToolUseStats| {
+        let _ = writeln!(io::stderr(), "{}🗸 {}{}", DIM_TEXT, stats.tool_name, RESET);
+    });
+    let on_text: Arc<CallbackFn<str>> = Arc::new(move |text: &str| {
         let _ = writeln!(io::stdout(), "{text}");
     });
 

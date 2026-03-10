@@ -226,7 +226,10 @@ impl From<ChatHistoryContent> for AnthropicResponseContent {
             ChatHistoryContent::ToolCallResponse(res) => Self::ToolResult(AnthropicToolUseResult {
                 r#type: "tool_result".into(),
                 tool_use_id: res.id,
-                content: res.result.to_string(),
+                content: match res.result {
+                    serde_json::Value::String(s) => s,
+                    other => other.to_string(),
+                },
             }),
         }
     }
