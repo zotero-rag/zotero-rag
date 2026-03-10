@@ -9,6 +9,7 @@ use serde::ser::SerializeMap;
 use serde_json::{Map, Value};
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::Arc;
 
 use crate::llm::{
     base::{
@@ -175,6 +176,10 @@ pub fn get_owned_tools<'a>(tools: Option<&'a [Box<dyn Tool>]>) -> Option<Vec<Ser
     })
 }
 
+/// A callback function that is passed a reference to a `T`, and is thread-safe and has a `'static`
+/// lifetime.
+pub type CallbackFn<T> = dyn Fn(&T) + Send + Sync + 'static;
+
 /// Process tool calls in a single model response (provider‑agnostic).
 ///
 /// This function consumes a slice of provider‑agnostic `ChatHistoryContent` that represents the
@@ -189,6 +194,10 @@ pub fn get_owned_tools<'a>(tools: Option<&'a [Box<dyn Tool>]>) -> Option<Vec<Ser
 /// * `new_contents` - Accumulates user‑facing `ContentType` items produced while processing.
 /// * `contents` - The model's latest message converted to `ChatHistoryContent` values.
 /// * `tools` - The available tools for invocation.
+/// * `on_tool_call` - Optional callback invoked after each tool call completes, receiving a
+///   reference to the [`ToolUseStats`] for that call.
+/// * `on_text` - Optional callback invoked for each text segment in the model's response,
+///   receiving the text as a string slice.
 ///
 /// # Returns
 ///
@@ -202,6 +211,8 @@ pub async fn process_tool_calls<CHI>(
     new_contents: &mut Vec<ContentType>,
     contents: &[ChatHistoryContent],
     tools: &[SerializedTool<'_>],
+    on_tool_call: Option<&Arc<CallbackFn<ToolUseStats>>>,
+    on_text: Option<&Arc<CallbackFn<str>>>,
 ) -> Result<(), LLMError>
 where
     CHI: From<ChatHistoryItem>,
@@ -262,6 +273,18 @@ where
     for result in results {
         let (content_opt, history_opt) = result?;
         if let Some(content) = content_opt {
+            match &content {
+                ContentType::ToolCall(stats) => {
+                    if let Some(cb) = on_tool_call {
+                        cb(stats);
+                    }
+                }
+                ContentType::Text(s) => {
+                    if let Some(cb) = on_text {
+                        cb(s);
+                    }
+                }
+            }
             new_contents.push(content);
         }
         if let Some(history) = history_opt {
@@ -412,6 +435,8 @@ mod tests {
             &mut new_contents,
             &contents,
             &serialized_tools,
+            None,
+            None,
         )
         .await
         .unwrap();

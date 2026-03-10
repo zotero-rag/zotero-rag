@@ -22,7 +22,7 @@ use crate::common::request_with_backoff;
 use crate::constants::{DEFAULT_MAX_RETRIES, DEFAULT_OPENAI_EMBEDDING_DIM, DEFAULT_OPENAI_MODEL};
 use crate::embedding::openai::compute_openai_embeddings_sync;
 use crate::llm::base::{ChatHistoryContent, ContentType, ToolUseStats, USER_ROLE};
-use crate::llm::tools::{SerializedTool, get_owned_tools};
+use crate::llm::tools::{CallbackFn, SerializedTool, get_owned_tools};
 use serde_json::{Map, Value};
 
 /// A client for OpenAI's chat completions (Responses) API.
@@ -350,6 +350,8 @@ async fn process_openai_tool_calls(
     new_contents: &mut Vec<ContentType>,
     contents: &[OpenAIRequestInput],
     tools: &[SerializedTool<'_>],
+    on_tool_call: Option<&Arc<CallbackFn<ToolUseStats>>>,
+    on_text: Option<&Arc<CallbackFn<str>>>,
 ) -> Result<(), LLMError> {
     let futures = contents.iter().map(|content| async move {
         match content {
@@ -413,6 +415,18 @@ async fn process_openai_tool_calls(
     for result in results {
         let (content, history_item) = result?;
         if let Some(c) = content {
+            match &c {
+                ContentType::ToolCall(stats) => {
+                    if let Some(cb) = on_tool_call {
+                        cb(stats);
+                    }
+                }
+                ContentType::Text(s) => {
+                    if let Some(cb) = on_text {
+                        cb(s);
+                    }
+                }
+            }
             new_contents.push(c);
         }
         if let Some(h) = history_item {
@@ -565,6 +579,8 @@ impl<T: HttpClient> ApiClient for OpenAIClient<T> {
                 &mut contents,
                 &converted_contents,
                 &base_tools,
+                request.on_tool_call.as_ref(),
+                request.on_text.as_ref(),
             )
             .await?;
 
@@ -593,14 +609,19 @@ impl<T: HttpClient> ApiClient for OpenAIClient<T> {
             match content {
                 OpenAIOutput::Message { content, .. } => {
                     if let Some(ct) = content.first() {
-                        contents.push(ContentType::Text(ct.text.clone().unwrap()));
+                        let text = ct.text.clone().unwrap();
+                        if let Some(cb) = request.on_text.as_ref() {
+                            cb(&text);
+                        }
+                        contents.push(ContentType::Text(text));
                     }
                 }
                 OpenAIOutput::Reasoning { summary, .. } => {
-                    contents.push(ContentType::Text(format!(
-                        "<reasoning>{}</reasoning>",
-                        summary.join("\n")
-                    )));
+                    let text = format!("<reasoning>{}</reasoning>", summary.join("\n"));
+                    if let Some(cb) = request.on_text.as_ref() {
+                        cb(&text);
+                    }
+                    contents.push(ContentType::Text(text));
                 }
                 OpenAIOutput::FunctionCall { .. } => {}
             }
@@ -693,6 +714,8 @@ mod tests {
             max_tokens: Some(1024),
             message: "Hello!".to_owned(),
             tools: None,
+            on_tool_call: None,
+            on_text: None,
         };
         let res = client.send_message(&request).await;
 
@@ -742,6 +765,8 @@ mod tests {
             max_tokens: Some(1024),
             message: "Hello!".to_owned(),
             tools: None,
+            on_tool_call: None,
+            on_text: None,
         };
         let res = mock_client.send_message(&request).await;
 
@@ -807,6 +832,8 @@ mod tests {
             max_tokens: Some(1024),
             message: "This is a test. Call the `mock_tool`, passing in a `name`, and ensure it returns a greeting".into(),
             tools: Some(&[Box::new(tool)]),
+            on_tool_call: None,
+            on_text: None,
         };
 
         let res = client.send_message(&request).await;
@@ -887,6 +914,8 @@ mod tests {
             &mut new_contents,
             &contents,
             &serialized_tools,
+            None,
+            None,
         )
         .await
         .expect("Failed to process tool calls");
