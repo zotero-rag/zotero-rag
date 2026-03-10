@@ -1026,9 +1026,11 @@ pub(crate) mod tests {
     use crate::common::State;
     use crate::config::{Config, VoyageAIConfig};
     use crate::state::{SavedChatHistory, save_conversation};
+    use crate::tools::retrieval::RetrievalTool;
     use arrow_array::{RecordBatch, StringArray};
     use arrow_ipc::writer::FileWriter;
     use chrono::Local;
+    use serde_json::json;
     use serial_test::serial;
     use std::fs::{self, File};
     use std::io::Cursor;
@@ -1038,7 +1040,9 @@ pub(crate) mod tests {
     use zqa_rag::constants::{
         DEFAULT_VOYAGE_EMBEDDING_DIM, DEFAULT_VOYAGE_EMBEDDING_MODEL, DEFAULT_VOYAGE_RERANK_MODEL,
     };
+    use zqa_rag::embedding::common::EmbeddingProviderConfig;
     use zqa_rag::llm::base::{ASSISTANT_ROLE, ChatHistoryContent, ChatHistoryItem, USER_ROLE};
+    use zqa_rag::llm::tools::Tool;
 
     use crate::{
         cli::app::{process, run_query},
@@ -1077,6 +1081,21 @@ pub(crate) mod tests {
             out,
             err,
         }
+    }
+
+    fn make_retrieval_tool(schema_key: &str) -> RetrievalTool {
+        // Build a minimal tool; the embedding config is only used in `call`, not in the metadata
+        // methods, so we use a dummy VoyageAI config here.
+        RetrievalTool::new(
+            EmbeddingProviderConfig::VoyageAI(zqa_rag::config::VoyageAIConfig {
+                api_key: String::new(),
+                embedding_model: DEFAULT_VOYAGE_EMBEDDING_MODEL.into(),
+                embedding_dims: DEFAULT_VOYAGE_EMBEDDING_DIM as usize,
+                reranker: DEFAULT_VOYAGE_RERANK_MODEL.into(),
+            }),
+            "voyageai".into(),
+            schema_key.into(),
+        )
     }
 
     #[tokio::test]
@@ -1392,5 +1411,46 @@ pub(crate) mod tests {
             let err = String::from_utf8(ctx.err.into_inner()).unwrap();
             test_contains!(err, "Invalid selection.");
         });
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    #[serial]
+    async fn test_call_returns_results_key() {
+        dotenv::dotenv().ok();
+        let _ = crate::common::setup_logger(log::LevelFilter::Info);
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_uri = temp_dir
+            .path()
+            .join("lancedb-table")
+            .to_str()
+            .unwrap()
+            .to_string();
+
+        let mut setup_ctx = create_test_context();
+
+        // Create test database with assets data
+        let setup_result = temp_env::async_with_vars(
+            [("CI", Some("true")), ("LANCEDB_URI", Some(&db_uri))],
+            process(&mut setup_ctx),
+        )
+        .await;
+        test_ok!(setup_result);
+
+        // Now test the retrieval tool
+        let tool = make_retrieval_tool("input_schema");
+
+        let result = temp_env::async_with_vars(
+            [("LANCEDB_URI", Some(&db_uri))],
+            tool.call(json!({"query": "machine learning"})),
+        )
+        .await;
+        test_ok!(result);
+
+        let value = result.unwrap();
+        assert!(
+            value.get("results").is_some(),
+            "Expected 'results' key in output, got: {value}"
+        );
     }
 }

@@ -124,12 +124,7 @@ impl Tool for RetrievalTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cli::app::process;
-    use crate::cli::app::tests::create_test_context;
     use serde_json::json;
-    use temp_env;
-    use tempfile;
-    use zqa_macros::test_ok;
     use zqa_rag::constants::{
         DEFAULT_VOYAGE_EMBEDDING_DIM, DEFAULT_VOYAGE_EMBEDDING_MODEL, DEFAULT_VOYAGE_RERANK_MODEL,
     };
@@ -195,46 +190,6 @@ mod tests {
         assert!(
             err.contains("Invalid arguments"),
             "Unexpected error message: {err}"
-        );
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_call_returns_results_key() {
-        dotenv::dotenv().ok();
-        let _ = crate::common::setup_logger(log::LevelFilter::Info);
-
-        let temp_dir = tempfile::tempdir().unwrap();
-        let db_uri = temp_dir
-            .path()
-            .join("lancedb-table")
-            .to_str()
-            .unwrap()
-            .to_string();
-
-        let mut setup_ctx = create_test_context();
-
-        // Create test database with assets data
-        let setup_result = temp_env::async_with_vars(
-            [("CI", Some("true")), ("LANCEDB_URI", Some(&db_uri))],
-            process(&mut setup_ctx),
-        )
-        .await;
-        test_ok!(setup_result);
-
-        // Now test the retrieval tool
-        let tool = make_tool("input_schema");
-
-        let result = temp_env::async_with_vars(
-            [("LANCEDB_URI", Some(&db_uri))],
-            tool.call(json!({"query": "machine learning"})),
-        )
-        .await;
-        test_ok!(result);
-
-        let value = result.unwrap();
-        assert!(
-            value.get("results").is_some(),
-            "Expected 'results' key in output, got: {value}"
         );
     }
 }
