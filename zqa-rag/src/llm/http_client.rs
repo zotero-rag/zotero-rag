@@ -5,6 +5,11 @@
 
 use http;
 use reqwest::{header::HeaderMap, multipart::Form};
+#[cfg(test)]
+use std::{
+    collections::VecDeque,
+    sync::{Arc, Mutex},
+};
 use std::{future::Future, pin::Pin};
 
 /// A trait that represents an HTTP client for making requests to LLM providers.
@@ -144,6 +149,76 @@ where
         Self {
             response: T::default(),
         }
+    }
+}
+
+/// A mock HTTP client that returns responses from a pre-loaded queue, one per call. Useful for
+/// testing multi-turn interactions (e.g. a tool-call response followed by a final text response).
+#[cfg(test)]
+#[derive(Debug, Clone)]
+pub struct SequentialMockHttpClient {
+    /// The queue of JSON-serialized responses to return, in order.
+    responses: Arc<Mutex<VecDeque<String>>>,
+}
+
+#[cfg(test)]
+impl SequentialMockHttpClient {
+    /// Create a new `SequentialMockHttpClient` from an iterator of serializable responses.
+    ///
+    /// # Panics
+    ///
+    /// * If `serde_json::to_string` returns an `Err`.
+    pub fn new<T: serde::Serialize>(responses: impl IntoIterator<Item = T>) -> Self {
+        let queue = responses
+            .into_iter()
+            .map(|r| serde_json::to_string(&r).unwrap())
+            .collect();
+        Self {
+            responses: Arc::new(Mutex::new(queue)),
+        }
+    }
+}
+
+#[cfg(test)]
+impl HttpClient for SequentialMockHttpClient {
+    fn post_json<'a, U: serde::Serialize + Send + Sync>(
+        &'a self,
+        _url: &'a str,
+        _headers: HeaderMap,
+        _body: &'a U,
+    ) -> Pin<Box<dyn Future<Output = Result<reqwest::Response, reqwest::Error>> + Send + 'a>> {
+        let responses = Arc::clone(&self.responses);
+        Box::pin(async move {
+            let json = responses
+                .lock()
+                .unwrap()
+                .pop_front()
+                .expect("SequentialMockHttpClient: no more responses in queue");
+            let bytes = bytes::Bytes::from(json);
+            let http_response = http::Response::builder()
+                .status(200)
+                .header("content-type", "application/json")
+                .body(bytes)
+                .unwrap();
+            Ok(reqwest::Response::from(http_response))
+        })
+    }
+
+    fn post_form<'a>(
+        &'a self,
+        url: &'a str,
+        headers: HeaderMap,
+        _form_data: Form,
+    ) -> Pin<Box<dyn Future<Output = Result<reqwest::Response, reqwest::Error>> + Send + '_>> {
+        self.post_json(url, headers, &None::<usize>)
+    }
+
+    fn get_json<'a>(
+        &'a self,
+        url: &'a str,
+        headers: HeaderMap,
+    ) -> Pin<Box<dyn Future<Output = Result<reqwest::Response, reqwest::Error>> + Send + 'a>> {
+        self.post_json(url, headers, &None::<usize>)
     }
 }
 

@@ -517,12 +517,15 @@ mod tests {
 
     use crate::constants::DEFAULT_OPENAI_EMBEDDING_DIM;
     use crate::llm::anthropic::{AnthropicTextResponseContent, DEFAULT_CLAUDE_MODEL};
-    use crate::llm::base::{ApiClient, ChatRequest, ContentType};
-    use crate::llm::http_client::{MockHttpClient, ReqwestClient};
+    use crate::llm::base::{
+        ApiClient, ChatHistoryContent, ChatRequest, ContentType, ToolCallResponse,
+    };
+    use crate::llm::http_client::{MockHttpClient, ReqwestClient, SequentialMockHttpClient};
     use crate::llm::tools::test_utils::MockTool;
 
     use super::{
-        AnthropicClient, AnthropicResponse, AnthropicResponseContent, AnthropicUsageStats,
+        AnthropicClient, AnthropicResponse, AnthropicResponseContent,
+        AnthropicToolUseResponseContent, AnthropicUsageStats,
     };
 
     #[tokio::test]
@@ -667,5 +670,120 @@ mod tests {
 
         test_ok!(res);
         assert!(call_count.lock().unwrap().eq(&1_usize));
+    }
+
+    #[tokio::test]
+    async fn test_callbacks_fire() {
+        dotenv().ok();
+
+        let tool_call_response = AnthropicResponse {
+            id: "msg-1".into(),
+            model: DEFAULT_CLAUDE_MODEL.into(),
+            role: "assistant".into(),
+            stop_reason: "tool_use".into(),
+            stop_sequence: None,
+            usage: AnthropicUsageStats {
+                input_tokens: 10,
+                output_tokens: 5,
+            },
+            r#type: "message".into(),
+            content: vec![AnthropicResponseContent::ToolCall(
+                AnthropicToolUseResponseContent {
+                    id: "tool-1".into(),
+                    r#type: "tool_use".into(),
+                    name: "mock_tool".into(),
+                    input: serde_json::json!({"name": "Alice"})
+                        .as_object()
+                        .unwrap()
+                        .clone(),
+                },
+            )],
+        };
+        let text_response = AnthropicResponse {
+            id: "msg-2".into(),
+            model: DEFAULT_CLAUDE_MODEL.into(),
+            role: "assistant".into(),
+            stop_reason: "end_turn".into(),
+            stop_sequence: None,
+            usage: AnthropicUsageStats {
+                input_tokens: 20,
+                output_tokens: 8,
+            },
+            r#type: "message".into(),
+            content: vec![AnthropicResponseContent::Text(
+                AnthropicTextResponseContent {
+                    r#type: "text".into(),
+                    text: "Done!".into(),
+                },
+            )],
+        };
+
+        let call_count = Arc::new(Mutex::new(0_usize));
+        let tool = MockTool {
+            call_count: Arc::clone(&call_count),
+            schema_key: "input_schema".into(),
+        };
+
+        let tool_call_count = Arc::new(Mutex::new(0_usize));
+        let tool_call_count_cb = Arc::clone(&tool_call_count);
+        let text_segments: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let text_segments_cb = Arc::clone(&text_segments);
+
+        let request = ChatRequest {
+            chat_history: Vec::new(),
+            max_tokens: Some(1024),
+            message: "Test".into(),
+            tools: Some(&[Box::new(tool)]),
+            on_tool_call: Some(Arc::new(move |_| {
+                *tool_call_count_cb.lock().unwrap() += 1;
+            })),
+            on_text: Some(Arc::new(move |s| {
+                text_segments_cb.lock().unwrap().push(s.to_string());
+            })),
+        };
+
+        let mock_client = AnthropicClient {
+            client: SequentialMockHttpClient::new([tool_call_response, text_response]),
+            config: None,
+        };
+        let res = mock_client.send_message(&request).await;
+        test_ok!(res);
+
+        test_eq!(*tool_call_count.lock().unwrap(), 1_usize);
+        let texts = text_segments.lock().unwrap();
+        test_eq!(texts.len(), 1);
+        test_eq!(texts[0].as_str(), "Done!");
+    }
+
+    #[test]
+    fn test_tool_result_object_content_is_serialized_as_string() {
+        // A JSON-object result must be serialized as a JSON string so the Anthropic API
+        // receives `"content": "{...}"` rather than `"content": {...}`.
+        let content = AnthropicResponseContent::from(ChatHistoryContent::ToolCallResponse(
+            ToolCallResponse {
+                id: "tool-1".into(),
+                tool_name: "mock_tool".into(),
+                result: serde_json::json!({"answer": 42}),
+            },
+        ));
+        let json = serde_json::to_value(&content).unwrap();
+        assert!(
+            json["content"].is_string(),
+            "content should be a JSON string, got: {}",
+            json["content"]
+        );
+    }
+
+    #[test]
+    fn test_tool_result_string_content_passes_through() {
+        let content = AnthropicResponseContent::from(ChatHistoryContent::ToolCallResponse(
+            ToolCallResponse {
+                id: "tool-2".into(),
+                tool_name: "mock_tool".into(),
+                result: serde_json::json!("plain text"),
+            },
+        ));
+        let json = serde_json::to_value(&content).unwrap();
+        test_eq!(json["content"].as_str().unwrap(), "plain text");
     }
 }
