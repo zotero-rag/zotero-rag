@@ -5,6 +5,7 @@ use crate::llm::anthropic::AnthropicClient;
 use crate::llm::base::{ApiClient, ChatRequest};
 use crate::llm::errors::LLMError;
 use crate::llm::gemini::GeminiClient;
+use crate::llm::ollama::OllamaClient;
 use crate::llm::openai::OpenAIClient;
 use crate::llm::openrouter::OpenRouterClient;
 
@@ -13,6 +14,8 @@ use crate::llm::openrouter::OpenRouterClient;
 pub enum LLMClient {
     /// Anthropic client
     Anthropic(AnthropicClient),
+    /// Ollama client
+    Ollama(OllamaClient),
     /// OpenAI client
     OpenAI(OpenAIClient),
     /// OpenRouter client
@@ -29,6 +32,7 @@ impl ApiClient for LLMClient {
     ) -> Result<crate::llm::base::CompletionApiResponse, LLMError> {
         match self {
             LLMClient::Anthropic(client) => client.send_message(message).await,
+            LLMClient::Ollama(client) => client.send_message(message).await,
             LLMClient::OpenAI(client) => client.send_message(message).await,
             LLMClient::OpenRouter(client) => client.send_message(message).await,
             LLMClient::Gemini(client) => client.send_message(message).await,
@@ -44,6 +48,7 @@ impl ApiClient for LLMClient {
 pub fn get_client_by_provider(provider: &str) -> Result<LLMClient, LLMError> {
     match provider {
         "anthropic" => Ok(LLMClient::Anthropic(AnthropicClient::new())),
+        "ollama" => Ok(LLMClient::Ollama(OllamaClient::new())),
         "openai" => Ok(LLMClient::OpenAI(OpenAIClient::new())),
         "openrouter" => Ok(LLMClient::OpenRouter(OpenRouterClient::new())),
         "gemini" => Ok(LLMClient::Gemini(GeminiClient::new())),
@@ -60,6 +65,7 @@ pub fn get_client_with_config(config: LLMClientConfig) -> Result<LLMClient, LLME
         LLMClientConfig::Anthropic(cfg) => {
             Ok(LLMClient::Anthropic(AnthropicClient::with_config(cfg)))
         }
+        LLMClientConfig::Ollama(cfg) => Ok(LLMClient::Ollama(OllamaClient::with_config(cfg))),
         LLMClientConfig::OpenAI(cfg) => Ok(LLMClient::OpenAI(OpenAIClient::with_config(cfg))),
         LLMClientConfig::OpenRouter(cfg) => {
             Ok(LLMClient::OpenRouter(OpenRouterClient::with_config(cfg)))

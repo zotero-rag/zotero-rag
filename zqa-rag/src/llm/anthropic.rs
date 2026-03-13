@@ -84,7 +84,7 @@ where
 /// An Anthropic-specific chat history object. This is pretty much the same as `ChatHistoryItem`,
 /// except that `content` is now Anthropic-specific.
 #[derive(Clone, Serialize)]
-struct AnthropicChatHistoryItem {
+pub(crate) struct AnthropicChatHistoryItem {
     /// Either "user" or "assistant".
     pub role: String,
     /// The contents of this item.
@@ -120,21 +120,21 @@ impl From<&ChatHistoryItem> for AnthropicChatHistoryItem {
 
 /// Represents a request to the Anthropic API
 #[derive(Serialize)]
-struct AnthropicRequest<'a> {
+pub(crate) struct AnthropicRequest<'a> {
     /// The model to use for the request (e.g., "claude-4-5-sonnet")
-    model: &'a str,
+    pub(crate) model: &'a str,
     /// The maximum number of tokens that can be generated in the response
-    max_tokens: u32,
+    pub(crate) max_tokens: u32,
     /// The conversation history and current message
-    messages: &'a [AnthropicChatHistoryItem],
+    pub(crate) messages: &'a [AnthropicChatHistoryItem],
     /// The tools passed in
     #[serde(skip_serializing_if = "Option::is_none")]
-    tools: Option<&'a [SerializedTool<'a>]>,
+    pub(crate) tools: Option<&'a [SerializedTool<'a>]>,
 }
 
 /// Helper to build messages and tools from a ChatRequest.
 /// Returns owned data that can then be borrowed by AnthropicRequest.
-fn build_anthropic_messages_and_tools<'a>(
+pub(crate) fn build_anthropic_messages_and_tools<'a>(
     req: &'a ChatRequest<'a>,
 ) -> (
     Vec<AnthropicChatHistoryItem>,
@@ -154,16 +154,16 @@ fn build_anthropic_messages_and_tools<'a>(
 
 /// Token usage statistics returned by the Anthropic API
 #[derive(Clone, Debug, Serialize, Deserialize)]
-struct AnthropicUsageStats {
+pub(crate) struct AnthropicUsageStats {
     /// Number of tokens in the input prompt
-    input_tokens: u32,
+    pub(crate) input_tokens: u32,
     /// Number of tokens in the generated response
-    output_tokens: u32,
+    pub(crate) output_tokens: u32,
 }
 
 /// The result of a tool call. This is the Anthropic-specific result format.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-struct AnthropicToolUseResult {
+pub(crate) struct AnthropicToolUseResult {
     /// The content type. This should always be "tool_result".
     r#type: String,
     /// The ID of the tool call request that this is a result for.
@@ -172,13 +172,22 @@ struct AnthropicToolUseResult {
     content: String,
 }
 
+/// A thinking block returned by models with extended thinking enabled.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub(crate) struct AnthropicThinkingResponseContent {
+    /// The content type. Always "thinking".
+    pub(crate) r#type: String,
+    /// The thinking content from the model
+    pub(crate) thinking: String,
+}
+
 /// A part of an Anthropic API response denoting some text from the model.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-struct AnthropicTextResponseContent {
+pub(crate) struct AnthropicTextResponseContent {
     /// The content type. Always "text".
-    r#type: String,
+    pub(crate) r#type: String,
     /// The text content from the model's response
-    text: String,
+    pub(crate) text: String,
 }
 
 /// A part of an Anthropic API response denoting a tool call (Anthropic uses the term "tool use" or
@@ -186,22 +195,22 @@ struct AnthropicTextResponseContent {
 /// `AnthropicToolUseResult`. Note that this struct is also used as part of
 /// `AnthropicChatHistoryItem`, as one of the possible content types.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-struct AnthropicToolUseResponseContent {
+pub(crate) struct AnthropicToolUseResponseContent {
     /// Tool use ID
-    id: String,
+    pub(crate) id: String,
     /// The content type. Always "tool_use".
-    r#type: String,
+    pub(crate) r#type: String,
     /// The tool being called
-    name: String,
+    pub(crate) name: String,
     /// The input to the tool. Note that all we can guarantee is that the keys are strings
-    input: serde_json::Map<String, serde_json::Value>,
+    pub(crate) input: serde_json::Map<String, serde_json::Value>,
 }
 
 /// Content block in an Anthropic API response. This is also used in the request as the chat
 /// history.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(untagged)]
-enum AnthropicResponseContent {
+pub(crate) enum AnthropicResponseContent {
     /// A plain-text content, which is used in requests and the user parts of chat history.
     PlainText(String),
     /// A text part of a response
@@ -209,6 +218,8 @@ enum AnthropicResponseContent {
     ToolCall(AnthropicToolUseResponseContent),
     /// Only used in the chat history; this can never be in the response from the API.
     ToolResult(AnthropicToolUseResult),
+    /// A thinking block from models with extended thinking enabled.
+    Thinking(AnthropicThinkingResponseContent),
 }
 
 impl From<ChatHistoryContent> for AnthropicResponseContent {
@@ -246,23 +257,23 @@ impl From<String> for AnthropicResponseContent {
 
 /// Response from the Anthropic API
 #[derive(Clone, Debug, Serialize, Deserialize)]
-struct AnthropicResponse {
+pub(crate) struct AnthropicResponse {
     /// Unique identifier for the response
-    id: String,
+    pub(crate) id: String,
     /// The model that generated the response
-    model: String,
+    pub(crate) model: String,
     /// The role of the message (usually "assistant")
-    role: String,
+    pub(crate) role: String,
     /// Why the model stopped generating (e.g., "end_turn")
-    stop_reason: String,
+    pub(crate) stop_reason: String,
     /// The stop sequence that caused generation to end, if any
-    stop_sequence: Option<String>,
+    pub(crate) stop_sequence: Option<String>,
     /// Token usage statistics
-    usage: AnthropicUsageStats,
+    pub(crate) usage: AnthropicUsageStats,
     /// The type of the response (usually "message")
-    r#type: String,
+    pub(crate) r#type: String,
     /// The content blocks in the response
-    content: Vec<AnthropicResponseContent>,
+    pub(crate) content: Vec<AnthropicResponseContent>,
 }
 
 /// Send an API request to Anthropic.
@@ -310,7 +321,9 @@ async fn send_anthropic_request(
 ///
 /// Tool results should never appear in Anthropic API responses; if encountered, they are ignored
 /// with a warning.
-fn map_response_to_chat_contents(contents: &[AnthropicResponseContent]) -> Vec<ChatHistoryContent> {
+pub(crate) fn map_response_to_chat_contents(
+    contents: &[AnthropicResponseContent],
+) -> Vec<ChatHistoryContent> {
     let mut out = Vec::new();
     for c in contents {
         match c {
@@ -328,6 +341,7 @@ fn map_response_to_chat_contents(contents: &[AnthropicResponseContent]) -> Vec<C
                     "Got a tool result from the API response. This is not expected, and will be ignored."
                 );
             }
+            AnthropicResponseContent::Thinking(_) => {}
         }
     }
     out
