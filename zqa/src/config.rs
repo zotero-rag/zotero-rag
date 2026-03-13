@@ -394,7 +394,7 @@ impl Default for OllamaConfig {
             model_small: Some(DEFAULT_OLLAMA_MODEL_SMALL.into()),
             embedding_model: Some(DEFAULT_OLLAMA_EMBEDDING_MODEL.into()),
             embedding_dims: Some(DEFAULT_OLLAMA_EMBEDDING_DIM),
-            base_url: None,
+            base_url: Some(DEFAULT_OLLAMA_BASE_URL.into()),
         }
     }
 }
