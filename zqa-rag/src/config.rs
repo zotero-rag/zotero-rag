@@ -30,6 +30,19 @@ pub struct OpenAIConfig {
     pub embedding_dims: usize,
 }
 
+/// Configuration for `ollama` LLM and embedding provider
+#[derive(Debug, Clone)]
+pub struct OllamaConfig {
+    /// Model name for generation (e.g., "qwen3.5")
+    pub model: String,
+    /// Maximum tokens for generation
+    pub max_tokens: u32,
+    /// Embedding model name
+    pub embedding_model: String,
+    /// Embedding dimensions
+    pub embedding_dims: usize,
+}
+
 /// Configuration for Gemini LLM and embedding provider
 #[derive(Debug, Clone)]
 pub struct GeminiConfig {
@@ -83,6 +96,8 @@ pub struct OpenRouterConfig {
 pub enum LLMClientConfig {
     /// Anthropic client configuration
     Anthropic(crate::config::AnthropicConfig),
+    /// Ollama client configuration
+    Ollama(crate::config::OllamaConfig),
     /// OpenAI client configuration
     OpenAI(crate::config::OpenAIConfig),
     /// OpenRouter client configuration

@@ -149,7 +149,7 @@ fn unwrap_openai_tools<'a>(tools: &[OpenAITool<'a>]) -> Vec<SerializedTool<'a>> 
 /// We add tool call requests as items in the flattened input list when
 /// constructing a request body for the Responses API.
 #[derive(Clone, Debug, Serialize)]
-struct OpenAIRequestToolCallInputItem {
+pub(crate) struct OpenAIRequestToolCallInputItem {
     /// The unique tool call ID.
     call_id: String,
     /// Always "function_call".
@@ -161,7 +161,7 @@ struct OpenAIRequestToolCallInputItem {
 }
 
 #[derive(Clone, Debug, Serialize)]
-struct OpenAIRequestToolResultInputItem {
+pub(crate) struct OpenAIRequestToolResultInputItem {
     /// Always "function_call_output".
     r#type: String,
     /// The tool call ID this is a result for.
@@ -172,13 +172,13 @@ struct OpenAIRequestToolResultInputItem {
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(untagged)]
-enum OpenAIRequestInputItem {
+pub(crate) enum OpenAIRequestInputItem {
     /// A plain-text item.
     Text(String),
 }
 
 #[derive(Clone, Serialize)]
-struct OpenAIChatHistoryItem {
+pub(crate) struct OpenAIChatHistoryItem {
     /// Either USER_ROLE or "assistant".
     pub role: String,
     /// The content item for this role.
@@ -189,7 +189,7 @@ struct OpenAIChatHistoryItem {
 
 #[derive(Clone, Serialize)]
 #[serde(untagged)]
-enum OpenAIRequestInput {
+pub(crate) enum OpenAIRequestInput {
     Message(OpenAIChatHistoryItem),
     FunctionCall(OpenAIRequestToolCallInputItem),
     ToolResult(OpenAIRequestToolResultInputItem),
@@ -227,7 +227,7 @@ impl From<&ChatHistoryItem> for Vec<OpenAIRequestInput> {
 }
 
 #[derive(Serialize)]
-struct OpenAIRequest<'a> {
+pub(crate) struct OpenAIRequest<'a> {
     /// The model to use for the request (e.g., "gpt-5.2").
     model: &'a str,
 

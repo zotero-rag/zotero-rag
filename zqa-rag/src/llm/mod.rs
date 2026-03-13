@@ -6,6 +6,7 @@ pub mod errors;
 pub mod factory;
 pub mod gemini;
 pub mod http_client;
+pub mod ollama;
 pub mod openai;
 pub mod openrouter;
 pub mod tools;

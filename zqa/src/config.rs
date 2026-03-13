@@ -275,6 +275,7 @@ impl Config {
         if let Some(small_model_name) = small_model_name {
             match &mut client_config {
                 LLMClientConfig::Anthropic(c) => c.model.clone_from(small_model_name),
+                LLMClientConfig::Ollama(c) => c.model.clone_from(small_model_name),
                 LLMClientConfig::OpenAI(c) => c.model.clone_from(small_model_name),
                 LLMClientConfig::Gemini(c) => c.model.clone_from(small_model_name),
                 LLMClientConfig::OpenRouter(c) => c.model.clone_from(small_model_name),

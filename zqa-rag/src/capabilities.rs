@@ -13,10 +13,12 @@ use crate::llm::errors::LLMError;
 /// implementations will be in the `llm/` directory.
 #[derive(Clone, Debug)]
 pub enum ModelProvider {
-    /// OpenAI model provider
-    OpenAI,
     /// Anthropic model provider
     Anthropic,
+    /// Ollama model provider
+    Ollama,
+    /// OpenAI model provider
+    OpenAI,
     /// OpenRouter model provider
     OpenRouter,
     /// Gemini model provider
@@ -28,8 +30,9 @@ impl ModelProvider {
     #[must_use]
     pub fn as_str(&self) -> &'static str {
         match self {
-            ModelProvider::OpenAI => "openai",
             ModelProvider::Anthropic => "anthropic",
+            ModelProvider::Ollama => "ollama",
+            ModelProvider::OpenAI => "openai",
             ModelProvider::OpenRouter => "openrouter",
             ModelProvider::Gemini => "gemini",
         }
@@ -39,8 +42,9 @@ impl ModelProvider {
     #[must_use]
     pub fn contains(provider: &str) -> bool {
         [
-            ModelProvider::OpenAI.as_str(),
             ModelProvider::Anthropic.as_str(),
+            ModelProvider::Ollama.as_str(),
+            ModelProvider::OpenAI.as_str(),
             ModelProvider::OpenRouter.as_str(),
             ModelProvider::Gemini.as_str(),
         ]
