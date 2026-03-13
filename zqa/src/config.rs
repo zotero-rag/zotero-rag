@@ -5,6 +5,7 @@ use std::{env, num::ParseIntError, path::Path};
 use thiserror;
 use thiserror::Error;
 use zqa_rag::config::LLMClientConfig;
+#[allow(clippy::wildcard_imports)]
 use zqa_rag::constants::*;
 use zqa_rag::constants::{DEFAULT_OPENAI_EMBEDDING_DIM, DEFAULT_OPENAI_EMBEDDING_MODEL};
 use zqa_rag::embedding::common::EmbeddingProviderConfig;
@@ -35,6 +36,7 @@ use zqa_rag::embedding::common::EmbeddingProviderConfig;
 /// max_tokens = 8192
 /// embedding-model = "qwen3-embedding"
 /// embedding_dims = 4096
+/// base_url = "http://localhost:11434"  # Defaults to local ollama instance
 ///
 /// [openai]
 /// model = "gpt-5.2"
@@ -153,6 +155,15 @@ impl Config {
             anthropic_config
                 .api_key
                 .replace_with_env("ANTHROPIC_API_KEY");
+        }
+
+        // Ollama options
+        if let Some(ollama_config) = &mut self.ollama {
+            ollama_config.model.replace_with_env("OLLAMA_MODEL");
+            ollama_config
+                .model_small
+                .replace_with_env("OLLAMA_MODEL_SMALL");
+            ollama_config.base_url.replace_with_env("OLLAMA_BASE_URL");
         }
 
         // OpenAI options
@@ -371,6 +382,8 @@ pub struct OllamaConfig {
     pub embedding_model: Option<String>,
     /// Embedding dimension size
     pub embedding_dims: Option<usize>,
+    /// Base URL for the ollama API (e.g., "http://localhost:11434")
+    pub base_url: Option<String>,
 }
 
 impl Default for OllamaConfig {
@@ -381,6 +394,7 @@ impl Default for OllamaConfig {
             model_small: Some(DEFAULT_OLLAMA_MODEL_SMALL.into()),
             embedding_model: Some(DEFAULT_OLLAMA_EMBEDDING_MODEL.into()),
             embedding_dims: Some(DEFAULT_OLLAMA_EMBEDDING_DIM),
+            base_url: None,
         }
     }
 }
@@ -625,7 +639,8 @@ impl From<OllamaConfig> for zqa_rag::config::OllamaConfig {
                 .unwrap_or(DEFAULT_OLLAMA_EMBEDDING_MODEL.into()),
             embedding_dims: config
                 .embedding_dims
-                .unwrap_or(DEFAULT_OLLAMA_EMBEDDING_DIM as usize),
+                .unwrap_or(DEFAULT_OLLAMA_EMBEDDING_DIM),
+            base_url: config.base_url.unwrap_or(DEFAULT_OLLAMA_BASE_URL.into()),
         }
     }
 }

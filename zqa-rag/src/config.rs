@@ -41,6 +41,8 @@ pub struct OllamaConfig {
     pub embedding_model: String,
     /// Embedding dimensions
     pub embedding_dims: usize,
+    /// Base URL for the ollama API (e.g., "http://localhost:11434")
+    pub base_url: String,
 }
 
 /// Configuration for Gemini LLM and embedding provider
