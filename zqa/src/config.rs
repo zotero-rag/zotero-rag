@@ -5,15 +5,7 @@ use std::{env, num::ParseIntError, path::Path};
 use thiserror;
 use thiserror::Error;
 use zqa_rag::config::LLMClientConfig;
-use zqa_rag::constants::{
-    DEFAULT_ANTHROPIC_MAX_TOKENS, DEFAULT_ANTHROPIC_MODEL, DEFAULT_ANTHROPIC_MODEL_SMALL,
-    DEFAULT_COHERE_EMBEDDING_DIM, DEFAULT_COHERE_EMBEDDING_MODEL, DEFAULT_COHERE_RERANK_MODEL,
-    DEFAULT_GEMINI_EMBEDDING_DIM, DEFAULT_GEMINI_EMBEDDING_MODEL, DEFAULT_GEMINI_MODEL,
-    DEFAULT_GEMINI_MODEL_SMALL, DEFAULT_MAX_CONCURRENT_REQUESTS, DEFAULT_MAX_RETRIES,
-    DEFAULT_OPENAI_MAX_TOKENS, DEFAULT_OPENAI_MODEL, DEFAULT_OPENAI_MODEL_SMALL,
-    DEFAULT_OPENROUTER_MODEL, DEFAULT_OPENROUTER_MODEL_SMALL, DEFAULT_VOYAGE_EMBEDDING_DIM,
-    DEFAULT_VOYAGE_EMBEDDING_MODEL, DEFAULT_VOYAGE_RERANK_MODEL,
-};
+use zqa_rag::constants::*;
 use zqa_rag::constants::{DEFAULT_OPENAI_EMBEDDING_DIM, DEFAULT_OPENAI_EMBEDDING_MODEL};
 use zqa_rag::embedding::common::EmbeddingProviderConfig;
 
@@ -36,6 +28,13 @@ use zqa_rag::embedding::common::EmbeddingProviderConfig;
 /// model_small = "claude-haiku-4-5"
 /// api_key = "sk-ant-..."
 /// max_tokens = 64000
+///
+/// [ollama]
+/// model = "qwen3.5"  # Defaults to the 9B version
+/// model_small = "qwen3.5:0.8b"
+/// max_tokens = 8192
+/// embedding-model = "qwen3-embedding"
+/// embedding_dims = 4096
 ///
 /// [openai]
 /// model = "gpt-5.2"
@@ -94,6 +93,10 @@ pub struct Config {
     /// Anthropic-specific configuration
     #[serde(default)]
     pub anthropic: Option<AnthropicConfig>,
+
+    /// Ollama-specific configuration
+    #[serde(default)]
+    pub ollama: Option<OllamaConfig>,
 
     /// OpenAI-specific configuration
     #[serde(default)]
@@ -263,6 +266,7 @@ impl Config {
 
         let small_model_name = match self.model_provider.as_str() {
             "anthropic" => self.anthropic.as_ref().and_then(|c| c.model_small.as_ref()),
+            "ollama" => self.ollama.as_ref().and_then(|c| c.model_small.as_ref()),
             "openai" => self.openai.as_ref().and_then(|c| c.model_small.as_ref()),
             "gemini" => self.gemini.as_ref().and_then(|c| c.model_small.as_ref()),
             "openrouter" => self
@@ -292,6 +296,10 @@ impl Config {
                 .anthropic
                 .as_ref()
                 .map(|cfg| LLMClientConfig::Anthropic(cfg.clone().into())),
+            "ollama" => self
+                .ollama
+                .as_ref()
+                .map(|cfg| LLMClientConfig::Ollama(cfg.clone().into())),
             "openai" => self
                 .openai
                 .as_ref()
@@ -346,6 +354,33 @@ impl Default for AnthropicConfig {
             model_small: Some(DEFAULT_ANTHROPIC_MODEL_SMALL.into()),
             max_tokens: DEFAULT_ANTHROPIC_MAX_TOKENS,
             api_key: None,
+        }
+    }
+}
+
+/// `ollama` provider configuration
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct OllamaConfig {
+    /// Model name (e.g., "qwen3.5")
+    pub model: Option<String>,
+    /// Small model name, used for generating conversation titles
+    pub model_small: Option<String>,
+    /// Maximum tokens for generation
+    pub max_tokens: Option<u32>,
+    /// Embedding model name (e.g., "qwen3-embedding")
+    pub embedding_model: Option<String>,
+    /// Embedding dimension size
+    pub embedding_dims: Option<usize>,
+}
+
+impl Default for OllamaConfig {
+    fn default() -> Self {
+        Self {
+            model: Some(DEFAULT_OLLAMA_MODEL.into()),
+            max_tokens: Some(DEFAULT_OLLAMA_MAX_TOKENS),
+            model_small: Some(DEFAULT_OLLAMA_MODEL_SMALL.into()),
+            embedding_model: Some(DEFAULT_OLLAMA_EMBEDDING_MODEL.into()),
+            embedding_dims: Some(DEFAULT_OLLAMA_EMBEDDING_DIM),
         }
     }
 }
@@ -557,6 +592,7 @@ impl Default for Config {
             max_concurrent_requests: default_max_concurrent_requests(),
             max_retries: default_max_retries(),
             anthropic: Some(AnthropicConfig::default()),
+            ollama: Some(OllamaConfig::default()),
             openai: Some(OpenAIConfig::default()),
             gemini: Some(GeminiConfig::default()),
             voyageai: Some(VoyageAIConfig::default()),
@@ -575,6 +611,21 @@ impl From<AnthropicConfig> for zqa_rag::config::AnthropicConfig {
                 .expect("Anthropic API key not found. Please set it in your config file or as ANTHROPIC_API_KEY."),
             model: config.model.unwrap_or(DEFAULT_ANTHROPIC_MODEL.into()),
             max_tokens: config.max_tokens,
+        }
+    }
+}
+
+impl From<OllamaConfig> for zqa_rag::config::OllamaConfig {
+    fn from(config: OllamaConfig) -> Self {
+        Self {
+            model: config.model.unwrap_or(DEFAULT_ANTHROPIC_MODEL.into()),
+            max_tokens: config.max_tokens.unwrap_or(DEFAULT_OLLAMA_MAX_TOKENS),
+            embedding_model: config
+                .embedding_model
+                .unwrap_or(DEFAULT_OLLAMA_EMBEDDING_MODEL.into()),
+            embedding_dims: config
+                .embedding_dims
+                .unwrap_or(DEFAULT_OLLAMA_EMBEDDING_DIM as usize),
         }
     }
 }

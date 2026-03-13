@@ -9,7 +9,7 @@ This project provides a command-line interface for querying your Zotero library 
 ### Features
 
 * Extracts text from PDFs and ignores tables/figures (they're unlikely to have useful context for LLMs)
-* Support for OpenAI, Anthropic, Gemini, and OpenRouter models for text generation, and Cohere and Voyage AI models for embedding (technically, OpenAI models are supported, but are unlikely to work as of now, see Limitations below).
+* Support for OpenAI, Ollama, Anthropic, Gemini, and OpenRouter models for text generation, and Cohere and Voyage AI models for embedding (technically, OpenAI models are supported, but are unlikely to work as of now, see Limitations below).
 * Locally-stored embeddings using LanceDB.
 * Search-only mode retrieves papers
 
@@ -110,6 +110,13 @@ model = "claude-sonnet-4-5"
 model_small = "claude-haiku-4-5"
 api_key = "sk-ant-..."
 max_tokens = 64000
+
+[ollama]
+model = "qwen3.5"
+model_small = "qwen3.5:0.8b"
+max_tokens = 8192
+embedding_model = "qwen3-embedding"
+embedding_dims = 4096
 
 [openai]
 model = "gpt-5.2"
