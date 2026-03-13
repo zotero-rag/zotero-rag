@@ -2,7 +2,7 @@
 //! module includes support for text generation and embedding, but not retrieval.
 
 use crate::common::request_with_backoff;
-use crate::constants::{DEFAULT_OLLAMA_MAX_TOKENS, DEFAULT_OLLAMA_MODEL};
+use crate::constants::{DEFAULT_MAX_RETRIES, DEFAULT_OLLAMA_MAX_TOKENS, DEFAULT_OLLAMA_MODEL};
 use crate::llm::anthropic::{
     AnthropicChatHistoryItem, AnthropicRequest, AnthropicResponse, AnthropicResponseContent,
     build_anthropic_messages_and_tools, map_response_to_chat_contents,
@@ -60,39 +60,6 @@ where
 type OllamaRequest<'a> = AnthropicRequest<'a>;
 type OllamaResponse = AnthropicResponse;
 
-// Response from the `ollama` API when not streaming. In streaming mode, usage stats are only sent
-// in the last chunk, when `done` is set to `true`.
-// #[derive(Debug, Clone, Serialize, Deserialize)]
-// struct OllamaNonStreamingResponse {
-//     /// The model that generated the response
-//     model: String,
-//     /// The model response
-//     response: String,
-//     /// Whether this is the last response
-//     done: bool,
-//     /// The reason for `done`, usually "stop"
-//     done_reason: String,
-//     /// The duration in nanoseconds
-//     total_duration: String,
-//     /// Input tokens processed
-//     prompt_eval_count: usize,
-//     /// Output tokens processed
-//     eval_count: usize,
-// }
-
-// Error from the API
-// #[derive(Debug, Clone, Serialize, Deserialize)]
-// struct OllamaError {
-//     error: String,
-// }
-
-// A response from the API
-// #[derive(Debug, Clone, Serialize, Deserialize)]
-// enum OllamaResponse {
-//     Success(OllamaNonStreamingResponse),
-//     Error(OllamaError),
-// }
-
 /// Send an API request to `ollama`.
 ///
 /// # Arguments:
@@ -109,7 +76,7 @@ async fn send_ollama_request(
     headers: &HeaderMap,
     req: &OllamaRequest<'_>,
 ) -> Result<OllamaResponse, LLMError> {
-    const MAX_RETRIES: usize = 3;
+    const MAX_RETRIES: usize = DEFAULT_MAX_RETRIES;
     let res = request_with_backoff(
         client,
         "http://localhost:11434/v1/messages",
