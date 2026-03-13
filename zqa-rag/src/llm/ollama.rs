@@ -232,6 +232,11 @@ mod tests {
     async fn test_request_works() {
         dotenv().ok();
 
+        if env::var("CI").is_ok() {
+            // Skip this test in CI environments until we get ollama there
+            return;
+        }
+
         let client = OllamaClient::<ReqwestClient>::default();
         let request = ChatRequest {
             chat_history: Vec::new(),
@@ -255,6 +260,11 @@ mod tests {
     #[tokio::test]
     async fn test_request_with_tool_works() {
         dotenv().ok();
+
+        if env::var("CI").is_ok() {
+            // Skip this test in CI environments until we get ollama there
+            return;
+        }
 
         let client = OllamaClient::<ReqwestClient>::default();
         let call_count = Arc::new(Mutex::new(0));
