@@ -1,8 +1,10 @@
 //! Functions, structs, and trait implementations for interacting with `ollama`. This
-//! module includes support for text generation and embedding, but not retrieval.
+//! module includes support for text generation only.
 
 use crate::common::request_with_backoff;
-use crate::constants::{DEFAULT_MAX_RETRIES, DEFAULT_OLLAMA_BASE_URL, DEFAULT_OLLAMA_MAX_TOKENS, DEFAULT_OLLAMA_MODEL};
+use crate::constants::{
+    DEFAULT_MAX_RETRIES, DEFAULT_OLLAMA_BASE_URL, DEFAULT_OLLAMA_MAX_TOKENS, DEFAULT_OLLAMA_MODEL,
+};
 use crate::llm::anthropic::{
     AnthropicChatHistoryItem, AnthropicRequest, AnthropicResponse, AnthropicResponseContent,
     build_anthropic_messages_and_tools, map_response_to_chat_contents,
@@ -78,14 +80,7 @@ async fn send_ollama_request(
     url: &str,
 ) -> Result<OllamaResponse, LLMError> {
     const MAX_RETRIES: usize = DEFAULT_MAX_RETRIES;
-    let res = request_with_backoff(
-        client,
-        url,
-        headers,
-        req,
-        MAX_RETRIES,
-    )
-    .await?;
+    let res = request_with_backoff(client, url, headers, req, MAX_RETRIES).await?;
 
     let body = res.text().await?;
     let json: serde_json::Value = serde_json::from_str(&body)?;
@@ -107,7 +102,11 @@ impl<T: HttpClient> ApiClient for OllamaClient<T> {
     ) -> Result<CompletionApiResponse, LLMError> {
         // Use config if available, otherwise fall back to env vars
         let (model, max_tokens, base_url) = if let Some(ref config) = self.config {
-            (config.model.clone(), config.max_tokens, config.base_url.clone())
+            (
+                config.model.clone(),
+                config.max_tokens,
+                config.base_url.clone(),
+            )
         } else {
             (
                 env::var("OLLAMA_MODEL").unwrap_or_else(|_| DEFAULT_OLLAMA_MODEL.to_string()),

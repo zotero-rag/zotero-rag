@@ -34,7 +34,7 @@ use zqa_rag::embedding::common::EmbeddingProviderConfig;
 /// model = "qwen3.5"  # Defaults to the 9B version
 /// model_small = "qwen3.5:0.8b"
 /// max_tokens = 8192
-/// embedding-model = "qwen3-embedding"
+/// embedding_model = "qwen3-embedding"
 /// embedding_dims = 4096
 /// base_url = "http://localhost:11434"  # Defaults to local ollama instance
 ///
