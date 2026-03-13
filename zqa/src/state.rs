@@ -288,11 +288,12 @@ pub(crate) fn oobe<R: BufRead>(reader: &mut R, is_terminal: bool) -> Result<(), 
 
     println!("What model provider do you want to use?");
     println!("[A]nthropic");
+    println!("O[l]lama");
     println!("(O)penAI");
     println!("(G)emini");
     println!("Open(R)outer");
     println!();
-    let model_provider = read_char(reader, 'a', &['a', 'o', 'g', 'r']);
+    let model_provider = read_char(reader, 'a', &['a', 'l', 'o', 'g', 'r']);
 
     println!("Enter your model provider's API key: ");
     let model_api_key = read_password(reader, is_terminal)?.trim().to_string();
@@ -300,6 +301,7 @@ pub(crate) fn oobe<R: BufRead>(reader: &mut R, is_terminal: bool) -> Result<(), 
 
     config.model_provider = match model_provider {
         'a' => "anthropic",
+        'l' => "ollama",
         'o' => "openai",
         'g' => "gemini",
         'r' => "openrouter",
@@ -391,6 +393,7 @@ pub(crate) fn oobe<R: BufRead>(reader: &mut R, is_terminal: bool) -> Result<(), 
             let anthropic_config = config.anthropic.as_mut().unwrap();
             anthropic_config.api_key = Some(model_api_key);
         }
+        // We don't need to handle ollama here, since there's usually no API key.
         'o' => {
             let openai_config = config.openai.as_mut().unwrap();
             openai_config.api_key = Some(model_api_key);

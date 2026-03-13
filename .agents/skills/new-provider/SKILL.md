@@ -135,7 +135,20 @@ Model on `zqa-rag/src/llm/openrouter.rs`. Requirements:
 - Add `/// <Name> reranking provider` + `<Name>` variant
 - Update `as_str()` and `contains()`
 
-## Step 7: Post-scaffold checklist
+## Step 7: Add to `zqa`
+
+**Add configs in `zqa/src/config.rs`:**
+
+- Add an example of the config to the docstring at the top of the file.
+- Add `<name>: Option<NameConfig>` to the `Config` struct.
+- Add a `<Name>Config` struct near the other provider-specific config structs.
+- Add a `From<NameConfig>` impl to map the `zqa-rag` structs to the `zqa` structs.
+- Add a `match` arm to `get_generation_config` and `get_small_model_config` for generation models, `get_embedding_config` for embedding models, and `get_reranker_config` for rerankers.
+- Add the config example to the `README.md`.
+- Add a section to the `oobe` function in `state.rs`.
+- Add the new config to the initializer in `zqa/tests/new_library.rs`.
+
+## Step 8: Post-scaffold checklist
 
 - [ ] All public types and functions have `///` doc comments; `# Arguments`, `# Returns`, and `# Errors` sections are present where applicable (see `STYLE.md`)
 - [ ] No `anyhow` used — errors propagate via `LLMError` using `thiserror`
