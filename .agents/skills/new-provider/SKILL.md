@@ -144,6 +144,7 @@ Model on `zqa-rag/src/llm/openrouter.rs`. Requirements:
 - Add a `<Name>Config` struct near the other provider-specific config structs.
 - Add a `From<NameConfig>` impl to map the `zqa-rag` structs to the `zqa` structs.
 - Add a `match` arm to `get_generation_config` and `get_small_model_config` for generation models, `get_embedding_config` for embedding models, and `get_reranker_config` for rerankers.
+- Add a new section to `read_env` in `zqa/src/config.rs`.
 - Add the config example to the `README.md`.
 - Add a section to the `oobe` function in `state.rs`.
 - Add the new config to the initializer in `zqa/tests/new_library.rs`.

@@ -21,6 +21,9 @@ pub const DEFAULT_OLLAMA_EMBEDDING_MODEL: &str = "qwen3-embedding";
 /// Default embedding dimension for `qwen3-embedding`.
 pub const DEFAULT_OLLAMA_EMBEDDING_DIM: usize = 4096;
 
+/// Default base URL for the `ollama` API.
+pub const DEFAULT_OLLAMA_BASE_URL: &str = "http://localhost:11434";
+
 /// Default OpenAI model for chat completions
 pub const DEFAULT_OPENAI_MODEL: &str = "gpt-5.2";
 

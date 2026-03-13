@@ -2,7 +2,7 @@
 //! module includes support for text generation and embedding, but not retrieval.
 
 use crate::common::request_with_backoff;
-use crate::constants::{DEFAULT_MAX_RETRIES, DEFAULT_OLLAMA_MAX_TOKENS, DEFAULT_OLLAMA_MODEL};
+use crate::constants::{DEFAULT_MAX_RETRIES, DEFAULT_OLLAMA_BASE_URL, DEFAULT_OLLAMA_MAX_TOKENS, DEFAULT_OLLAMA_MODEL};
 use crate::llm::anthropic::{
     AnthropicChatHistoryItem, AnthropicRequest, AnthropicResponse, AnthropicResponseContent,
     build_anthropic_messages_and_tools, map_response_to_chat_contents,
@@ -75,11 +75,12 @@ async fn send_ollama_request(
     client: &impl HttpClient,
     headers: &HeaderMap,
     req: &OllamaRequest<'_>,
+    url: &str,
 ) -> Result<OllamaResponse, LLMError> {
     const MAX_RETRIES: usize = DEFAULT_MAX_RETRIES;
     let res = request_with_backoff(
         client,
-        "http://localhost:11434/v1/messages",
+        url,
         headers,
         req,
         MAX_RETRIES,
@@ -105,12 +106,13 @@ impl<T: HttpClient> ApiClient for OllamaClient<T> {
         request: &'a ChatRequest<'a>,
     ) -> Result<CompletionApiResponse, LLMError> {
         // Use config if available, otherwise fall back to env vars
-        let (model, max_tokens) = if let Some(ref config) = self.config {
-            (config.model.clone(), config.max_tokens)
+        let (model, max_tokens, base_url) = if let Some(ref config) = self.config {
+            (config.model.clone(), config.max_tokens, config.base_url.clone())
         } else {
             (
                 env::var("OLLAMA_MODEL").unwrap_or_else(|_| DEFAULT_OLLAMA_MODEL.to_string()),
                 DEFAULT_OLLAMA_MAX_TOKENS,
+                env::var("OLLAMA_BASE_URL").unwrap_or_else(|_| DEFAULT_OLLAMA_BASE_URL.to_string()),
             )
         };
 
@@ -131,7 +133,8 @@ impl<T: HttpClient> ApiClient for OllamaClient<T> {
             tools: tools.as_deref(),
         };
 
-        let mut response = send_ollama_request(&self.client, &headers, &req_body).await?;
+        let url = format!("{base_url}/v1/messages");
+        let mut response = send_ollama_request(&self.client, &headers, &req_body, &url).await?;
 
         let mut has_tool_calls: bool = response
             .content
@@ -170,7 +173,7 @@ impl<T: HttpClient> ApiClient for OllamaClient<T> {
                 tools: tools.as_deref(),
             };
 
-            response = send_ollama_request(&self.client, &headers, &updated_req_body).await?;
+            response = send_ollama_request(&self.client, &headers, &updated_req_body, &url).await?;
 
             // Append the new response to chat history
             chat_history.push(AnthropicChatHistoryItem {
