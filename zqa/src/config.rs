@@ -618,7 +618,7 @@ impl From<AnthropicConfig> for zqa_rag::config::AnthropicConfig {
 impl From<OllamaConfig> for zqa_rag::config::OllamaConfig {
     fn from(config: OllamaConfig) -> Self {
         Self {
-            model: config.model.unwrap_or(DEFAULT_ANTHROPIC_MODEL.into()),
+            model: config.model.unwrap_or(DEFAULT_OLLAMA_MODEL.into()),
             max_tokens: config.max_tokens.unwrap_or(DEFAULT_OLLAMA_MAX_TOKENS),
             embedding_model: config
                 .embedding_model

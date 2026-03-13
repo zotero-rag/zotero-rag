@@ -18,7 +18,7 @@ pub const DEFAULT_OLLAMA_MAX_TOKENS: u32 = 8192;
 /// Default `ollama` embedding model.
 pub const DEFAULT_OLLAMA_EMBEDDING_MODEL: &str = "qwen3-embedding";
 
-/// Default embedding dimension for `voyage-4-nano`.
+/// Default embedding dimension for `qwen3-embedding`.
 pub const DEFAULT_OLLAMA_EMBEDDING_DIM: usize = 4096;
 
 /// Default OpenAI model for chat completions
