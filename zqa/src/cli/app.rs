@@ -507,6 +507,12 @@ async fn run_query<O: Write, E: Write>(
             .clone()
             .map(|c| get_client_with_config(LLMClientConfig::OpenRouter(c.into())))
             .transpose()?,
+        "ollama" => ctx
+            .config
+            .ollama
+            .clone()
+            .map(|c| get_client_with_config(LLMClientConfig::Ollama(c.into())))
+            .transpose()?,
         _ => None,
     }
     .unwrap_or_else(|| get_client_by_provider(&model_provider).unwrap());
