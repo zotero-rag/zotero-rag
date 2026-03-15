@@ -108,7 +108,7 @@ impl PricingCacheOptions {
         }
 
         if self.ttl.is_none() {
-            return true;
+            return false;
         }
 
         let ttl = self.ttl.unwrap() as u64;
@@ -161,11 +161,19 @@ pub fn get_model_pricing(
     };
 
     if should_fetch {
-        let rt = tokio::runtime::Runtime::new().ok()?;
-        let bytes = rt
-            .block_on(async { reqwest::get(LITELLM_PRICING_URL).await?.bytes().await })
-            .ok()?;
-        std::fs::write(&path, &bytes).ok()?;
+        match reqwest::blocking::get(LITELLM_PRICING_URL).and_then(|r| r.bytes()) {
+            Ok(bytes) => {
+                if let Err(e) = std::fs::write(&path, &bytes) {
+                    eprintln!("[WARN] Failed to write pricing cache file: {}", e);
+                }
+            }
+            Err(e) => {
+                eprintln!(
+                    "[WARN] Failed to fetch pricing file, using cache if available: {}",
+                    e
+                );
+            }
+        }
     }
 
     if provider == "ollama" {
@@ -205,8 +213,10 @@ mod tests {
             output_cost_per_token: 0.000_015,
         };
         let cost = pricing.estimate_cost(1000, 500);
+        let expected = 0.0105;
 
-        assert!((cost - 0.0105).abs() < f64::EPSILON);
+        // Relative tolerance
+        assert!((cost - expected).abs() < expected * f64::EPSILON * 10.0);
     }
 
     #[test]
@@ -269,9 +279,7 @@ mod tests {
             ttl: None,
         };
 
-        // `ttl=None` means "never re-fetch once exists", but should_fetch returns `true` when `ttl`
-        // is `None`
-        assert!(opts.should_fetch());
+        assert!(!opts.should_fetch());
     }
 
     #[test]
@@ -321,7 +329,8 @@ mod tests {
 
     #[test]
     fn test_get_pricing_known_model() {
-        let (_, opts) = make_cache(SAMPLE_JSON);
+        // NOTE: This cannot be changed to `_`! That would clean up the tempfile.
+        let (_f, opts) = make_cache(SAMPLE_JSON);
         let p = get_model_pricing("openai", "gpt-5.4", Some(opts)).unwrap();
 
         assert!((p.input_cost_per_token - 0.000_002_5).abs() < f64::EPSILON);
@@ -330,7 +339,7 @@ mod tests {
 
     #[test]
     fn test_get_pricing_fallback_provider_slash_model_key() {
-        let (_, opts) = make_cache(SAMPLE_JSON);
+        let (_f, opts) = make_cache(SAMPLE_JSON);
         let p = get_model_pricing("openrouter", "mistral-7b", Some(opts)).unwrap();
 
         assert!((p.input_cost_per_token - 0.000_000_1).abs() < f64::EPSILON);
@@ -339,7 +348,7 @@ mod tests {
 
     #[test]
     fn test_get_pricing_unknown_model_returns_none() {
-        let (_, opts) = make_cache(SAMPLE_JSON);
+        let (_f, opts) = make_cache(SAMPLE_JSON);
         let result = get_model_pricing("openai", "foobar", Some(opts));
 
         assert!(result.is_none());
@@ -347,7 +356,7 @@ mod tests {
 
     #[test]
     fn test_get_pricing_estimate_round_trip() {
-        let (_, opts) = make_cache(SAMPLE_JSON);
+        let (_f, opts) = make_cache(SAMPLE_JSON);
         let p = get_model_pricing("openai", "gpt-5.4", Some(opts)).unwrap();
         let cost = p.estimate_cost(100, 50);
         let expected = 100.0 * 0.000_002_5 + 50.0 * 0.00001;
