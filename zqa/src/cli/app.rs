@@ -1084,6 +1084,7 @@ pub(crate) mod tests {
         F: Fn() -> Fut,
         Fut: std::future::Future<Output = ()> + 'static,
     {
+        assert!(max_attempts > 0, "max_attempts must be greater than 0");
         for attempt in 1..=max_attempts {
             let local = tokio::task::LocalSet::new();
             let result = local
