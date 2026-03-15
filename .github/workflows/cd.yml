@@ -15,6 +15,7 @@ on:
 
 jobs:
   crate_metadata:
+    if: github.event.pull_request.draft == false
     name: Extract crate metadata
     runs-on: blacksmith-2vcpu-ubuntu-2404
     steps:
@@ -38,6 +39,7 @@ jobs:
       msrv: ${{ steps.crate_metadata.outputs.msrv }}
 
   build:
+    if: github.event.pull_request.draft == false
     name: '${{ matrix.job.target }} (${{ matrix.job.os }})'
     runs-on: ${{ matrix.job.os }}
     needs: crate_metadata
