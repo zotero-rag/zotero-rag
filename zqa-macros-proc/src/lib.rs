@@ -77,7 +77,6 @@ pub fn retry(args: TokenStream, input: TokenStream) -> TokenStream {
                 }
             }
             .await;
-            unreachable!()
         }
     }
     .into()
