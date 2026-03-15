@@ -13,7 +13,6 @@ use chrono::Local;
 use lancedb::embeddings::EmbeddingDefinition;
 use rustyline::error::ReadlineError;
 use zqa_rag::capabilities::ModelProvider;
-use zqa_rag::config::LLMClientConfig;
 use zqa_rag::llm::base::{
     ASSISTANT_ROLE, ApiClient, ChatHistoryContent, ChatHistoryItem, ChatRequest, ToolUseStats,
     USER_ROLE,
