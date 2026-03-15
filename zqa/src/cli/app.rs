@@ -482,40 +482,12 @@ async fn run_query<O: Write, E: Write>(
     }
 
     // Create LLM client with config
-    let llm_client = match model_provider.as_str() {
-        "anthropic" => ctx
-            .config
-            .anthropic
-            .clone()
-            .map(|c| get_client_with_config(LLMClientConfig::Anthropic(c.into())))
-            .transpose()?,
-        "openai" => ctx
-            .config
-            .openai
-            .clone()
-            .map(|c| get_client_with_config(LLMClientConfig::OpenAI(c.into())))
-            .transpose()?,
-        "gemini" => ctx
-            .config
-            .gemini
-            .clone()
-            .map(|c| get_client_with_config(LLMClientConfig::Gemini(c.into())))
-            .transpose()?,
-        "openrouter" => ctx
-            .config
-            .openrouter
-            .clone()
-            .map(|c| get_client_with_config(LLMClientConfig::OpenRouter(c.into())))
-            .transpose()?,
-        "ollama" => ctx
-            .config
-            .ollama
-            .clone()
-            .map(|c| get_client_with_config(LLMClientConfig::Ollama(c.into())))
-            .transpose()?,
-        _ => None,
-    }
-    .unwrap_or_else(|| get_client_by_provider(&model_provider).unwrap());
+    let llm_client = ctx
+        .config
+        .get_generation_config()
+        .map(get_client_with_config)
+        .transpose()?
+        .unwrap_or_else(|| get_client_by_provider(&model_provider).unwrap());
 
     let embedding_config = ctx
         .config
