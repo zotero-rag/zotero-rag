@@ -4,7 +4,10 @@ use humantime;
 use log::LevelFilter;
 use std::{
     io::Write,
-    sync::{Arc, Mutex, atomic::AtomicBool},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, AtomicU64},
+    },
 };
 use zqa_rag::llm::base::ChatHistoryItem;
 
@@ -39,6 +42,8 @@ pub(crate) struct State {
     pub(crate) dirty: AtomicBool,
     /// A title generated for the current conversation
     pub(crate) title: Arc<Mutex<Option<String>>>,
+    /// Accumulated session cost, in US cents (Money pattern)
+    pub(crate) session_cost: AtomicU64,
 }
 
 /// A structure that holds the application context, including CLI arguments and an writers

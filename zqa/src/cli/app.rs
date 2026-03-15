@@ -21,6 +21,7 @@ use zqa_rag::llm::factory::{get_client_by_provider, get_client_with_config};
 use zqa_rag::llm::tools::{
     ANTHROPIC_SCHEMA_KEY, CallbackFn, GEMINI_SCHEMA_KEY, OPENAI_SCHEMA_KEY, Tool,
 };
+use zqa_rag::pricing::get_model_pricing;
 use zqa_rag::vector::checkhealth::lancedb_health_check;
 use zqa_rag::vector::doctor::doctor as rag_doctor;
 use zqa_rag::vector::lance::{
@@ -488,6 +489,9 @@ async fn run_query<O: Write, E: Write>(
         .transpose()?
         .unwrap_or_else(|| get_client_by_provider(&model_provider).unwrap());
 
+    let generation_model_name = ctx.config.get_generation_model_name();
+    let _embedding_model_name = ctx.config.get_embedding_model_name();
+
     let embedding_config = ctx
         .config
         .get_embedding_config()
@@ -566,6 +570,11 @@ async fn run_query<O: Write, E: Write>(
     let final_draft_start = Instant::now();
     let result = llm_client.send_message(&request).await;
     let final_draft_duration = final_draft_start.elapsed();
+
+    // Invariant: by this point, `generation_model_name` cannot be `None`.
+    let generation_model_name = generation_model_name.unwrap_or_default();
+    let pricing = get_model_pricing(&model_provider, &generation_model_name, None);
+
     match result {
         Ok(response) => {
             writeln!(
@@ -583,6 +592,16 @@ async fn run_query<O: Write, E: Write>(
             total_output_tokens += response.output_tokens;
             if let Ok(summarization_output_tokens) = summarization_tool_clone.output_tokens.lock() {
                 total_output_tokens += *summarization_output_tokens;
+            }
+
+            // Update session cost
+            if let Some(ref p) = pricing {
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                let call_cost =
+                    (p.estimate_cost(total_input_tokens, total_output_tokens) * 100.0) as u64;
+                ctx.state
+                    .session_cost
+                    .fetch_add(call_cost, atomic::Ordering::Relaxed);
             }
 
             // Update state - re-acquire lock
@@ -624,6 +643,25 @@ async fn run_query<O: Write, E: Write>(
         "\t{DIM_TEXT}Output tokens: {}{RESET}\n",
         format_number(total_output_tokens)
     )?;
+
+    match &pricing {
+        Some(p) if p.estimate_cost(total_input_tokens, total_output_tokens) > 0.0 => {
+            let cost = p.estimate_cost(total_input_tokens, total_output_tokens);
+            writeln!(
+                &mut ctx.out,
+                "\t{DIM_TEXT}Estimated cost: ${cost:.4} ({generation_model_name}){RESET}"
+            )?;
+        }
+        _ => {}
+    }
+    let session_cost = ctx.state.session_cost.load(atomic::Ordering::Relaxed);
+    if session_cost > 0 {
+        writeln!(
+            &mut ctx.out,
+            "\t{DIM_TEXT}Session cost:   ${session_cost:.4}{RESET}"
+        )?;
+    }
+    writeln!(&mut ctx.out)?;
 
     Ok(())
 }
