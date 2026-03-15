@@ -1014,6 +1014,7 @@ pub(crate) mod tests {
     use std::sync::Arc;
     use temp_env;
     use zqa_macros::{test_contains, test_eq, test_ok};
+    use zqa_macros_proc::retry;
     use zqa_rag::constants::{
         DEFAULT_VOYAGE_EMBEDDING_DIM, DEFAULT_VOYAGE_EMBEDDING_MODEL, DEFAULT_VOYAGE_RERANK_MODEL,
     };
@@ -1075,207 +1076,176 @@ pub(crate) mod tests {
         )
     }
 
-    /// Retries an async test body up to `max_attempts` times, re-propagating the last panic
-    /// if all attempts fail. Panics are caught via `catch_unwind` so the test harness is not
-    /// unwound. The future runs directly on the caller's runtime context, so
-    /// `tokio::task::block_in_place` and `!Send` futures (e.g. those using `temp_env`) both work.
-    async fn retry_async<F, Fut>(max_attempts: usize, f: F)
-    where
-        F: Fn() -> Fut,
-        Fut: std::future::Future<Output = ()>,
-    {
-        use futures::FutureExt;
-        assert!(max_attempts > 0, "max_attempts must be greater than 0");
-        for attempt in 1..=max_attempts {
-            let result = std::panic::AssertUnwindSafe(f()).catch_unwind().await;
-            match result {
-                Ok(()) => return,
-                Err(_) if attempt < max_attempts => {
-                    eprintln!("[retry] attempt {attempt}/{max_attempts} failed, retrying...");
-                }
-                Err(e) => std::panic::resume_unwind(e),
-            }
-        }
-    }
-
+    #[retry(3)]
     #[tokio::test(flavor = "multi_thread")]
     #[serial]
     async fn test_embed() {
-        retry_async(3, || async {
-            dotenv::dotenv().ok();
+        dotenv::dotenv().ok();
 
-            let temp_dir = tempfile::tempdir().unwrap();
-            let db_uri = temp_dir
-                .path()
-                .join("lancedb-table")
-                .to_str()
-                .unwrap()
-                .to_string();
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_uri = temp_dir
+            .path()
+            .join("lancedb-table")
+            .to_str()
+            .unwrap()
+            .to_string();
 
-            let mut ctx = create_test_context();
+        let mut ctx = create_test_context();
 
-            // Create `RecordBatch` object to write out
-            let schema = arrow_schema::Schema::new(vec![arrow_schema::Field::new(
-                "pdf_text",
-                arrow_schema::DataType::Utf8,
-                false,
-            )]);
-            let data = StringArray::from(vec!["Hello", "World"]);
-            let record_batch =
-                RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(data)]).unwrap();
+        // Create `RecordBatch` object to write out
+        let schema = arrow_schema::Schema::new(vec![arrow_schema::Field::new(
+            "pdf_text",
+            arrow_schema::DataType::Utf8,
+            false,
+        )]);
+        let data = StringArray::from(vec!["Hello", "World"]);
+        let record_batch =
+            RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(data)]).unwrap();
 
-            // Write out the object to `BATCH_ITER_FILE`
-            let file = File::create(BATCH_ITER_FILE).unwrap();
-            let mut writer = FileWriter::try_new(file, &schema).unwrap();
+        // Write out the object to `BATCH_ITER_FILE`
+        let file = File::create(BATCH_ITER_FILE).unwrap();
+        let mut writer = FileWriter::try_new(file, &schema).unwrap();
 
-            writer.write(&record_batch).unwrap();
-            writer.finish().unwrap();
+        writer.write(&record_batch).unwrap();
+        writer.finish().unwrap();
 
-            // Actually call `embed`
-            let result =
-                temp_env::async_with_vars([("LANCEDB_URI", Some(&db_uri))], embed(&mut ctx, false))
-                    .await;
-            test_ok!(result);
+        // Actually call `embed`
+        let result =
+            temp_env::async_with_vars([("LANCEDB_URI", Some(&db_uri))], embed(&mut ctx, false))
+                .await;
+        test_ok!(result);
 
-            let output = String::from_utf8(ctx.out.into_inner()).unwrap();
-            assert!(output.contains("Successfully parsed library!"));
+        let output = String::from_utf8(ctx.out.into_inner()).unwrap();
+        assert!(output.contains("Successfully parsed library!"));
 
-            let err = String::from_utf8(ctx.err.into_inner()).unwrap();
-            assert!(err.is_empty());
+        let err = String::from_utf8(ctx.err.into_inner()).unwrap();
+        assert!(err.is_empty());
 
-            // Clean up
-            if fs::metadata(BATCH_ITER_FILE).is_ok() {
-                fs::remove_file(BATCH_ITER_FILE).expect("Failed to clean up BATCH_ITER_FILE");
-            }
-        })
-        .await;
+        // Clean up
+        if fs::metadata(BATCH_ITER_FILE).is_ok() {
+            fs::remove_file(BATCH_ITER_FILE).expect("Failed to clean up BATCH_ITER_FILE");
+        }
     }
 
+    #[retry(3)]
     #[tokio::test(flavor = "multi_thread")]
     #[serial]
     async fn test_process() {
-        retry_async(3, || async {
-            dotenv::dotenv().ok();
+        dotenv::dotenv().ok();
 
-            let temp_dir = tempfile::tempdir().unwrap();
-            let db_uri = temp_dir
-                .path()
-                .join("lancedb-table")
-                .to_str()
-                .unwrap()
-                .to_string();
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_uri = temp_dir
+            .path()
+            .join("lancedb-table")
+            .to_str()
+            .unwrap()
+            .to_string();
 
-            let mut ctx = create_test_context();
+        let mut ctx = create_test_context();
 
-            let result = temp_env::async_with_vars(
-                [("CI", Some("true")), ("LANCEDB_URI", Some(&db_uri))],
-                process(&mut ctx),
-            )
-            .await;
-
-            test_ok!(result);
-
-            let output = String::from_utf8(ctx.out.clone().into_inner()).unwrap();
-            assert!(output.contains("Successfully parsed library!"));
-
-            let stats =
-                temp_env::async_with_vars([("LANCEDB_URI", Some(&db_uri))], stats(&mut ctx)).await;
-            let output = String::from_utf8(ctx.out.into_inner()).unwrap();
-            test_ok!(stats);
-            assert!(output.contains("Table statistics:"));
-            assert!(output.contains("Number of rows: 8"));
-
-            // Cleanup
-            if fs::metadata(BATCH_ITER_FILE).is_ok() {
-                fs::remove_file(BATCH_ITER_FILE).expect("Failed to clean up BATCH_ITER_FILE");
-            }
-        })
+        let result = temp_env::async_with_vars(
+            [("CI", Some("true")), ("LANCEDB_URI", Some(&db_uri))],
+            process(&mut ctx),
+        )
         .await;
+
+        test_ok!(result);
+
+        let output = String::from_utf8(ctx.out.clone().into_inner()).unwrap();
+        assert!(output.contains("Successfully parsed library!"));
+
+        let stats =
+            temp_env::async_with_vars([("LANCEDB_URI", Some(&db_uri))], stats(&mut ctx)).await;
+        let output = String::from_utf8(ctx.out.into_inner()).unwrap();
+        test_ok!(stats);
+        assert!(output.contains("Table statistics:"));
+        assert!(output.contains("Number of rows: 8"));
+
+        // Cleanup
+        if fs::metadata(BATCH_ITER_FILE).is_ok() {
+            fs::remove_file(BATCH_ITER_FILE).expect("Failed to clean up BATCH_ITER_FILE");
+        }
     }
 
+    #[retry(3)]
     #[tokio::test(flavor = "multi_thread")]
     #[serial]
     async fn test_search_only() {
-        retry_async(3, || async {
-            dotenv::dotenv().ok();
-            let temp_dir = tempfile::tempdir().unwrap();
-            let db_uri = temp_dir
-                .path()
-                .join("lancedb-table")
-                .to_str()
-                .unwrap()
-                .to_string();
+        dotenv::dotenv().ok();
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_uri = temp_dir
+            .path()
+            .join("lancedb-table")
+            .to_str()
+            .unwrap()
+            .to_string();
 
-            let mut setup_ctx = create_test_context();
+        let mut setup_ctx = create_test_context();
 
-            // `process` needs to be run before `search_for_papers`
-            let result = temp_env::async_with_vars(
-                [("CI", Some("true")), ("LANCEDB_URI", Some(&db_uri))],
-                process(&mut setup_ctx),
-            )
-            .await;
-            test_ok!(result);
-
-            let mut ctx = create_test_context();
-            let result = temp_env::async_with_vars(
-                [("CI", Some("true")), ("LANCEDB_URI", Some(&db_uri))],
-                search_for_papers(
-                    "How should I oversample in defect prediction?".into(),
-                    &mut ctx,
-                ),
-            )
-            .await;
-
-            if let Err(e) = &result {
-                dbg!(e);
-            }
-
-            test_ok!(result);
-
-            let output = String::from_utf8(ctx.out.into_inner()).unwrap();
-            assert!(output.len() > 20);
-        })
+        // `process` needs to be run before `search_for_papers`
+        let result = temp_env::async_with_vars(
+            [("CI", Some("true")), ("LANCEDB_URI", Some(&db_uri))],
+            process(&mut setup_ctx),
+        )
         .await;
+        test_ok!(result);
+
+        let mut ctx = create_test_context();
+        let result = temp_env::async_with_vars(
+            [("CI", Some("true")), ("LANCEDB_URI", Some(&db_uri))],
+            search_for_papers(
+                "How should I oversample in defect prediction?".into(),
+                &mut ctx,
+            ),
+        )
+        .await;
+
+        if let Err(e) = &result {
+            dbg!(e);
+        }
+
+        test_ok!(result);
+
+        let output = String::from_utf8(ctx.out.into_inner()).unwrap();
+        assert!(output.len() > 20);
     }
 
+    #[retry(3)]
     #[tokio::test(flavor = "multi_thread")]
     #[serial]
     async fn test_run_query() {
-        retry_async(3, || async {
-            dotenv::dotenv().ok();
-            let temp_dir = tempfile::tempdir().unwrap();
-            let db_uri = temp_dir
-                .path()
-                .join("lancedb-table")
-                .to_str()
-                .unwrap()
-                .to_string();
+        dotenv::dotenv().ok();
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_uri = temp_dir
+            .path()
+            .join("lancedb-table")
+            .to_str()
+            .unwrap()
+            .to_string();
 
-            let mut setup_ctx = create_test_context();
+        let mut setup_ctx = create_test_context();
 
-            // `process` needs to be run before `run_query`
-            let _ = temp_env::async_with_vars(
-                [("CI", Some("true")), ("LANCEDB_URI", Some(&db_uri))],
-                process(&mut setup_ctx),
-            )
-            .await;
-
-            let mut ctx = create_test_context();
-            let result = temp_env::async_with_vars(
-                [("CI", Some("true")), ("LANCEDB_URI", Some(&db_uri))],
-                run_query(
-                    "How should I oversample in defect prediction?".into(),
-                    &mut ctx,
-                ),
-            )
-            .await;
-
-            test_ok!(result);
-
-            let output = String::from_utf8(ctx.out.into_inner()).unwrap();
-            assert!(output.contains("Total token usage:"));
-        })
+        // `process` needs to be run before `run_query`
+        let _ = temp_env::async_with_vars(
+            [("CI", Some("true")), ("LANCEDB_URI", Some(&db_uri))],
+            process(&mut setup_ctx),
+        )
         .await;
+
+        let mut ctx = create_test_context();
+        let result = temp_env::async_with_vars(
+            [("CI", Some("true")), ("LANCEDB_URI", Some(&db_uri))],
+            run_query(
+                "How should I oversample in defect prediction?".into(),
+                &mut ctx,
+            ),
+        )
+        .await;
+
+        test_ok!(result);
+
+        let output = String::from_utf8(ctx.out.into_inner()).unwrap();
+        assert!(output.contains("Total token usage:"));
     }
 
     #[tokio::test]
@@ -1301,43 +1271,41 @@ pub(crate) mod tests {
         assert!(output.contains("directory does not exist"));
     }
 
+    #[retry(3)]
     #[tokio::test]
     #[serial]
     async fn test_checkhealth_with_database() {
-        retry_async(3, || async {
-            dotenv::dotenv().ok();
+        dotenv::dotenv().ok();
 
-            let temp_dir = tempfile::tempdir().unwrap();
-            let db_uri = temp_dir
-                .path()
-                .join("lancedb-table")
-                .to_str()
-                .unwrap()
-                .to_string();
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_uri = temp_dir
+            .path()
+            .join("lancedb-table")
+            .to_str()
+            .unwrap()
+            .to_string();
 
-            // First create a database by running process
-            let mut setup_ctx = create_test_context();
-            let result = temp_env::async_with_vars(
-                [("CI", Some("true")), ("LANCEDB_URI", Some(&db_uri))],
-                process(&mut setup_ctx),
-            )
-            .await;
-            test_ok!(result);
+        // First create a database by running process
+        let mut setup_ctx = create_test_context();
+        let result = temp_env::async_with_vars(
+            [("CI", Some("true")), ("LANCEDB_URI", Some(&db_uri))],
+            process(&mut setup_ctx),
+        )
+        .await;
+        test_ok!(result);
 
-            // Now run health check
-            let mut ctx = create_test_context();
-            let output = temp_env::async_with_vars([("LANCEDB_URI", Some(&db_uri))], async move {
-                checkhealth(&mut ctx).await;
-                String::from_utf8(ctx.out.into_inner()).unwrap()
-            })
-            .await;
-
-            test_contains!(output, "LanceDB Health Check Results");
-            test_contains!(output, "directory exists");
-            test_contains!(output, "Table is accessible");
-            test_contains!(output, "Table has");
+        // Now run health check
+        let mut ctx = create_test_context();
+        let output = temp_env::async_with_vars([("LANCEDB_URI", Some(&db_uri))], async move {
+            checkhealth(&mut ctx).await;
+            String::from_utf8(ctx.out.into_inner()).unwrap()
         })
         .await;
+
+        test_contains!(output, "LanceDB Health Check Results");
+        test_contains!(output, "directory exists");
+        test_contains!(output, "Table is accessible");
+        test_contains!(output, "Table has");
     }
 
     #[test]
@@ -1428,47 +1396,45 @@ pub(crate) mod tests {
         });
     }
 
+    #[retry(3)]
     #[tokio::test(flavor = "multi_thread")]
     #[serial]
     async fn test_call_returns_results_key() {
-        retry_async(3, || async {
-            dotenv::dotenv().ok();
-            let _ = crate::common::setup_logger(log::LevelFilter::Info);
+        dotenv::dotenv().ok();
+        let _ = crate::common::setup_logger(log::LevelFilter::Info);
 
-            let temp_dir = tempfile::tempdir().unwrap();
-            let db_uri = temp_dir
-                .path()
-                .join("lancedb-table")
-                .to_str()
-                .unwrap()
-                .to_string();
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_uri = temp_dir
+            .path()
+            .join("lancedb-table")
+            .to_str()
+            .unwrap()
+            .to_string();
 
-            let mut setup_ctx = create_test_context();
+        let mut setup_ctx = create_test_context();
 
-            // Create test database with assets data
-            let setup_result = temp_env::async_with_vars(
-                [("CI", Some("true")), ("LANCEDB_URI", Some(&db_uri))],
-                process(&mut setup_ctx),
-            )
-            .await;
-            test_ok!(setup_result);
-
-            // Now test the retrieval tool
-            let tool = make_retrieval_tool("input_schema");
-
-            let result = temp_env::async_with_vars(
-                [("LANCEDB_URI", Some(&db_uri))],
-                tool.call(json!({"query": "machine learning"})),
-            )
-            .await;
-            test_ok!(result);
-
-            let value = result.unwrap();
-            assert!(
-                value.get("results").is_some(),
-                "Expected 'results' key in output, got: {value}"
-            );
-        })
+        // Create test database with assets data
+        let setup_result = temp_env::async_with_vars(
+            [("CI", Some("true")), ("LANCEDB_URI", Some(&db_uri))],
+            process(&mut setup_ctx),
+        )
         .await;
+        test_ok!(setup_result);
+
+        // Now test the retrieval tool
+        let tool = make_retrieval_tool("input_schema");
+
+        let result = temp_env::async_with_vars(
+            [("LANCEDB_URI", Some(&db_uri))],
+            tool.call(json!({"query": "machine learning"})),
+        )
+        .await;
+        test_ok!(result);
+
+        let value = result.unwrap();
+        assert!(
+            value.get("results").is_some(),
+            "Expected 'results' key in output, got: {value}"
+        );
     }
 }
