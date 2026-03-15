@@ -1076,32 +1076,24 @@ pub(crate) mod tests {
     }
 
     /// Retries an async test body up to `max_attempts` times, re-propagating the last panic
-    /// if all attempts fail. Each invocation of `f` runs inside a fresh `LocalSet::run_until` +
-    /// `spawn_local` so that panics (from `assert!`, `test_ok!`, etc.) are caught without
-    /// unwinding the test harness. `!Send` futures (e.g. those using `temp_env`) are supported.
+    /// if all attempts fail. Panics are caught via `catch_unwind` so the test harness is not
+    /// unwound. The future runs directly on the caller's runtime context, so
+    /// `tokio::task::block_in_place` and `!Send` futures (e.g. those using `temp_env`) both work.
     async fn retry_async<F, Fut>(max_attempts: usize, f: F)
     where
         F: Fn() -> Fut,
-        Fut: std::future::Future<Output = ()> + 'static,
+        Fut: std::future::Future<Output = ()>,
     {
+        use futures::FutureExt;
         assert!(max_attempts > 0, "max_attempts must be greater than 0");
         for attempt in 1..=max_attempts {
-            let local = tokio::task::LocalSet::new();
-            let result = local
-                .run_until(async { tokio::task::spawn_local(f()).await })
-                .await;
+            let result = std::panic::AssertUnwindSafe(f()).catch_unwind().await;
             match result {
                 Ok(()) => return,
                 Err(_) if attempt < max_attempts => {
                     eprintln!("[retry] attempt {attempt}/{max_attempts} failed, retrying...");
                 }
-                Err(e) => {
-                    if e.is_panic() {
-                        std::panic::resume_unwind(e.into_panic())
-                    } else {
-                        panic!("test task was cancelled unexpectedly")
-                    }
-                }
+                Err(e) => std::panic::resume_unwind(e),
             }
         }
     }
