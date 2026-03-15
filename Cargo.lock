@@ -7050,6 +7050,7 @@ dependencies = [
  "tokio",
  "toml",
  "zqa-macros",
+ "zqa-macros-proc",
  "zqa-pdftools",
  "zqa-rag",
 ]
@@ -7057,6 +7058,15 @@ dependencies = [
 [[package]]
 name = "zqa-macros"
 version = "0.1.0"
+
+[[package]]
+name = "zqa-macros-proc"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.111",
+]
 
 [[package]]
 name = "zqa-pdftools"

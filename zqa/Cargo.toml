@@ -50,6 +50,7 @@ serial_test = "3.2.0"
 tempfile = "3.24.0"
 zqa-macros.workspace = true
 futures = "0.3"
+zqa-macros-proc.workspace = true
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(tarpaulin)'] }
