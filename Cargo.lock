@@ -7032,6 +7032,7 @@ dependencies = [
  "directories",
  "dotenv",
  "fern",
+ "futures",
  "humantime",
  "indicatif 0.17.11",
  "lancedb",
