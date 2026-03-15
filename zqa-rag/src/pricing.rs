@@ -234,8 +234,9 @@ mod tests {
             output_cost_per_token: 0.000_002,
         };
         let cost = pricing.estimate_cost(0, 1000);
+        let expected = 0.002;
 
-        assert!((cost - 0.002).abs() < f64::EPSILON);
+        assert!((cost - expected).abs() < expected * f64::EPSILON * 10.0);
     }
 
     #[test]
@@ -330,18 +331,34 @@ mod tests {
         // NOTE: This cannot be changed to `_`! That would clean up the tempfile.
         let (_f, opts) = make_cache(SAMPLE_JSON);
         let p = get_model_pricing("openai", "gpt-5.4", Some(opts)).unwrap();
+        let expected_input_cost = 0.000_002_5;
+        let expected_output_cost = 0.00001;
 
-        assert!((p.input_cost_per_token - 0.000_002_5).abs() < f64::EPSILON);
-        assert!((p.output_cost_per_token - 0.00001).abs() < f64::EPSILON);
+        assert!(
+            (p.input_cost_per_token - expected_input_cost).abs()
+                < expected_input_cost * f64::EPSILON * 10.0
+        );
+        assert!(
+            (p.output_cost_per_token - expected_output_cost).abs()
+                < expected_output_cost * f64::EPSILON * 10.0
+        );
     }
 
     #[test]
     fn test_get_pricing_fallback_provider_slash_model_key() {
         let (_f, opts) = make_cache(SAMPLE_JSON);
         let p = get_model_pricing("openrouter", "mistral-7b", Some(opts)).unwrap();
+        let expected_input_cost = 0.000_000_1;
+        let expected_output_cost = 0.000_000_2;
 
-        assert!((p.input_cost_per_token - 0.000_000_1).abs() < f64::EPSILON);
-        assert!((p.output_cost_per_token - 0.000_000_2).abs() < f64::EPSILON);
+        assert!(
+            (p.input_cost_per_token - expected_input_cost).abs()
+                < expected_input_cost * f64::EPSILON * 10.0
+        );
+        assert!(
+            (p.output_cost_per_token - expected_output_cost).abs()
+                < expected_output_cost * f64::EPSILON * 10.0
+        );
     }
 
     #[test]
@@ -359,6 +376,6 @@ mod tests {
         let cost = p.estimate_cost(100, 50);
         let expected = 100.0 * 0.000_002_5 + 50.0 * 0.00001;
 
-        assert!((cost - expected).abs() < f64::EPSILON);
+        assert!((cost - expected).abs() < expected * f64::EPSILON * 10.0);
     }
 }
