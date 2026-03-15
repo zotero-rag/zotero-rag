@@ -6,11 +6,10 @@ use syn::{ItemFn, LitInt, parse_macro_input};
 
 /// Retry an async test function up to `n` times on panic.
 ///
-/// Each attempt runs the function body inside a fresh
-/// `tokio::task::LocalSet` + `spawn_local` pair so that panics from
-/// `assert!`, `test_ok!`, etc. are caught and retried rather than
-/// immediately failing the test. `!Send` futures (e.g. those using
-/// `temp_env`) are supported.
+/// Each attempt runs the function body wrapped in
+/// `futures::FutureExt::catch_unwind` + `std::panic::AssertUnwindSafe` so
+/// that panics from `assert!`, `test_ok!`, etc. are caught and retried rather
+/// than immediately failing the test.
 ///
 /// On the final attempt any panic is re-propagated, failing the test normally.
 ///
@@ -65,18 +64,15 @@ pub fn retry(args: TokenStream, input: TokenStream) -> TokenStream {
             let __max: usize = #max;
             async {
                 for attempt in 1..=__max {
-                    let local = ::tokio::task::LocalSet::new();
-                    let result = local
-                        .run_until(async {
-                            ::tokio::task::spawn_local(async #body).await
-                        })
-                        .await;
+                    let result = ::futures::FutureExt::catch_unwind(
+                        ::std::panic::AssertUnwindSafe(async #body)
+                    ).await;
                     match result {
                         Ok(value) => return value,
                         Err(_) if attempt < __max => {
                             eprintln!("[retry] attempt {attempt}/{__max} failed, retrying...");
                         }
-                        Err(e) => ::std::panic::resume_unwind(e.into_panic()),
+                        Err(e) => ::std::panic::resume_unwind(e),
                     }
                 }
 
