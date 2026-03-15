@@ -85,7 +85,6 @@ impl PricingCacheOptions {
     ///   condition whose existence can neither be confirmed nor denied. See [`std::fs::exists`]
     ///   for details.
     /// * One of the following is true:
-    ///     * `self.ttl` is `None`
     ///     * `self.cache_path` does not exist *at the time of checking*.
     ///     * `self.cache_path` exists *at the time of checking*, and `self.ttl` contains a value
     ///       greater than the time elapsed since the file's last modified time (mtime).
@@ -161,17 +160,16 @@ pub fn get_model_pricing(
     };
 
     if should_fetch {
-        match reqwest::blocking::get(LITELLM_PRICING_URL).and_then(|r| r.bytes()) {
+        match reqwest::blocking::get(LITELLM_PRICING_URL)
+            .and_then(reqwest::blocking::Response::bytes)
+        {
             Ok(bytes) => {
                 if let Err(e) = std::fs::write(&path, &bytes) {
-                    eprintln!("[WARN] Failed to write pricing cache file: {}", e);
+                    eprintln!("[WARN] Failed to write pricing cache file: {e}");
                 }
             }
             Err(e) => {
-                eprintln!(
-                    "[WARN] Failed to fetch pricing file, using cache if available: {}",
-                    e
-                );
+                eprintln!("[WARN] Failed to fetch pricing file, using cache if available: {e}");
             }
         }
     }
@@ -271,7 +269,7 @@ mod tests {
     }
 
     #[test]
-    fn test_should_fetch_no_ttl_existing_file_returns_true() {
+    fn test_should_fetch_no_ttl_existing_file_returns_false() {
         let mut f = NamedTempFile::with_suffix(".json").unwrap();
         f.write_all(b"{}").unwrap();
         let opts = PricingCacheOptions {
