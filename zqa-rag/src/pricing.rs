@@ -191,3 +191,167 @@ pub fn get_model_pricing(
         output_cost_per_token: output_cost,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_estimate_cost_basic() {
+        let pricing = ModelPricing {
+            input_cost_per_token: 0.000_003,
+            output_cost_per_token: 0.000_015,
+        };
+        let cost = pricing.estimate_cost(1000, 500);
+
+        assert!((cost - 0.0105).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_estimate_cost_zero_tokens() {
+        let pricing = ModelPricing {
+            input_cost_per_token: 0.000_003,
+            output_cost_per_token: 0.000_015,
+        };
+
+        assert!(pricing.estimate_cost(0, 0) < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_estimate_cost_output_only() {
+        let pricing = ModelPricing {
+            input_cost_per_token: 0.000_001,
+            output_cost_per_token: 0.000_002,
+        };
+        let cost = pricing.estimate_cost(0, 1000);
+
+        assert!((cost - 0.002).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_should_fetch_no_extension_returns_false() {
+        let opts = PricingCacheOptions {
+            cache_path: PathBuf::from("/tmp/pricingcache_no_ext"),
+            ttl: Some(3600),
+        };
+
+        assert!(!opts.should_fetch());
+    }
+
+    #[test]
+    fn test_should_fetch_non_json_extension_returns_false() {
+        let opts = PricingCacheOptions {
+            cache_path: PathBuf::from("/tmp/pricingcache.txt"),
+            ttl: Some(3600),
+        };
+
+        assert!(!opts.should_fetch());
+    }
+
+    #[test]
+    fn test_should_fetch_nonexistent_file_returns_true() {
+        let opts = PricingCacheOptions {
+            cache_path: PathBuf::from("/tmp/zqa_pricing_does_not_exist_abc123.json"),
+            ttl: Some(3600),
+        };
+
+        assert!(opts.should_fetch());
+    }
+
+    #[test]
+    fn test_should_fetch_no_ttl_existing_file_returns_true() {
+        let mut f = NamedTempFile::with_suffix(".json").unwrap();
+        f.write_all(b"{}").unwrap();
+        let opts = PricingCacheOptions {
+            cache_path: f.path().to_path_buf(),
+            ttl: None,
+        };
+
+        // `ttl=None` means "never re-fetch once exists", but should_fetch returns `true` when `ttl`
+        // is `None`
+        assert!(opts.should_fetch());
+    }
+
+    #[test]
+    fn test_should_fetch_fresh_file_returns_false() {
+        let mut f = NamedTempFile::with_suffix(".json").unwrap();
+        f.write_all(b"{}").unwrap();
+        let opts = PricingCacheOptions {
+            cache_path: f.path().to_path_buf(),
+            ttl: Some(usize::MAX),
+        };
+
+        assert!(!opts.should_fetch());
+    }
+
+    const SAMPLE_JSON: &str = r#"{
+        "gpt-5.4": {
+            "input_cost_per_token": 0.0000025,
+            "output_cost_per_token": 0.00001
+        },
+        "openrouter/mistral-7b": {
+            "input_cost_per_token": 0.0000001,
+            "output_cost_per_token": 0.0000002
+        }
+    }"#;
+
+    /// Write `json` to a fresh `.json` tempfile and return cache options that will
+    /// never trigger a re-fetch (ttl = usize::MAX on a file that was just written).
+    fn make_cache(json: &str) -> (NamedTempFile, PricingCacheOptions) {
+        let mut f = NamedTempFile::with_suffix(".json").unwrap();
+        f.write_all(json.as_bytes()).unwrap();
+        let path = f.path().to_path_buf();
+        let opts = PricingCacheOptions {
+            cache_path: path,
+            ttl: Some(usize::MAX),
+        };
+        (f, opts)
+    }
+
+    #[test]
+    fn test_get_pricing_ollama_returns_zero() {
+        let (_, opts) = make_cache(SAMPLE_JSON);
+        let p = get_model_pricing("ollama", "llama3.2", Some(opts)).unwrap();
+
+        assert!(p.input_cost_per_token < f64::EPSILON);
+        assert!(p.output_cost_per_token < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_get_pricing_known_model() {
+        let (_, opts) = make_cache(SAMPLE_JSON);
+        let p = get_model_pricing("openai", "gpt-5.4", Some(opts)).unwrap();
+
+        assert!((p.input_cost_per_token - 0.000_002_5).abs() < f64::EPSILON);
+        assert!((p.output_cost_per_token - 0.00001).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_get_pricing_fallback_provider_slash_model_key() {
+        let (_, opts) = make_cache(SAMPLE_JSON);
+        let p = get_model_pricing("openrouter", "mistral-7b", Some(opts)).unwrap();
+
+        assert!((p.input_cost_per_token - 0.000_000_1).abs() < f64::EPSILON);
+        assert!((p.output_cost_per_token - 0.000_000_2).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_get_pricing_unknown_model_returns_none() {
+        let (_, opts) = make_cache(SAMPLE_JSON);
+        let result = get_model_pricing("openai", "foobar", Some(opts));
+
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_get_pricing_estimate_round_trip() {
+        let (_, opts) = make_cache(SAMPLE_JSON);
+        let p = get_model_pricing("openai", "gpt-5.4", Some(opts)).unwrap();
+        let cost = p.estimate_cost(100, 50);
+        let expected = 100.0 * 0.000_002_5 + 50.0 * 0.00001;
+
+        assert!((cost - expected).abs() < f64::EPSILON);
+    }
+}
