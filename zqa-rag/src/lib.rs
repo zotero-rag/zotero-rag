@@ -39,4 +39,5 @@ pub mod config;
 pub mod constants;
 pub mod embedding;
 pub mod llm;
+pub mod pricing;
 pub mod vector;
