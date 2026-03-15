@@ -75,8 +75,6 @@ pub fn retry(args: TokenStream, input: TokenStream) -> TokenStream {
                         Err(e) => ::std::panic::resume_unwind(e),
                     }
                 }
-
-                unreachable!();
             }
             .await;
             unreachable!()
