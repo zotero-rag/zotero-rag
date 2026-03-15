@@ -1095,7 +1095,13 @@ pub(crate) mod tests {
                 Err(_) if attempt < max_attempts => {
                     eprintln!("[retry] attempt {attempt}/{max_attempts} failed, retrying...");
                 }
-                Err(e) => std::panic::resume_unwind(e.into_panic()),
+                Err(e) => {
+                    if e.is_panic() {
+                        std::panic::resume_unwind(e.into_panic())
+                    } else {
+                        panic!("test task was cancelled unexpectedly")
+                    }
+                }
             }
         }
     }
