@@ -1133,11 +1133,9 @@ pub(crate) mod tests {
             writer.finish().unwrap();
 
             // Actually call `embed`
-            let result = temp_env::async_with_vars(
-                [("LANCEDB_URI", Some(&db_uri))],
-                embed(&mut ctx, false),
-            )
-            .await;
+            let result =
+                temp_env::async_with_vars([("LANCEDB_URI", Some(&db_uri))], embed(&mut ctx, false))
+                    .await;
             test_ok!(result);
 
             let output = String::from_utf8(ctx.out.into_inner()).unwrap();
@@ -1182,8 +1180,7 @@ pub(crate) mod tests {
             assert!(output.contains("Successfully parsed library!"));
 
             let stats =
-                temp_env::async_with_vars([("LANCEDB_URI", Some(&db_uri))], stats(&mut ctx))
-                    .await;
+                temp_env::async_with_vars([("LANCEDB_URI", Some(&db_uri))], stats(&mut ctx)).await;
             let output = String::from_utf8(ctx.out.into_inner()).unwrap();
             test_ok!(stats);
             assert!(output.contains("Table statistics:"));
@@ -1330,12 +1327,11 @@ pub(crate) mod tests {
 
             // Now run health check
             let mut ctx = create_test_context();
-            let output =
-                temp_env::async_with_vars([("LANCEDB_URI", Some(&db_uri))], async move {
-                    checkhealth(&mut ctx).await;
-                    String::from_utf8(ctx.out.into_inner()).unwrap()
-                })
-                .await;
+            let output = temp_env::async_with_vars([("LANCEDB_URI", Some(&db_uri))], async move {
+                checkhealth(&mut ctx).await;
+                String::from_utf8(ctx.out.into_inner()).unwrap()
+            })
+            .await;
 
             test_contains!(output, "LanceDB Health Check Results");
             test_contains!(output, "directory exists");
