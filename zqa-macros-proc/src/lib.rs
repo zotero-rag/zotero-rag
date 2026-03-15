@@ -43,16 +43,6 @@ pub fn retry(args: TokenStream, input: TokenStream) -> TokenStream {
         Err(e) => return e.to_compile_error().into(),
     };
 
-    match max.base10_parse::<usize>() {
-        Ok(val) if val > 0 => (),
-        Ok(_) => {
-            return syn::Error::new(max.span(), "#[retry(n)]: n must be a positive integer")
-                .to_compile_error()
-                .into();
-        }
-        Err(e) => return e.to_compile_error().into(),
-    };
-
     let func = parse_macro_input!(input as ItemFn);
 
     if func.sig.asyncness.is_none() {
