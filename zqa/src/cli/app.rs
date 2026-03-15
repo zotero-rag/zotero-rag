@@ -1091,7 +1091,7 @@ pub(crate) mod tests {
                 .await;
             match result {
                 Ok(()) => return,
-                Err(e) if attempt < max_attempts => {
+                Err(_) if attempt < max_attempts => {
                     eprintln!("[retry] attempt {attempt}/{max_attempts} failed, retrying...");
                 }
                 Err(e) => std::panic::resume_unwind(e.into_panic()),
