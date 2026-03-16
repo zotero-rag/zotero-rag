@@ -166,8 +166,8 @@ pub(crate) struct OpenAIRequestToolResultInputItem {
     r#type: String,
     /// The tool call ID this is a result for.
     call_id: String,
-    /// The tool output value.
-    output: serde_json::Value,
+    /// The tool output value, JSON-encoded as a string per the Responses API spec.
+    output: String,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -218,7 +218,8 @@ impl From<&ChatHistoryItem> for Vec<OpenAIRequestInput> {
                     OpenAIRequestInput::ToolResult(OpenAIRequestToolResultInputItem {
                         call_id: res.id.clone(),
                         r#type: "function_call_output".into(),
-                        output: res.result.clone(),
+                        output: serde_json::to_string(&res.result)
+                            .unwrap_or_else(|_| "null".to_string()),
                     })
                 }
             })
@@ -399,7 +400,8 @@ async fn process_openai_tool_calls(
                         OpenAIRequestToolResultInputItem {
                             r#type: "function_call_output".into(),
                             call_id: tool_call_id,
-                            output: tool_result,
+                            output: serde_json::to_string(&tool_result)
+                                .unwrap_or_else(|_| "null".to_string()),
                         },
                     )),
                 ))
