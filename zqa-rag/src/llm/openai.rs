@@ -218,8 +218,12 @@ impl From<&ChatHistoryItem> for Vec<OpenAIRequestInput> {
                     OpenAIRequestInput::ToolResult(OpenAIRequestToolResultInputItem {
                         call_id: res.id.clone(),
                         r#type: "function_call_output".into(),
-                        output: serde_json::to_string(&res.result)
-                            .unwrap_or_else(|_| "null".to_string()),
+                        output: if let Some(s) = res.result.as_str() {
+                            s.to_string()
+                        } else {
+                            serde_json::to_string(&res.result)
+                                .unwrap_or_else(|_| "null".to_string())
+                        },
                     })
                 }
             })
@@ -400,8 +404,12 @@ async fn process_openai_tool_calls(
                         OpenAIRequestToolResultInputItem {
                             r#type: "function_call_output".into(),
                             call_id: tool_call_id,
-                            output: serde_json::to_string(&tool_result)
-                                .unwrap_or_else(|_| "null".to_string()),
+                            output: if let Some(s) = tool_result.as_str() {
+                                s.to_string()
+                            } else {
+                                serde_json::to_string(&tool_result)
+                                    .unwrap_or_else(|_| "null".to_string())
+                            },
                         },
                     )),
                 ))
