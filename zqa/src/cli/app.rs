@@ -573,7 +573,14 @@ async fn run_query<O: Write, E: Write>(
 
     // Invariant: by this point, `generation_model_name` cannot be `None`.
     let generation_model_name = generation_model_name.unwrap_or_default();
-    let pricing = get_model_pricing(&model_provider, &generation_model_name, None);
+    let pricing = {
+        let mp = model_provider.clone();
+        let gmn = generation_model_name.clone();
+        tokio::task::spawn_blocking(move || get_model_pricing(&mp, &gmn, None))
+            .await
+            .ok()
+            .flatten()
+    };
 
     match result {
         Ok(response) => {
