@@ -490,7 +490,6 @@ async fn run_query<O: Write, E: Write>(
         .unwrap_or_else(|| get_client_by_provider(&model_provider).unwrap());
 
     let generation_model_name = ctx.config.get_generation_model_name();
-    let _embedding_model_name = ctx.config.get_embedding_model_name();
 
     let embedding_config = ctx
         .config
@@ -651,21 +650,21 @@ async fn run_query<O: Write, E: Write>(
         format_number(total_output_tokens)
     )?;
 
-    match &pricing {
-        Some(p) if p.estimate_cost(total_input_tokens, total_output_tokens) > 0.0 => {
-            let cost = p.estimate_cost(total_input_tokens, total_output_tokens);
+    if let Some(p) = &pricing {
+        let cost = p.estimate_cost(total_input_tokens, total_output_tokens);
+        if cost > 0.0 {
             writeln!(
                 &mut ctx.out,
                 "\t{DIM_TEXT}Estimated cost: ${cost:.4} ({generation_model_name}){RESET}"
             )?;
         }
-        _ => {}
     }
     let session_cost = ctx.state.session_cost.load(atomic::Ordering::Relaxed);
     if session_cost > 0 {
+        let session_cost_dollars = session_cost as f64 / 100.0;
         writeln!(
             &mut ctx.out,
-            "\t{DIM_TEXT}Session cost:   ${session_cost:.4}{RESET}"
+            "\t{DIM_TEXT}Session cost:   ${session_cost_dollars:.4}{RESET}"
         )?;
     }
     writeln!(&mut ctx.out)?;

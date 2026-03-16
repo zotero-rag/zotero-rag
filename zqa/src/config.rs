@@ -302,25 +302,23 @@ impl Config {
 
     #[must_use]
     pub fn get_embedding_model_name(&self) -> Option<String> {
-        match self.get_embedding_config() {
-            None => None,
-            Some(EmbeddingProviderConfig::OpenAI(cfg)) => Some(cfg.embedding_model.clone()),
-            Some(EmbeddingProviderConfig::Gemini(cfg)) => Some(cfg.embedding_model.clone()),
-            Some(EmbeddingProviderConfig::VoyageAI(cfg)) => Some(cfg.embedding_model.clone()),
-            Some(EmbeddingProviderConfig::Cohere(cfg)) => Some(cfg.embedding_model.clone()),
-        }
+        self.get_embedding_config().map(|config| match config {
+            EmbeddingProviderConfig::OpenAI(cfg) => cfg.embedding_model,
+            EmbeddingProviderConfig::Gemini(cfg) => cfg.embedding_model,
+            EmbeddingProviderConfig::VoyageAI(cfg) => cfg.embedding_model,
+            EmbeddingProviderConfig::Cohere(cfg) => cfg.embedding_model,
+        })
     }
 
     #[must_use]
     pub fn get_generation_model_name(&self) -> Option<String> {
-        match self.get_generation_config() {
-            None => None,
-            Some(LLMClientConfig::Anthropic(cfg)) => Some(cfg.model.clone()),
-            Some(LLMClientConfig::Ollama(cfg)) => Some(cfg.model.clone()),
-            Some(LLMClientConfig::OpenAI(cfg)) => Some(cfg.model.clone()),
-            Some(LLMClientConfig::Gemini(cfg)) => Some(cfg.model.clone()),
-            Some(LLMClientConfig::OpenRouter(cfg)) => Some(cfg.model.clone()),
-        }
+        self.get_generation_config().map(|config| match config {
+            LLMClientConfig::Anthropic(cfg) => cfg.model,
+            LLMClientConfig::Ollama(cfg) => cfg.model,
+            LLMClientConfig::OpenAI(cfg) => cfg.model,
+            LLMClientConfig::Gemini(cfg) => cfg.model,
+            LLMClientConfig::OpenRouter(cfg) => cfg.model,
+        })
     }
 
     #[must_use]
