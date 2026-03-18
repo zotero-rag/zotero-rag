@@ -756,6 +756,16 @@ mod tests {
 
     use super::*;
 
+    fn get_test_openai_embedding_config() -> EmbeddingProviderConfig {
+        EmbeddingProviderConfig::OpenAI(OpenAIConfig {
+            api_key: env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY not set"),
+            model: DEFAULT_OPENAI_MODEL.into(),
+            max_tokens: 8192,
+            embedding_model: DEFAULT_OPENAI_EMBEDDING_MODEL.into(),
+            embedding_dims: DEFAULT_OPENAI_EMBEDDING_DIM as usize,
+        })
+    }
+
     #[tokio::test]
     #[serial]
     async fn test_create_initial_table_with_openai() {
@@ -768,18 +778,13 @@ mod tests {
         )]);
         let data = StringArray::from(vec!["Hello", "World"]);
         let record_batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(data)]).unwrap();
-        let batches = vec![record_batch.clone()];
+        let batches = vec![record_batch];
 
+        let embedding_config = get_test_openai_embedding_config();
         let db = insert_records(
             batches,
             None,
-            &EmbeddingProviderConfig::OpenAI(OpenAIConfig {
-                api_key: env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY not set"),
-                model: DEFAULT_OPENAI_MODEL.into(),
-                max_tokens: 8192,
-                embedding_model: DEFAULT_OPENAI_EMBEDDING_MODEL.into(),
-                embedding_dims: DEFAULT_OPENAI_EMBEDDING_DIM as usize,
-            }),
+            &embedding_config,
             EmbeddingDefinition::new(
                 "data_openai",      // source column
                 "openai",           // embedding name, either "openai" or "anthropic"
@@ -829,7 +834,7 @@ mod tests {
         )]);
         let data = StringArray::from(vec!["Hello", "World"]);
         let record_batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(data)]).unwrap();
-        let batches = vec![record_batch.clone()];
+        let batches = vec![record_batch];
 
         let db = insert_records(
             batches,
@@ -885,18 +890,13 @@ mod tests {
         )]);
         let data = StringArray::from(vec!["Hello", "World"]);
         let record_batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(data)]).unwrap();
-        let batches = vec![record_batch.clone()];
+        let batches = vec![record_batch];
 
+        let embedding_config = get_test_openai_embedding_config();
         let db = insert_records(
             batches,
             None,
-            &EmbeddingProviderConfig::OpenAI(OpenAIConfig {
-                api_key: String::new(),
-                model: String::new(),
-                embedding_dims: DEFAULT_OPENAI_EMBEDDING_DIM as usize,
-                embedding_model: DEFAULT_OPENAI_EMBEDDING_MODEL.into(),
-                max_tokens: 8192,
-            }),
+            &embedding_config,
             EmbeddingDefinition::new("data", "invalid", Some("embeddings")),
         )
         .await;
@@ -921,18 +921,13 @@ mod tests {
             vec![Arc::new(id_data), Arc::new(content_data)],
         )
         .unwrap();
-        let batches = vec![record_batch.clone()];
+        let batches = vec![record_batch];
 
+        let embedding_config = get_test_openai_embedding_config();
         let _db = insert_records(
             batches,
             None,
-            &EmbeddingProviderConfig::OpenAI(OpenAIConfig {
-                api_key: env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY not set"),
-                model: DEFAULT_OPENAI_MODEL.into(),
-                max_tokens: 8192,
-                embedding_model: DEFAULT_OPENAI_EMBEDDING_MODEL.into(),
-                embedding_dims: DEFAULT_OPENAI_EMBEDDING_DIM as usize,
-            }),
+            &embedding_config,
             EmbeddingDefinition::new("content", "openai", Some("embeddings")),
         )
         .await
@@ -977,18 +972,13 @@ mod tests {
             vec![Arc::new(category_data), Arc::new(item_data)],
         )
         .unwrap();
-        let batches = vec![record_batch.clone()];
+        let batches = vec![record_batch];
 
+        let embedding_config = get_test_openai_embedding_config();
         let _db = insert_records(
             batches,
             None,
-            &EmbeddingProviderConfig::OpenAI(OpenAIConfig {
-                api_key: env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY not set"),
-                model: DEFAULT_OPENAI_MODEL.into(),
-                max_tokens: 8192,
-                embedding_model: DEFAULT_OPENAI_EMBEDDING_MODEL.into(),
-                embedding_dims: DEFAULT_OPENAI_EMBEDDING_DIM as usize,
-            }),
+            &embedding_config,
             EmbeddingDefinition::new("item", "openai", Some("embeddings")),
         )
         .await
@@ -1031,8 +1021,6 @@ mod tests {
         let values = vec!["'; DROP TABLE data; --"];
         let result = search_by_column("category", &values).await;
         test_ok!(result);
-        // Should not crash and return empty results
-        assert!(result.is_ok());
     }
 
     #[tokio::test]
@@ -1056,16 +1044,11 @@ mod tests {
         )
         .unwrap();
 
+        let embedding_config = get_test_openai_embedding_config();
         let _db = insert_records(
             vec![record_batch],
             None,
-            &EmbeddingProviderConfig::OpenAI(OpenAIConfig {
-                api_key: env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY not set"),
-                model: DEFAULT_OPENAI_MODEL.into(),
-                max_tokens: 8192,
-                embedding_model: DEFAULT_OPENAI_EMBEDDING_MODEL.into(),
-                embedding_dims: DEFAULT_OPENAI_EMBEDDING_DIM as usize,
-            }),
+            &embedding_config,
             EmbeddingDefinition::new("text", "openai", Some("embeddings")),
         )
         .await
@@ -1098,14 +1081,7 @@ mod tests {
         )
         .unwrap();
 
-        let embedding_config = EmbeddingProviderConfig::OpenAI(OpenAIConfig {
-            api_key: env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY not set"),
-            model: DEFAULT_OPENAI_MODEL.into(),
-            max_tokens: 8192,
-            embedding_model: DEFAULT_OPENAI_EMBEDDING_MODEL.into(),
-            embedding_dims: DEFAULT_OPENAI_EMBEDDING_DIM as usize,
-        });
-
+        let embedding_config = get_test_openai_embedding_config();
         let _db = insert_records(
             vec![record_batch],
             None,
@@ -1144,14 +1120,7 @@ mod tests {
         )
         .unwrap();
 
-        let embedding_config = EmbeddingProviderConfig::OpenAI(OpenAIConfig {
-            api_key: env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY not set"),
-            model: DEFAULT_OPENAI_MODEL.into(),
-            max_tokens: 8192,
-            embedding_model: DEFAULT_OPENAI_EMBEDDING_MODEL.into(),
-            embedding_dims: DEFAULT_OPENAI_EMBEDDING_DIM as usize,
-        });
-
+        let embedding_config = get_test_openai_embedding_config();
         let _db = insert_records(
             vec![record_batch],
             None,
@@ -1183,14 +1152,7 @@ mod tests {
         )
         .unwrap();
 
-        let embedding_config = EmbeddingProviderConfig::OpenAI(OpenAIConfig {
-            api_key: env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY not set"),
-            model: DEFAULT_OPENAI_MODEL.into(),
-            max_tokens: 8192,
-            embedding_model: DEFAULT_OPENAI_EMBEDDING_MODEL.into(),
-            embedding_dims: DEFAULT_OPENAI_EMBEDDING_DIM as usize,
-        });
-
+        let embedding_config = get_test_openai_embedding_config();
         let _db = insert_records(
             vec![record_batch],
             None,
