@@ -7,7 +7,7 @@ use crate::tools::summarization::SummarizationTool;
 use crate::utils::arrow::{DbFields, get_schema, library_to_arrow, vector_search};
 use crate::utils::library::{ZoteroItem, ZoteroItemSet, get_authors, get_new_library_items};
 use crate::utils::rag::ModelResponse;
-use arrow_array::{self, RecordBatch, RecordBatchIterator, StringArray};
+use arrow_array::{self, RecordBatch, StringArray};
 use arrow_schema::Schema;
 use chrono::Local;
 use lancedb::embeddings::EmbeddingDefinition;
@@ -70,8 +70,8 @@ async fn embed<O: Write, E: Write>(
     let file = File::open(BATCH_ITER_FILE)?;
     let reader = FileReader::try_new(file, None)?;
 
-    let mut batches = Vec::<Result<RecordBatch, arrow_schema::ArrowError>>::new();
-    for batch in reader {
+    let mut batches = Vec::<RecordBatch>::new();
+    for batch in reader.flatten() {
         batches.push(batch);
     }
 
@@ -86,12 +86,8 @@ async fn embed<O: Write, E: Write>(
     let n_batches = batches.len();
 
     // All batches should have the same schema, so we use the first batch
-    let first_batch = batches
-        .first()
-        .ok_or(CLIError::MalformedBatchError)?
-        .as_ref()?;
-    let schema = first_batch.schema();
-    let batch_iter = RecordBatchIterator::new(batches.into_iter(), schema);
+    let first_batch = batches.first().ok_or(CLIError::MalformedBatchError)?;
+    let _schema = first_batch.schema();
 
     write!(ctx.out, "Successfully loaded {n_batches} batch")?;
 
@@ -102,7 +98,7 @@ async fn embed<O: Write, E: Write>(
 
     let embedding_provider = &ctx.config.embedding_provider;
     let db = insert_records(
-        batch_iter,
+        batches,
         Some(&[DbFields::LibraryKey.as_ref()]),
         &ctx.config
             .get_embedding_config()
@@ -219,12 +215,10 @@ async fn fix_zero_embeddings<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Res
     )
     .await?;
 
-    let batches = vec![Ok(nonempty_zero_subset_batch.clone())];
-    let batch_iter =
-        RecordBatchIterator::new(batches.into_iter(), nonempty_zero_subset_batch.schema());
+    let batches = vec![nonempty_zero_subset_batch.clone()];
 
     insert_records(
-        batch_iter,
+        batches,
         Some(&[DbFields::LibraryKey.as_ref()]),
         &ctx.config
             .get_embedding_config()
@@ -357,8 +351,7 @@ pub(crate) async fn process<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Resu
 
     let record_batch = full_library_to_arrow(&ctx.config, None, None).await?;
     let schema = record_batch.schema();
-    let batches = vec![Ok(record_batch.clone())];
-    let batch_iter = RecordBatchIterator::new(batches.into_iter(), schema.clone());
+    let batches = vec![record_batch.clone()];
 
     // Write to binary file using Arrow IPC format
     let file = File::create(BATCH_ITER_FILE)?;
@@ -369,7 +362,7 @@ pub(crate) async fn process<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Resu
 
     let embedding_provider = ctx.config.embedding_provider.as_str();
     let result = insert_records(
-        batch_iter,
+        batches,
         Some(&[DbFields::LibraryKey.as_ref()]),
         &ctx.config
             .get_embedding_config()
