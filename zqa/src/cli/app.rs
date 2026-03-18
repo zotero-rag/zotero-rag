@@ -71,8 +71,8 @@ async fn embed<O: Write, E: Write>(
     let reader = FileReader::try_new(file, None)?;
 
     let mut batches = Vec::<RecordBatch>::new();
-    for batch in reader.flatten() {
-        batches.push(batch);
+    for batch in reader {
+        batches.push(batch?);
     }
 
     if batches.is_empty() {
@@ -84,10 +84,6 @@ async fn embed<O: Write, E: Write>(
     }
 
     let n_batches = batches.len();
-
-    // All batches should have the same schema, so we use the first batch
-    let first_batch = batches.first().ok_or(CLIError::MalformedBatchError)?;
-    let _schema = first_batch.schema();
 
     write!(ctx.out, "Successfully loaded {n_batches} batch")?;
 
