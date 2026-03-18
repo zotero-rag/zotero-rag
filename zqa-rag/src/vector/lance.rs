@@ -1205,9 +1205,13 @@ mod tests {
             arrow_schema::Field::new("nonexistent_by", arrow_schema::DataType::Utf8, false),
             arrow_schema::Field::new("nonexistent_key", arrow_schema::DataType::Utf8, false),
         ]);
-        let deleted =
-            dedup_rows(&embedding_config, missing_schema, "nonexistent_by", "nonexistent_key")
-                .await;
+        let deleted = dedup_rows(
+            &embedding_config,
+            missing_schema,
+            "nonexistent_by",
+            "nonexistent_key",
+        )
+        .await;
         test_ok!(deleted);
         test_eq!(deleted.unwrap(), 0);
     }
