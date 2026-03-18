@@ -24,7 +24,7 @@ use lancedb::{
     query::QueryBase,
 };
 use std::collections::HashSet;
-use std::{fmt::Display, path::PathBuf, sync::Arc, time::Instant, vec::IntoIter};
+use std::{fmt::Display, path::PathBuf, sync::Arc, time::Instant};
 use thiserror::Error;
 
 // NOTE: Maintainers: ensure that `DB_URI` begins with `TABLE_NAME`
@@ -626,7 +626,7 @@ pub async fn search_by_column(
 /// # Errors
 /// Returns a `LanceError` if connection, table creation, or registering embedding functions fails
 pub async fn insert_records(
-    data: RecordBatchIterator<IntoIter<Result<RecordBatch, ArrowError>>>,
+    data: Vec<RecordBatch>,
     merge_on: Option<&[&str]>,
     embedding_config: &EmbeddingProviderConfig,
     embedding_params: EmbeddingDefinition,
@@ -635,6 +635,7 @@ pub async fn insert_records(
 
     if lancedb_exists().await
         && let Some(merge_on) = merge_on
+        && let Some(first_batch) = data.first()
     {
         // Add rows if they don't already exist
         let tbl = db
@@ -643,10 +644,16 @@ pub async fn insert_records(
             .await
             .map_err(|e| LanceError::TableUpdateError(e.to_string()))?;
 
+        let schema = first_batch.schema();
+
+        let reader = RecordBatchIterator::new(
+            data.into_iter().map(std::result::Result::Ok),
+            schema.clone(),
+        );
         tbl.merge_insert(merge_on)
             .when_not_matched_insert_all()
             .clone()
-            .execute(Box::new(data))
+            .execute(Box::new(reader))
             .await
             .map_err(|e| LanceError::TableUpdateError(e.to_string()))?;
     } else {
@@ -678,7 +685,7 @@ pub async fn insert_records(
 /// # Errors
 /// Returns a `LanceError` if backup creation, database operations, or restoration fails
 pub async fn insert_records_with_backup(
-    data: RecordBatchIterator<IntoIter<Result<RecordBatch, ArrowError>>>,
+    data: Vec<RecordBatch>,
     merge_on: Option<&[&str]>,
     embedding_config: &EmbeddingProviderConfig,
     embedding_params: EmbeddingDefinition,
@@ -761,11 +768,10 @@ mod tests {
         )]);
         let data = StringArray::from(vec!["Hello", "World"]);
         let record_batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(data)]).unwrap();
-        let batches = vec![Ok(record_batch.clone())];
-        let reader = RecordBatchIterator::new(batches.into_iter(), record_batch.schema());
+        let batches = vec![record_batch.clone()];
 
         let db = insert_records(
-            reader,
+            batches,
             None,
             &EmbeddingProviderConfig::OpenAI(OpenAIConfig {
                 api_key: env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY not set"),
@@ -823,11 +829,10 @@ mod tests {
         )]);
         let data = StringArray::from(vec!["Hello", "World"]);
         let record_batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(data)]).unwrap();
-        let batches = vec![Ok(record_batch.clone())];
-        let reader = RecordBatchIterator::new(batches.into_iter(), record_batch.schema());
+        let batches = vec![record_batch.clone()];
 
         let db = insert_records(
-            reader,
+            batches,
             None,
             &EmbeddingProviderConfig::VoyageAI(VoyageAIConfig {
                 embedding_model: DEFAULT_VOYAGE_EMBEDDING_MODEL.into(),
@@ -880,11 +885,10 @@ mod tests {
         )]);
         let data = StringArray::from(vec!["Hello", "World"]);
         let record_batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(data)]).unwrap();
-        let batches = vec![Ok(record_batch.clone())];
-        let reader = RecordBatchIterator::new(batches.into_iter(), record_batch.schema());
+        let batches = vec![record_batch.clone()];
 
         let db = insert_records(
-            reader,
+            batches,
             None,
             &EmbeddingProviderConfig::OpenAI(OpenAIConfig {
                 api_key: String::new(),
@@ -917,11 +921,10 @@ mod tests {
             vec![Arc::new(id_data), Arc::new(content_data)],
         )
         .unwrap();
-        let batches = vec![Ok(record_batch.clone())];
-        let reader = RecordBatchIterator::new(batches.into_iter(), record_batch.schema());
+        let batches = vec![record_batch.clone()];
 
         let _db = insert_records(
-            reader,
+            batches,
             None,
             &EmbeddingProviderConfig::OpenAI(OpenAIConfig {
                 api_key: env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY not set"),
@@ -974,11 +977,10 @@ mod tests {
             vec![Arc::new(category_data), Arc::new(item_data)],
         )
         .unwrap();
-        let batches = vec![Ok(record_batch.clone())];
-        let reader = RecordBatchIterator::new(batches.into_iter(), record_batch.schema());
+        let batches = vec![record_batch.clone()];
 
         let _db = insert_records(
-            reader,
+            batches,
             None,
             &EmbeddingProviderConfig::OpenAI(OpenAIConfig {
                 api_key: env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY not set"),
