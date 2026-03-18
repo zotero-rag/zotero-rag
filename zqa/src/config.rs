@@ -121,6 +121,27 @@ pub struct Config {
     pub openrouter: Option<OpenRouterConfig>,
 }
 
+impl Display for Config {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let redacted_self = self.redacted();
+        f.write_str(&format!("{redacted_self:#?}"))
+    }
+}
+
+fn redact(secret: Option<&String>) -> Option<String> {
+    secret.map(|s| {
+        let len = s.len();
+        if len >= 4
+            && let Some((head, _)) = s.split_at_checked(2)
+            && let Some((_, tail)) = s.split_at_checked(len - 2)
+        {
+            return Some(format!("{head}***{tail}"));
+        }
+
+        Some("***".into())
+    })?
+}
+
 impl Config {
     /// Load configuration from a TOML file
     ///
@@ -319,6 +340,38 @@ impl Config {
             LLMClientConfig::Gemini(cfg) => cfg.model,
             LLMClientConfig::OpenRouter(cfg) => cfg.model,
         })
+    }
+
+    /// Return the configuration object with all API keys redacted.
+    #[must_use]
+    pub fn redacted(&self) -> Self {
+        let mut clone = self.clone();
+
+        if let Some(cfg) = clone.anthropic.as_mut() {
+            cfg.api_key = redact(cfg.api_key.as_ref());
+        }
+
+        if let Some(cfg) = clone.openai.as_mut() {
+            cfg.api_key = redact(cfg.api_key.as_ref());
+        }
+
+        if let Some(cfg) = clone.gemini.as_mut() {
+            cfg.api_key = redact(cfg.api_key.as_ref());
+        }
+
+        if let Some(cfg) = clone.openrouter.as_mut() {
+            cfg.api_key = redact(cfg.api_key.as_ref());
+        }
+
+        if let Some(cfg) = clone.voyageai.as_mut() {
+            cfg.api_key = redact(cfg.api_key.as_ref());
+        }
+
+        if let Some(cfg) = clone.cohere.as_mut() {
+            cfg.api_key = redact(cfg.api_key.as_ref());
+        }
+
+        clone
     }
 
     #[must_use]

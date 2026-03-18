@@ -921,6 +921,9 @@ pub(crate) async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<()
                             writeln!(&mut ctx.err, "Error resuming conversation: {e}")?;
                         }
                     }
+                    "/config" => {
+                        writeln!(&mut ctx.out, "{}", ctx.config)?;
+                    }
                     "/quit" | "/exit" | "quit" | "exit" | "/new" => {
                         if ctx.state.dirty.load(atomic::Ordering::Relaxed) {
                             let chat_history = Arc::clone(&ctx.state.chat_history);
