@@ -238,7 +238,7 @@ async fn get_db_with_embeddings(
 }
 
 /// Given a `RecordBatch` of items, delete records in the database where the `key` matches. Note
-/// that they `key` has to exist in the schema in both `rows` and the database.
+/// that the `key` has to exist in the schema in both `rows` and the database.
 ///
 /// # Arguments:
 ///
