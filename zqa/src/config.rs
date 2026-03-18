@@ -123,23 +123,21 @@ pub struct Config {
 
 impl Display for Config {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let redacted_self = self.redacted();
-        f.write_str(&format!("{redacted_self:#?}"))
+        write!(f, "{:#?}", self.redacted())
     }
 }
 
 fn redact(secret: Option<&String>) -> Option<String> {
-    secret.map(|s| {
-        let len = s.len();
-        if len >= 4
-            && let Some((head, _)) = s.split_at_checked(2)
-            && let Some((_, tail)) = s.split_at_checked(len - 2)
-        {
-            return Some(format!("{head}***{tail}"));
-        }
+    let s = secret?;
+    let len = s.len();
+    if len >= 4
+        && let Some((head, _)) = s.split_at_checked(2)
+        && let Some((_, tail)) = s.split_at_checked(len - 2)
+    {
+        return Some(format!("{head}***{tail}"));
+    }
 
-        Some("***".into())
-    })?
+    Some("***".into())
 }
 
 impl Config {
@@ -885,6 +883,142 @@ mod tests {
         test_eq!(config.model_provider, "openai");
         test_eq!(config.embedding_provider, "voyageai"); // default
         test_eq!(config.max_concurrent_requests, 5); // default
+    }
+
+    #[test]
+    fn test_redact_none() {
+        assert_eq!(redact(None), None);
+    }
+
+    #[test]
+    fn test_redact_short_key() {
+        // Strings shorter than 4 chars get fully masked
+        assert_eq!(redact(Some(&"ab".into())), Some("***".into()));
+        assert_eq!(redact(Some(&"abc".into())), Some("***".into()));
+    }
+
+    #[test]
+    fn test_redact_normal_key() {
+        // Shows first 2 and last 2 characters
+        assert_eq!(
+            redact(Some(&"sk-ant-abc123".into())),
+            Some("sk***23".into())
+        );
+        // Exactly 4 chars: first 2 and last 2 overlap but are still shown
+        assert_eq!(redact(Some(&"abcd".into())), Some("ab***cd".into()));
+    }
+
+    #[test]
+    fn test_redacted_masks_all_provider_keys() {
+        let config = Config {
+            anthropic: Some(AnthropicConfig {
+                api_key: Some("sk-ant-abcdef".into()),
+                ..AnthropicConfig::default()
+            }),
+            openai: Some(OpenAIConfig {
+                api_key: Some("sk-proj-abcdef".into()),
+                ..OpenAIConfig::default()
+            }),
+            gemini: Some(GeminiConfig {
+                api_key: Some("AIzaabcdef".into()),
+                ..GeminiConfig::default()
+            }),
+            openrouter: Some(OpenRouterConfig {
+                api_key: Some("or-abcdef".into()),
+                ..OpenRouterConfig::default()
+            }),
+            voyageai: Some(VoyageAIConfig {
+                api_key: Some("pa-abcdef".into()),
+                ..VoyageAIConfig::default()
+            }),
+            cohere: Some(CohereConfig {
+                api_key: Some("co-abcdef".into()),
+                ..CohereConfig::default()
+            }),
+            ..Config::default()
+        };
+
+        let redacted = config.redacted();
+
+        assert_ne!(
+            redacted.anthropic.as_ref().unwrap().api_key,
+            Some("sk-ant-abcdef".into())
+        );
+        assert_ne!(
+            redacted.openai.as_ref().unwrap().api_key,
+            Some("sk-proj-abcdef".into())
+        );
+        assert_ne!(
+            redacted.gemini.as_ref().unwrap().api_key,
+            Some("AIzaabcdef".into())
+        );
+        assert_ne!(
+            redacted.openrouter.as_ref().unwrap().api_key,
+            Some("or-abcdef".into())
+        );
+        assert_ne!(
+            redacted.voyageai.as_ref().unwrap().api_key,
+            Some("pa-abcdef".into())
+        );
+        assert_ne!(
+            redacted.cohere.as_ref().unwrap().api_key,
+            Some("co-abcdef".into())
+        );
+
+        // Spot-check the format: first 2 + *** + last 2
+        assert_eq!(
+            redacted.anthropic.as_ref().unwrap().api_key,
+            Some("sk***ef".into())
+        );
+    }
+
+    #[test]
+    fn test_redacted_none_key_stays_none() {
+        let config = Config {
+            anthropic: Some(AnthropicConfig {
+                api_key: None,
+                ..AnthropicConfig::default()
+            }),
+            ..Config::default()
+        };
+
+        let redacted = config.redacted();
+        assert_eq!(redacted.anthropic.unwrap().api_key, None);
+    }
+
+    #[test]
+    fn test_redacted_does_not_mutate_original() {
+        let config = Config {
+            anthropic: Some(AnthropicConfig {
+                api_key: Some("sk-ant-secret".into()),
+                ..AnthropicConfig::default()
+            }),
+            ..Config::default()
+        };
+
+        let _ = config.redacted();
+        assert_eq!(
+            config.anthropic.unwrap().api_key,
+            Some("sk-ant-secret".into())
+        );
+    }
+
+    #[test]
+    fn test_redacted_preserves_non_key_fields() {
+        let config = Config {
+            anthropic: Some(AnthropicConfig {
+                model: Some("claude-opus-4-6".into()),
+                api_key: Some("sk-ant-secret".into()),
+                max_tokens: 8192,
+                ..AnthropicConfig::default()
+            }),
+            ..Config::default()
+        };
+
+        let redacted = config.redacted();
+        let anthropic = redacted.anthropic.unwrap();
+        assert_eq!(anthropic.model, Some("claude-opus-4-6".into()));
+        assert_eq!(anthropic.max_tokens, 8192);
     }
 }
 
