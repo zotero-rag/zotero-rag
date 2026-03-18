@@ -370,43 +370,44 @@ pub async fn dedup_rows(
         LanceError::InvalidStateError(format!("The table {TABLE_NAME} does not exist"))
     })?;
 
-    if let Some((by_idx, _)) = schema.column_with_name(by)
-        && let Some((key_idx, _)) = schema.column_with_name(key)
-    {
-        let mut stream = table.query().execute().await?;
-        let mut seen_by_values = HashSet::new();
-        let mut duplicate_keys = Vec::new();
+    let Some((by_idx, _)) = schema.column_with_name(by) else {
+        return Ok(0);
+    };
+    let Some((key_idx, _)) = schema.column_with_name(key) else {
+        return Ok(0);
+    };
 
-        while let Some(batch) = stream.try_next().await? {
-            let by_values = get_column_from_batch(&batch, by_idx);
-            let key_values = get_column_from_batch(&batch, key_idx);
+    let mut stream = table.query().execute().await?;
+    let mut seen_by_values = HashSet::new();
+    let mut duplicate_keys = Vec::new();
 
-            for (by_val, key_val) in by_values.into_iter().zip(key_values.into_iter()) {
-                if !seen_by_values.insert(by_val) {
-                    duplicate_keys.push(key_val);
-                }
+    while let Some(batch) = stream.try_next().await? {
+        let by_values = get_column_from_batch(&batch, by_idx);
+        let key_values = get_column_from_batch(&batch, key_idx);
+
+        for (by_val, key_val) in by_values.into_iter().zip(key_values.into_iter()) {
+            if !seen_by_values.insert(by_val) {
+                duplicate_keys.push(key_val);
             }
         }
-
-        // Delete duplicate rows
-        let deleted_count = duplicate_keys.len();
-        if !duplicate_keys.is_empty() {
-            let schema_fields = vec![arrow_schema::Field::new(
-                key,
-                arrow_schema::DataType::Utf8,
-                false,
-            )];
-            let schema = arrow_schema::Schema::new(schema_fields);
-            let array = StringArray::from_iter_values(duplicate_keys);
-            let record_batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(array) as _])?;
-
-            delete_rows(record_batch, key, embedding_config).await?;
-        }
-
-        return Ok(deleted_count);
     }
 
-    Ok(0)
+    // Delete duplicate rows
+    let deleted_count = duplicate_keys.len();
+    if !duplicate_keys.is_empty() {
+        let schema_fields = vec![arrow_schema::Field::new(
+            key,
+            arrow_schema::DataType::Utf8,
+            false,
+        )];
+        let schema = arrow_schema::Schema::new(schema_fields);
+        let array = StringArray::from_iter_values(duplicate_keys);
+        let record_batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(array) as _])?;
+
+        delete_rows(record_batch, key, embedding_config).await?;
+    }
+
+    Ok(deleted_count)
 }
 
 /// Return all the rows in the LanceDB table, selecting only the columns specified. This is useful
