@@ -1034,4 +1034,181 @@ mod tests {
         // Should not crash and return empty results
         assert!(result.is_ok());
     }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_create_or_update_indexes() {
+        dotenv().ok();
+
+        // IVF-PQ index creation requires at least 256 rows
+        let row_count = 256;
+        let schema = arrow_schema::Schema::new(vec![
+            arrow_schema::Field::new("id", arrow_schema::DataType::Utf8, false),
+            arrow_schema::Field::new("text", arrow_schema::DataType::Utf8, false),
+        ]);
+        let id_data: StringArray = (0..row_count).map(|i| Some(i.to_string())).collect();
+        let text_data: StringArray = (0..row_count)
+            .map(|i| Some(format!("Sample text for row {i}")))
+            .collect();
+        let record_batch = RecordBatch::try_new(
+            Arc::new(schema),
+            vec![Arc::new(id_data), Arc::new(text_data)],
+        )
+        .unwrap();
+
+        let _db = insert_records(
+            vec![record_batch],
+            None,
+            &EmbeddingProviderConfig::OpenAI(OpenAIConfig {
+                api_key: env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY not set"),
+                model: DEFAULT_OPENAI_MODEL.into(),
+                max_tokens: 8192,
+                embedding_model: DEFAULT_OPENAI_EMBEDDING_MODEL.into(),
+                embedding_dims: DEFAULT_OPENAI_EMBEDDING_DIM as usize,
+            }),
+            EmbeddingDefinition::new("text", "openai", Some("embeddings")),
+        )
+        .await
+        .unwrap();
+
+        // First call — should create both indices
+        let result = create_or_update_indexes("text", "embeddings").await;
+        test_ok!(result);
+
+        // Second call — should be idempotent when indices already exist
+        let result = create_or_update_indexes("text", "embeddings").await;
+        test_ok!(result);
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_dedup_rows_removes_duplicates() {
+        dotenv().ok();
+
+        let schema = arrow_schema::Schema::new(vec![
+            arrow_schema::Field::new("id", arrow_schema::DataType::Utf8, false),
+            arrow_schema::Field::new("title", arrow_schema::DataType::Utf8, false),
+        ]);
+        // "dup_title" appears twice — one duplicate should be removed
+        let id_data = StringArray::from(vec!["id1", "id2", "id3", "id4"]);
+        let title_data = StringArray::from(vec!["unique_a", "dup_title", "unique_b", "dup_title"]);
+        let record_batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(id_data), Arc::new(title_data)],
+        )
+        .unwrap();
+
+        let embedding_config = EmbeddingProviderConfig::OpenAI(OpenAIConfig {
+            api_key: env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY not set"),
+            model: DEFAULT_OPENAI_MODEL.into(),
+            max_tokens: 8192,
+            embedding_model: DEFAULT_OPENAI_EMBEDDING_MODEL.into(),
+            embedding_dims: DEFAULT_OPENAI_EMBEDDING_DIM as usize,
+        });
+
+        let _db = insert_records(
+            vec![record_batch],
+            None,
+            &embedding_config,
+            EmbeddingDefinition::new("title", "openai", Some("embeddings")),
+        )
+        .await
+        .unwrap();
+
+        let deleted = dedup_rows(&embedding_config, schema, "title", "id").await;
+        test_ok!(deleted);
+        test_eq!(deleted.unwrap(), 1);
+
+        // Verify 3 rows remain after dedup
+        let remaining = get_lancedb_items(&embedding_config, vec!["id".to_string()])
+            .await
+            .unwrap();
+        let total_rows: usize = remaining.iter().map(RecordBatch::num_rows).sum();
+        test_eq!(total_rows, 3);
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_dedup_rows_no_duplicates() {
+        dotenv().ok();
+
+        let schema = arrow_schema::Schema::new(vec![
+            arrow_schema::Field::new("id", arrow_schema::DataType::Utf8, false),
+            arrow_schema::Field::new("title", arrow_schema::DataType::Utf8, false),
+        ]);
+        let id_data = StringArray::from(vec!["id1", "id2", "id3"]);
+        let title_data = StringArray::from(vec!["unique_x", "unique_y", "unique_z"]);
+        let record_batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(id_data), Arc::new(title_data)],
+        )
+        .unwrap();
+
+        let embedding_config = EmbeddingProviderConfig::OpenAI(OpenAIConfig {
+            api_key: env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY not set"),
+            model: DEFAULT_OPENAI_MODEL.into(),
+            max_tokens: 8192,
+            embedding_model: DEFAULT_OPENAI_EMBEDDING_MODEL.into(),
+            embedding_dims: DEFAULT_OPENAI_EMBEDDING_DIM as usize,
+        });
+
+        let _db = insert_records(
+            vec![record_batch],
+            None,
+            &embedding_config,
+            EmbeddingDefinition::new("title", "openai", Some("embeddings")),
+        )
+        .await
+        .unwrap();
+
+        let deleted = dedup_rows(&embedding_config, schema, "title", "id").await;
+        test_ok!(deleted);
+        test_eq!(deleted.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_dedup_rows_missing_columns_returns_zero() {
+        dotenv().ok();
+
+        let schema = arrow_schema::Schema::new(vec![
+            arrow_schema::Field::new("id", arrow_schema::DataType::Utf8, false),
+            arrow_schema::Field::new("title", arrow_schema::DataType::Utf8, false),
+        ]);
+        let id_data = StringArray::from(vec!["id1", "id2"]);
+        let title_data = StringArray::from(vec!["a", "b"]);
+        let record_batch = RecordBatch::try_new(
+            Arc::new(schema),
+            vec![Arc::new(id_data), Arc::new(title_data)],
+        )
+        .unwrap();
+
+        let embedding_config = EmbeddingProviderConfig::OpenAI(OpenAIConfig {
+            api_key: env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY not set"),
+            model: DEFAULT_OPENAI_MODEL.into(),
+            max_tokens: 8192,
+            embedding_model: DEFAULT_OPENAI_EMBEDDING_MODEL.into(),
+            embedding_dims: DEFAULT_OPENAI_EMBEDDING_DIM as usize,
+        });
+
+        let _db = insert_records(
+            vec![record_batch],
+            None,
+            &embedding_config,
+            EmbeddingDefinition::new("title", "openai", Some("embeddings")),
+        )
+        .await
+        .unwrap();
+
+        // Schema with non-existent columns — should return Ok(0) rather than an error
+        let missing_schema = arrow_schema::Schema::new(vec![
+            arrow_schema::Field::new("nonexistent_by", arrow_schema::DataType::Utf8, false),
+            arrow_schema::Field::new("nonexistent_key", arrow_schema::DataType::Utf8, false),
+        ]);
+        let deleted =
+            dedup_rows(&embedding_config, missing_schema, "nonexistent_by", "nonexistent_key")
+                .await;
+        test_ok!(deleted);
+        test_eq!(deleted.unwrap(), 0);
+    }
 }
