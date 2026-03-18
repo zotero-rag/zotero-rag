@@ -854,6 +854,10 @@ pub(crate) async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<()
                         )?;
                         writeln!(
                             &mut ctx.out,
+                            "/config\t\tShow the currently used configuration."
+                        )?;
+                        writeln!(
+                            &mut ctx.out,
                             "/new\t\tSave the current conversation and switch to a new one."
                         )?;
                         writeln!(&mut ctx.out, "/resume\t\tResume a previous conversation.")?;
