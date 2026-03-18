@@ -265,3 +265,64 @@ impl RerankerProviders {
         .contains(&provider)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use lancedb::embeddings::EmbeddingFunction;
+
+    use crate::embedding::cohere::CohereClient;
+    use crate::embedding::common::Rerank;
+    use crate::embedding::voyage::VoyageAIClient;
+    use crate::llm::anthropic::AnthropicClient;
+    use crate::llm::base::ApiClient;
+    use crate::llm::gemini::GeminiClient;
+    use crate::llm::http_client::ReqwestClient;
+    use crate::llm::ollama::OllamaClient;
+    use crate::llm::openai::OpenAIClient;
+    use crate::llm::openrouter::OpenRouterClient;
+
+    use super::BatchAPIProvider;
+
+    fn assert_api_client<T: ApiClient>() {}
+    fn assert_embedding_fn<T: EmbeddingFunction>() {}
+    fn assert_batch_provider<T: BatchAPIProvider>() {}
+    fn assert_reranker<T: Rerank<U>, U: AsRef<str>>() {}
+
+    /// Verify that every [`super::ModelProvider`] variant has a corresponding client that
+    /// implements [`ApiClient`]. If a client is removed or its trait impl is dropped, this
+    /// will fail to compile.
+    #[test]
+    fn model_providers_implement_api_client() {
+        assert_api_client::<AnthropicClient<ReqwestClient>>();
+        assert_api_client::<OllamaClient<ReqwestClient>>();
+        assert_api_client::<OpenAIClient<ReqwestClient>>();
+        assert_api_client::<OpenRouterClient<ReqwestClient>>();
+        assert_api_client::<GeminiClient<ReqwestClient>>();
+    }
+
+    /// Verify that every [`super::EmbeddingProvider`] variant has a corresponding client that
+    /// implements LanceDB's [`EmbeddingFunction`].
+    #[test]
+    fn embedding_providers_implement_embedding_function() {
+        assert_embedding_fn::<AnthropicClient<ReqwestClient>>();
+        assert_embedding_fn::<OpenAIClient<ReqwestClient>>();
+        assert_embedding_fn::<GeminiClient<ReqwestClient>>();
+        assert_embedding_fn::<CohereClient<ReqwestClient>>();
+        assert_embedding_fn::<VoyageAIClient<ReqwestClient>>();
+    }
+
+    /// Verify that [`super::BatchEmbeddingProvider::VoyageAI`] has a corresponding client that
+    /// implements [`BatchAPIProvider`].
+    #[test]
+    fn batch_embedding_providers_implement_batch_api() {
+        assert_batch_provider::<VoyageAIClient<ReqwestClient>>();
+    }
+
+    /// Verify that every [`super::RerankerProviders`] variant has a corresponding client that
+    /// implements [`Rerank`].
+    #[test]
+    fn reranker_providers_implement_rerank() {
+        assert_reranker::<CohereClient<ReqwestClient>, String>();
+        assert_reranker::<VoyageAIClient<ReqwestClient>, String>();
+    }
+}
