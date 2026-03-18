@@ -652,7 +652,6 @@ pub async fn insert_records(
         );
         tbl.merge_insert(merge_on)
             .when_not_matched_insert_all()
-            .clone()
             .execute(Box::new(reader))
             .await
             .map_err(|e| LanceError::TableUpdateError(e.to_string()))?;
