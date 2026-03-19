@@ -1061,9 +1061,11 @@ pub(crate) mod tests {
     use crate::config::{Config, VoyageAIConfig};
     use crate::state::{SavedChatHistory, save_conversation};
     use crate::tools::retrieval::RetrievalTool;
+    use arrow_array::{FixedSizeListArray, Float32Array, RecordBatchIterator};
     use arrow_array::{RecordBatch, StringArray};
     use arrow_ipc::writer::FileWriter;
     use chrono::Local;
+    use lancedb::connect;
     use serde_json::json;
     use serial_test::serial;
     use std::fs::{self, File};
@@ -1475,7 +1477,164 @@ pub(crate) mod tests {
         test_contains!(output, "/stats");
         test_contains!(output, "/dedup");
         test_contains!(output, "/resume");
+        test_contains!(output, "/config");
+        test_contains!(output, "/new");
         test_contains!(output, "/quit"); // one of the variants suffices to show the user
+    }
+
+    /// Inserts a single row with a zero-valued embedding vector and empty `pdf_text` directly into
+    /// the LanceDB table at `db_uri`. This bypasses the embedding function so we can deterministically
+    /// create zero-embedding rows for testing `fix_zero_embeddings`.
+    async fn insert_zero_embedding_row(db_uri: &str) {
+        let dims = DEFAULT_VOYAGE_EMBEDDING_DIM as i32;
+        let schema = Arc::new(arrow_schema::Schema::new(vec![
+            arrow_schema::Field::new("library_key", arrow_schema::DataType::Utf8, false),
+            arrow_schema::Field::new("title", arrow_schema::DataType::Utf8, false),
+            arrow_schema::Field::new("file_path", arrow_schema::DataType::Utf8, false),
+            arrow_schema::Field::new("pdf_text", arrow_schema::DataType::Utf8, false),
+            arrow_schema::Field::new(
+                "embeddings",
+                arrow_schema::DataType::FixedSizeList(
+                    Arc::new(arrow_schema::Field::new(
+                        "item",
+                        arrow_schema::DataType::Float32,
+                        true,
+                    )),
+                    dims,
+                ),
+                false,
+            ),
+        ]));
+
+        #[allow(clippy::cast_sign_loss)]
+        let zeros = Float32Array::from(vec![0.0f32; dims as usize]);
+        let embedding_col = FixedSizeListArray::try_new(
+            Arc::new(arrow_schema::Field::new(
+                "item",
+                arrow_schema::DataType::Float32,
+                true,
+            )),
+            dims,
+            Arc::new(zeros),
+            None,
+        )
+        .unwrap();
+
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(StringArray::from(vec!["ZEROTEST001"])),
+                Arc::new(StringArray::from(vec!["Zero Test Item"])),
+                Arc::new(StringArray::from(vec!["/dev/null"])),
+                Arc::new(StringArray::from(vec![""])), // will be deleted by fix
+                Arc::new(embedding_col),
+            ],
+        )
+        .unwrap();
+
+        let db = connect(db_uri).execute().await.unwrap();
+        let tbl = db.open_table("data").execute().await.unwrap();
+        let reader = RecordBatchIterator::new(vec![Ok(batch)].into_iter(), schema);
+        tbl.merge_insert(&["library_key"])
+            .when_not_matched_insert_all()
+            .clone()
+            .execute(Box::new(reader))
+            .await
+            .unwrap();
+    }
+
+    /// When the database has no zero-embedding records, `fix_zero_embeddings` (via `/embed fix`)
+    /// should complete immediately and report "Done!". Running `/embed fix` twice after `/process`
+    /// guarantees the second run sees a clean database (the first clears any zeros produced by
+    /// unparseable CI fixtures).
+    #[retry(3)]
+    #[tokio::test(flavor = "multi_thread")]
+    #[serial]
+    async fn test_fix_zero_embeddings_no_zeros() {
+        dotenv::dotenv().ok();
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_uri = temp_dir
+            .path()
+            .join("lancedb-table")
+            .to_str()
+            .unwrap()
+            .to_string();
+
+        let mut setup_ctx = create_test_context();
+        let setup_result = temp_env::async_with_vars(
+            [("CI", Some("true")), ("LANCEDB_URI", Some(&db_uri))],
+            handle_command("/process", &mut setup_ctx),
+        )
+        .await;
+        test_ok!(setup_result);
+
+        // First run clears any zero-embedding rows produced by unparseable CI fixtures.
+        let mut first_ctx = create_test_context();
+        let first_result = temp_env::async_with_vars(
+            [("LANCEDB_URI", Some(&db_uri))],
+            handle_command("/embed fix", &mut first_ctx),
+        )
+        .await;
+        test_ok!(first_result);
+        assert!(first_result.unwrap());
+
+        // Second run: the database is clean, so the function should exit early with "Done!".
+        let mut ctx = create_test_context();
+        let result = temp_env::async_with_vars(
+            [("LANCEDB_URI", Some(&db_uri))],
+            handle_command("/embed fix", &mut ctx),
+        )
+        .await;
+        test_ok!(result);
+        assert!(result.unwrap());
+
+        let output = String::from_utf8(ctx.out.into_inner()).unwrap();
+        test_contains!(output, "Done!");
+    }
+
+    /// When zero-embedding rows whose `pdf_text` is empty are present, `fix_zero_embeddings` (via
+    /// `/embed fix`) should delete them and report how many were removed.
+    #[retry(3)]
+    #[tokio::test(flavor = "multi_thread")]
+    #[serial]
+    async fn test_fix_zero_embeddings_with_zero_rows() {
+        dotenv::dotenv().ok();
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_uri = temp_dir
+            .path()
+            .join("lancedb-table")
+            .to_str()
+            .unwrap()
+            .to_string();
+
+        let mut setup_ctx = create_test_context();
+        let setup_result = temp_env::async_with_vars(
+            [("CI", Some("true")), ("LANCEDB_URI", Some(&db_uri))],
+            handle_command("/process", &mut setup_ctx),
+        )
+        .await;
+        test_ok!(setup_result);
+
+        // Directly inject a row with a zero embedding vector and empty text into the DB.
+        temp_env::async_with_vars(
+            [("LANCEDB_URI", Some(&db_uri))],
+            insert_zero_embedding_row(&db_uri),
+        )
+        .await;
+
+        let mut ctx = create_test_context();
+        let result = temp_env::async_with_vars(
+            [("LANCEDB_URI", Some(&db_uri))],
+            handle_command("/embed fix", &mut ctx),
+        )
+        .await;
+        test_ok!(result);
+        assert!(result.unwrap());
+
+        let output = String::from_utf8(ctx.out.into_inner()).unwrap();
+        test_contains!(output, "items had empty texts, and will be deleted.");
     }
 
     #[retry(3)]
