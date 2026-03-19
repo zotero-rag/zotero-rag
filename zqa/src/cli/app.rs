@@ -769,6 +769,221 @@ fn resume<O: Write, E: Write, R: BufRead>(
     Ok(())
 }
 
+fn save_current_conversation<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Result<(), CLIError> {
+    if ctx.state.dirty.load(atomic::Ordering::Relaxed) {
+        let chat_history = Arc::clone(&ctx.state.chat_history);
+        let history = chat_history
+            .lock()
+            .map_err(|_| CLIError::MutexPoisoningError("chat history".into()))?;
+        let date = Local::now();
+
+        let conversation = SavedChatHistory {
+            history: history.clone(),
+            date,
+            title: ctx
+                .state
+                .title
+                .lock()
+                .map_err(|_| CLIError::MutexPoisoningError("title".into()))?
+                .clone()
+                .unwrap_or_else(|| format!("Conversation on {}", date.format("%Y-%m-%d %H:%M"))),
+        };
+
+        if let Err(e) = save_conversation(&conversation) {
+            writeln!(&mut ctx.err, "Error saving conversation: {e}")?;
+        }
+    }
+    Ok(())
+}
+
+/// Handle a single command or query from the user.
+///
+/// # Arguments
+///
+/// * `command` - The command string entered by the user.
+/// * `ctx` - A `Context` object that contains CLI args and objects that implement
+///   `std::io::Write` for `stdout` and `stderr`.
+///
+/// # Returns
+///
+/// `Ok(true)` if the CLI should continue running, `Ok(false)` if it should exit.
+#[allow(clippy::too_many_lines)]
+pub(crate) async fn handle_command<O: Write, E: Write>(
+    command: &str,
+    ctx: &mut Context<O, E>,
+) -> Result<bool, CLIError> {
+    let command = command.trim();
+
+    match command {
+        "" => Ok(true),
+        "/help" | "help" | "?" => {
+            writeln!(&mut ctx.out)?;
+            writeln!(&mut ctx.out, "Available commands:\n")?;
+            writeln!(&mut ctx.out, "/help\t\tShow this help message")?;
+            writeln!(
+                &mut ctx.out,
+                "/process\tPre-process Zotero library. Use to update the database."
+            )?;
+            writeln!(
+                &mut ctx.out,
+                "/embed\t\tRepair failed DB creation by re-adding embeddings."
+            )?;
+            writeln!(
+                &mut ctx.out,
+                "/search\t\tSearch for papers without summarizing them. Usage: /search <query>"
+            )?;
+            writeln!(
+                &mut ctx.out,
+                "/config\t\tShow the currently used configuration."
+            )?;
+            writeln!(
+                &mut ctx.out,
+                "/new\t\tSave the current conversation and switch to a new one."
+            )?;
+            writeln!(&mut ctx.out, "/resume\t\tResume a previous conversation.")?;
+            writeln!(&mut ctx.out, "/index\t\tCreate or update indices.")?;
+            writeln!(
+                &mut ctx.out,
+                "/checkhealth\tRun health checks on your LanceDB."
+            )?;
+            writeln!(
+                &mut ctx.out,
+                "/doctor\t\tAttempt to fix issues spotted by /checkhealth."
+            )?;
+            writeln!(&mut ctx.out, "/stats\t\tShow table statistics.")?;
+            writeln!(&mut ctx.out, "/dedup\t\tRemove duplicate items.")?;
+            writeln!(&mut ctx.out, "/quit\t\tExit the program")?;
+            writeln!(&mut ctx.out)?;
+            Ok(true)
+        }
+        "/checkhealth" => {
+            checkhealth(ctx).await;
+            Ok(true)
+        }
+        "/doctor" => {
+            doctor(ctx).await?;
+            Ok(true)
+        }
+        "/embed" => {
+            if let Err(e) = embed(ctx, false).await {
+                writeln!(
+                    &mut ctx.err,
+                    "Failed to create embeddings. You may find relevant error messages below:\n\t{e}"
+                )?;
+            }
+            Ok(true)
+        }
+        "/process" => {
+            if let Err(e) = process(ctx).await {
+                writeln!(
+                    &mut ctx.err,
+                    "Failed to create embeddings. You may find relevant error messages below:\n\t{e}"
+                )?;
+            }
+            Ok(true)
+        }
+        "/index" => {
+            if let Err(e) = update_indices(ctx).await {
+                writeln!(
+                    &mut ctx.err,
+                    "Failed to update indexes. You may find the below information useful:\n\t{e}"
+                )?;
+            }
+            Ok(true)
+        }
+        "/stats" => {
+            if let Err(e) = stats(ctx).await {
+                // This only errors on an I/O failure
+                writeln!(&mut ctx.err, "Failed to write statistics to buffer. {e}")?;
+            }
+            Ok(true)
+        }
+        "/dedup" => {
+            match dedup(ctx).await {
+                Ok(ct) => {
+                    writeln!(&mut ctx.out, "Removed {ct} items.")?;
+                }
+                Err(e) => {
+                    writeln!(&mut ctx.err, "Deduplication failed: {e}")?;
+                }
+            }
+            Ok(true)
+        }
+        "/resume" => {
+            let stdin = io::stdin();
+            let mut reader = stdin.lock();
+            if let Err(e) = resume(ctx, &mut reader) {
+                writeln!(&mut ctx.err, "Error resuming conversation: {e}")?;
+            }
+            Ok(true)
+        }
+        "/config" => {
+            writeln!(&mut ctx.out, "{}", ctx.config)?;
+            Ok(true)
+        }
+        "/quit" | "/exit" | "quit" | "exit" | "/new" => {
+            save_current_conversation(ctx)?;
+
+            if command == "/new" {
+                ctx.state.dirty.store(false, atomic::Ordering::Relaxed);
+                ctx.state.chat_history = Arc::new(Mutex::new(Vec::new()));
+                ctx.state.title = Arc::new(Mutex::new(None));
+                Ok(true)
+            } else {
+                Ok(false)
+            }
+        }
+        query => {
+            writeln!(&mut ctx.out)?;
+
+            // Check for a threshold to ensure this isn't an accidental Enter-hit.
+            #[allow(clippy::items_after_statements)]
+            const MIN_QUERY_LENGTH: usize = 10;
+
+            if query.len() < MIN_QUERY_LENGTH {
+                writeln!(&mut ctx.out, "Invalid command: {query}")?;
+                return Ok(true);
+            }
+
+            // Search queries have priority
+            if query.starts_with("/search") {
+                let search_term = query.strip_prefix("/search").unwrap().trim();
+                if search_term.is_empty() {
+                    writeln!(&mut ctx.err, "Please provide a search term after /search.")?;
+                    return Ok(true);
+                }
+
+                if let Err(e) = search_for_papers(search_term.into(), ctx).await {
+                    writeln!(
+                        &mut ctx.err,
+                        "Failed to perform a vector search. You may find relevant error messages below:\n\t{e}"
+                    )?;
+                }
+
+                return Ok(true);
+            } else if query.starts_with("/embed") {
+                // Handle `/embed fix`
+                let subcmd = query.strip_prefix("/embed").unwrap().trim();
+                if subcmd != "fix" {
+                    writeln!(&mut ctx.err, "Invalid subcommand to /embed: {subcmd}")?;
+                    return Ok(true);
+                }
+
+                embed(ctx, true).await?;
+                return Ok(true);
+            }
+
+            if let Err(e) = run_query(query.into(), ctx).await {
+                writeln!(
+                    &mut ctx.err,
+                    "Failed to answer the question. You may find relevant error messages below:\n\t{e}",
+                )?;
+            }
+            Ok(true)
+        }
+    }
+}
+
 /// The core CLI implementation that implements a REPL for user commands.
 ///
 /// # Arguments
@@ -815,188 +1030,14 @@ pub(crate) async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<()
 
         match readline {
             Ok(command) => {
-                let command = command.trim();
-
-                if !command.is_empty()
-                    && let Err(e) = rl.add_history_entry(command)
+                if !command.trim().is_empty()
+                    && let Err(e) = rl.add_history_entry(command.trim())
                 {
                     log::debug!("Failed to write history entry: {e}");
                 }
 
-                match command {
-                    "" => {}
-                    "/help" | "help" | "?" => {
-                        writeln!(&mut ctx.out)?;
-                        writeln!(&mut ctx.out, "Available commands:\n")?;
-                        writeln!(&mut ctx.out, "/help\t\tShow this help message")?;
-                        writeln!(
-                            &mut ctx.out,
-                            "/process\tPre-process Zotero library. Use to update the database."
-                        )?;
-                        writeln!(
-                            &mut ctx.out,
-                            "/embed\t\tRepair failed DB creation by re-adding embeddings."
-                        )?;
-                        writeln!(
-                            &mut ctx.out,
-                            "/search\t\tSearch for papers without summarizing them. Usage: /search <query>"
-                        )?;
-                        writeln!(
-                            &mut ctx.out,
-                            "/config\t\tShow the currently used configuration."
-                        )?;
-                        writeln!(
-                            &mut ctx.out,
-                            "/new\t\tSave the current conversation and switch to a new one."
-                        )?;
-                        writeln!(&mut ctx.out, "/resume\t\tResume a previous conversation.")?;
-                        writeln!(&mut ctx.out, "/index\t\tCreate or update indices.")?;
-                        writeln!(
-                            &mut ctx.out,
-                            "/checkhealth\tRun health checks on your LanceDB."
-                        )?;
-                        writeln!(
-                            &mut ctx.out,
-                            "/doctor\t\tAttempt to fix issues spotted by /checkhealth."
-                        )?;
-                        writeln!(&mut ctx.out, "/stats\t\tShow table statistics.")?;
-                        writeln!(&mut ctx.out, "/quit\t\tExit the program")?;
-                        writeln!(&mut ctx.out)?;
-                    }
-                    "/checkhealth" => {
-                        checkhealth(&mut ctx).await;
-                    }
-                    "/doctor" => {
-                        doctor(&mut ctx).await?;
-                    }
-                    "/embed" => {
-                        if let Err(e) = embed(&mut ctx, false).await {
-                            writeln!(
-                                &mut ctx.err,
-                                "Failed to create embeddings. You may find relevant error messages below:\n\t{e}"
-                            )?;
-                        }
-                    }
-                    "/process" => {
-                        if let Err(e) = process(&mut ctx).await {
-                            writeln!(
-                                &mut ctx.err,
-                                "Failed to create embeddings. You may find relevant error messages below:\n\t{e}"
-                            )?;
-                        }
-                    }
-                    "/index" => {
-                        if let Err(e) = update_indices(&mut ctx).await {
-                            writeln!(
-                                &mut ctx.err,
-                                "Failed to update indexes. You may find the below information useful:\n\t{e}"
-                            )?;
-                        }
-                    }
-                    "/stats" => {
-                        if let Err(e) = stats(&mut ctx).await {
-                            // This only errors on an I/O failure
-                            writeln!(&mut ctx.err, "Failed to write statistics to buffer. {e}")?;
-                        }
-                    }
-                    "/dedup" => match dedup(&mut ctx).await {
-                        Ok(ct) => {
-                            writeln!(&mut ctx.out, "Removed {ct} items.")?;
-                        }
-                        Err(e) => {
-                            writeln!(&mut ctx.err, "Deduplication failed: {e}")?;
-                        }
-                    },
-                    "/resume" => {
-                        let stdin = io::stdin();
-                        let mut reader = stdin.lock();
-                        if let Err(e) = resume(&mut ctx, &mut reader) {
-                            writeln!(&mut ctx.err, "Error resuming conversation: {e}")?;
-                        }
-                    }
-                    "/config" => {
-                        writeln!(&mut ctx.out, "{}", ctx.config)?;
-                    }
-                    "/quit" | "/exit" | "quit" | "exit" | "/new" => {
-                        if ctx.state.dirty.load(atomic::Ordering::Relaxed) {
-                            let chat_history = Arc::clone(&ctx.state.chat_history);
-                            let history = chat_history.lock()?;
-                            let date = Local::now();
-
-                            let conversation = SavedChatHistory {
-                                history: history.clone(),
-                                date,
-                                title: ctx.state.title.lock()?.clone().unwrap_or_else(|| {
-                                    format!("Conversation on {}", date.format("%Y-%m-%d %H:%M"))
-                                }),
-                            };
-
-                            if let Err(e) = save_conversation(&conversation)
-                                && let Err(write_err) =
-                                    writeln!(&mut ctx.err, "Error saving conversation: {e}")
-                            {
-                                log::error!("Failed to write to stderr: {write_err}");
-                            }
-                        }
-
-                        if command == "/new" {
-                            ctx.state.dirty.store(false, atomic::Ordering::Relaxed);
-                            ctx.state.chat_history = Arc::new(Mutex::new(Vec::new()));
-                            ctx.state.title = Arc::new(Mutex::new(None));
-                        } else {
-                            break;
-                        }
-                    }
-                    query => {
-                        writeln!(&mut ctx.out)?;
-
-                        // Check for a threshold to ensure this isn't an accidental Enter-hit.
-                        #[allow(clippy::items_after_statements)]
-                        const MIN_QUERY_LENGTH: usize = 10;
-
-                        if query.len() < MIN_QUERY_LENGTH {
-                            writeln!(&mut ctx.out, "Invalid command: {query}")?;
-                            continue;
-                        }
-
-                        // Search queries have priority
-                        if query.starts_with("/search") {
-                            let search_term = query.strip_prefix("/search").unwrap().trim();
-                            if search_term.is_empty() {
-                                writeln!(
-                                    &mut ctx.err,
-                                    "Please provide a search term after /search."
-                                )?;
-                                continue;
-                            }
-
-                            if let Err(e) = search_for_papers(search_term.into(), &mut ctx).await {
-                                writeln!(
-                                    &mut ctx.err,
-                                    "Failed to perform a vector search. You may find relevant error messages below:\n\t{e}"
-                                )?;
-                            }
-
-                            continue;
-                        } else if query.starts_with("/embed") {
-                            // Handle `/embed fix`
-                            let subcmd = query.strip_prefix("/embed").unwrap().trim();
-                            if subcmd != "fix" {
-                                writeln!(&mut ctx.err, "Invalid subcommand to /embed: {subcmd}")?;
-                                continue;
-                            }
-
-                            embed(&mut ctx, true).await?;
-                            continue;
-                        }
-
-                        if let Err(e) = run_query(query.into(), &mut ctx).await {
-                            writeln!(
-                                &mut ctx.err,
-                                "Failed to answer the question. You may find relevant error messages below:\n\t{e}",
-                            )?;
-                        }
-                    }
+                if !handle_command(&command, &mut ctx).await? {
+                    break;
                 }
             }
             Err(ReadlineError::Signal(rustyline::error::Signal::Resize)) => {
@@ -1005,26 +1046,7 @@ pub(crate) async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<()
             }
             Err(ReadlineError::Interrupted) => {
                 // Handle SIGINT by saving the conversation if needed
-                if ctx.state.dirty.load(atomic::Ordering::Relaxed) {
-                    let chat_history = Arc::clone(&ctx.state.chat_history);
-                    let history = chat_history.lock()?;
-                    let date = Local::now();
-
-                    let conversation = SavedChatHistory {
-                        history: history.clone(),
-                        date,
-                        title: ctx.state.title.lock()?.clone().unwrap_or_else(|| {
-                            format!("Conversation on {}", date.format("%Y-%m-%d %H:%M"))
-                        }),
-                    };
-
-                    if let Err(e) = save_conversation(&conversation)
-                        && let Err(write_err) =
-                            writeln!(&mut ctx.err, "Error saving conversation: {e}")
-                    {
-                        log::error!("Failed to write to stderr: {write_err}");
-                    }
-                }
+                save_current_conversation(&mut ctx)?;
                 break;
             }
             _ => break,
@@ -1039,7 +1061,7 @@ pub(crate) async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<()
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use crate::cli::app::{BATCH_ITER_FILE, checkhealth, embed, resume, search_for_papers, stats};
+    use crate::cli::app::{BATCH_ITER_FILE, handle_command, resume};
     use crate::common::State;
     use crate::config::{Config, VoyageAIConfig};
     use crate::state::{SavedChatHistory, save_conversation};
@@ -1062,10 +1084,7 @@ pub(crate) mod tests {
     use zqa_rag::llm::base::{ASSISTANT_ROLE, ChatHistoryContent, ChatHistoryItem, USER_ROLE};
     use zqa_rag::llm::tools::Tool;
 
-    use crate::{
-        cli::app::{process, run_query},
-        common::Context,
-    };
+    use crate::common::Context;
 
     pub(crate) fn get_config() -> Config {
         let mut config = Config {
@@ -1149,11 +1168,14 @@ pub(crate) mod tests {
         writer.write(&record_batch).unwrap();
         writer.finish().unwrap();
 
-        // Actually call `embed`
-        let result =
-            temp_env::async_with_vars([("LANCEDB_URI", Some(&db_uri))], embed(&mut ctx, false))
-                .await;
+        // Actually call `handle_command`
+        let result = temp_env::async_with_vars(
+            [("LANCEDB_URI", Some(&db_uri))],
+            handle_command("/embed", &mut ctx),
+        )
+        .await;
         test_ok!(result);
+        assert!(result.unwrap()); // Should continue loop
 
         let output = String::from_utf8(ctx.out.into_inner()).unwrap();
         assert!(output.contains("Successfully parsed library!"));
@@ -1185,19 +1207,24 @@ pub(crate) mod tests {
 
         let result = temp_env::async_with_vars(
             [("CI", Some("true")), ("LANCEDB_URI", Some(&db_uri))],
-            process(&mut ctx),
+            handle_command("/process", &mut ctx),
         )
         .await;
 
         test_ok!(result);
+        assert!(result.unwrap());
 
         let output = String::from_utf8(ctx.out.clone().into_inner()).unwrap();
         assert!(output.contains("Successfully parsed library!"));
 
-        let stats =
-            temp_env::async_with_vars([("LANCEDB_URI", Some(&db_uri))], stats(&mut ctx)).await;
+        let stats = temp_env::async_with_vars(
+            [("LANCEDB_URI", Some(&db_uri))],
+            handle_command("/stats", &mut ctx),
+        )
+        .await;
         let output = String::from_utf8(ctx.out.into_inner()).unwrap();
         test_ok!(stats);
+        assert!(stats.unwrap());
         assert!(output.contains("Table statistics:"));
         assert!(output.contains("Number of rows: 8"));
 
@@ -1225,7 +1252,7 @@ pub(crate) mod tests {
         // `process` needs to be run before `search_for_papers`
         let result = temp_env::async_with_vars(
             [("CI", Some("true")), ("LANCEDB_URI", Some(&db_uri))],
-            process(&mut setup_ctx),
+            handle_command("/process", &mut setup_ctx),
         )
         .await;
         test_ok!(result);
@@ -1233,8 +1260,8 @@ pub(crate) mod tests {
         let mut ctx = create_test_context();
         let result = temp_env::async_with_vars(
             [("CI", Some("true")), ("LANCEDB_URI", Some(&db_uri))],
-            search_for_papers(
-                "How should I oversample in defect prediction?".into(),
+            handle_command(
+                "/search How should I oversample in defect prediction?",
                 &mut ctx,
             ),
         )
@@ -1245,6 +1272,7 @@ pub(crate) mod tests {
         }
 
         test_ok!(result);
+        assert!(result.unwrap());
 
         let output = String::from_utf8(ctx.out.into_inner()).unwrap();
         assert!(output.len() > 20);
@@ -1268,21 +1296,19 @@ pub(crate) mod tests {
         // `process` needs to be run before `run_query`
         let _ = temp_env::async_with_vars(
             [("CI", Some("true")), ("LANCEDB_URI", Some(&db_uri))],
-            process(&mut setup_ctx),
+            handle_command("/process", &mut setup_ctx),
         )
         .await;
 
         let mut ctx = create_test_context();
         let result = temp_env::async_with_vars(
             [("CI", Some("true")), ("LANCEDB_URI", Some(&db_uri))],
-            run_query(
-                "How should I oversample in defect prediction?".into(),
-                &mut ctx,
-            ),
+            handle_command("How should I oversample in defect prediction?", &mut ctx),
         )
         .await;
 
         test_ok!(result);
+        assert!(result.unwrap());
 
         let output = String::from_utf8(ctx.out.into_inner()).unwrap();
         assert!(output.contains("Total token usage:"));
@@ -1303,7 +1329,7 @@ pub(crate) mod tests {
 
         let mut ctx = create_test_context();
         let output = temp_env::async_with_vars([("LANCEDB_URI", Some(&db_uri))], async move {
-            checkhealth(&mut ctx).await;
+            handle_command("/checkhealth", &mut ctx).await.unwrap();
             String::from_utf8(ctx.out.into_inner()).unwrap()
         })
         .await;
@@ -1329,7 +1355,7 @@ pub(crate) mod tests {
         let mut setup_ctx = create_test_context();
         let result = temp_env::async_with_vars(
             [("CI", Some("true")), ("LANCEDB_URI", Some(&db_uri))],
-            process(&mut setup_ctx),
+            handle_command("/process", &mut setup_ctx),
         )
         .await;
         test_ok!(result);
@@ -1337,7 +1363,7 @@ pub(crate) mod tests {
         // Now run health check
         let mut ctx = create_test_context();
         let output = temp_env::async_with_vars([("LANCEDB_URI", Some(&db_uri))], async move {
-            checkhealth(&mut ctx).await;
+            handle_command("/checkhealth", &mut ctx).await.unwrap();
             String::from_utf8(ctx.out.into_inner()).unwrap()
         })
         .await;
@@ -1436,6 +1462,27 @@ pub(crate) mod tests {
         });
     }
 
+    #[tokio::test]
+    async fn test_handle_command_help() {
+        let mut ctx = create_test_context();
+        let result = handle_command("/help", &mut ctx).await.unwrap();
+        assert!(result);
+        let output = String::from_utf8(ctx.out.into_inner()).unwrap();
+        test_contains!(output, "Available commands:");
+
+        // Check that all the `match` arms are contained
+        test_contains!(output, "/help");
+        test_contains!(output, "/checkhealth");
+        test_contains!(output, "/doctor");
+        test_contains!(output, "/embed");
+        test_contains!(output, "/process");
+        test_contains!(output, "/index");
+        test_contains!(output, "/stats");
+        test_contains!(output, "/dedup");
+        test_contains!(output, "/resume");
+        test_contains!(output, "/quit"); // one of the variants suffices to show the user
+    }
+
     #[retry(3)]
     #[tokio::test(flavor = "multi_thread")]
     #[serial]
@@ -1456,7 +1503,7 @@ pub(crate) mod tests {
         // Create test database with assets data
         let setup_result = temp_env::async_with_vars(
             [("CI", Some("true")), ("LANCEDB_URI", Some(&db_uri))],
-            process(&mut setup_ctx),
+            handle_command("/process", &mut setup_ctx),
         )
         .await;
         test_ok!(setup_result);
