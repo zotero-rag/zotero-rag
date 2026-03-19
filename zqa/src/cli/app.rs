@@ -772,22 +772,17 @@ fn resume<O: Write, E: Write, R: BufRead>(
 fn save_current_conversation<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Result<(), CLIError> {
     if ctx.state.dirty.load(atomic::Ordering::Relaxed) {
         let chat_history = Arc::clone(&ctx.state.chat_history);
-        let history = chat_history
-            .lock()
-            .map_err(|_| CLIError::MutexPoisoningError("chat history".into()))?;
+        let history = chat_history.lock()?;
         let date = Local::now();
 
-        let conversation = SavedChatHistory {
-            history: history.clone(),
-            date,
-            title: ctx
-                .state
-                .title
-                .lock()
-                .map_err(|_| CLIError::MutexPoisoningError("title".into()))?
-                .clone()
-                .unwrap_or_else(|| format!("Conversation on {}", date.format("%Y-%m-%d %H:%M"))),
-        };
+        let conversation =
+            SavedChatHistory {
+                history: history.clone(),
+                date,
+                title: ctx.state.title.lock()?.clone().unwrap_or_else(|| {
+                    format!("Conversation on {}", date.format("%Y-%m-%d %H:%M"))
+                }),
+            };
 
         if let Err(e) = save_conversation(&conversation) {
             writeln!(&mut ctx.err, "Error saving conversation: {e}")?;
