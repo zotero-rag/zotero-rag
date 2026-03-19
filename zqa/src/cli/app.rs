@@ -1618,11 +1618,7 @@ pub(crate) mod tests {
         test_ok!(setup_result);
 
         // Directly inject a row with a zero embedding vector and empty text into the DB.
-        temp_env::async_with_vars(
-            [("LANCEDB_URI", Some(&db_uri))],
-            insert_zero_embedding_row(&db_uri),
-        )
-        .await;
+        insert_zero_embedding_row(&db_uri).await;
 
         let mut ctx = create_test_context();
         let result = temp_env::async_with_vars(
