@@ -91,8 +91,8 @@ pub struct TableStatistics {
 impl Display for TableStatistics {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("Table statistics:\n")?;
-        f.write_str(&format!("\tTable version: {}", self.table_version))?;
-        f.write_str(&format!("\tNumber of rows: {}", self.num_rows))?;
+        f.write_str(&format!("\tTable version: {}\n", self.table_version))?;
+        f.write_str(&format!("\tNumber of rows: {}\n", self.num_rows))?;
 
         Ok(())
     }
@@ -238,7 +238,7 @@ async fn get_db_with_embeddings(
 }
 
 /// Given a `RecordBatch` of items, delete records in the database where the `key` matches. Note
-/// that they `key` has to exist in the schema in both `rows` and the database.
+/// that the `key` has to exist in the schema in both `rows` and the database.
 ///
 /// # Arguments:
 ///
@@ -437,7 +437,7 @@ pub async fn get_lancedb_items(
         LanceError::InvalidStateError(format!("The table {TABLE_NAME} does not exist"))
     })?;
 
-    // The installed version of Lance has a bug where without the `.limit` call here, it only
+    // The installed version of LanceDB has a bug where without the `.limit` call here, it only
     // returns 10 rows; see https://github.com/lancedb/lancedb/issues/1852#issuecomment-2489837804
     let results: Vec<RecordBatch> = tbl
         .query()

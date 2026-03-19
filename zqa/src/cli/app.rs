@@ -293,7 +293,7 @@ async fn doctor<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Result<(), CLIEr
     }
 
     // Currently, we can really only fix the zero-embeddings issue
-    return fix_zero_embeddings(ctx).await;
+    fix_zero_embeddings(ctx).await
 }
 
 /// Process a user's Zotero library. This acts as one of the main functions provided by the CLI.
@@ -376,7 +376,7 @@ pub(crate) async fn process<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Resu
     match result {
         Ok(_) => {
             writeln!(&mut ctx.out, "Successfully parsed library!")?;
-            std::fs::remove_file("batch_iter.bin")?;
+            std::fs::remove_file(BATCH_ITER_FILE)?;
         }
         Err(e) => {
             writeln!(&mut ctx.out, "Parsing library failed: {e}")?;
