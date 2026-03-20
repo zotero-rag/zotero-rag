@@ -79,7 +79,7 @@ pub fn get_embedding_provider(
     embedding_name: &str,
 ) -> Result<Arc<dyn EmbeddingFunction>, LLMError> {
     match embedding_name {
-        "openai" | "anthropic" => Ok(Arc::new(OpenAIClient::<ReqwestClient>::default())),
+        "openai" => Ok(Arc::new(OpenAIClient::<ReqwestClient>::default())),
         "voyageai" => Ok(Arc::new(VoyageAIClient::<ReqwestClient>::default())),
         "gemini" => Ok(Arc::new(GeminiClient::<ReqwestClient>::default())),
         "cohere" => Ok(Arc::new(CohereClient::<ReqwestClient>::default())),
