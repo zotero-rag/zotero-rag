@@ -295,7 +295,7 @@ pub trait EmbeddingApiResponse {
 /// * `LLMError::InvalidHeaderError` - If header values cannot be parsed
 /// * `LLMError::GenericLLMError` - If other HTTP errors occur or Arrow array creation fails
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
-pub async fn compute_embeddings_async<T, U, F>(
+pub(crate) async fn compute_embeddings_async<T, U, F>(
     source: Arc<dyn arrow_array::Array>,
     api_url: &str,
     api_key: &str,
