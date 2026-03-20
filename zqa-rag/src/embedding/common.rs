@@ -15,6 +15,7 @@ use std::{
 
 use lancedb::embeddings::EmbeddingFunction;
 
+use crate::clients::gemini::GeminiClient;
 use crate::clients::openai::OpenAIClient;
 use crate::constants::{
     DEFAULT_COHERE_EMBEDDING_DIM, DEFAULT_GEMINI_EMBEDDING_DIM, DEFAULT_OPENAI_EMBEDDING_DIM,
@@ -24,7 +25,6 @@ use crate::embedding::cohere::CohereClient;
 use crate::embedding::voyage::VoyageAIClient;
 use crate::http_client::{HttpClient, ReqwestClient};
 use crate::llm::errors::LLMError;
-use crate::llm::gemini::GeminiClient;
 
 /// A struct containing information about texts that failed to embed.
 #[derive(serde::Serialize, serde::Deserialize)]

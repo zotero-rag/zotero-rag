@@ -1,22 +1,14 @@
 //! Functions, structs, and trait implementations for interacting with the Gemini API. This module
 //! includes support for both text generation and embedding, and tool calling is supported.
 
-use futures::StreamExt;
-use std::borrow::Cow;
 use std::env;
-use std::sync::Arc;
 
-use arrow_schema::{DataType, Field};
-use futures::stream;
-use lancedb::embeddings::EmbeddingFunction;
+use crate::clients::gemini::{GeminiClient, get_gemini_api_key};
 use reqwest::header::HeaderMap;
 use serde::{Deserialize, Serialize};
 
 use crate::common::request_with_backoff;
-use crate::constants::{
-    DEFAULT_GEMINI_EMBEDDING_DIM, DEFAULT_GEMINI_EMBEDDING_MODEL, DEFAULT_GEMINI_MODEL,
-    DEFAULT_MAX_CONCURRENT_REQUESTS, DEFAULT_MAX_RETRIES,
-};
+use crate::constants::{DEFAULT_GEMINI_MODEL, DEFAULT_MAX_RETRIES};
 use crate::llm::base::{
     ChatHistoryContent, ChatHistoryItem, ContentType, ToolCallRequest, USER_ROLE,
 };
@@ -24,185 +16,7 @@ use crate::llm::tools::{SerializedTool, get_owned_tools, process_tool_calls};
 
 use super::base::{ApiClient, ChatRequest, CompletionApiResponse};
 use super::errors::LLMError;
-use crate::http_client::{HttpClient, ReqwestClient};
-
-/// A client for Google's Gemini APIs (chat + embeddings)
-#[derive(Debug, Clone)]
-pub struct GeminiClient<T: HttpClient = ReqwestClient> {
-    /// The HTTP client. The generic parameter allows for mocking in tests.
-    pub(crate) client: T,
-    /// Optional configuration for the Gemini client.
-    pub config: Option<crate::config::GeminiConfig>,
-}
-
-impl<T: HttpClient + Default> Default for GeminiClient<T> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-/// Call the Gemini embeddings API.
-///
-/// # Arguments:
-///
-/// * `client`: An `HTTPClient` implementation.
-/// * `text`: The text to embed.
-///
-/// # Returns
-///
-/// An embedding vector if the request was successful.
-async fn call_gemini_embedding_api(
-    client: &impl HttpClient,
-    text: String,
-) -> Result<Vec<f32>, LLMError> {
-    let api_key = get_gemini_api_key()?;
-    let model = env::var("GEMINI_EMBEDDING_MODEL")
-        .ok()
-        .unwrap_or_else(|| DEFAULT_GEMINI_EMBEDDING_MODEL.to_string());
-
-    let mut headers = HeaderMap::new();
-    headers.insert("content-type", "application/json".parse()?);
-    headers.insert("x-goog-api-key", api_key.parse()?);
-
-    let url =
-        format!("https://generativelanguage.googleapis.com/v1beta/models/{model}:embedContent");
-    let request_body = GeminiEmbeddingRequest::from_text(text);
-
-    let res =
-        request_with_backoff(client, &url, &headers, &request_body, DEFAULT_MAX_RETRIES).await?;
-    let body = res.text().await?;
-    let json: serde_json::Value = serde_json::from_str(&body)?;
-    let parsed: GeminiEmbeddingResponse = serde_json::from_value(json).map_err(|e| {
-        LLMError::GenericLLMError(format!(
-            "Failed to deserialize Gemini embedding response: {e}"
-        ))
-    })?;
-
-    Ok(parsed.embedding.values)
-}
-
-impl<T> GeminiClient<T>
-where
-    T: HttpClient + Default,
-{
-    /// Creates a new GeminiClient instance without configuration
-    /// (will fall back to environment variables)
-    #[must_use]
-    pub fn new() -> Self {
-        Self {
-            client: T::default(),
-            config: None,
-        }
-    }
-
-    /// Creates a new GeminiClient instance with provided configuration
-    #[must_use]
-    pub fn with_config(config: crate::config::GeminiConfig) -> Self {
-        Self {
-            client: T::default(),
-            config: Some(config),
-        }
-    }
-
-    /// Internal method to compute embeddings that works with LLMError
-    ///
-    /// # Errors
-    ///
-    /// * `LLMError::EnvError` - If neither GEMINI_API_KEY nor GOOGLE_API_KEY environment variables are set
-    /// * `LLMError::TimeoutError` - If the HTTP request times out
-    /// * `LLMError::CredentialError` - If the API returns 401 or 403 status
-    /// * `LLMError::HttpStatusError` - If the API returns other unsuccessful HTTP status codes
-    /// * `LLMError::NetworkError` - If a network connectivity error occurs
-    /// * `LLMError::DeserializationError` - If the API response cannot be parsed
-    /// * `LLMError::GenericLLMError` - If other HTTP errors occur or Arrow array creation fails
-    pub fn compute_embeddings_internal(
-        &self,
-        source: Arc<dyn arrow_array::Array>,
-    ) -> Result<Arc<dyn arrow_array::Array>, LLMError> {
-        tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(self.compute_embeddings_async(source))
-        })
-    }
-
-    /// Compute embeddings asynchronously using the Gemini API.
-    ///
-    /// # Arguments:
-    ///
-    /// * `source`: An Arrow array
-    ///
-    /// # Returns
-    ///
-    /// If successful, an Arrow array containing the embeddings for each source text.
-    async fn compute_embeddings_async(
-        &self,
-        source: Arc<dyn arrow_array::Array>,
-    ) -> Result<Arc<dyn arrow_array::Array>, LLMError> {
-        let source_array = arrow_array::cast::as_string_array(&source);
-        let texts: Vec<String> = source_array
-            .iter()
-            .filter_map(|s| Some(s?.to_owned()))
-            .collect();
-
-        // Create a stream of futures
-        let futures = texts
-            .iter()
-            .map(|text| call_gemini_embedding_api(&self.client, text.clone()));
-
-        // Convert to a stream and process with buffer_unordered to limit concurrency
-        let max_concurrent = env::var("MAX_CONCURRENT_REQUESTS")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(DEFAULT_MAX_CONCURRENT_REQUESTS);
-
-        // Process futures with limited concurrency
-        let results = stream::iter(futures)
-            .buffer_unordered(max_concurrent)
-            .collect::<Vec<_>>()
-            .await;
-
-        // Process results and construct Arrow array
-        let mut embeddings: Vec<Vec<f32>> = Vec::with_capacity(texts.len());
-        for result in results {
-            match result {
-                Ok(embedding) => embeddings.push(embedding),
-                Err(e) => return Err(e),
-            }
-        }
-
-        // Convert to Arrow FixedSizeListArray
-        let embedding_dim = if embeddings.is_empty() {
-            DEFAULT_GEMINI_EMBEDDING_DIM as usize
-        } else {
-            embeddings[0].len()
-        };
-
-        let flattened: Vec<f32> = embeddings.iter().flatten().copied().collect();
-        let values = arrow_array::Float32Array::from(flattened);
-
-        let list_array = arrow_array::FixedSizeListArray::try_new(
-            Arc::new(Field::new("item", DataType::Float32, true)),
-            embedding_dim as i32,
-            Arc::new(values),
-            None,
-        )
-        .map_err(|e| {
-            LLMError::GenericLLMError(format!(
-                "Failed to create FixedSizeListArray in Gemini embeddings: {e}"
-            ))
-        })?;
-
-        Ok(Arc::new(list_array) as Arc<dyn arrow_array::Array>)
-    }
-}
-
-/// Get the Gemini API key from environment variables.
-fn get_gemini_api_key() -> Result<String, LLMError> {
-    // Prefer GEMINI_API_KEY, fallback to GOOGLE_API_KEY if present
-    match env::var("GEMINI_API_KEY") {
-        Ok(v) => Ok(v),
-        Err(_) => Ok(env::var("GOOGLE_API_KEY")?),
-    }
-}
+use crate::http_client::HttpClient;
 
 /// A function (tool) call request from the model.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -228,7 +42,7 @@ struct GeminiFunctionResult {
 /// A content part in a request to the Gemini API
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(untagged)]
-enum GeminiPart {
+pub(crate) enum GeminiPart {
     Text {
         text: String,
         #[serde(rename = "thoughtSignature", skip_serializing_if = "Option::is_none")]
@@ -599,101 +413,15 @@ impl<T: HttpClient> ApiClient for GeminiClient<T> {
     }
 }
 
-/// Content for an embedding API request
-#[derive(Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct GeminiEmbeddingRequestContent {
-    parts: Vec<GeminiPart>,
-}
-
-/// A request to embed texts using the Gemini API
-#[derive(Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct GeminiEmbeddingRequest {
-    model: String,
-    content: GeminiEmbeddingRequestContent,
-}
-
-impl GeminiEmbeddingRequest {
-    fn from_text(text: String) -> Self {
-        Self {
-            model: env::var("GEMINI_EMBEDDING_MODEL")
-                .ok()
-                .unwrap_or_else(|| DEFAULT_GEMINI_EMBEDDING_MODEL.to_string()),
-            content: GeminiEmbeddingRequestContent {
-                parts: vec![GeminiPart::Text {
-                    text,
-                    thought_signature: None,
-                }],
-            },
-        }
-    }
-}
-
-/// A vector containing the embeddings, returned as a nested object by Gemini's embedding API.
-#[derive(Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct GeminiEmbeddingVector {
-    values: Vec<f32>,
-}
-
-/// The full embedding API response
-#[derive(Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct GeminiEmbeddingResponse {
-    embedding: GeminiEmbeddingVector,
-}
-
-/// Implements the LanceDB EmbeddingFunction trait for Gemini client.
-impl<T: HttpClient + Default + std::fmt::Debug> EmbeddingFunction for GeminiClient<T> {
-    fn name(&self) -> &'static str {
-        "Gemini"
-    }
-
-    fn source_type(&self) -> Result<Cow<'_, DataType>, lancedb::Error> {
-        Ok(Cow::Owned(DataType::Utf8))
-    }
-
-    fn dest_type(&self) -> Result<Cow<'_, DataType>, lancedb::Error> {
-        Ok(Cow::Owned(DataType::FixedSizeList(
-            Arc::new(Field::new("item", DataType::Float32, true)),
-            DEFAULT_GEMINI_EMBEDDING_DIM as i32,
-        )))
-    }
-
-    fn compute_source_embeddings(
-        &self,
-        source: Arc<dyn arrow_array::Array>,
-    ) -> Result<Arc<dyn arrow_array::Array>, lancedb::Error> {
-        match self.compute_embeddings_internal(source) {
-            Ok(result) => Ok(result),
-            Err(e) => Err(lancedb::Error::Other {
-                message: e.to_string(),
-                source: None,
-            }),
-        }
-    }
-
-    fn compute_query_embeddings(
-        &self,
-        input: Arc<dyn arrow_array::Array>,
-    ) -> Result<Arc<dyn arrow_array::Array>, lancedb::Error> {
-        match self.compute_embeddings_internal(input) {
-            Ok(result) => Ok(result),
-            Err(e) => Err(lancedb::Error::Other {
-                message: e.to_string(),
-                source: None,
-            }),
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::{Arc, Mutex};
     use zqa_macros::test_ok;
 
     use super::*;
+    use crate::clients::gemini::GeminiClient;
+    use crate::constants::DEFAULT_GEMINI_EMBEDDING_DIM;
+    use crate::http_client::ReqwestClient;
     use crate::http_client::{MockHttpClient, SequentialMockHttpClient};
     use crate::llm::base::{ApiClient, ChatHistoryItem, ChatRequest};
     use crate::llm::tools::test_utils::MockTool;
