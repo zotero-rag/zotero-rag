@@ -402,8 +402,8 @@ pub(crate) struct VoyageAIBatchCreateResponse {
 ///
 /// # Construction example
 ///
-/// ```rust
-/// # use crate::embedding::voyage::VoyageAIBatchRequest;
+/// ```ignore
+/// # use zqa_rag::embedding::voyage::VoyageAIBatchRequest;
 ///
 /// let request = VoyageAIBatchRequest::default()
 ///     .with_file_id("file-123");
