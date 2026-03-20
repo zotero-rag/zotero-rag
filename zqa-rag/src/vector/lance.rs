@@ -3,12 +3,12 @@
 //! operations, variants with backup support are provided.
 
 use crate::capabilities::EmbeddingProvider;
+use crate::clients::openai::OpenAIClient;
 use crate::embedding::cohere::CohereClient;
 use crate::embedding::common::EmbeddingProviderConfig;
 use crate::embedding::voyage::VoyageAIClient;
 use crate::http_client::ReqwestClient;
 use crate::llm::gemini::GeminiClient;
-use crate::llm::openai::OpenAIClient;
 use crate::vector::backup::with_backup;
 use crate::vector::checkhealth::get_zero_vectors;
 

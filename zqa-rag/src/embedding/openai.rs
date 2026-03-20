@@ -2,8 +2,10 @@
 //! Anthropic client, but that will likely be changed, at which point this module will move to
 //! `llm`.
 
+use crate::clients::openai::OpenAIClient;
 use crate::constants::DEFAULT_OPENAI_EMBEDDING_MODEL;
 use crate::constants::{DEFAULT_MAX_CONCURRENT_REQUESTS, DEFAULT_OPENAI_EMBEDDING_DIM};
+use crate::http_client::HttpClient;
 use crate::llm::errors::LLMError;
 use arrow_array;
 use futures::StreamExt;
@@ -12,6 +14,42 @@ use lancedb::arrow::arrow_schema::{DataType, Field};
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::sync::Arc;
+
+impl<T> OpenAIClient<T>
+where
+    T: HttpClient + Default,
+{
+    /// Internal implementation for computing embeddings using shared logic.
+    ///
+    /// # Arguments:
+    ///
+    /// * `source` - An Arrow array of strings to embed.
+    ///
+    /// # Returns
+    ///
+    /// An Arrow array of `FixedSizeList<Float32>` containing the embeddings.
+    ///
+    /// # Errors
+    ///
+    /// * `LLMError::EnvError` - If the OPENAI_API_KEY environment variable is not set
+    /// * `LLMError::TimeoutError` - If the HTTP request times out
+    /// * `LLMError::CredentialError` - If the API returns 401 or 403 status
+    /// * `LLMError::HttpStatusError` - If the API returns other unsuccessful HTTP status codes
+    /// * `LLMError::NetworkError` - If a network connectivity error occurs
+    /// * `LLMError::DeserializationError` - If the API response cannot be parsed
+    /// * `LLMError::GenericLLMError` - If other HTTP errors occur or Arrow array creation fails
+    pub fn compute_embeddings_internal(
+        &self,
+        source: Arc<dyn arrow_array::Array>,
+    ) -> Result<Arc<dyn arrow_array::Array>, LLMError> {
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(compute_openai_embeddings_async(
+                source,
+                self.config.as_ref(),
+            ))
+        })
+    }
+}
 
 /// Process the actual embedding request with the OpenAI API.
 ///
@@ -179,24 +217,4 @@ pub(crate) async fn compute_openai_embeddings_async(
     .map_err(|e| LLMError::GenericLLMError(format!("Failed to create FixedSizeListArray: {e}")))?;
 
     Ok(Arc::new(list_array) as Arc<dyn arrow_array::Array>)
-}
-
-/// Synchronous wrapper for embedding computation
-///
-/// # Errors
-///
-/// * `LLMError::EnvError` - If the OPENAI_API_KEY environment variable is not set
-/// * `LLMError::TimeoutError` - If the HTTP request times out
-/// * `LLMError::CredentialError` - If the API returns 401 or 403 status
-/// * `LLMError::HttpStatusError` - If the API returns other unsuccessful HTTP status codes
-/// * `LLMError::NetworkError` - If a network connectivity error occurs
-/// * `LLMError::DeserializationError` - If the API response cannot be parsed
-/// * `LLMError::GenericLLMError` - If other HTTP errors occur or Arrow array creation fails
-pub(crate) fn compute_openai_embeddings_sync(
-    source: Arc<dyn arrow_array::Array>,
-    config: Option<&crate::config::OpenAIConfig>,
-) -> Result<Arc<dyn arrow_array::Array>, LLMError> {
-    tokio::task::block_in_place(|| {
-        tokio::runtime::Handle::current().block_on(compute_openai_embeddings_async(source, config))
-    })
 }

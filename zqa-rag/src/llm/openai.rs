@@ -17,91 +17,13 @@ use serde::{Deserialize, Serialize};
 
 use super::base::{ApiClient, ChatHistoryItem, ChatRequest, CompletionApiResponse};
 use super::errors::LLMError;
+use crate::clients::openai::OpenAIClient;
 use crate::common::request_with_backoff;
 use crate::constants::{DEFAULT_MAX_RETRIES, DEFAULT_OPENAI_EMBEDDING_DIM, DEFAULT_OPENAI_MODEL};
-use crate::embedding::openai::compute_openai_embeddings_sync;
-use crate::http_client::{HttpClient, ReqwestClient};
+use crate::http_client::HttpClient;
 use crate::llm::base::{ChatHistoryContent, ContentType, ToolUseStats, USER_ROLE};
 use crate::llm::tools::{CallbackFn, SerializedTool, get_owned_tools};
 use serde_json::{Map, Value};
-
-/// A client for OpenAI's chat completions (Responses) API.
-#[derive(Debug, Clone)]
-pub struct OpenAIClient<T: HttpClient = ReqwestClient> {
-    /// The HTTP client. The generic parameter allows for mocking in tests.
-    pub client: T,
-    /// Optional configuration for the OpenAI client.
-    pub config: Option<crate::config::OpenAIConfig>,
-}
-
-impl<T: HttpClient + Default> Default for OpenAIClient<T> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl<T> OpenAIClient<T>
-where
-    T: HttpClient + Default,
-{
-    /// Creates a new `OpenAIClient` instance without configuration.
-    ///
-    /// Uses environment variables for configuration.
-    ///
-    /// # Returns
-    ///
-    /// A client initialized with a default HTTP client and no config.
-    #[must_use]
-    pub fn new() -> Self {
-        Self {
-            client: T::default(),
-            config: None,
-        }
-    }
-
-    /// Creates a new `OpenAIClient` instance with provided configuration.
-    ///
-    /// # Arguments:
-    ///
-    /// * `config` - Client configuration including API key and model.
-    ///
-    /// # Returns
-    ///
-    /// A client initialized with a default HTTP client and the given config.
-    #[must_use]
-    pub fn with_config(config: crate::config::OpenAIConfig) -> Self {
-        Self {
-            client: T::default(),
-            config: Some(config),
-        }
-    }
-
-    /// Internal implementation for computing embeddings using shared logic.
-    ///
-    /// # Arguments:
-    ///
-    /// * `source` - An Arrow array of strings to embed.
-    ///
-    /// # Returns
-    ///
-    /// An Arrow array of `FixedSizeList<Float32>` containing the embeddings.
-    ///
-    /// # Errors
-    ///
-    /// * `LLMError::EnvError` - If the OPENAI_API_KEY environment variable is not set
-    /// * `LLMError::TimeoutError` - If the HTTP request times out
-    /// * `LLMError::CredentialError` - If the API returns 401 or 403 status
-    /// * `LLMError::HttpStatusError` - If the API returns other unsuccessful HTTP status codes
-    /// * `LLMError::NetworkError` - If a network connectivity error occurs
-    /// * `LLMError::DeserializationError` - If the API response cannot be parsed
-    /// * `LLMError::GenericLLMError` - If other HTTP errors occur or Arrow array creation fails
-    pub fn compute_embeddings_internal(
-        &self,
-        source: Arc<dyn arrow_array::Array>,
-    ) -> Result<Arc<dyn arrow_array::Array>, LLMError> {
-        compute_openai_embeddings_sync(source, self.config.as_ref())
-    }
-}
 
 /// OpenAI-specific tool wrapper that adds the `type` and `strict` fields
 /// required by OpenAI's API.
