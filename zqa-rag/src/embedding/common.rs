@@ -65,8 +65,8 @@ pub fn get_embedding_dims_by_provider(embedding_name: &str) -> u32 {
 ///
 /// # Arguments
 ///
-/// * `embedding_name`: Embedding provider name. Must be one of "openai", "anthropic", or
-///   "voyageai".
+/// * `embedding_name`: Embedding provider name. Must be one of "openai", "gemini",
+///   "voyageai", or "cohere".
 ///
 /// # Returns
 ///
