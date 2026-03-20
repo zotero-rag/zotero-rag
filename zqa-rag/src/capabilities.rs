@@ -65,8 +65,6 @@ pub enum EmbeddingProvider {
     Cohere,
     /// OpenAI embedding provider
     OpenAI,
-    /// Anthropic embedding provider, uses the OpenAI API (for now).
-    Anthropic,
     /// VoyageAI embedding provider
     VoyageAI,
     /// Gemini embedding provider
@@ -80,7 +78,6 @@ impl EmbeddingProvider {
         match self {
             EmbeddingProvider::Cohere => "cohere",
             EmbeddingProvider::OpenAI => "openai",
-            EmbeddingProvider::Anthropic => "anthropic",
             EmbeddingProvider::VoyageAI => "voyageai",
             EmbeddingProvider::Gemini => "gemini",
         }
@@ -92,7 +89,6 @@ impl EmbeddingProvider {
         [
             EmbeddingProvider::Cohere.as_str(),
             EmbeddingProvider::OpenAI.as_str(),
-            EmbeddingProvider::Anthropic.as_str(),
             EmbeddingProvider::VoyageAI.as_str(),
             EmbeddingProvider::Gemini.as_str(),
         ]
@@ -107,9 +103,7 @@ impl EmbeddingProvider {
                 ChunkingStrategy::WholeDocument
             }
             // include a buffer for approximation errors
-            EmbeddingProvider::OpenAI | EmbeddingProvider::Anthropic => {
-                ChunkingStrategy::SectionBased(7500)
-            }
+            EmbeddingProvider::OpenAI => ChunkingStrategy::SectionBased(7500),
             // include a buffer for approximation errors; actual limit is 2048
             EmbeddingProvider::Gemini => ChunkingStrategy::SectionBased(1500),
         }
@@ -304,7 +298,6 @@ mod tests {
     /// implements LanceDB's [`EmbeddingFunction`].
     #[test]
     fn embedding_providers_implement_embedding_function() {
-        assert_embedding_fn::<AnthropicClient<ReqwestClient>>();
         assert_embedding_fn::<OpenAIClient<ReqwestClient>>();
         assert_embedding_fn::<GeminiClient<ReqwestClient>>();
         assert_embedding_fn::<CohereClient<ReqwestClient>>();
