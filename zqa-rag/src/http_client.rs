@@ -3,7 +3,6 @@
 //! implementation is provided as a default implementation, but it can be easily replaced with a
 //! `MockHttpClient` implementation for testing.
 
-use http;
 use reqwest::{header::HeaderMap, multipart::Form};
 #[cfg(test)]
 use std::{
@@ -129,18 +128,21 @@ impl HttpClient for ReqwestClient {
 
 /// A mock implementation of the `HttpClient` trait for testing purposes.
 #[derive(Debug)]
-pub struct MockHttpClient<T: Send + Sync + Clone> {
+#[cfg(test)]
+pub(crate) struct MockHttpClient<T: Send + Sync + Clone> {
     /// The response to return when the mock client is called.
     pub response: T,
 }
 
+#[cfg(test)]
 impl<T: serde::Serialize + Send + Sync + Clone> MockHttpClient<T> {
     /// Create a new `MockHttpClient` with the given response.
-    pub fn new(response: T) -> Self {
+    pub(crate) fn new(response: T) -> Self {
         Self { response }
     }
 }
 
+#[cfg(test)]
 impl<T: serde::Serialize + Send + Sync + Clone> Default for MockHttpClient<T>
 where
     T: Default,
@@ -156,7 +158,7 @@ where
 /// testing multi-turn interactions (e.g. a tool-call response followed by a final text response).
 #[cfg(test)]
 #[derive(Debug, Clone)]
-pub struct SequentialMockHttpClient {
+pub(crate) struct SequentialMockHttpClient {
     /// The queue of JSON-serialized responses to return, in order.
     responses: Arc<Mutex<VecDeque<String>>>,
 }
@@ -168,7 +170,7 @@ impl SequentialMockHttpClient {
     /// # Panics
     ///
     /// * If `serde_json::to_string` returns an `Err`.
-    pub fn new<T: serde::Serialize>(responses: impl IntoIterator<Item = T>) -> Self {
+    pub(crate) fn new<T: serde::Serialize>(responses: impl IntoIterator<Item = T>) -> Self {
         let queue = responses
             .into_iter()
             .map(|r| serde_json::to_string(&r).unwrap())
@@ -222,6 +224,7 @@ impl HttpClient for SequentialMockHttpClient {
     }
 }
 
+#[cfg(test)]
 impl<T: serde::Serialize + Send + Sync + Clone> HttpClient for MockHttpClient<T> {
     #[allow(unused_variables)]
     fn post_json<'a, U: serde::Serialize + Send + Sync>(
