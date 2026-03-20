@@ -1,13 +1,8 @@
 //! A module for interacting with Anthropic's API.
 
-use std::borrow::Cow;
 use std::env;
-use std::sync::Arc;
 
-use arrow_array;
 use http::HeaderMap;
-use lancedb::arrow::arrow_schema::{DataType, Field};
-use lancedb::embeddings::EmbeddingFunction;
 use serde::{Deserialize, Serialize};
 
 use super::base::{ApiClient, ChatHistoryItem, ChatRequest, CompletionApiResponse};
@@ -15,9 +10,7 @@ use super::errors::LLMError;
 use crate::common::request_with_backoff;
 use crate::constants::{
     DEFAULT_ANTHROPIC_MAX_TOKENS, DEFAULT_ANTHROPIC_MODEL, DEFAULT_MAX_RETRIES,
-    DEFAULT_OPENAI_EMBEDDING_DIM,
 };
-use crate::embedding::openai::compute_openai_embeddings_sync;
 use crate::http_client::{HttpClient, ReqwestClient};
 use crate::llm::base::{ChatHistoryContent, ContentType, ToolCallRequest, USER_ROLE};
 use crate::llm::tools::{SerializedTool, get_owned_tools, process_tool_calls};
@@ -60,23 +53,6 @@ where
             client: T::default(),
             config: Some(config),
         }
-    }
-
-    /// Internal implementation for computing embeddings using shared logic
-    ///
-    /// # Errors
-    ///
-    /// * `LLMError::EnvError` - If the OPENAI_API_KEY environment variable is not set
-    /// * `LLMError::TimeoutError` - If the HTTP request times out
-    /// * `LLMError::CredentialError` - If the API returns 401 or 403 status
-    /// * `LLMError::HttpStatusError` - If the API returns other unsuccessful HTTP status codes
-    /// * `LLMError::NetworkError` - If a network connectivity error occurs
-    /// * `LLMError::DeserializationError` - If the API response cannot be parsed
-    /// * `LLMError::GenericLLMError` - If other HTTP errors occur or Arrow array creation fails
-    pub fn compute_embeddings_internal(
-        source: Arc<dyn arrow_array::Array>,
-    ) -> Result<Arc<dyn arrow_array::Array>, LLMError> {
-        compute_openai_embeddings_sync(source, None)
     }
 }
 
@@ -466,69 +442,13 @@ impl<T: HttpClient> ApiClient for AnthropicClient<T> {
     }
 }
 
-/// Implements the LanceDB EmbeddingFunction trait for AnthropicClient. Note that Anthropic
-/// does not have their own embeddings model, so we'll just use OpenAI's model instead. This
-/// does mean users will need an API key from both--but there's really no other option here.
-/// Anthropic's docs recommend Voyage AI--but users are more likely to have an OpenAI key than
-/// a Voyage AI key.
-///
-/// Maintainers should note that any updates here should also be reflected in OpenAIClient.
-impl<T: HttpClient + Default + std::fmt::Debug> EmbeddingFunction for AnthropicClient<T> {
-    fn name(&self) -> &'static str {
-        "Anthropic"
-    }
-
-    fn source_type(&self) -> Result<Cow<'_, DataType>, lancedb::Error> {
-        Ok(Cow::Owned(DataType::Utf8))
-    }
-
-    fn dest_type(&self) -> Result<Cow<'_, DataType>, lancedb::Error> {
-        Ok(Cow::Owned(DataType::FixedSizeList(
-            Arc::new(Field::new("item", DataType::Float32, true)),
-            DEFAULT_OPENAI_EMBEDDING_DIM as i32, // text-embedding-3-small size
-        )))
-    }
-
-    fn compute_source_embeddings(
-        &self,
-        source: Arc<dyn arrow_array::Array>,
-    ) -> Result<Arc<dyn arrow_array::Array>, lancedb::Error> {
-        // Call our internal implementation and map LLMError to lancedb::Error
-        match AnthropicClient::<T>::compute_embeddings_internal(source) {
-            Ok(result) => Ok(result),
-            Err(e) => Err(lancedb::Error::Other {
-                message: e.to_string(),
-                source: None,
-            }),
-        }
-    }
-
-    fn compute_query_embeddings(
-        &self,
-        input: Arc<dyn arrow_array::Array>,
-    ) -> Result<Arc<dyn arrow_array::Array>, lancedb::Error> {
-        // For queries, we don't need concurrency since it's typically a single query
-        // Just reuse the same implementation with the expectation it's usually for one item
-        match AnthropicClient::<T>::compute_embeddings_internal(input) {
-            Ok(result) => Ok(result),
-            Err(e) => Err(lancedb::Error::Other {
-                message: e.to_string(),
-                source: None,
-            }),
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::{Arc, Mutex};
 
-    use arrow_array::Array;
     use dotenv::dotenv;
-    use lancedb::embeddings::EmbeddingFunction;
     use zqa_macros::{test_eq, test_ok};
 
-    use crate::constants::DEFAULT_OPENAI_EMBEDDING_DIM;
     use crate::http_client::{MockHttpClient, ReqwestClient, SequentialMockHttpClient};
     use crate::llm::anthropic::{AnthropicTextResponseContent, DEFAULT_CLAUDE_MODEL};
     use crate::llm::base::{
@@ -624,36 +544,6 @@ mod tests {
         } else {
             panic!("Expected Text content type");
         }
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
-    async fn test_compute_embeddings() {
-        dotenv().ok();
-
-        let array = arrow_array::StringArray::from(vec![
-            "Hello, World!",
-            "A second string",
-            "A third string",
-            "A fourth string",
-            "A fifth string",
-            "A sixth string",
-        ]);
-
-        let client = AnthropicClient::<ReqwestClient>::default();
-        let embeddings = client.compute_source_embeddings(Arc::new(array));
-
-        // Debug the error if there is one
-        if embeddings.is_err() {
-            println!("Anthropic embedding error: {:?}", embeddings.as_ref().err());
-        }
-
-        test_ok!(embeddings);
-
-        let embeddings = embeddings.unwrap();
-        let vector = arrow_array::cast::as_fixed_size_list_array(&embeddings);
-
-        test_eq!(vector.len(), 6);
-        test_eq!(vector.value_length(), DEFAULT_OPENAI_EMBEDDING_DIM as i32);
     }
 
     #[tokio::test]

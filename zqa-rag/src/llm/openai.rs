@@ -648,8 +648,6 @@ impl<T: HttpClient> ApiClient for OpenAIClient<T> {
 /// Implements the LanceDB EmbeddingFunction trait for OpenAI client. This is the same code
 /// as the one in AnthropicClient verbatim--I made a judgement call that two copies are okay;
 /// when we hit a place where we need a third copy, we'll refactor.
-///
-/// Maintainers should note that any updates here should also be reflected in AnthropicClient.
 impl<T: HttpClient + Default + Debug> EmbeddingFunction for OpenAIClient<T> {
     fn name(&self) -> &'static str {
         "OpenAI"
