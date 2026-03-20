@@ -17,10 +17,10 @@ use serde::{Deserialize, Serialize};
 
 use super::base::{ApiClient, ChatHistoryItem, ChatRequest, CompletionApiResponse};
 use super::errors::LLMError;
-use super::http_client::{HttpClient, ReqwestClient};
 use crate::common::request_with_backoff;
 use crate::constants::{DEFAULT_MAX_RETRIES, DEFAULT_OPENAI_EMBEDDING_DIM, DEFAULT_OPENAI_MODEL};
 use crate::embedding::openai::compute_openai_embeddings_sync;
+use crate::http_client::{HttpClient, ReqwestClient};
 use crate::llm::base::{ChatHistoryContent, ContentType, ToolUseStats, USER_ROLE};
 use crate::llm::tools::{CallbackFn, SerializedTool, get_owned_tools};
 use serde_json::{Map, Value};
@@ -106,7 +106,7 @@ where
 /// OpenAI-specific tool wrapper that adds the `type` and `strict` fields
 /// required by OpenAI's API.
 #[derive(Clone)]
-pub struct OpenAITool<'a>(pub SerializedTool<'a>);
+pub(crate) struct OpenAITool<'a>(pub SerializedTool<'a>);
 
 impl Serialize for OpenAITool<'_> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
@@ -704,8 +704,8 @@ impl<T: HttpClient + Default + Debug> EmbeddingFunction for OpenAIClient<T> {
 mod tests {
     use super::{OpenAIClient, OpenAIContent, OpenAIOutput, OpenAIResponse, OpenAIUsage};
     use crate::constants::DEFAULT_OPENAI_EMBEDDING_DIM;
+    use crate::http_client::{MockHttpClient, ReqwestClient};
     use crate::llm::base::{ApiClient, ChatRequest, ContentType};
-    use crate::llm::http_client::{MockHttpClient, ReqwestClient};
     use crate::llm::tools::OPENAI_SCHEMA_KEY;
     use crate::llm::tools::test_utils::MockTool;
     use arrow_array::Array;
@@ -858,7 +858,7 @@ mod tests {
     }
 
     use super::{OpenAIRequestInput, OpenAIRequestToolCallInputItem, process_openai_tool_calls};
-    use crate::llm::http_client::SequentialMockHttpClient;
+    use crate::http_client::SequentialMockHttpClient;
     use crate::llm::tools::Tool;
     use crate::llm::tools::get_owned_tools;
     use crate::llm::tools::test_utils::MockToolInput;

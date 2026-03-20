@@ -16,12 +16,12 @@ use std::{borrow::Cow, env, future::Future, pin::Pin, sync::Arc, time::Instant};
 use arrow_schema::{DataType, Field};
 use lancedb::embeddings::EmbeddingFunction;
 
+use crate::http_client::{HttpClient, ReqwestClient};
 use crate::llm::errors::LLMError;
-use crate::llm::http_client::{HttpClient, ReqwestClient};
 
 /// A client for Cohere's embeddings API.
 #[derive(Debug, Clone)]
-pub struct CohereClient<T: HttpClient = ReqwestClient> {
+pub(crate) struct CohereClient<T: HttpClient = ReqwestClient> {
     /// The HTTP client. The generic parameter allows for mocking in tests.
     pub client: T,
     /// Optional configuration for the Cohere client.
@@ -41,7 +41,7 @@ where
     /// Creates a new CohereClient instance without configuration
     /// (will fall back to environment variables)
     #[must_use]
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             client: T::default(),
             config: None,
@@ -50,7 +50,7 @@ where
 
     /// Creates a new CohereClient instance with provided configuration
     #[must_use]
-    pub fn with_config(config: crate::config::CohereConfig) -> Self {
+    pub(crate) fn with_config(config: crate::config::CohereConfig) -> Self {
         Self {
             client: T::default(),
             config: Some(config),
@@ -112,20 +112,20 @@ struct CohereEmbedRequest {
 
 /// The embeddings returned by the Cohere API.
 #[derive(Serialize, Deserialize, Debug)]
-pub struct CohereAIEmbeddings {
+pub(crate) struct CohereAIEmbeddings {
     /// The embeddings, returned as a vector of floats for each text.
     float: Vec<Vec<f32>>,
 }
 
 /// Represents a successful response from the Cohere embeddings API.
 #[derive(Serialize, Deserialize, Debug)]
-pub struct CohereAISuccess {
+pub(crate) struct CohereAISuccess {
     embeddings: CohereAIEmbeddings,
 }
 
 /// Represents an error response from the Cohere embeddings API.
 #[derive(Serialize, Deserialize, Debug)]
-pub struct CohereAIError {
+pub(crate) struct CohereAIError {
     message: String,
 }
 
@@ -286,7 +286,7 @@ impl<T: HttpClient, U: AsRef<str> + Send + Clone> Rerank<U> for CohereClient<T> 
 #[cfg(test)]
 mod tests {
     use super::{CohereClient, DEFAULT_COHERE_EMBEDDING_DIM};
-    use crate::{embedding::common::Rerank, llm::http_client::ReqwestClient};
+    use crate::{embedding::common::Rerank, http_client::ReqwestClient};
     use arrow_array::Array;
     use dotenv::dotenv;
     use std::sync::Arc;

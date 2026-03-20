@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use super::base::{ApiClient, ChatHistoryItem, ChatRequest, CompletionApiResponse};
 use super::errors::LLMError;
-use super::http_client::{HttpClient, ReqwestClient};
+use crate::http_client::{HttpClient, ReqwestClient};
 
 const DEFAULT_MODEL: &str = "anthropic/claude-sonnet-4.5";
 
@@ -466,8 +466,8 @@ mod tests {
     use zqa_macros::{test_eq, test_ok};
 
     use super::*;
+    use crate::http_client::{MockHttpClient, ReqwestClient, SequentialMockHttpClient};
     use crate::llm::base::{ApiClient, ChatRequest};
-    use crate::llm::http_client::{MockHttpClient, ReqwestClient, SequentialMockHttpClient};
     use crate::llm::tools::test_utils::MockTool;
 
     #[tokio::test]

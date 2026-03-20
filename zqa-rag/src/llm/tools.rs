@@ -127,7 +127,7 @@ pub trait Tool: Send + Sync {
 
 /// A newtype wrapper struct that lets us add a blanket implementation of `Serialize` to all tools.
 #[derive(Clone)]
-pub struct SerializedTool<'a>(pub &'a dyn Tool);
+pub(crate) struct SerializedTool<'a>(pub &'a dyn Tool);
 
 impl Serialize for SerializedTool<'_> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
@@ -168,7 +168,9 @@ impl Serialize for SerializedTool<'_> {
 /// `Some(Vec<SerializedTool>)` referencing the original tools, or `None` if no tools were
 /// provided.
 #[must_use]
-pub fn get_owned_tools<'a>(tools: Option<&'a [Box<dyn Tool>]>) -> Option<Vec<SerializedTool<'a>>> {
+pub(crate) fn get_owned_tools<'a>(
+    tools: Option<&'a [Box<dyn Tool>]>,
+) -> Option<Vec<SerializedTool<'a>>> {
     tools.as_ref().map(|iter| {
         iter.iter()
             .map(|f| SerializedTool(&**f))
@@ -206,7 +208,7 @@ pub type CallbackFn<T> = dyn Fn(&T) + Send + Sync + 'static;
 /// # Errors
 ///
 /// Returns an error if a tool is called that does not exist in the provided list of tools.
-pub async fn process_tool_calls<CHI>(
+pub(crate) async fn process_tool_calls<CHI>(
     chat_history: &mut Vec<CHI>,
     new_contents: &mut Vec<ContentType>,
     contents: &[ChatHistoryContent],

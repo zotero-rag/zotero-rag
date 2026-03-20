@@ -6,8 +6,9 @@ use crate::capabilities::EmbeddingProvider;
 use crate::embedding::cohere::CohereClient;
 use crate::embedding::common::EmbeddingProviderConfig;
 use crate::embedding::voyage::VoyageAIClient;
+use crate::http_client::ReqwestClient;
 use crate::llm::gemini::GeminiClient;
-use crate::llm::{http_client::ReqwestClient, openai::OpenAIClient};
+use crate::llm::openai::OpenAIClient;
 use crate::vector::backup::with_backup;
 use crate::vector::checkhealth::get_zero_vectors;
 

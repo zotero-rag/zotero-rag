@@ -174,22 +174,20 @@ mod tests {
     use tempfile;
     use zqa_macros::{test_contains, test_eq, test_ok};
     use zqa_rag::{
-        config::AnthropicConfig,
+        config::{AnthropicConfig, LLMClientConfig},
         constants::DEFAULT_ANTHROPIC_MODEL_SMALL,
-        llm::{
-            anthropic::AnthropicClient, factory::LLMClient, http_client::ReqwestClient,
-            tools::ANTHROPIC_SCHEMA_KEY,
-        },
+        llm::{factory::get_client_with_config, tools::ANTHROPIC_SCHEMA_KEY},
     };
 
     fn make_tool(schema_key: &str) -> SummarizationTool {
-        let client = AnthropicClient::<ReqwestClient>::with_config(AnthropicConfig {
+        let client = get_client_with_config(LLMClientConfig::Anthropic(AnthropicConfig {
             api_key: env::var("ANTHROPIC_API_KEY").unwrap(),
             model: DEFAULT_ANTHROPIC_MODEL_SMALL.into(),
             max_tokens: 8192,
-        });
+        }))
+        .unwrap();
 
-        SummarizationTool::new(LLMClient::Anthropic(client), schema_key.to_string())
+        SummarizationTool::new(client, schema_key.to_string())
     }
 
     #[test]

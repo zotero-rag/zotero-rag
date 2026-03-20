@@ -40,22 +40,6 @@ impl ApiClient for LLMClient {
     }
 }
 
-/// Returns an ApiClient implementation based on the provider name
-/// without configuration (will fall back to environment variables)
-///
-/// # Errors
-/// Returns LLMError::InvalidProviderError if the provider is not supported
-pub fn get_client_by_provider(provider: &str) -> Result<LLMClient, LLMError> {
-    match provider {
-        "anthropic" => Ok(LLMClient::Anthropic(AnthropicClient::new())),
-        "ollama" => Ok(LLMClient::Ollama(OllamaClient::new())),
-        "openai" => Ok(LLMClient::OpenAI(OpenAIClient::new())),
-        "openrouter" => Ok(LLMClient::OpenRouter(OpenRouterClient::new())),
-        "gemini" => Ok(LLMClient::Gemini(GeminiClient::new())),
-        _ => Err(LLMError::InvalidProviderError(provider.to_string())),
-    }
-}
-
 /// Returns an ApiClient implementation with provided configuration
 ///
 /// # Errors
