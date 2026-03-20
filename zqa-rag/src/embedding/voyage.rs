@@ -24,9 +24,9 @@ use crate::llm::errors::LLMError;
 #[derive(Debug, Clone)]
 pub(crate) struct VoyageAIClient<T: HttpClient = ReqwestClient> {
     /// The HTTP client. The generic parameter allows for mocking in tests.
-    pub client: T,
+    pub(crate) client: T,
     /// Optional configuration for the VoyageAI client.
-    pub config: Option<crate::config::VoyageAIConfig>,
+    pub(crate) config: Option<crate::config::VoyageAIConfig>,
 }
 
 impl<T: HttpClient + Default + Clone> Default for VoyageAIClient<T> {
@@ -403,7 +403,7 @@ pub(crate) struct VoyageAIBatchCreateResponse {
 /// # Construction example
 ///
 /// ```rust
-/// # use zqa_rag::embedding::voyage::VoyageAIBatchRequest;
+/// # use crate::embedding::voyage::VoyageAIBatchRequest;
 ///
 /// let request = VoyageAIBatchRequest::default()
 ///     .with_file_id("file-123");
