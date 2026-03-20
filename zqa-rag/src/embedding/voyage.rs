@@ -334,7 +334,7 @@ impl<T: HttpClient, U: AsRef<str> + Send + Clone> Rerank<U> for VoyageAIClient<T
 #[derive(Serialize)]
 pub(crate) struct VoyageAIFilesRequestBody {
     /// A list of input texts that belong to one "group".
-    input: Vec<String>,
+    pub(crate) input: Vec<String>,
 }
 
 /// An input as part of the request to the Voyage AI Files API, used as a precursor to interact
@@ -350,9 +350,9 @@ pub(crate) struct VoyageAIFilesRequestBody {
 #[derive(Serialize)]
 pub(crate) struct VoyageAIFilesRequest {
     /// A unique ID assigned to each request
-    pub custom_id: String,
+    pub(crate) custom_id: String,
     /// One or more inputs as part of this request.
-    pub body: VoyageAIFilesRequestBody,
+    pub(crate) body: VoyageAIFilesRequestBody,
 }
 
 /// A response from the Voyage AI Files API.
@@ -360,11 +360,11 @@ pub(crate) struct VoyageAIFilesRequest {
 #[allow(dead_code)]
 pub(crate) struct VoyageAIFilesResponse {
     /// The file ID, used to refer to input, output, and error files. This starts with "file-".
-    pub id: String,
+    pub(crate) id: String,
     /// An ISO 8601 extended format string with time zone offset.
-    pub created_at: String,
+    pub(crate) created_at: String,
     /// An ISO 8601 extended format string with time zone offset.
-    pub expires_at: String,
+    pub(crate) expires_at: String,
 }
 
 /// The embedding parameters for a batch request.
@@ -394,7 +394,7 @@ impl Default for VoyageAIBatchRequestParams<'_> {
 #[allow(dead_code)]
 pub(crate) struct VoyageAIBatchCreateResponse {
     /// The batch ID, used to check status and retrieve results.
-    pub id: String,
+    pub(crate) id: String,
 }
 
 /// A request to the Voyage AI Batch API. This assumes a call to the Files API has been made,
