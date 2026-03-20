@@ -23,9 +23,9 @@ use crate::llm::errors::LLMError;
 #[derive(Debug, Clone)]
 pub(crate) struct CohereClient<T: HttpClient = ReqwestClient> {
     /// The HTTP client. The generic parameter allows for mocking in tests.
-    pub client: T,
+    pub(crate) client: T,
     /// Optional configuration for the Cohere client.
-    pub config: Option<crate::config::CohereConfig>,
+    pub(crate) config: Option<crate::config::CohereConfig>,
 }
 
 impl<T: HttpClient + Default + Clone> Default for CohereClient<T> {
