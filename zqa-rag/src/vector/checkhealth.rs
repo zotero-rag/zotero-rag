@@ -379,7 +379,7 @@ mod tests {
     use crate::embedding::common::EmbeddingProviderConfig;
     use crate::vector::lance::get_db_uri;
     use crate::vector::lance::insert_records;
-    use arrow_array::{RecordBatch, RecordBatchIterator, StringArray};
+    use arrow_array::{RecordBatch, StringArray};
     use dotenv::dotenv;
     use lancedb::embeddings::EmbeddingDefinition;
     use serial_test::serial;
@@ -426,11 +426,10 @@ mod tests {
             vec![Arc::new(pdf_text_data), Arc::new(title_data)],
         )
         .unwrap();
-        let batches = vec![Ok(record_batch.clone())];
-        let reader = RecordBatchIterator::new(batches.into_iter(), record_batch.schema());
+        let batches = vec![record_batch.clone()];
 
         let _db = insert_records(
-            reader,
+            batches,
             None,
             &EmbeddingProviderConfig::VoyageAI(VoyageAIConfig {
                 embedding_model: DEFAULT_VOYAGE_EMBEDDING_MODEL.into(),

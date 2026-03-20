@@ -161,7 +161,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow_array::{RecordBatch, RecordBatchIterator, StringArray};
+    use arrow_array::{RecordBatch, StringArray};
     use arrow_schema::{DataType, Field, Schema};
     use dotenv::dotenv;
     use lancedb::{connect, embeddings::EmbeddingDefinition};
@@ -177,8 +177,7 @@ mod tests {
         let schema = Schema::new(vec![Field::new("test_data", DataType::Utf8, false)]);
         let data = StringArray::from(vec!["test1", "test2"]);
         let record_batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(data)]).unwrap();
-        let batches = vec![Ok(record_batch.clone())];
-        let reader = RecordBatchIterator::new(batches.into_iter(), record_batch.schema());
+        let batches = vec![record_batch.clone()];
 
         // Connect and register embedding function
         let db = connect(&get_db_uri()).execute().await?;
@@ -190,7 +189,7 @@ mod tests {
             >::default()),
         )?;
 
-        db.create_table(TABLE_NAME, reader)
+        db.create_table(TABLE_NAME, batches)
             .mode(lancedb::database::CreateTableMode::Overwrite)
             .add_embedding(EmbeddingDefinition::new(
                 "test_data",
@@ -223,11 +222,10 @@ mod tests {
         let schema = Schema::new(vec![Field::new("test_data", DataType::Utf8, false)]);
         let data = StringArray::from(vec!["test3", "test4"]);
         let record_batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(data)]).unwrap();
-        let batches = vec![Ok(record_batch.clone())];
-        let reader = RecordBatchIterator::new(batches.into_iter(), record_batch.schema());
+        let batches = vec![record_batch.clone()];
 
         // Add data
-        table.add(reader).execute().await?;
+        table.add(batches).execute().await?;
 
         Ok(table.version().await?)
     }

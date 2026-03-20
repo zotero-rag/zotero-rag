@@ -1,4 +1,3 @@
-use arrow_array::RecordBatchIterator;
 use dotenv::dotenv;
 use lancedb::embeddings::EmbeddingDefinition;
 use log::LevelFilter;
@@ -51,12 +50,11 @@ async fn test_integration_works() {
     test_ok!(record_batch);
 
     let record_batch = record_batch.unwrap();
-    let schema = record_batch.schema();
-    let batches = vec![Ok(record_batch.clone())];
-    let batch_iter = RecordBatchIterator::new(batches.into_iter(), schema.clone());
+    let _schema = record_batch.schema();
+    let batches = vec![record_batch.clone()];
 
     let db = insert_records(
-        batch_iter,
+        batches,
         None,
         &config.get_embedding_config().unwrap(),
         EmbeddingDefinition::new("pdf_text", "voyageai", Some("embeddings")),

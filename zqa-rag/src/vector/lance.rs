@@ -25,7 +25,7 @@ use lancedb::{
     query::QueryBase,
 };
 use std::collections::HashSet;
-use std::{fmt::Display, path::PathBuf, sync::Arc, time::Instant, vec::IntoIter};
+use std::{fmt::Display, path::PathBuf, sync::Arc, time::Instant};
 use thiserror::Error;
 
 // NOTE: Maintainers: ensure that `DB_URI` begins with `TABLE_NAME`
@@ -92,8 +92,8 @@ pub struct TableStatistics {
 impl Display for TableStatistics {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("Table statistics:\n")?;
-        f.write_str(&format!("\tTable version: {}", self.table_version))?;
-        f.write_str(&format!("\tNumber of rows: {}", self.num_rows))?;
+        f.write_str(&format!("\tTable version: {}\n", self.table_version))?;
+        f.write_str(&format!("\tNumber of rows: {}\n", self.num_rows))?;
 
         Ok(())
     }
@@ -239,7 +239,7 @@ async fn get_db_with_embeddings(
 }
 
 /// Given a `RecordBatch` of items, delete records in the database where the `key` matches. Note
-/// that they `key` has to exist in the schema in both `rows` and the database.
+/// that the `key` has to exist in the schema in both `rows` and the database.
 ///
 /// # Arguments:
 ///
@@ -438,7 +438,7 @@ pub async fn get_lancedb_items(
         LanceError::InvalidStateError(format!("The table {TABLE_NAME} does not exist"))
     })?;
 
-    // The installed version of Lance has a bug where without the `.limit` call here, it only
+    // The installed version of LanceDB has a bug where without the `.limit` call here, it only
     // returns 10 rows; see https://github.com/lancedb/lancedb/issues/1852#issuecomment-2489837804
     let results: Vec<RecordBatch> = tbl
         .query()
@@ -627,7 +627,7 @@ pub async fn search_by_column(
 /// # Errors
 /// Returns a `LanceError` if connection, table creation, or registering embedding functions fails
 pub async fn insert_records(
-    data: RecordBatchIterator<IntoIter<Result<RecordBatch, ArrowError>>>,
+    data: Vec<RecordBatch>,
     merge_on: Option<&[&str]>,
     embedding_config: &EmbeddingProviderConfig,
     embedding_params: EmbeddingDefinition,
@@ -636,6 +636,7 @@ pub async fn insert_records(
 
     if lancedb_exists().await
         && let Some(merge_on) = merge_on
+        && let Some(first_batch) = data.first()
     {
         // Add rows if they don't already exist
         let tbl = db
@@ -644,10 +645,16 @@ pub async fn insert_records(
             .await
             .map_err(|e| LanceError::TableUpdateError(e.to_string()))?;
 
+        let schema = first_batch.schema();
+
+        let reader = RecordBatchIterator::new(
+            data.into_iter().map(std::result::Result::Ok),
+            schema.clone(),
+        );
         tbl.merge_insert(merge_on)
             .when_not_matched_insert_all()
             .clone()
-            .execute(Box::new(data))
+            .execute(Box::new(reader))
             .await
             .map_err(|e| LanceError::TableUpdateError(e.to_string()))?;
     } else {
@@ -679,7 +686,7 @@ pub async fn insert_records(
 /// # Errors
 /// Returns a `LanceError` if backup creation, database operations, or restoration fails
 pub async fn insert_records_with_backup(
-    data: RecordBatchIterator<IntoIter<Result<RecordBatch, ArrowError>>>,
+    data: Vec<RecordBatch>,
     merge_on: Option<&[&str]>,
     embedding_config: &EmbeddingProviderConfig,
     embedding_params: EmbeddingDefinition,
@@ -750,6 +757,16 @@ mod tests {
 
     use super::*;
 
+    fn get_test_openai_embedding_config() -> EmbeddingProviderConfig {
+        EmbeddingProviderConfig::OpenAI(OpenAIConfig {
+            api_key: env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY not set"),
+            model: DEFAULT_OPENAI_MODEL.into(),
+            max_tokens: 8192,
+            embedding_model: DEFAULT_OPENAI_EMBEDDING_MODEL.into(),
+            embedding_dims: DEFAULT_OPENAI_EMBEDDING_DIM as usize,
+        })
+    }
+
     #[tokio::test]
     #[serial]
     async fn test_create_initial_table_with_openai() {
@@ -762,19 +779,13 @@ mod tests {
         )]);
         let data = StringArray::from(vec!["Hello", "World"]);
         let record_batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(data)]).unwrap();
-        let batches = vec![Ok(record_batch.clone())];
-        let reader = RecordBatchIterator::new(batches.into_iter(), record_batch.schema());
+        let batches = vec![record_batch];
 
+        let embedding_config = get_test_openai_embedding_config();
         let db = insert_records(
-            reader,
+            batches,
             None,
-            &EmbeddingProviderConfig::OpenAI(OpenAIConfig {
-                api_key: env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY not set"),
-                model: DEFAULT_OPENAI_MODEL.into(),
-                max_tokens: 8192,
-                embedding_model: DEFAULT_OPENAI_EMBEDDING_MODEL.into(),
-                embedding_dims: DEFAULT_OPENAI_EMBEDDING_DIM as usize,
-            }),
+            &embedding_config,
             EmbeddingDefinition::new(
                 "data_openai",      // source column
                 "openai",           // embedding name, either "openai" or "anthropic"
@@ -824,11 +835,10 @@ mod tests {
         )]);
         let data = StringArray::from(vec!["Hello", "World"]);
         let record_batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(data)]).unwrap();
-        let batches = vec![Ok(record_batch.clone())];
-        let reader = RecordBatchIterator::new(batches.into_iter(), record_batch.schema());
+        let batches = vec![record_batch];
 
         let db = insert_records(
-            reader,
+            batches,
             None,
             &EmbeddingProviderConfig::VoyageAI(VoyageAIConfig {
                 embedding_model: DEFAULT_VOYAGE_EMBEDDING_MODEL.into(),
@@ -881,19 +891,13 @@ mod tests {
         )]);
         let data = StringArray::from(vec!["Hello", "World"]);
         let record_batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(data)]).unwrap();
-        let batches = vec![Ok(record_batch.clone())];
-        let reader = RecordBatchIterator::new(batches.into_iter(), record_batch.schema());
+        let batches = vec![record_batch];
 
+        let embedding_config = get_test_openai_embedding_config();
         let db = insert_records(
-            reader,
+            batches,
             None,
-            &EmbeddingProviderConfig::OpenAI(OpenAIConfig {
-                api_key: String::new(),
-                model: String::new(),
-                embedding_dims: DEFAULT_OPENAI_EMBEDDING_DIM as usize,
-                embedding_model: DEFAULT_OPENAI_EMBEDDING_MODEL.into(),
-                max_tokens: 8192,
-            }),
+            &embedding_config,
             EmbeddingDefinition::new("data", "invalid", Some("embeddings")),
         )
         .await;
@@ -918,19 +922,13 @@ mod tests {
             vec![Arc::new(id_data), Arc::new(content_data)],
         )
         .unwrap();
-        let batches = vec![Ok(record_batch.clone())];
-        let reader = RecordBatchIterator::new(batches.into_iter(), record_batch.schema());
+        let batches = vec![record_batch];
 
+        let embedding_config = get_test_openai_embedding_config();
         let _db = insert_records(
-            reader,
+            batches,
             None,
-            &EmbeddingProviderConfig::OpenAI(OpenAIConfig {
-                api_key: env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY not set"),
-                model: DEFAULT_OPENAI_MODEL.into(),
-                max_tokens: 8192,
-                embedding_model: DEFAULT_OPENAI_EMBEDDING_MODEL.into(),
-                embedding_dims: DEFAULT_OPENAI_EMBEDDING_DIM as usize,
-            }),
+            &embedding_config,
             EmbeddingDefinition::new("content", "openai", Some("embeddings")),
         )
         .await
@@ -975,19 +973,13 @@ mod tests {
             vec![Arc::new(category_data), Arc::new(item_data)],
         )
         .unwrap();
-        let batches = vec![Ok(record_batch.clone())];
-        let reader = RecordBatchIterator::new(batches.into_iter(), record_batch.schema());
+        let batches = vec![record_batch];
 
+        let embedding_config = get_test_openai_embedding_config();
         let _db = insert_records(
-            reader,
+            batches,
             None,
-            &EmbeddingProviderConfig::OpenAI(OpenAIConfig {
-                api_key: env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY not set"),
-                model: DEFAULT_OPENAI_MODEL.into(),
-                max_tokens: 8192,
-                embedding_model: DEFAULT_OPENAI_EMBEDDING_MODEL.into(),
-                embedding_dims: DEFAULT_OPENAI_EMBEDDING_DIM as usize,
-            }),
+            &embedding_config,
             EmbeddingDefinition::new("item", "openai", Some("embeddings")),
         )
         .await
@@ -1030,7 +1022,160 @@ mod tests {
         let values = vec!["'; DROP TABLE data; --"];
         let result = search_by_column("category", &values).await;
         test_ok!(result);
-        // Should not crash and return empty results
-        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_create_or_update_indexes() {
+        dotenv().ok();
+
+        // IVF-PQ index creation requires at least 256 rows
+        let row_count = 256;
+        let schema = arrow_schema::Schema::new(vec![
+            arrow_schema::Field::new("id", arrow_schema::DataType::Utf8, false),
+            arrow_schema::Field::new("text", arrow_schema::DataType::Utf8, false),
+        ]);
+        let id_data: StringArray = (0..row_count).map(|i| Some(i.to_string())).collect();
+        let text_data: StringArray = (0..row_count)
+            .map(|i| Some(format!("Sample text for row {i}")))
+            .collect();
+        let record_batch = RecordBatch::try_new(
+            Arc::new(schema),
+            vec![Arc::new(id_data), Arc::new(text_data)],
+        )
+        .unwrap();
+
+        let embedding_config = get_test_openai_embedding_config();
+        let _db = insert_records(
+            vec![record_batch],
+            None,
+            &embedding_config,
+            EmbeddingDefinition::new("text", "openai", Some("embeddings")),
+        )
+        .await
+        .unwrap();
+
+        // First call — should create both indices
+        let result = create_or_update_indexes("text", "embeddings").await;
+        test_ok!(result);
+
+        // Second call — should be idempotent when indices already exist
+        let result = create_or_update_indexes("text", "embeddings").await;
+        test_ok!(result);
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_dedup_rows_removes_duplicates() {
+        dotenv().ok();
+
+        let schema = arrow_schema::Schema::new(vec![
+            arrow_schema::Field::new("id", arrow_schema::DataType::Utf8, false),
+            arrow_schema::Field::new("title", arrow_schema::DataType::Utf8, false),
+        ]);
+        // "dup_title" appears twice — one duplicate should be removed
+        let id_data = StringArray::from(vec!["id1", "id2", "id3", "id4"]);
+        let title_data = StringArray::from(vec!["unique_a", "dup_title", "unique_b", "dup_title"]);
+        let record_batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(id_data), Arc::new(title_data)],
+        )
+        .unwrap();
+
+        let embedding_config = get_test_openai_embedding_config();
+        let _db = insert_records(
+            vec![record_batch],
+            None,
+            &embedding_config,
+            EmbeddingDefinition::new("title", "openai", Some("embeddings")),
+        )
+        .await
+        .unwrap();
+
+        let deleted = dedup_rows(&embedding_config, schema, "title", "id").await;
+        test_ok!(deleted);
+        test_eq!(deleted.unwrap(), 1);
+
+        // Verify 3 rows remain after dedup
+        let remaining = get_lancedb_items(&embedding_config, vec!["id".to_string()])
+            .await
+            .unwrap();
+        let total_rows: usize = remaining.iter().map(RecordBatch::num_rows).sum();
+        test_eq!(total_rows, 3);
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_dedup_rows_no_duplicates() {
+        dotenv().ok();
+
+        let schema = arrow_schema::Schema::new(vec![
+            arrow_schema::Field::new("id", arrow_schema::DataType::Utf8, false),
+            arrow_schema::Field::new("title", arrow_schema::DataType::Utf8, false),
+        ]);
+        let id_data = StringArray::from(vec!["id1", "id2", "id3"]);
+        let title_data = StringArray::from(vec!["unique_x", "unique_y", "unique_z"]);
+        let record_batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(id_data), Arc::new(title_data)],
+        )
+        .unwrap();
+
+        let embedding_config = get_test_openai_embedding_config();
+        let _db = insert_records(
+            vec![record_batch],
+            None,
+            &embedding_config,
+            EmbeddingDefinition::new("title", "openai", Some("embeddings")),
+        )
+        .await
+        .unwrap();
+
+        let deleted = dedup_rows(&embedding_config, schema, "title", "id").await;
+        test_ok!(deleted);
+        test_eq!(deleted.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_dedup_rows_missing_columns_returns_zero() {
+        dotenv().ok();
+
+        let schema = arrow_schema::Schema::new(vec![
+            arrow_schema::Field::new("id", arrow_schema::DataType::Utf8, false),
+            arrow_schema::Field::new("title", arrow_schema::DataType::Utf8, false),
+        ]);
+        let id_data = StringArray::from(vec!["id1", "id2"]);
+        let title_data = StringArray::from(vec!["a", "b"]);
+        let record_batch = RecordBatch::try_new(
+            Arc::new(schema),
+            vec![Arc::new(id_data), Arc::new(title_data)],
+        )
+        .unwrap();
+
+        let embedding_config = get_test_openai_embedding_config();
+        let _db = insert_records(
+            vec![record_batch],
+            None,
+            &embedding_config,
+            EmbeddingDefinition::new("title", "openai", Some("embeddings")),
+        )
+        .await
+        .unwrap();
+
+        // Schema with non-existent columns — should return Ok(0) rather than an error
+        let missing_schema = arrow_schema::Schema::new(vec![
+            arrow_schema::Field::new("nonexistent_by", arrow_schema::DataType::Utf8, false),
+            arrow_schema::Field::new("nonexistent_key", arrow_schema::DataType::Utf8, false),
+        ]);
+        let deleted = dedup_rows(
+            &embedding_config,
+            missing_schema,
+            "nonexistent_by",
+            "nonexistent_key",
+        )
+        .await;
+        test_ok!(deleted);
+        test_eq!(deleted.unwrap(), 0);
     }
 }
