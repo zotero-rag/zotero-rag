@@ -1,12 +1,12 @@
 //! Factory methods for creating clients based on the provider name.
 
+use crate::clients::anthropic::AnthropicClient;
+use crate::clients::openai::OpenAIClient;
 use crate::config::LLMClientConfig;
-use crate::llm::anthropic::AnthropicClient;
 use crate::llm::base::{ApiClient, ChatRequest};
 use crate::llm::errors::LLMError;
 use crate::llm::gemini::GeminiClient;
 use crate::llm::ollama::OllamaClient;
-use crate::llm::openai::OpenAIClient;
 use crate::llm::openrouter::OpenRouterClient;
 
 /// Enum representing different LLM client implementations

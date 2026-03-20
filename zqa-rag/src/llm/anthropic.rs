@@ -7,54 +7,15 @@ use serde::{Deserialize, Serialize};
 
 use super::base::{ApiClient, ChatHistoryItem, ChatRequest, CompletionApiResponse};
 use super::errors::LLMError;
+use crate::clients::anthropic::AnthropicClient;
 use crate::common::request_with_backoff;
 use crate::constants::{
     DEFAULT_ANTHROPIC_MAX_TOKENS, DEFAULT_ANTHROPIC_MODEL, DEFAULT_MAX_RETRIES,
 };
-use crate::http_client::{HttpClient, ReqwestClient};
+use crate::http_client::HttpClient;
 use crate::llm::base::{ChatHistoryContent, ContentType, ToolCallRequest, USER_ROLE};
 use crate::llm::tools::{SerializedTool, get_owned_tools, process_tool_calls};
 const DEFAULT_CLAUDE_MODEL: &str = DEFAULT_ANTHROPIC_MODEL;
-
-/// A generic client class for now. We can add stuff here later if needed, for
-/// example, features like Anthropic's native RAG thing
-#[derive(Debug, Clone)]
-pub struct AnthropicClient<T: HttpClient = ReqwestClient> {
-    /// The HTTP client. The generic parameter allows for mocking in tests.
-    pub client: T,
-    /// Optional configuration for the Anthropic client.
-    pub config: Option<crate::config::AnthropicConfig>,
-}
-
-impl<T: HttpClient + Default> Default for AnthropicClient<T> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl<T> AnthropicClient<T>
-where
-    T: HttpClient + Default,
-{
-    /// Creates a new AnthropicClient instance without configuration
-    /// (will fall back to environment variables)
-    #[must_use]
-    pub fn new() -> Self {
-        Self {
-            client: T::default(),
-            config: None,
-        }
-    }
-
-    /// Creates a new AnthropicClient instance with provided configuration
-    #[must_use]
-    pub fn with_config(config: crate::config::AnthropicConfig) -> Self {
-        Self {
-            client: T::default(),
-            config: Some(config),
-        }
-    }
-}
 
 /// An Anthropic-specific chat history object. This is pretty much the same as `ChatHistoryItem`,
 /// except that `content` is now Anthropic-specific.

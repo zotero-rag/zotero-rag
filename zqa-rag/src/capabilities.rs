@@ -260,15 +260,15 @@ impl RerankerProviders {
 mod tests {
     use lancedb::embeddings::EmbeddingFunction;
 
+    use crate::clients::anthropic::AnthropicClient;
+    use crate::clients::openai::OpenAIClient;
     use crate::embedding::cohere::CohereClient;
     use crate::embedding::common::Rerank;
     use crate::embedding::voyage::VoyageAIClient;
     use crate::http_client::ReqwestClient;
-    use crate::llm::anthropic::AnthropicClient;
     use crate::llm::base::ApiClient;
     use crate::llm::gemini::GeminiClient;
     use crate::llm::ollama::OllamaClient;
-    use crate::llm::openai::OpenAIClient;
     use crate::llm::openrouter::OpenRouterClient;
 
     use super::BatchAPIProvider;
