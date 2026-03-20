@@ -12,13 +12,13 @@ use serde::{Deserialize, Serialize};
 
 use super::base::{ApiClient, ChatHistoryItem, ChatRequest, CompletionApiResponse};
 use super::errors::LLMError;
-use super::http_client::{HttpClient, ReqwestClient};
 use crate::common::request_with_backoff;
 use crate::constants::{
     DEFAULT_ANTHROPIC_MAX_TOKENS, DEFAULT_ANTHROPIC_MODEL, DEFAULT_MAX_RETRIES,
     DEFAULT_OPENAI_EMBEDDING_DIM,
 };
 use crate::embedding::openai::compute_openai_embeddings_sync;
+use crate::http_client::{HttpClient, ReqwestClient};
 use crate::llm::base::{ChatHistoryContent, ContentType, ToolCallRequest, USER_ROLE};
 use crate::llm::tools::{SerializedTool, get_owned_tools, process_tool_calls};
 const DEFAULT_CLAUDE_MODEL: &str = DEFAULT_ANTHROPIC_MODEL;
@@ -74,7 +74,6 @@ where
     /// * `LLMError::DeserializationError` - If the API response cannot be parsed
     /// * `LLMError::GenericLLMError` - If other HTTP errors occur or Arrow array creation fails
     pub fn compute_embeddings_internal(
-        &self,
         source: Arc<dyn arrow_array::Array>,
     ) -> Result<Arc<dyn arrow_array::Array>, LLMError> {
         compute_openai_embeddings_sync(source, None)
@@ -495,7 +494,7 @@ impl<T: HttpClient + Default + std::fmt::Debug> EmbeddingFunction for AnthropicC
         source: Arc<dyn arrow_array::Array>,
     ) -> Result<Arc<dyn arrow_array::Array>, lancedb::Error> {
         // Call our internal implementation and map LLMError to lancedb::Error
-        match self.compute_embeddings_internal(source) {
+        match AnthropicClient::<T>::compute_embeddings_internal(source) {
             Ok(result) => Ok(result),
             Err(e) => Err(lancedb::Error::Other {
                 message: e.to_string(),
@@ -510,7 +509,7 @@ impl<T: HttpClient + Default + std::fmt::Debug> EmbeddingFunction for AnthropicC
     ) -> Result<Arc<dyn arrow_array::Array>, lancedb::Error> {
         // For queries, we don't need concurrency since it's typically a single query
         // Just reuse the same implementation with the expectation it's usually for one item
-        match self.compute_embeddings_internal(input) {
+        match AnthropicClient::<T>::compute_embeddings_internal(input) {
             Ok(result) => Ok(result),
             Err(e) => Err(lancedb::Error::Other {
                 message: e.to_string(),
@@ -530,11 +529,11 @@ mod tests {
     use zqa_macros::{test_eq, test_ok};
 
     use crate::constants::DEFAULT_OPENAI_EMBEDDING_DIM;
+    use crate::http_client::{MockHttpClient, ReqwestClient, SequentialMockHttpClient};
     use crate::llm::anthropic::{AnthropicTextResponseContent, DEFAULT_CLAUDE_MODEL};
     use crate::llm::base::{
         ApiClient, ChatHistoryContent, ChatRequest, ContentType, ToolCallResponse,
     };
-    use crate::llm::http_client::{MockHttpClient, ReqwestClient, SequentialMockHttpClient};
     use crate::llm::tools::test_utils::MockTool;
 
     use super::{

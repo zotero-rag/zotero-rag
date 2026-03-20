@@ -21,9 +21,9 @@ use crate::constants::{
 };
 use crate::embedding::cohere::CohereClient;
 use crate::embedding::voyage::VoyageAIClient;
+use crate::http_client::{HttpClient, ReqwestClient};
 use crate::llm::errors::LLMError;
 use crate::llm::gemini::GeminiClient;
-use crate::llm::http_client::{HttpClient, ReqwestClient};
 use crate::llm::openai::OpenAIClient;
 
 /// A struct containing information about texts that failed to embed.

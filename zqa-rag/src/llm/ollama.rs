@@ -17,7 +17,7 @@ use http::HeaderMap;
 
 use super::base::{ApiClient, ChatRequest, CompletionApiResponse};
 use super::errors::LLMError;
-use super::http_client::{HttpClient, ReqwestClient};
+use crate::http_client::{HttpClient, ReqwestClient};
 
 /// Client for interacting with the Ollama API
 #[derive(Debug, Clone)]
@@ -221,11 +221,11 @@ mod tests {
     use zqa_macros::{test_eq, test_ok};
 
     use super::*;
+    use crate::http_client::{ReqwestClient, SequentialMockHttpClient};
     use crate::llm::anthropic::{
         AnthropicTextResponseContent, AnthropicToolUseResponseContent, AnthropicUsageStats,
     };
     use crate::llm::base::{ApiClient, ChatRequest};
-    use crate::llm::http_client::{ReqwestClient, SequentialMockHttpClient};
     use crate::llm::tools::test_utils::MockTool;
 
     #[tokio::test]

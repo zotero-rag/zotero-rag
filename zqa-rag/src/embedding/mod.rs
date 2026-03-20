@@ -1,6 +1,6 @@
 //! Structs, traits, and implementations for embedding providers.
 
-pub mod cohere;
+pub(crate) mod cohere;
 pub mod common;
-pub mod openai;
-pub mod voyage;
+pub(crate) mod openai;
+pub(crate) mod voyage;

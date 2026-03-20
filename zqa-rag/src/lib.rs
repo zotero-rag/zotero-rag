@@ -38,6 +38,7 @@ pub(crate) mod common;
 pub mod config;
 pub mod constants;
 pub mod embedding;
+pub mod http_client;
 pub mod llm;
 pub mod pricing;
 pub mod vector;

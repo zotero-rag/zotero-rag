@@ -5,7 +5,8 @@ use reqwest::Response;
 use serde::Serialize;
 use std::time::Duration;
 
-use crate::llm::{errors::LLMError, http_client::HttpClient};
+use crate::http_client::HttpClient;
+use crate::llm::errors::LLMError;
 
 /// Calculate the backoff delay given an attempt number and a response. It assumes the response is
 /// a 429 Too Many Requests response with a "Retry-After" header. If the header is not present or
@@ -66,7 +67,7 @@ pub(crate) async fn request_with_backoff<T: HttpClient>(
 mod tests {
     use crate::{
         common::{calculate_backoff_delay, request_with_backoff},
-        llm::http_client::HttpClient,
+        http_client::HttpClient,
     };
     use http::HeaderMap;
     use reqwest::Response;

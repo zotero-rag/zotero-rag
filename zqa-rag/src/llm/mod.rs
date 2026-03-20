@@ -1,12 +1,11 @@
 //! Structs, traits, and functions for working with LLMs.
 
-pub mod anthropic;
+pub(crate) mod anthropic;
 pub mod base;
 pub mod errors;
 pub mod factory;
-pub mod gemini;
-pub mod http_client;
-pub mod ollama;
-pub mod openai;
-pub mod openrouter;
+pub(crate) mod gemini;
+pub(crate) mod ollama;
+pub(crate) mod openai;
+pub(crate) mod openrouter;
 pub mod tools;

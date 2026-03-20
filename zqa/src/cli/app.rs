@@ -17,7 +17,7 @@ use zqa_rag::llm::base::{
     ASSISTANT_ROLE, ApiClient, ChatHistoryContent, ChatHistoryItem, ChatRequest, ToolUseStats,
     USER_ROLE,
 };
-use zqa_rag::llm::factory::{get_client_by_provider, get_client_with_config};
+use zqa_rag::llm::factory::get_client_with_config;
 use zqa_rag::llm::tools::{
     ANTHROPIC_SCHEMA_KEY, CallbackFn, GEMINI_SCHEMA_KEY, OPENAI_SCHEMA_KEY, Tool,
 };
@@ -487,7 +487,9 @@ async fn run_query<O: Write, E: Write>(
         .get_generation_config()
         .map(get_client_with_config)
         .transpose()?
-        .unwrap_or_else(|| get_client_by_provider(&model_provider).unwrap());
+        .ok_or(CLIError::ConfigError(
+            "Could not get generation config".into(),
+        ))?;
 
     let generation_model_name = ctx.config.get_generation_model_name();
 

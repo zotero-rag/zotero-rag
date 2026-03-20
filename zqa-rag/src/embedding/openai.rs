@@ -111,7 +111,7 @@ async fn get_openai_embeddings(
 /// * `LLMError::NetworkError` - If a network connectivity error occurs
 /// * `LLMError::DeserializationError` - If the API response cannot be parsed
 /// * `LLMError::GenericLLMError` - If other HTTP errors occur or Arrow array creation fails
-pub async fn compute_openai_embeddings_async(
+pub(crate) async fn compute_openai_embeddings_async(
     source: Arc<dyn arrow_array::Array>,
     config: Option<&crate::config::OpenAIConfig>,
 ) -> Result<Arc<dyn arrow_array::Array>, LLMError> {
@@ -192,7 +192,7 @@ pub async fn compute_openai_embeddings_async(
 /// * `LLMError::NetworkError` - If a network connectivity error occurs
 /// * `LLMError::DeserializationError` - If the API response cannot be parsed
 /// * `LLMError::GenericLLMError` - If other HTTP errors occur or Arrow array creation fails
-pub fn compute_openai_embeddings_sync(
+pub(crate) fn compute_openai_embeddings_sync(
     source: Arc<dyn arrow_array::Array>,
     config: Option<&crate::config::OpenAIConfig>,
 ) -> Result<Arc<dyn arrow_array::Array>, LLMError> {

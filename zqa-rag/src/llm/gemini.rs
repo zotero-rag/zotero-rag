@@ -24,7 +24,7 @@ use crate::llm::tools::{SerializedTool, get_owned_tools, process_tool_calls};
 
 use super::base::{ApiClient, ChatRequest, CompletionApiResponse};
 use super::errors::LLMError;
-use super::http_client::{HttpClient, ReqwestClient};
+use crate::http_client::{HttpClient, ReqwestClient};
 
 /// A client for Google's Gemini APIs (chat + embeddings)
 #[derive(Debug, Clone)]
@@ -694,8 +694,8 @@ mod tests {
     use zqa_macros::test_ok;
 
     use super::*;
+    use crate::http_client::{MockHttpClient, SequentialMockHttpClient};
     use crate::llm::base::{ApiClient, ChatHistoryItem, ChatRequest};
-    use crate::llm::http_client::{MockHttpClient, SequentialMockHttpClient};
     use crate::llm::tools::test_utils::MockTool;
     use arrow_array::Array;
     use dotenv::dotenv;

@@ -17,12 +17,12 @@ use reqwest::multipart::Form;
 use serde::{Deserialize, Serialize};
 use serde_jsonlines::{json_lines, write_json_lines};
 
+use crate::http_client::{HttpClient, ReqwestClient};
 use crate::llm::errors::LLMError;
-use crate::llm::http_client::{HttpClient, ReqwestClient};
 
 /// A client for Voyage AI's embedding API.
 #[derive(Debug, Clone)]
-pub struct VoyageAIClient<T: HttpClient = ReqwestClient> {
+pub(crate) struct VoyageAIClient<T: HttpClient = ReqwestClient> {
     /// The HTTP client. The generic parameter allows for mocking in tests.
     pub client: T,
     /// Optional configuration for the VoyageAI client.
@@ -42,7 +42,7 @@ where
     /// Creates a new VoyageAIClient instance without configuration
     /// (will fall back to environment variables)
     #[must_use]
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             client: T::default(),
             config: None,
@@ -51,7 +51,7 @@ where
 
     /// Creates a new VoyageAIClient instance with provided configuration
     #[must_use]
-    pub fn with_config(config: crate::config::VoyageAIConfig) -> Self {
+    pub(crate) fn with_config(config: crate::config::VoyageAIConfig) -> Self {
         Self {
             client: T::default(),
             config: Some(config),
@@ -70,7 +70,7 @@ where
     /// * `LLMError::DeserializationError` - If the API response cannot be parsed
     /// * `LLMError::InvalidHeaderError` - If header values cannot be parsed
     /// * `LLMError::GenericLLMError` - If other HTTP errors occur or Arrow array creation fails
-    pub fn compute_embeddings_internal(
+    pub(crate) fn compute_embeddings_internal(
         &self,
         source: Arc<dyn arrow_array::Array>,
     ) -> Result<Arc<dyn arrow_array::Array>, LLMError> {
@@ -332,7 +332,7 @@ impl<T: HttpClient, U: AsRef<str> + Send + Clone> Rerank<U> for VoyageAIClient<T
 
 /// The `body` field for a request to the Voyage AI Files API.
 #[derive(Serialize)]
-pub struct VoyageAIFilesRequestBody {
+pub(crate) struct VoyageAIFilesRequestBody {
     /// A list of input texts that belong to one "group".
     input: Vec<String>,
 }
@@ -348,7 +348,7 @@ pub struct VoyageAIFilesRequestBody {
 ///
 /// See also: [Documentation](https://docs.voyageai.com/docs/batch-inference#5-retrieve-results)
 #[derive(Serialize)]
-pub struct VoyageAIFilesRequest {
+pub(crate) struct VoyageAIFilesRequest {
     /// A unique ID assigned to each request
     pub custom_id: String,
     /// One or more inputs as part of this request.
@@ -358,7 +358,7 @@ pub struct VoyageAIFilesRequest {
 /// A response from the Voyage AI Files API.
 #[derive(Deserialize, Serialize, Clone)]
 #[allow(dead_code)]
-pub struct VoyageAIFilesResponse {
+pub(crate) struct VoyageAIFilesResponse {
     /// The file ID, used to refer to input, output, and error files. This starts with "file-".
     pub id: String,
     /// An ISO 8601 extended format string with time zone offset.
@@ -369,7 +369,7 @@ pub struct VoyageAIFilesResponse {
 
 /// The embedding parameters for a batch request.
 #[derive(Serialize)]
-pub struct VoyageAIBatchRequestParams<'a> {
+pub(crate) struct VoyageAIBatchRequestParams<'a> {
     /// The model used. Defaults to [`crate::constants::DEFAULT_VOYAGE_EMBEDDING_MODEL`].
     model: &'a str,
     /// The input type. This is set to "document".
@@ -392,7 +392,7 @@ impl Default for VoyageAIBatchRequestParams<'_> {
 /// [`VoyageAIFilesResponse`], which is returned by the Files API.
 #[derive(Deserialize, Serialize, Clone)]
 #[allow(dead_code)]
-pub struct VoyageAIBatchCreateResponse {
+pub(crate) struct VoyageAIBatchCreateResponse {
     /// The batch ID, used to check status and retrieve results.
     pub id: String,
 }
@@ -409,7 +409,7 @@ pub struct VoyageAIBatchCreateResponse {
 ///     .with_file_id("file-123");
 /// ```
 #[derive(Serialize)]
-pub struct VoyageAIBatchRequest<'a> {
+pub(crate) struct VoyageAIBatchRequest<'a> {
     /// The Voyage AI embedding endpoint. Defaults to "/v1/embeddings".
     endpoint: &'a str,
     /// The completion window. Defaults to "12h".
@@ -423,7 +423,7 @@ pub struct VoyageAIBatchRequest<'a> {
 impl VoyageAIBatchRequest<'_> {
     /// Add a file ID to the current batch request.
     #[must_use]
-    pub fn with_file_id(mut self, file_id: &str) -> Self {
+    pub(crate) fn with_file_id(mut self, file_id: &str) -> Self {
         self.input_file_id = file_id.into();
 
         self
@@ -474,7 +474,7 @@ impl From<VoyageAIBatchStatus> for BatchJobState {
 /// A response to a request checking the status of a batch.
 #[derive(Deserialize, Serialize, Clone)]
 #[allow(dead_code)]
-pub struct VoyageAIBatchStatusResponse {
+pub(crate) struct VoyageAIBatchStatusResponse {
     /// The batch ID.
     id: String,
     /// The file ID used to create this batch.
@@ -500,7 +500,7 @@ pub struct VoyageAIBatchStatusResponse {
 /// The `response` field of the response from the Batch API.
 #[derive(Debug, Deserialize)]
 #[allow(dead_code)]
-pub struct VoyageAIBatchResultResponse {
+pub(crate) struct VoyageAIBatchResultResponse {
     /// The HTTP status code from the embedding endpoint
     status_code: u16,
     /// The embeddings
@@ -511,7 +511,7 @@ pub struct VoyageAIBatchResultResponse {
 /// API, but the result of calling the *Files API* using the `file_id` obtained from the Batch API.
 #[derive(Debug, Deserialize)]
 #[allow(dead_code)]
-pub struct VoyageAIBatchResult {
+pub(crate) struct VoyageAIBatchResult {
     /// The ID of the batch containing this result
     batch_id: String,
     /// The `custom_id` field of this result
@@ -742,7 +742,7 @@ mod tests {
     use crate::capabilities::{BatchAPIProvider, BatchJobState};
     use crate::constants::{DEFAULT_VOYAGE_EMBEDDING_DIM, DEFAULT_VOYAGE_EMBEDDING_MODEL};
     use crate::embedding::common::Rerank;
-    use crate::llm::http_client::{MockHttpClient, ReqwestClient};
+    use crate::http_client::{MockHttpClient, ReqwestClient};
     use arrow_array::Array;
     use dotenv::dotenv;
     use std::sync::Arc;

@@ -186,7 +186,7 @@ mod tests {
         db.embedding_registry().register(
             "openai",
             Arc::new(crate::llm::openai::OpenAIClient::<
-                crate::llm::http_client::ReqwestClient,
+                crate::http_client::ReqwestClient,
             >::default()),
         )?;
 
@@ -213,7 +213,7 @@ mod tests {
         db.embedding_registry().register(
             "openai",
             Arc::new(crate::llm::openai::OpenAIClient::<
-                crate::llm::http_client::ReqwestClient,
+                crate::http_client::ReqwestClient,
             >::default()),
         )?;
 
