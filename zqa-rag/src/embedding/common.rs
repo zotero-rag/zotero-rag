@@ -35,12 +35,11 @@ pub struct FailedTexts {
     pub texts: Vec<String>,
 }
 
-/// Returns the embedding dimension given an embedding provider. Note that for Anthropic, we
-/// actually use OpenAI's embeddings.
+/// Returns the embedding dimension given an embedding provider.
 ///
 /// # Arguments
 ///
-/// * `embedding_name` - Embedding provider name. Must be one of "openai", "anthropic",
+/// * `embedding_name` - Embedding provider name. Must be one of "openai",
 ///   "voyageai", or "cohere".
 ///
 /// # Returns
@@ -53,7 +52,7 @@ pub struct FailedTexts {
 #[must_use]
 pub fn get_embedding_dims_by_provider(embedding_name: &str) -> u32 {
     match embedding_name {
-        "openai" | "anthropic" => DEFAULT_OPENAI_EMBEDDING_DIM,
+        "openai" => DEFAULT_OPENAI_EMBEDDING_DIM,
         "voyageai" => DEFAULT_VOYAGE_EMBEDDING_DIM,
         "gemini" => DEFAULT_GEMINI_EMBEDDING_DIM,
         "cohere" => DEFAULT_COHERE_EMBEDDING_DIM,

@@ -608,7 +608,7 @@ pub async fn search_by_column(
 /// Creates and initializes a LanceDB table for vector storage.
 ///
 /// Connects to LanceDB at the default location, creates a table named `TABLE_NAME`,
-/// and registers embedding functions for both Anthropic and OpenAI. If this table already exists,
+/// and registers embedding functions for OpenAI. If this table already exists,
 /// it simply opens it and upserts the data; otherwise, it inserts the data into the newly created
 /// table.
 ///

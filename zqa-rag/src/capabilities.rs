@@ -55,10 +55,6 @@ impl ModelProvider {
 /// Providers of embedding models. Structs corresponding to these should implement LanceDB's
 /// `EmbeddingFunction` trait. Depending on if the provider also has models that support text
 /// generation, you will find the structs in `llm/` or `embedding/`.
-///
-/// For legacy reasons, although Anthropic does not have their own embedding model, this is
-/// included in this list (and it implements `EmbeddingFunction` by calling OpenAI's embedding
-/// model instead.
 #[derive(Clone, Debug)]
 pub enum EmbeddingProvider {
     /// Cohere embedding provider
