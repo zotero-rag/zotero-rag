@@ -12,7 +12,7 @@ use crate::{
 pub trait Rerank: Send + Sync {
     /// Rerank items using the provider.
     ///
-    /// # Arguments:
+    /// # Arguments
     ///
     /// * `items` - The items to rerank.
     /// * `query` - The query to rerank against.
@@ -29,7 +29,7 @@ pub trait Rerank: Send + Sync {
 
 /// A factory method for getting a reranking provider.
 ///
-/// # Arguments:
+/// # Arguments
 ///
 /// * `provider` - The name of the provider to get.
 ///

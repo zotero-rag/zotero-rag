@@ -225,8 +225,7 @@ impl BatchEmbeddingProvider {
 }
 
 /// Providers of reranker (also called cross-encoder) models. Structs corresponding to values here
-/// should implement the `Rerank` trait. In general, providers that have a reranker model also have
-/// an embedding model, so it's likely you will find the structs in `embedding/`.
+/// should implement the `Rerank` trait.
 #[derive(Clone, Debug)]
 pub enum RerankerProviders {
     /// Cohere reranking provider
