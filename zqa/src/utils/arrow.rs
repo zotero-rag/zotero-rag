@@ -297,16 +297,30 @@ pub async fn vector_search(
 
     let items: ZoteroItemSet = batches.into();
     let items: Vec<ZoteroItem> = items.into();
-    let items = items
-        .iter()
+
+    let filtered_items: Vec<ZoteroItem> = items
+        .into_iter()
         .filter(|item| !item.text.trim().is_empty())
-        .cloned()
+        .collect();
+
+    if filtered_items.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let item_strings = filtered_items
+        .iter()
+        .map(|f| f.text.clone())
         .collect::<Vec<_>>();
 
-    let rerank_provider = get_reranking_provider::<ZoteroItem>(&reranker)?;
-    let items = rerank_provider.rerank(items, &query).await?;
+    let rerank_provider = get_reranking_provider(&reranker)?;
+    let indices = rerank_provider.rerank(item_strings, &query).await?;
 
-    Ok(items)
+    let reranked_items = indices
+        .into_iter()
+        .filter_map(|idx| filtered_items.get(idx).cloned())
+        .collect();
+
+    Ok(reranked_items)
 }
 
 #[cfg(test)]

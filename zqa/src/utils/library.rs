@@ -99,12 +99,6 @@ impl From<Vec<ZoteroItem>> for ZoteroItemSet {
     }
 }
 
-impl AsRef<str> for ZoteroItem {
-    fn as_ref(&self) -> &str {
-        &self.text
-    }
-}
-
 impl From<Vec<RecordBatch>> for ZoteroItemSet {
     fn from(batches: Vec<RecordBatch>) -> Self {
         batches

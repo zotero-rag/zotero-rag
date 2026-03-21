@@ -150,7 +150,7 @@ impl EmbeddingProviderConfig {
 /// string in a non-consuming way. A user may also choose to `map` their `Vec<RecordBatch>` with
 /// custom logic if they prefer (or if, for some reason, their struct's `AsRef<str>` is implemented
 /// with a different purpose, but the resulting string isn't useful for reranking purposes).
-pub trait Rerank<T: AsRef<str>>: Send + Sync {
+pub trait Rerank: Send + Sync {
     /// Rerank items using the provider.
     ///
     /// # Arguments:
@@ -160,14 +160,12 @@ pub trait Rerank<T: AsRef<str>>: Send + Sync {
     ///
     /// # Returns
     ///
-    /// A vector of items reranked using the provider.
+    /// A vector of indices of the items reranked using the provider.
     fn rerank<'a>(
         &'a self,
-        items: Vec<T>,
+        items: Vec<String>,
         query: &'a str,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<T>, LLMError>> + Send + 'a>>
-    where
-        T: 'a;
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<usize>, LLMError>> + Send + 'a>>;
 }
 
 /// A factory method for getting a reranking provider.
@@ -183,9 +181,7 @@ pub trait Rerank<T: AsRef<str>>: Send + Sync {
 /// # Errors
 ///
 /// Returns an error if the provider name is not recognized.
-pub fn get_reranking_provider<T: AsRef<str> + Send + Clone>(
-    provider: &str,
-) -> Result<Arc<dyn Rerank<T>>, LLMError> {
+pub fn get_reranking_provider(provider: &str) -> Result<Arc<dyn Rerank>, LLMError> {
     match provider {
         "voyageai" => Ok(Arc::new(VoyageAIClient::<ReqwestClient>::default())),
         "cohere" => Ok(Arc::new(CohereClient::<ReqwestClient>::default())),
@@ -206,9 +202,9 @@ pub fn get_reranking_provider<T: AsRef<str> + Send + Clone>(
 /// # Errors
 ///
 /// Returns an error if provider configuration is invalid or initialization fails.
-pub fn get_reranking_provider_with_config<T: AsRef<str> + Send + Clone>(
+pub fn get_reranking_provider_with_config(
     config: RerankProviderConfig,
-) -> Result<Arc<dyn Rerank<T>>, LLMError> {
+) -> Result<Arc<dyn Rerank>, LLMError> {
     match config {
         RerankProviderConfig::VoyageAI(cfg) => {
             Ok(Arc::new(VoyageAIClient::<ReqwestClient>::with_config(cfg)))

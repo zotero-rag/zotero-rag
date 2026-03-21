@@ -220,15 +220,12 @@ struct CohereRerankResponse {
     results: Vec<CohereRerankedDocument>,
 }
 
-impl<T: HttpClient, U: AsRef<str> + Send + Clone> Rerank<U> for CohereClient<T> {
+impl<T: HttpClient> Rerank for CohereClient<T> {
     fn rerank<'a>(
         &'a self,
-        items: Vec<U>,
+        items: Vec<String>,
         query: &'a str,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<U>, LLMError>> + Send + 'a>>
-    where
-        U: 'a,
-    {
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<usize>, LLMError>> + Send + 'a>> {
         Box::pin(async move {
             const RERANK_API_URL: &str = "https://api.cohere.com/v2/rerank";
 
@@ -242,13 +239,11 @@ impl<T: HttpClient, U: AsRef<str> + Send + Clone> Rerank<U> for CohereClient<T> 
                 )
             };
 
-            let documents: Vec<String> =
-                items.iter().map(|item| item.as_ref().to_string()).collect();
             let request = CohereRerankRequest {
                 model: reranker_model,
                 query: query.into(),
                 top_n: None,
-                documents,
+                documents: items.clone(),
             };
 
             let mut headers = HeaderMap::new();
@@ -274,8 +269,7 @@ impl<T: HttpClient, U: AsRef<str> + Send + Clone> Rerank<U> for CohereClient<T> 
             let cohere_response = cohere_response.results;
             let res = cohere_response
                 .iter()
-                .filter_map(|result| items.get(result.index))
-                .cloned()
+                .map(|result| result.index)
                 .collect::<Vec<_>>();
 
             Ok(res)

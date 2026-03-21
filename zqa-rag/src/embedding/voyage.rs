@@ -267,15 +267,12 @@ struct VoyageAIRerankResponse {
     data: Vec<VoyageAIRerankedDoc>,
 }
 
-impl<T: HttpClient, U: AsRef<str> + Send + Clone> Rerank<U> for VoyageAIClient<T> {
+impl<T: HttpClient> Rerank for VoyageAIClient<T> {
     fn rerank<'a>(
         &'a self,
-        items: Vec<U>,
+        items: Vec<String>,
         query: &'a str,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<U>, LLMError>> + Send + 'a>>
-    where
-        U: 'a,
-    {
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<usize>, LLMError>> + Send + 'a>> {
         Box::pin(async move {
             const RERANK_API_URL: &str = "https://api.voyageai.com/v1/rerank";
 
@@ -290,12 +287,10 @@ impl<T: HttpClient, U: AsRef<str> + Send + Clone> Rerank<U> for VoyageAIClient<T
                 )
             };
 
-            let documents: Vec<String> =
-                items.iter().map(|item| item.as_ref().to_string()).collect();
             let request = VoyageAIRerankRequest {
                 model: reranker_model,
                 query: query.into(),
-                documents,
+                documents: items.clone(),
             };
 
             let mut headers = HeaderMap::new();
@@ -321,8 +316,7 @@ impl<T: HttpClient, U: AsRef<str> + Send + Clone> Rerank<U> for VoyageAIClient<T
             let voyage_response = voyage_response.data;
             let res = voyage_response
                 .iter()
-                .filter_map(|result| items.get(result.index))
-                .cloned()
+                .map(|result| result.index)
                 .collect::<Vec<_>>();
 
             Ok(res)
