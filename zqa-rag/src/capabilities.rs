@@ -276,7 +276,7 @@ mod tests {
     fn assert_api_client<T: ApiClient>() {}
     fn assert_embedding_fn<T: EmbeddingFunction>() {}
     fn assert_batch_provider<T: BatchAPIProvider>() {}
-    fn assert_reranker<T: Rerank<U>, U: AsRef<str>>() {}
+    fn assert_reranker<T: Rerank>() {}
 
     /// Verify that every [`super::ModelProvider`] variant has a corresponding client that
     /// implements [`ApiClient`]. If a client is removed or its trait impl is dropped, this
@@ -311,7 +311,7 @@ mod tests {
     /// implements [`Rerank`].
     #[test]
     fn reranker_providers_implement_rerank() {
-        assert_reranker::<CohereClient<ReqwestClient>, String>();
-        assert_reranker::<VoyageAIClient<ReqwestClient>, String>();
+        assert_reranker::<CohereClient<ReqwestClient>>();
+        assert_reranker::<VoyageAIClient<ReqwestClient>>();
     }
 }
