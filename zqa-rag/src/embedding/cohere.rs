@@ -243,7 +243,7 @@ impl<T: HttpClient> Rerank for CohereClient<T> {
                 model: reranker_model,
                 query: query.into(),
                 top_n: None,
-                documents: items.clone(),
+                documents: items,
             };
 
             let mut headers = HeaderMap::new();
