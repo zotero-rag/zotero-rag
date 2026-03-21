@@ -266,10 +266,10 @@ mod tests {
     use crate::clients::openai::OpenAIClient;
     use crate::clients::openrouter::OpenRouterClient;
     use crate::embedding::cohere::CohereClient;
-    use crate::embedding::common::Rerank;
     use crate::embedding::voyage::VoyageAIClient;
     use crate::http_client::ReqwestClient;
     use crate::llm::base::ApiClient;
+    use crate::reranking::common::Rerank;
 
     use super::BatchAPIProvider;
 

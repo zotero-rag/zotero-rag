@@ -8,10 +8,10 @@ use crate::{
 };
 use zqa_rag::{
     embedding::common::{
-        EmbeddingProviderConfig, get_embedding_dims_by_provider,
-        get_embedding_provider_with_config, get_reranking_provider,
+        EmbeddingProviderConfig, get_embedding_dims_by_provider, get_embedding_provider_with_config,
     },
     llm::errors::LLMError,
+    reranking::common::get_reranking_provider,
     vector::lance::{LanceError, lancedb_exists, vector_search as rag_vector_search},
 };
 

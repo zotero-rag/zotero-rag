@@ -38,7 +38,7 @@ where
 
     /// Creates a new `OpenAIClient` instance with provided configuration.
     ///
-    /// # Arguments:
+    /// # Arguments
     ///
     /// * `config` - Client configuration including API key and model.
     ///
