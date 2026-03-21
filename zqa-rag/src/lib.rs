@@ -34,7 +34,7 @@
 )]
 
 pub mod capabilities;
-pub mod clients;
+pub(crate) mod clients;
 pub(crate) mod common;
 pub mod config;
 pub mod constants;

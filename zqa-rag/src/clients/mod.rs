@@ -3,8 +3,8 @@
 //! The [`lancedb::embeddings::EmbeddingFunction`] and the [`crate::llm::base::ApiClient`] traits
 //! are implemented in [`crate::embedding`] and [`crate::llm`] respectively.
 
-pub mod anthropic;
-pub mod gemini;
-pub mod ollama;
-pub mod openai;
-pub mod openrouter;
+pub(crate) mod anthropic;
+pub(crate) mod gemini;
+pub(crate) mod ollama;
+pub(crate) mod openai;
+pub(crate) mod openrouter;

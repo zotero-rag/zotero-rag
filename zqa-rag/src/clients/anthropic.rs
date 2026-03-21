@@ -7,9 +7,9 @@ use crate::http_client::{HttpClient, ReqwestClient};
 #[derive(Debug, Clone)]
 pub struct AnthropicClient<T: HttpClient = ReqwestClient> {
     /// The HTTP client. The generic parameter allows for mocking in tests.
-    pub client: T,
+    pub(crate) client: T,
     /// Optional configuration for the Anthropic client.
-    pub config: Option<crate::config::AnthropicConfig>,
+    pub(crate) config: Option<crate::config::AnthropicConfig>,
 }
 
 impl<T: HttpClient + Default> Default for AnthropicClient<T> {

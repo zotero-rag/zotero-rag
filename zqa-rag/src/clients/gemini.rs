@@ -11,9 +11,9 @@ use crate::{
 #[derive(Debug, Clone)]
 pub struct GeminiClient<T: HttpClient = ReqwestClient> {
     /// The HTTP client. The generic parameter allows for mocking in tests.
-    pub client: T,
+    pub(crate) client: T,
     /// Optional configuration for the Gemini client.
-    pub config: Option<crate::config::GeminiConfig>,
+    pub(crate) config: Option<crate::config::GeminiConfig>,
 }
 
 impl<T: HttpClient + Default> Default for GeminiClient<T> {

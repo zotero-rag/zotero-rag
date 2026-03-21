@@ -6,9 +6,9 @@ use crate::http_client::{HttpClient, ReqwestClient};
 #[derive(Debug, Clone)]
 pub struct OpenAIClient<T: HttpClient = ReqwestClient> {
     /// The HTTP client. The generic parameter allows for mocking in tests.
-    pub client: T,
+    pub(crate) client: T,
     /// Optional configuration for the OpenAI client.
-    pub config: Option<crate::config::OpenAIConfig>,
+    pub(crate) config: Option<crate::config::OpenAIConfig>,
 }
 
 impl<T: HttpClient + Default> Default for OpenAIClient<T> {

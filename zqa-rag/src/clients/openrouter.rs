@@ -7,9 +7,9 @@ use crate::http_client::{HttpClient, ReqwestClient};
 #[derive(Debug, Clone)]
 pub struct OpenRouterClient<T: HttpClient = ReqwestClient> {
     /// The HTTP client. The generic parameter allows for mocking in tests.
-    pub client: T,
+    pub(crate) client: T,
     /// Optional configuration for the OpenRouter client.
-    pub config: Option<crate::config::OpenRouterConfig>,
+    pub(crate) config: Option<crate::config::OpenRouterConfig>,
 }
 
 impl<T: HttpClient + Default> Default for OpenRouterClient<T> {

@@ -6,9 +6,9 @@ use crate::http_client::{HttpClient, ReqwestClient};
 #[derive(Debug, Clone)]
 pub struct OllamaClient<T: HttpClient = ReqwestClient> {
     /// The HTTP client. The generic parameter allows for mocking in tests.
-    pub client: T,
+    pub(crate) client: T,
     /// Optional configuration for the `ollama` client.
-    pub config: Option<crate::config::OllamaConfig>,
+    pub(crate) config: Option<crate::config::OllamaConfig>,
 }
 
 impl<T: HttpClient + Default> Default for OllamaClient<T> {
