@@ -1,0 +1,25 @@
+codecov:
+  strict_yaml_branch: master
+  max_report_age: '3h'
+  require_ci_to_pass: false
+
+  notify:
+    after_n_builds: 1
+    wait_for_ci: false
+    notify_error: true
+
+coverage:
+  precision: 2
+  round: 'nearest'
+  range: 70..90
+
+  status:
+    project:
+      default:
+        target: 70
+        threshold: 0
+
+    patch:
+      default:
+        target: 70
+        threshold: 0
