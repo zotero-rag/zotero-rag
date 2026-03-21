@@ -1,3 +1,5 @@
+//! Client definition for the Anthropic API.
+
 use crate::http_client::{HttpClient, ReqwestClient};
 
 /// A generic client class for now. We can add stuff here later if needed, for

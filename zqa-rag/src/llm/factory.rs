@@ -2,12 +2,12 @@
 
 use crate::clients::anthropic::AnthropicClient;
 use crate::clients::gemini::GeminiClient;
+use crate::clients::ollama::OllamaClient;
 use crate::clients::openai::OpenAIClient;
+use crate::clients::openrouter::OpenRouterClient;
 use crate::config::LLMClientConfig;
 use crate::llm::base::{ApiClient, ChatRequest};
 use crate::llm::errors::LLMError;
-use crate::llm::ollama::OllamaClient;
-use crate::llm::openrouter::OpenRouterClient;
 
 /// Enum representing different LLM client implementations
 #[derive(Debug, Clone)]

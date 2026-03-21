@@ -20,7 +20,7 @@ use crate::http_client::HttpClient;
 
 /// A function (tool) call request from the model.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct GeminiFunctionCall {
+pub(crate) struct GeminiFunctionCall {
     /// A unique ID for the function call (optional in responses)
     #[serde(skip_serializing_if = "Option::is_none")]
     id: Option<String>,
@@ -32,7 +32,7 @@ struct GeminiFunctionCall {
 
 /// A result of a tool call, to be sent to the API.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct GeminiFunctionResult {
+pub(crate) struct GeminiFunctionResult {
     /// The name of the function
     name: String,
     /// The function response in JSON format

@@ -12,49 +12,10 @@ use serde::{Deserialize, Serialize};
 
 use super::base::{ApiClient, ChatHistoryItem, ChatRequest, CompletionApiResponse};
 use super::errors::LLMError;
-use crate::http_client::{HttpClient, ReqwestClient};
+use crate::clients::openrouter::OpenRouterClient;
+use crate::http_client::HttpClient;
 
 const DEFAULT_MODEL: &str = "anthropic/claude-sonnet-4.5";
-
-/// A generic client class for now. We can add stuff here later for
-/// all the features OpenRouter supports.
-#[derive(Debug, Clone)]
-pub struct OpenRouterClient<T: HttpClient = ReqwestClient> {
-    /// The HTTP client. The generic parameter allows for mocking in tests.
-    pub client: T,
-    /// Optional configuration for the OpenRouter client.
-    pub config: Option<crate::config::OpenRouterConfig>,
-}
-
-impl<T: HttpClient + Default> Default for OpenRouterClient<T> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl<T> OpenRouterClient<T>
-where
-    T: HttpClient + Default,
-{
-    /// Creates a new OpenRouterClient instance without configuration
-    /// (will fall back to environment variables)
-    #[must_use]
-    pub fn new() -> Self {
-        Self {
-            client: T::default(),
-            config: None,
-        }
-    }
-
-    /// Creates a new OpenRouterClient instance with provided configuration
-    #[must_use]
-    pub fn with_config(config: crate::config::OpenRouterConfig) -> Self {
-        Self {
-            client: T::default(),
-            config: Some(config),
-        }
-    }
-}
 
 /// OpenRouter-specific message format
 #[derive(Clone, Debug, Serialize)]
@@ -466,6 +427,7 @@ mod tests {
     use zqa_macros::{test_eq, test_ok};
 
     use super::*;
+    use crate::clients::openrouter::OpenRouterClient;
     use crate::http_client::{MockHttpClient, ReqwestClient, SequentialMockHttpClient};
     use crate::llm::base::{ApiClient, ChatRequest};
     use crate::llm::tools::test_utils::MockTool;
