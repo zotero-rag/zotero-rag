@@ -178,8 +178,8 @@ impl From<ToolCallRequest> for AnthropicToolUseResponseContent {
             r#type: "tool_use".into(),
             name: value.tool_name,
             input: serde_json::Value::as_object(&value.args)
-                .unwrap_or(&serde_json::Map::new())
-                .clone(),
+                .cloned()
+                .unwrap_or_default(),
         }
     }
 }
@@ -635,8 +635,8 @@ mod tests {
         test_eq!(texts.len(), 1);
         test_eq!(texts[0].as_str(), "Done!");
     }
-    #[test]
 
+    #[test]
     fn test_tool_result_object_content_is_serialized_as_string() {
         // A JSON-object result must be serialized as a JSON string so the Anthropic API
         // receives `"content": "{...}"` rather than `"content": {...}`.
