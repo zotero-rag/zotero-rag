@@ -145,11 +145,7 @@ impl EmbeddingProviderConfig {
     }
 }
 
-/// A trait indicating reranking capabilities. This is made generic since it is expected that users
-/// will pass in whatever type they convert `RecordBatch` to, as long as we can convert it into a
-/// string in a non-consuming way. A user may also choose to `map` their `Vec<RecordBatch>` with
-/// custom logic if they prefer (or if, for some reason, their struct's `AsRef<str>` is implemented
-/// with a different purpose, but the resulting string isn't useful for reranking purposes).
+/// A trait indicating reranking capabilities.
 pub trait Rerank: Send + Sync {
     /// Rerank items using the provider.
     ///

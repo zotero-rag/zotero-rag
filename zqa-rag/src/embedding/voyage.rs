@@ -290,7 +290,7 @@ impl<T: HttpClient> Rerank for VoyageAIClient<T> {
             let request = VoyageAIRerankRequest {
                 model: reranker_model,
                 query: query.into(),
-                documents: items.clone(),
+                documents: items,
             };
 
             let mut headers = HeaderMap::new();
