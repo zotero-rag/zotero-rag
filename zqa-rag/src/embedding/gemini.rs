@@ -78,13 +78,7 @@ where
             .await;
 
         // Process results and construct Arrow array
-        let mut embeddings: Vec<Vec<f32>> = Vec::with_capacity(texts.len());
-        for result in results {
-            match result {
-                Ok(embedding) => embeddings.push(embedding),
-                Err(e) => return Err(e),
-            }
-        }
+        let embeddings: Vec<Vec<f32>> = results.into_iter().collect::<Result<_, _>>()?;
 
         // Convert to Arrow FixedSizeListArray
         let embedding_dim = if embeddings.is_empty() {
