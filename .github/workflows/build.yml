@@ -7,10 +7,12 @@ on:
     branches: [ "master" ]
     paths-ignore:
       - '**/*.md'
+      - 'zqa/**'
   pull_request:
     branches: [ "master" ]
     paths-ignore:
       - '**/*.md'
+      - 'zqa/**'
 
 env:
   CARGO_TERM_COLOR: always
