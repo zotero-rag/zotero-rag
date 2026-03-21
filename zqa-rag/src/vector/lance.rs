@@ -82,6 +82,7 @@ impl From<LanceDbError> for LanceError {
 }
 
 /// Table statistics, to be shown when the user calls the `/stats` command.
+#[derive(Debug, PartialEq)]
 pub struct TableStatistics {
     /// The table version. Each update to a table creates a new version.
     table_version: u64,
