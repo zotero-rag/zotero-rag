@@ -6,6 +6,7 @@ This file is meant for developers interested in contributing, or for existing ma
 
 - Make sure to open an issue before submitting a pull request. This helps with issue tracking.
 - You may find the `AGENTS.md` file helpful. This has brief style and design guides as well as some useful information on what directories/crates do what.
+- Make sure you review the [policy on AI use](./AI_POLICY.md) in this repo.
 
 ## Troubleshooting Tips
 
