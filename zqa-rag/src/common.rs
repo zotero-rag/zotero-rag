@@ -47,7 +47,7 @@ pub(crate) async fn request_with_backoff<T: HttpClient>(
 
     let serialized_request =
         serde_json::to_string_pretty(request).unwrap_or("Serialization failed".into());
-    eprintln!("Request to URL: {url}\nHeaders: {headers:#?}\nrequest: {serialized_request}");
+    log::debug!("Request to URL: {url}\nHeaders: {headers:#?}\nrequest: {serialized_request}");
 
     loop {
         let response = client.post_json(url, headers.clone(), &request).await?;

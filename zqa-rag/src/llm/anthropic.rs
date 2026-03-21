@@ -78,15 +78,6 @@ pub(crate) struct AnthropicRequest<'a> {
     pub(crate) tools: Option<&'a [SerializedTool<'a>]>,
 }
 
-/// Internal newtype wrapper to make conversions more ergonomic
-struct AnthropicChatHistory(Vec<AnthropicChatHistoryItem>);
-
-impl From<Vec<ChatHistoryItem>> for AnthropicChatHistory {
-    fn from(value: Vec<ChatHistoryItem>) -> Self {
-        Self(value.into_iter().map(Into::into).collect())
-    }
-}
-
 /// Helper to build messages and tools from a ChatRequest.
 /// Returns owned data that can then be borrowed by AnthropicRequest.
 pub(crate) fn build_anthropic_messages_and_tools<'a>(
@@ -95,8 +86,12 @@ pub(crate) fn build_anthropic_messages_and_tools<'a>(
     Vec<AnthropicChatHistoryItem>,
     Option<Vec<SerializedTool<'a>>>,
 ) {
-    let messages: AnthropicChatHistory = req.chat_history.clone().into();
-    let mut messages = messages.0;
+    let mut messages: Vec<AnthropicChatHistoryItem> = req
+        .chat_history
+        .clone()
+        .into_iter()
+        .map(Into::into)
+        .collect();
 
     messages.push(AnthropicChatHistoryItem {
         role: USER_ROLE.to_owned(),
@@ -182,7 +177,9 @@ impl From<ToolCallRequest> for AnthropicToolUseResponseContent {
             id: value.id,
             r#type: "tool_use".into(),
             name: value.tool_name,
-            input: serde_json::Value::as_object(&value.args).unwrap().clone(),
+            input: serde_json::Value::as_object(&value.args)
+                .unwrap_or(&serde_json::Map::new())
+                .clone(),
         }
     }
 }
@@ -434,7 +431,8 @@ mod tests {
     use crate::http_client::{MockHttpClient, ReqwestClient, SequentialMockHttpClient};
     use crate::llm::anthropic::{AnthropicTextResponseContent, DEFAULT_CLAUDE_MODEL};
     use crate::llm::base::{
-        ApiClient, ChatHistoryContent, ChatHistoryItem, ChatRequest, ContentType, USER_ROLE,
+        ApiClient, ChatHistoryContent, ChatHistoryItem, ChatRequest, ContentType, ToolCallResponse,
+        USER_ROLE,
     };
     use crate::llm::tools::test_utils::MockTool;
 
@@ -636,6 +634,40 @@ mod tests {
         let texts = text_segments.lock().unwrap();
         test_eq!(texts.len(), 1);
         test_eq!(texts[0].as_str(), "Done!");
+    }
+    #[test]
+
+    fn test_tool_result_object_content_is_serialized_as_string() {
+        // A JSON-object result must be serialized as a JSON string so the Anthropic API
+        // receives `"content": "{...}"` rather than `"content": {...}`.
+        let content = AnthropicResponseContent::ToolResult(
+            ToolCallResponse {
+                id: "tool-1".into(),
+                tool_name: "mock_tool".into(),
+                result: serde_json::json!({"answer": 42}),
+            }
+            .into(),
+        );
+        let json = serde_json::to_value(&content).unwrap();
+        assert!(
+            json["content"].is_string(),
+            "content should be a JSON string, got: {}",
+            json["content"]
+        );
+    }
+
+    #[test]
+    fn test_tool_result_string_content_passes_through() {
+        let content = AnthropicResponseContent::ToolResult(
+            ToolCallResponse {
+                id: "tool-2".into(),
+                tool_name: "mock_tool".into(),
+                result: serde_json::json!("plain text"),
+            }
+            .into(),
+        );
+        let json = serde_json::to_value(&content).unwrap();
+        test_eq!(json["content"].as_str().unwrap(), "plain text");
     }
 
     #[tokio::test]
