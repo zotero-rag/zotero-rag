@@ -13,6 +13,7 @@ jobs:
   coverage:
     if: github.event.pull_request.draft == false
     runs-on: blacksmith-8vcpu-ubuntu-2404
+    timeout-minutes: 15
     env:
       CARGO_TERM_COLOR: always
     steps:
