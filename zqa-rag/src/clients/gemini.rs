@@ -21,6 +21,7 @@ impl<T: HttpClient + Default> Default for GeminiClient<T> {
         Self::new()
     }
 }
+
 impl<T> GeminiClient<T>
 where
     T: HttpClient + Default,
