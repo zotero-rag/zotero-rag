@@ -49,8 +49,7 @@ where
 /// Get the Gemini API key from environment variables.
 pub(crate) fn get_gemini_api_key() -> Result<String, LLMError> {
     // Prefer GEMINI_API_KEY, fallback to GOOGLE_API_KEY if present
-    match env::var("GEMINI_API_KEY") {
-        Ok(v) => Ok(v),
-        Err(_) => Ok(env::var("GOOGLE_API_KEY")?),
-    }
+    env::var("GEMINI_API_KEY")
+        .or_else(|_| env::var("GOOGLE_API_KEY"))
+        .map_err(Into::into)
 }
