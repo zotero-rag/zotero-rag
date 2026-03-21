@@ -426,12 +426,7 @@ fn map_response_to_chat_history(response: &OpenAIResponse) -> Vec<OpenAIRequestI
                     role: "assistant".into(),
                     r#type: "message".into(),
                     content: OpenAIRequestInputItem::Text(
-                        content
-                            .first()
-                            .unwrap()
-                            .text
-                            .clone()
-                            .unwrap_or_else(String::new),
+                        content.first()?.text.clone().unwrap_or_else(String::new),
                     ),
                 }))
             }
@@ -505,7 +500,13 @@ impl<T: HttpClient> ApiClient for OpenAIClient<T> {
 
         while has_tool_calls {
             let converted_contents = map_response_to_chat_history(&response);
-            let base_tools = tools.as_ref().map(|t| unwrap_openai_tools(t)).unwrap();
+            let base_tools =
+                tools
+                    .as_ref()
+                    .map(|t| unwrap_openai_tools(t))
+                    .ok_or(LLMError::ToolCallError(
+                        "Failed to extract wrapped tools in `unwrap_openai_tools`".into(),
+                    ))?;
             process_openai_tool_calls(
                 &mut chat_history,
                 &mut contents,
