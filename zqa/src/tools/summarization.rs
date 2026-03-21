@@ -32,8 +32,6 @@ pub(crate) const SUMMARIZATION_TOOL_NAME: &str = "summarization_tool";
 #[derive(Debug, Clone)]
 pub(crate) struct SummarizationTool {
     pub(crate) llm_client: LLMClient,
-    /// The key used by the API to describe the tool's parameters.
-    pub(crate) schema_key: String,
     /// The input tokens used
     pub(crate) input_tokens: Arc<Mutex<u32>>,
     /// The output tokens used
@@ -42,10 +40,9 @@ pub(crate) struct SummarizationTool {
 
 impl SummarizationTool {
     /// Create a new [`SummarizationTool`] instance, given an LLM client and a schema key.
-    pub fn new(llm_client: LLMClient, schema_key: String) -> Self {
+    pub fn new(llm_client: LLMClient) -> Self {
         Self {
             llm_client,
-            schema_key,
             input_tokens: Arc::new(Mutex::new(0)),
             output_tokens: Arc::new(Mutex::new(0)),
         }
@@ -68,10 +65,6 @@ impl Tool for SummarizationTool {
 
     fn description(&self) -> String {
         "A tool to summarize Zotero papers with a specified ID.".into()
-    }
-
-    fn schema_key(&self) -> String {
-        self.schema_key.clone()
     }
 
     fn parameters(&self) -> schemars::Schema {
@@ -176,10 +169,10 @@ mod tests {
     use zqa_rag::{
         config::{AnthropicConfig, LLMClientConfig},
         constants::DEFAULT_ANTHROPIC_MODEL_SMALL,
-        llm::{factory::get_client_with_config, tools::ANTHROPIC_SCHEMA_KEY},
+        llm::factory::get_client_with_config,
     };
 
-    fn make_tool(schema_key: &str) -> SummarizationTool {
+    fn make_tool() -> SummarizationTool {
         let client = get_client_with_config(LLMClientConfig::Anthropic(AnthropicConfig {
             api_key: env::var("ANTHROPIC_API_KEY").unwrap(),
             model: DEFAULT_ANTHROPIC_MODEL_SMALL.into(),
@@ -187,18 +180,18 @@ mod tests {
         }))
         .unwrap();
 
-        SummarizationTool::new(client, schema_key.to_string())
+        SummarizationTool::new(client)
     }
 
     #[test]
     fn test_name() {
-        let tool = make_tool("input_schema");
+        let tool = make_tool();
         test_eq!(tool.name(), SUMMARIZATION_TOOL_NAME);
     }
 
     #[test]
     fn test_description() {
-        let tool = make_tool("input_schema");
+        let tool = make_tool();
         test_eq!(
             tool.description(),
             "A tool to summarize Zotero papers with a specified ID."
@@ -206,16 +199,8 @@ mod tests {
     }
 
     #[test]
-    fn test_schema_key() {
-        for key in ["input_schema", "parameters", "parametersJsonSchema"] {
-            let tool = make_tool(key);
-            test_eq!(tool.schema_key(), key);
-        }
-    }
-
-    #[test]
     fn test_parameters_schema() {
-        let tool = make_tool("input_schema");
+        let tool = make_tool();
         let schema = tool.parameters();
 
         // The schema should be a valid JSON schema for SummarizationToolInput
@@ -270,7 +255,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_call_invalid_args() {
-        let tool = make_tool("input_schema");
+        let tool = make_tool();
 
         // Test with invalid JSON
         let invalid_args = json!({
@@ -284,7 +269,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_call_with_empty_ids() {
-        let tool = make_tool("input_schema");
+        let tool = make_tool();
 
         // Test with empty IDs array
         let args = json!({
@@ -328,7 +313,7 @@ mod tests {
 
         assert!(setup_result.is_ok(), "Failed to set up test database");
 
-        let tool = make_tool(ANTHROPIC_SCHEMA_KEY);
+        let tool = make_tool();
 
         let args = json!({
             "query": "What is the main contribution of this paper?",

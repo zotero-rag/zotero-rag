@@ -3,7 +3,9 @@
 
 use crate::common::request_with_backoff;
 use crate::llm::base::{ChatHistoryContent, ContentType, ToolCallRequest, USER_ROLE};
-use crate::llm::tools::{SerializedTool, get_owned_tools, process_tool_calls};
+use crate::llm::tools::{
+    OPENROUTER_SCHEMA_KEY, SerializedTool, get_owned_tools, process_tool_calls,
+};
 use std::collections::HashMap;
 use std::env;
 
@@ -141,7 +143,8 @@ fn build_openrouter_messages_and_tools<'a>(
         tool_call_id: None,
     });
 
-    let owned_tools: Option<Vec<SerializedTool<'a>>> = get_owned_tools(req.tools);
+    let owned_tools: Option<Vec<SerializedTool<'a>>> =
+        get_owned_tools(req.tools, OPENROUTER_SCHEMA_KEY);
 
     (messages, owned_tools)
 }
@@ -529,7 +532,6 @@ mod tests {
         let call_count = Arc::new(Mutex::new(0));
         let tool = MockTool {
             call_count: Arc::clone(&call_count),
-            schema_key: "parameters".into(),
         };
 
         let request = ChatRequest {
@@ -614,7 +616,6 @@ mod tests {
         let call_count = Arc::new(Mutex::new(0_usize));
         let tool = MockTool {
             call_count: Arc::clone(&call_count),
-            schema_key: "parameters".into(),
         };
 
         let tool_call_count = Arc::new(Mutex::new(0_usize));

@@ -18,9 +18,7 @@ use zqa_rag::llm::base::{
     USER_ROLE,
 };
 use zqa_rag::llm::factory::get_client_with_config;
-use zqa_rag::llm::tools::{
-    ANTHROPIC_SCHEMA_KEY, CallbackFn, GEMINI_SCHEMA_KEY, OPENAI_SCHEMA_KEY, Tool,
-};
+use zqa_rag::llm::tools::{CallbackFn, Tool};
 use zqa_rag::pricing::get_model_pricing;
 use zqa_rag::vector::checkhealth::lancedb_health_check;
 use zqa_rag::vector::doctor::doctor as rag_doctor;
@@ -489,12 +487,6 @@ async fn run_query<O: Write, E: Write>(
             "Could not get embedding config".into(),
         ))?;
     let reranker_provider = ctx.config.reranker_provider.clone();
-    let schema_key = match model_provider.as_str() {
-        "anthropic" => ANTHROPIC_SCHEMA_KEY,
-        "gemini" => GEMINI_SCHEMA_KEY,
-        _ => OPENAI_SCHEMA_KEY,
-    }
-    .to_string();
 
     // Spawn a background title generation task from the query alone, in parallel with summarization.
     // Only generate a title if we don't already have one (i.e., first query in the conversation).
@@ -528,9 +520,8 @@ async fn run_query<O: Write, E: Write>(
     let mut total_input_tokens: u32 = 0;
     let mut total_output_tokens: u32 = 0;
 
-    let retrieval_tool =
-        RetrievalTool::new(embedding_config, reranker_provider, schema_key.clone());
-    let summarization_tool = SummarizationTool::new(llm_client.clone(), schema_key);
+    let retrieval_tool = RetrievalTool::new(embedding_config, reranker_provider);
+    let summarization_tool = SummarizationTool::new(llm_client.clone());
     let summarization_tool_clone = summarization_tool.clone();
     let tools: Vec<Box<dyn Tool>> = vec![Box::new(retrieval_tool), Box::new(summarization_tool)];
 
@@ -1119,7 +1110,7 @@ pub(crate) mod tests {
         }
     }
 
-    fn make_retrieval_tool(schema_key: &str) -> RetrievalTool {
+    fn make_retrieval_tool(_schema_key: &str) -> RetrievalTool {
         // Build a minimal tool; the embedding config is only used in `call`, not in the metadata
         // methods, so we use a dummy VoyageAI config here.
         RetrievalTool::new(
@@ -1130,7 +1121,6 @@ pub(crate) mod tests {
                 reranker: DEFAULT_VOYAGE_RERANK_MODEL.into(),
             }),
             "voyageai".into(),
-            schema_key.into(),
         )
     }
 

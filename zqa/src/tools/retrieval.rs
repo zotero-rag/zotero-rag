@@ -21,8 +21,6 @@ pub(crate) struct RetrievalTool {
     pub(crate) embedding_config: EmbeddingProviderConfig,
     /// The reranker provider to use.
     pub(crate) reranker_provider: String,
-    /// The key used by the API to describe the tool's parameters.
-    pub(crate) schema_key: String,
 }
 
 impl RetrievalTool {
@@ -31,12 +29,10 @@ impl RetrievalTool {
     pub(crate) fn new(
         embedding_config: EmbeddingProviderConfig,
         reranker_provider: String,
-        schema_key: String,
     ) -> Self {
         Self {
             embedding_config,
             reranker_provider,
-            schema_key,
         }
     }
 }
@@ -54,10 +50,6 @@ impl Tool for RetrievalTool {
 
     fn description(&self) -> String {
         "Retrieves relevant papers from the user's Zotero library based on a search query".into()
-    }
-
-    fn schema_key(&self) -> String {
-        self.schema_key.clone()
     }
 
     fn parameters(&self) -> schemars::Schema {
@@ -130,7 +122,7 @@ mod tests {
     };
     use zqa_rag::embedding::common::EmbeddingProviderConfig;
 
-    fn make_tool(schema_key: &str) -> RetrievalTool {
+    fn make_tool() -> RetrievalTool {
         // Build a minimal tool; the embedding config is only used in `call`, not in the metadata
         // methods, so we use a dummy VoyageAI config here.
         RetrievalTool::new(
@@ -141,19 +133,18 @@ mod tests {
                 reranker: DEFAULT_VOYAGE_RERANK_MODEL.into(),
             }),
             "voyageai".into(),
-            schema_key.into(),
         )
     }
 
     #[test]
     fn test_name() {
-        let tool = make_tool("input_schema");
+        let tool = make_tool();
         assert_eq!(tool.name(), RETRIEVAL_TOOL_NAME);
     }
 
     #[test]
     fn test_description() {
-        let tool = make_tool("input_schema");
+        let tool = make_tool();
         assert_eq!(
             tool.description(),
             "Retrieves relevant papers from the user's Zotero library based on a search query"
@@ -161,16 +152,8 @@ mod tests {
     }
 
     #[test]
-    fn test_schema_key() {
-        for key in ["input_schema", "parameters", "parametersJsonSchema"] {
-            let tool = make_tool(key);
-            assert_eq!(tool.schema_key(), key);
-        }
-    }
-
-    #[test]
     fn test_parameters_contains_query_field() {
-        let tool = make_tool("input_schema");
+        let tool = make_tool();
         let schema = tool.parameters();
         let schema_value = serde_json::to_value(&schema).unwrap();
         let properties = &schema_value["properties"];
@@ -182,7 +165,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_call_returns_error_on_invalid_args() {
-        let tool = make_tool("input_schema");
+        let tool = make_tool();
         // Pass an object that is missing the required `query` field.
         let result = tool.call(json!({"not_query": "value"})).await;
         assert!(result.is_err(), "Expected error on invalid args");
