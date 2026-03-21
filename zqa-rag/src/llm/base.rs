@@ -69,7 +69,35 @@ pub struct ChatHistoryItem {
     pub content: Vec<ChatHistoryContent>,
 }
 
+impl From<Vec<ContentType>> for ChatHistoryItem {
+    /// Creates a [`ChatHistoryItem`] from a [`Vec<ContentType>`]. In general, the reason you would
+    /// want to do this is to conveniently add the response from a model (which can include text
+    /// and multiple tool calls) into [`ChatRequest`]. For this reason, this `from` implementation
+    /// sets the `role` to [`ASSISTANT_ROLE`].
+    fn from(value: Vec<ContentType>) -> Self {
+        let content = value
+            .into_iter()
+            .map(|ct| match ct {
+                ContentType::Text(s) => ChatHistoryContent::Text(s),
+                ContentType::ToolCall(stats) => {
+                    ChatHistoryContent::ToolCallResponse(ToolCallResponse {
+                        id: stats.tool_call_id,
+                        tool_name: stats.tool_name,
+                        result: stats.tool_result,
+                    })
+                }
+            })
+            .collect();
+
+        Self {
+            role: ASSISTANT_ROLE.into(),
+            content,
+        }
+    }
+}
+
 /// Represents a request to the chat API with optional tools.
+#[derive(Default)]
 pub struct ChatRequest<'a> {
     /// The chat history
     pub chat_history: Vec<ChatHistoryItem>,

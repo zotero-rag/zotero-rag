@@ -648,4 +648,36 @@ mod tests {
         test_eq!(texts.len(), 1);
         test_eq!(texts[0].as_str(), "Done!");
     }
+
+    #[tokio::test]
+    async fn test_followup_queries_work() {
+        dotenv().ok();
+
+        let client = OpenRouterClient::<ReqwestClient>::default();
+        let first_message = ChatRequest {
+            message: "What is self-attention?".into(),
+            ..ChatRequest::default()
+        };
+
+        let response = client.send_message(&first_message).await;
+        test_ok!(response);
+
+        let response = response.unwrap();
+        let chat_history_contents: ChatHistoryItem = response.content.into();
+
+        let second_message = ChatRequest {
+            chat_history: vec![
+                ChatHistoryItem {
+                    role: USER_ROLE.into(),
+                    content: vec![ChatHistoryContent::Text(first_message.message.clone())],
+                },
+                chat_history_contents,
+            ],
+            message: "What are the Q, K, and V matrices?".into(),
+            ..ChatRequest::default()
+        };
+
+        let response = client.send_message(&second_message).await;
+        test_ok!(response);
+    }
 }
