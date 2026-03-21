@@ -35,7 +35,7 @@ pub trait Rerank: Send + Sync {
 ///
 /// # Returns
 ///
-/// An `Arc<dyn Rerank<T>>` object, or an `LLMError` if the provider is not supported.
+/// An `Arc<dyn Rerank>` object, or an `LLMError` if the provider is not supported.
 ///
 /// # Errors
 ///
