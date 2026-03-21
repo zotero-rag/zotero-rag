@@ -13,18 +13,10 @@ const DIM_TEXT: &str = "\x1b[2m";
 const RESET: &str = "\x1b[0m";
 
 /// A wrapper type over `Vec<ContentType>` that provides a nicer interface for some tasks. This can
-/// be constructed from an owned value or a reference, and implements `Display` so that the model
-/// response can be printed or converted to a `String` using `to_string()`.
+/// be constructed from a reference, and implements `Display` so that the model response can be
+/// printed or converted to a `String` using `to_string()`.
 pub(crate) struct ModelResponse<'a> {
     parts: Cow<'a, [ContentType]>,
-}
-
-impl From<Vec<ContentType>> for ModelResponse<'_> {
-    fn from(value: Vec<ContentType>) -> Self {
-        Self {
-            parts: Cow::Owned(value),
-        }
-    }
 }
 
 impl<'a> From<&'a Vec<ContentType>> for ModelResponse<'a> {

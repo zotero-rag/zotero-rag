@@ -129,7 +129,7 @@ impl Tool for SummarizationTool {
             for result in summarization_results {
                 match result {
                     Ok(response) => {
-                        let summary = Into::<ModelResponse>::into(response.content).to_string();
+                        let summary = ModelResponse::from(&response.content).to_string();
                         summaries.push(summary);
 
                         // Update token counts (with error handling for mutex poisoning)

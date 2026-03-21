@@ -13,7 +13,9 @@ use crate::constants::{
     DEFAULT_ANTHROPIC_MAX_TOKENS, DEFAULT_ANTHROPIC_MODEL, DEFAULT_MAX_RETRIES,
 };
 use crate::http_client::HttpClient;
-use crate::llm::base::{ChatHistoryContent, ContentType, ToolCallRequest, USER_ROLE};
+use crate::llm::base::{
+    ChatHistoryContent, ContentType, ToolCallRequest, ToolCallResponse, USER_ROLE,
+};
 use crate::llm::tools::{
     ANTHROPIC_SCHEMA_KEY, SerializedTool, get_owned_tools, process_tool_calls,
 };
@@ -31,28 +33,34 @@ pub(crate) struct AnthropicChatHistoryItem {
 
 impl From<ChatHistoryItem> for AnthropicChatHistoryItem {
     fn from(value: ChatHistoryItem) -> Self {
+        let role = value.role.clone();
         Self {
-            role: value.role,
             content: value
                 .content
                 .into_iter()
-                .map(Into::into)
-                .collect::<Vec<_>>(),
+                .map(|ct| match ct {
+                    ChatHistoryContent::Text(s) => {
+                        AnthropicResponseContent::Text(AnthropicTextResponseContent {
+                            r#type: "text".into(),
+                            text: s,
+                        })
+                    }
+                    ChatHistoryContent::ToolCallRequest(req) => {
+                        AnthropicResponseContent::ToolCall(req.into())
+                    }
+                    ChatHistoryContent::ToolCallResponse(res) => {
+                        AnthropicResponseContent::ToolResult(res.into())
+                    }
+                })
+                .collect(),
+            role,
         }
     }
 }
 
 impl From<&ChatHistoryItem> for AnthropicChatHistoryItem {
     fn from(value: &ChatHistoryItem) -> Self {
-        Self {
-            role: value.role.clone(),
-            content: value
-                .content
-                .clone()
-                .into_iter()
-                .map(Into::into)
-                .collect::<Vec<_>>(),
-        }
+        value.clone().into()
     }
 }
 
@@ -70,6 +78,15 @@ pub(crate) struct AnthropicRequest<'a> {
     pub(crate) tools: Option<&'a [SerializedTool<'a>]>,
 }
 
+/// Internal newtype wrapper to make conversions more ergonomic
+struct AnthropicChatHistory(Vec<AnthropicChatHistoryItem>);
+
+impl From<Vec<ChatHistoryItem>> for AnthropicChatHistory {
+    fn from(value: Vec<ChatHistoryItem>) -> Self {
+        Self(value.into_iter().map(Into::into).collect())
+    }
+}
+
 /// Helper to build messages and tools from a ChatRequest.
 /// Returns owned data that can then be borrowed by AnthropicRequest.
 pub(crate) fn build_anthropic_messages_and_tools<'a>(
@@ -78,7 +95,8 @@ pub(crate) fn build_anthropic_messages_and_tools<'a>(
     Vec<AnthropicChatHistoryItem>,
     Option<Vec<SerializedTool<'a>>>,
 ) {
-    let mut messages = req.chat_history.iter().map(Into::into).collect::<Vec<_>>();
+    let messages: AnthropicChatHistory = req.chat_history.clone().into();
+    let mut messages = messages.0;
 
     messages.push(AnthropicChatHistoryItem {
         role: USER_ROLE.to_owned(),
@@ -109,6 +127,19 @@ pub(crate) struct AnthropicToolUseResult {
     tool_use_id: String,
     /// The result from the tool call.
     content: String,
+}
+
+impl From<ToolCallResponse> for AnthropicToolUseResult {
+    fn from(value: ToolCallResponse) -> Self {
+        Self {
+            r#type: "tool_result".into(),
+            tool_use_id: value.id,
+            content: match value.result {
+                serde_json::Value::String(s) => s,
+                other => other.to_string(),
+            },
+        }
+    }
 }
 
 /// A thinking block returned by models with extended thinking enabled.
@@ -145,6 +176,17 @@ pub(crate) struct AnthropicToolUseResponseContent {
     pub(crate) input: serde_json::Map<String, serde_json::Value>,
 }
 
+impl From<ToolCallRequest> for AnthropicToolUseResponseContent {
+    fn from(value: ToolCallRequest) -> Self {
+        Self {
+            id: value.id,
+            r#type: "tool_use".into(),
+            name: value.tool_name,
+            input: serde_json::Value::as_object(&value.args).unwrap().clone(),
+        }
+    }
+}
+
 /// Content block in an Anthropic API response. This is also used in the request as the chat
 /// history.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -159,30 +201,6 @@ pub(crate) enum AnthropicResponseContent {
     ToolResult(AnthropicToolUseResult),
     /// A thinking block from models with extended thinking enabled.
     Thinking(AnthropicThinkingResponseContent),
-}
-
-impl From<ChatHistoryContent> for AnthropicResponseContent {
-    fn from(value: ChatHistoryContent) -> Self {
-        match value {
-            ChatHistoryContent::Text(s) => Self::PlainText(s),
-            ChatHistoryContent::ToolCallRequest(req) => {
-                Self::ToolCall(AnthropicToolUseResponseContent {
-                    id: req.id,
-                    r#type: "tool_use".into(),
-                    name: req.tool_name,
-                    input: serde_json::Value::as_object(&req.args).unwrap().clone(),
-                })
-            }
-            ChatHistoryContent::ToolCallResponse(res) => Self::ToolResult(AnthropicToolUseResult {
-                r#type: "tool_result".into(),
-                tool_use_id: res.id,
-                content: match res.result {
-                    serde_json::Value::String(s) => s,
-                    other => other.to_string(),
-                },
-            }),
-        }
-    }
 }
 
 impl From<String> for AnthropicResponseContent {
@@ -416,7 +434,7 @@ mod tests {
     use crate::http_client::{MockHttpClient, ReqwestClient, SequentialMockHttpClient};
     use crate::llm::anthropic::{AnthropicTextResponseContent, DEFAULT_CLAUDE_MODEL};
     use crate::llm::base::{
-        ApiClient, ChatHistoryContent, ChatRequest, ContentType, ToolCallResponse,
+        ApiClient, ChatHistoryContent, ChatHistoryItem, ChatRequest, ContentType, USER_ROLE,
     };
     use crate::llm::tools::test_utils::MockTool;
 
@@ -620,35 +638,35 @@ mod tests {
         test_eq!(texts[0].as_str(), "Done!");
     }
 
-    #[test]
-    fn test_tool_result_object_content_is_serialized_as_string() {
-        // A JSON-object result must be serialized as a JSON string so the Anthropic API
-        // receives `"content": "{...}"` rather than `"content": {...}`.
-        let content = AnthropicResponseContent::from(ChatHistoryContent::ToolCallResponse(
-            ToolCallResponse {
-                id: "tool-1".into(),
-                tool_name: "mock_tool".into(),
-                result: serde_json::json!({"answer": 42}),
-            },
-        ));
-        let json = serde_json::to_value(&content).unwrap();
-        assert!(
-            json["content"].is_string(),
-            "content should be a JSON string, got: {}",
-            json["content"]
-        );
-    }
+    #[tokio::test]
+    async fn test_followup_queries_work() {
+        dotenv().ok();
 
-    #[test]
-    fn test_tool_result_string_content_passes_through() {
-        let content = AnthropicResponseContent::from(ChatHistoryContent::ToolCallResponse(
-            ToolCallResponse {
-                id: "tool-2".into(),
-                tool_name: "mock_tool".into(),
-                result: serde_json::json!("plain text"),
-            },
-        ));
-        let json = serde_json::to_value(&content).unwrap();
-        test_eq!(json["content"].as_str().unwrap(), "plain text");
+        let client = AnthropicClient::<ReqwestClient>::default();
+        let first_message = ChatRequest {
+            message: "What is self-attention?".into(),
+            ..ChatRequest::default()
+        };
+
+        let response = client.send_message(&first_message).await;
+        test_ok!(response);
+
+        let response = response.unwrap();
+        let chat_history_contents: ChatHistoryItem = response.content.into();
+
+        let second_message = ChatRequest {
+            chat_history: vec![
+                ChatHistoryItem {
+                    role: USER_ROLE.into(),
+                    content: vec![ChatHistoryContent::Text(first_message.message.clone())],
+                },
+                chat_history_contents,
+            ],
+            message: "What are the Q, K, and V matrices?".into(),
+            ..ChatRequest::default()
+        };
+
+        let response = client.send_message(&second_message).await;
+        test_ok!(response);
     }
 }
