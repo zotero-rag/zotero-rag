@@ -12,7 +12,7 @@ use crate::constants::{DEFAULT_GEMINI_MODEL, DEFAULT_MAX_RETRIES};
 use crate::llm::base::{
     ChatHistoryContent, ChatHistoryItem, ContentType, ToolCallRequest, USER_ROLE,
 };
-use crate::llm::tools::{SerializedTool, get_owned_tools, process_tool_calls};
+use crate::llm::tools::{GEMINI_SCHEMA_KEY, SerializedTool, get_owned_tools, process_tool_calls};
 
 use super::base::{ApiClient, ChatRequest, CompletionApiResponse};
 use super::errors::LLMError;
@@ -180,7 +180,8 @@ fn build_gemini_request_data<'a>(
         }],
     });
 
-    let owned_tools: Option<Vec<SerializedTool<'a>>> = get_owned_tools(req.tools);
+    let owned_tools: Option<Vec<SerializedTool<'a>>> =
+        get_owned_tools(req.tools, GEMINI_SCHEMA_KEY);
 
     let generation_config = Some(GeminiGenerationConfig {
         max_output_tokens: model_max,
@@ -582,7 +583,6 @@ mod tests {
         let call_count = Arc::new(Mutex::new(0));
         let tool = MockTool {
             call_count: Arc::clone(&call_count),
-            schema_key: "parametersJsonSchema".into(),
         };
         let request = ChatRequest {
             chat_history: Vec::new(),
@@ -653,7 +653,6 @@ mod tests {
         let call_count = Arc::new(Mutex::new(0_usize));
         let tool = MockTool {
             call_count: Arc::clone(&call_count),
-            schema_key: "parametersJsonSchema".into(),
         };
 
         let tool_call_count = Arc::new(Mutex::new(0_usize));

@@ -233,7 +233,6 @@ mod tests {
         let call_count = Arc::new(Mutex::new(0));
         let tool = MockTool {
             call_count: Arc::clone(&call_count),
-            schema_key: "input_schema".into(),
         };
 
         let request = ChatRequest {
@@ -306,7 +305,6 @@ mod tests {
         let call_count = Arc::new(Mutex::new(0_usize));
         let tool = MockTool {
             call_count: Arc::clone(&call_count),
-            schema_key: "input_schema".into(),
         };
 
         let tool_call_count = Arc::new(Mutex::new(0_usize));

@@ -18,15 +18,14 @@ use crate::llm::{
     errors::LLMError,
 };
 
-/// The key for the input schema for tools passed to Anthropic. Use this key as the return
-/// value of the `schema_key` method in the `Tool` trait.
-pub const ANTHROPIC_SCHEMA_KEY: &str = "input_schema";
-/// The key for the input schema for tools passed to Gemini. Use this key as the return
-/// value of the `schema_key` method in the `Tool` trait.
-pub const GEMINI_SCHEMA_KEY: &str = "parametersJsonSchema";
-/// The key for the input schema for tools passed to OpenAI. Use this key as the return
-/// value of the `schema_key` method in the `Tool` trait.
-pub const OPENAI_SCHEMA_KEY: &str = "parameters";
+/// The key for the input schema for tools passed to Anthropic.
+pub(crate) const ANTHROPIC_SCHEMA_KEY: &str = "input_schema";
+/// The key for the input schema for tools passed to Gemini.
+pub(crate) const GEMINI_SCHEMA_KEY: &str = "parametersJsonSchema";
+/// The key for the input schema for tools passed to OpenAI.
+pub(crate) const OPENAI_SCHEMA_KEY: &str = "parameters";
+/// The key for the input schema for tools passed to OpenRouter.
+pub(crate) const OPENROUTER_SCHEMA_KEY: &str = "parameters";
 
 /// A trait for tools that can be called by the LLM. Implement this trait to create tools that can
 /// be passed to models.
@@ -72,12 +71,6 @@ pub const OPENAI_SCHEMA_KEY: &str = "parameters";
 ///            schema_for!(MockToolInput)
 ///        }
 ///
-///        /// The key used by the API to describe the tool's parameters. See the method's docs for
-///        /// more details.
-///        fn schema_key(&self) -> String {
-///            self.schema_key.clone()
-///        }
-///
 ///        /// The function to call when the tool is invoked. Note that even if your function does
 ///        /// not need to be async, you should still use `async move` to ensure that the function
 ///        /// is properly `Send` and `Sync`.
@@ -108,16 +101,6 @@ pub trait Tool: Send + Sync {
     /// The JSON schema for the tool's arguments.
     fn parameters(&self) -> Schema;
 
-    /// The key used by the API to describe the tool's parameters.
-    ///
-    /// Most API providers have a standardized name and description property for tools, but the key
-    /// used to represent the input schema is *not* the same. This function should return that
-    /// *key*. For example, Anthropic uses "input_schema" (see docs:
-    /// https://docs.claude.com/en/docs/agents-and-tools/tool-use/overview), and OpenAI uses
-    /// "parameters" (see docs:
-    /// https://platform.openai.com/docs/guides/function-calling#function-tool-example).
-    fn schema_key(&self) -> String;
-
     /// The function to call when the tool is invoked.
     fn call<'a>(
         &'a self,
@@ -127,7 +110,16 @@ pub trait Tool: Send + Sync {
 
 /// A newtype wrapper struct that lets us add a blanket implementation of `Serialize` to all tools.
 #[derive(Clone)]
-pub(crate) struct SerializedTool<'a>(pub &'a dyn Tool);
+pub(crate) struct SerializedTool<'a> {
+    pub(crate) tool: &'a dyn Tool,
+    pub(crate) schema_key: &'static str,
+}
+
+impl<'a> SerializedTool<'a> {
+    pub(crate) fn new(tool: &'a dyn Tool, schema_key: &'static str) -> Self {
+        Self { tool, schema_key }
+    }
+}
 
 impl Serialize for SerializedTool<'_> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
@@ -136,11 +128,11 @@ impl Serialize for SerializedTool<'_> {
     {
         // Construct a map describing the tool
         let mut obj = Map::new();
-        obj.insert("name".into(), Value::String(self.0.name()));
-        obj.insert("description".into(), Value::String(self.0.description()));
+        obj.insert("name".into(), Value::String(self.tool.name()));
+        obj.insert("description".into(), Value::String(self.tool.description()));
 
         // This key varies by model provider
-        obj.insert(self.0.schema_key(), self.0.parameters().into());
+        obj.insert(self.schema_key.into(), self.tool.parameters().into());
 
         // Serialize the map to get the tool's JSON schema description
         let mut map = serializer.serialize_map(Some(obj.len()))?;
@@ -170,10 +162,11 @@ impl Serialize for SerializedTool<'_> {
 #[must_use]
 pub(crate) fn get_owned_tools<'a>(
     tools: Option<&'a [Box<dyn Tool>]>,
+    schema_key: &'static str,
 ) -> Option<Vec<SerializedTool<'a>>> {
     tools.as_ref().map(|iter| {
         iter.iter()
-            .map(|f| SerializedTool(&**f))
+            .map(|f| SerializedTool::new(&**f, schema_key))
             .collect::<Vec<SerializedTool<'a>>>()
     })
 }
@@ -236,7 +229,7 @@ where
                 let tool_call_id = tool_call.id.clone();
                 let called_tool = tools
                     .iter()
-                    .find(|tool| tool.0.name() == tool_call.tool_name)
+                    .find(|tool| tool.tool.name() == tool_call.tool_name)
                     .ok_or_else(|| {
                         LLMError::ToolCallError(format!(
                             "Tool {} was called, but it does not exist in the passed list of tools.",
@@ -244,7 +237,7 @@ where
                         ))
                     })?;
 
-                let tool_result = match called_tool.0.call(tool_call.args.clone()).await {
+                let tool_result = match called_tool.tool.call(tool_call.args.clone()).await {
                     Ok(res) => res,
                     Err(e) => Value::String(format!("Error calling tool: {e}")),
                 };
@@ -312,7 +305,6 @@ pub(crate) mod test_utils {
     #[derive(Debug)]
     pub(crate) struct MockTool {
         pub call_count: Arc<Mutex<usize>>,
-        pub schema_key: String,
     }
 
     /// The tool is simple and greets a user with a name; this is that input.
@@ -333,10 +325,6 @@ pub(crate) mod test_utils {
 
         fn parameters(&self) -> schemars::Schema {
             schema_for!(MockToolInput)
-        }
-
-        fn schema_key(&self) -> String {
-            self.schema_key.clone()
         }
 
         fn call(
@@ -390,10 +378,6 @@ mod tests {
             schema_for!(SlowToolInput)
         }
 
-        fn schema_key(&self) -> String {
-            "input_schema".into()
-        }
-
         fn call(
             &self,
             _args: Value,
@@ -413,7 +397,7 @@ mod tests {
         };
         let boxed_tool: Box<dyn Tool> = Box::new(tool);
         let tools = vec![boxed_tool];
-        let serialized_tools = get_owned_tools(Some(&tools)).unwrap();
+        let serialized_tools = get_owned_tools(Some(&tools), OPENAI_SCHEMA_KEY).unwrap();
 
         let contents = vec![
             ChatHistoryContent::ToolCallRequest(ToolCallRequest {

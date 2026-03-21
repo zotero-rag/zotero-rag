@@ -22,7 +22,7 @@ use crate::common::request_with_backoff;
 use crate::constants::{DEFAULT_MAX_RETRIES, DEFAULT_OPENAI_EMBEDDING_DIM, DEFAULT_OPENAI_MODEL};
 use crate::http_client::HttpClient;
 use crate::llm::base::{ChatHistoryContent, ContentType, ToolUseStats, USER_ROLE};
-use crate::llm::tools::{CallbackFn, SerializedTool, get_owned_tools};
+use crate::llm::tools::{CallbackFn, OPENAI_SCHEMA_KEY, SerializedTool, get_owned_tools};
 use serde_json::{Map, Value};
 
 /// OpenAI-specific tool wrapper that adds the `type` and `strict` fields
@@ -39,13 +39,16 @@ impl Serialize for OpenAITool<'_> {
 
         // Construct a map with OpenAI-specific fields
         let mut obj = Map::new();
-        obj.insert("name".into(), Value::String(self.0.0.name()));
-        obj.insert("description".into(), Value::String(self.0.0.description()));
+        obj.insert("name".into(), Value::String(self.0.tool.name()));
+        obj.insert(
+            "description".into(),
+            Value::String(self.0.tool.description()),
+        );
         obj.insert("type".into(), Value::String("function".into()));
         obj.insert("strict".into(), Value::Bool(false));
 
         // Add the schema with the provider-specific key
-        obj.insert(self.0.0.schema_key(), self.0.0.parameters().into());
+        obj.insert(self.0.schema_key.into(), self.0.tool.parameters().into());
 
         // Serialize the map
         let mut map = serializer.serialize_map(Some(obj.len()))?;
@@ -188,7 +191,7 @@ fn build_openai_messages_and_tools<'a>(
     }));
 
     let owned_tools: Option<Vec<OpenAITool<'a>>> =
-        get_owned_tools(req.tools).map(wrap_tools_for_openai);
+        get_owned_tools(req.tools, OPENAI_SCHEMA_KEY).map(wrap_tools_for_openai);
 
     (messages, owned_tools)
 }
@@ -295,7 +298,7 @@ async fn process_openai_tool_calls(
                 let tool_call_id = tool_call.call_id.clone();
                 let called_tool = tools
                     .iter()
-                    .find(|tool| tool.0.name() == tool_call.name)
+                    .find(|tool| tool.tool.name() == tool_call.name)
                     .ok_or_else(|| {
                         LLMError::ToolCallError(format!(
                             "Tool {} was called, but it does not exist in the passed list of tools.",
@@ -310,7 +313,7 @@ async fn process_openai_tool_calls(
                     other => other.clone(),
                 };
 
-                let tool_result = match called_tool.0.call(parsed_arguments.clone()).await {
+                let tool_result = match called_tool.tool.call(parsed_arguments.clone()).await {
                     Ok(res) => res,
                     Err(e) => serde_json::Value::String(format!("Error calling tool: {e}")),
                 };
@@ -754,7 +757,6 @@ mod tests {
         let call_count = Arc::new(Mutex::new(0));
         let tool = MockTool {
             call_count: Arc::clone(&call_count),
-            schema_key: OPENAI_SCHEMA_KEY.into(),
         };
         let request = ChatRequest {
             chat_history: Vec::new(),
@@ -800,9 +802,6 @@ mod tests {
         fn parameters(&self) -> schemars::Schema {
             schemars::schema_for!(MockToolInput)
         }
-        fn schema_key(&self) -> String {
-            "parameters".into()
-        }
         fn call(
             &self,
             _args: serde_json::Value,
@@ -820,7 +819,7 @@ mod tests {
         let delay = Duration::from_millis(100);
         let tool = SlowMockTool { delay };
         let tools: Vec<Box<dyn Tool>> = vec![Box::new(tool)];
-        let serialized_tools = get_owned_tools(Some(&tools)).unwrap();
+        let serialized_tools = get_owned_tools(Some(&tools), OPENAI_SCHEMA_KEY).unwrap();
 
         // Construct input with 5 tool calls
         let mut contents = Vec::new();
@@ -904,7 +903,6 @@ mod tests {
         let call_count = Arc::new(Mutex::new(0_usize));
         let tool = MockTool {
             call_count: Arc::clone(&call_count),
-            schema_key: OPENAI_SCHEMA_KEY.into(),
         };
 
         let tool_call_count = Arc::new(Mutex::new(0_usize));

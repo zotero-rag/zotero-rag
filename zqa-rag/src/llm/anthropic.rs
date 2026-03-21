@@ -14,7 +14,9 @@ use crate::constants::{
 };
 use crate::http_client::HttpClient;
 use crate::llm::base::{ChatHistoryContent, ContentType, ToolCallRequest, USER_ROLE};
-use crate::llm::tools::{SerializedTool, get_owned_tools, process_tool_calls};
+use crate::llm::tools::{
+    ANTHROPIC_SCHEMA_KEY, SerializedTool, get_owned_tools, process_tool_calls,
+};
 const DEFAULT_CLAUDE_MODEL: &str = DEFAULT_ANTHROPIC_MODEL;
 
 /// An Anthropic-specific chat history object. This is pretty much the same as `ChatHistoryItem`,
@@ -83,7 +85,8 @@ pub(crate) fn build_anthropic_messages_and_tools<'a>(
         content: vec![req.message.clone().into()],
     });
 
-    let owned_tools: Option<Vec<SerializedTool<'a>>> = get_owned_tools(req.tools);
+    let owned_tools: Option<Vec<SerializedTool<'a>>> =
+        get_owned_tools(req.tools, ANTHROPIC_SCHEMA_KEY);
 
     (messages, owned_tools)
 }
@@ -515,7 +518,6 @@ mod tests {
         let call_count = Arc::new(Mutex::new(0));
         let tool = MockTool {
             call_count: Arc::clone(&call_count),
-            schema_key: "input_schema".into(),
         };
         let request = ChatRequest {
             chat_history: Vec::new(),
@@ -585,7 +587,6 @@ mod tests {
         let call_count = Arc::new(Mutex::new(0_usize));
         let tool = MockTool {
             call_count: Arc::clone(&call_count),
-            schema_key: "input_schema".into(),
         };
 
         let tool_call_count = Arc::new(Mutex::new(0_usize));
