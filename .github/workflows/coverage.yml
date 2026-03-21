@@ -40,7 +40,7 @@ jobs:
         run: cargo install cargo-tarpaulin --force
 
       - name: Generate code coverage
-        run: cargo tarpaulin --engine llvm --out lcov --output-dir . --timeout 300 --exclude-files 'zqa/tests/*' -- --test-threads 1
+        run: cargo tarpaulin --engine llvm --out lcov --output-dir . --timeout 300 --exclude-files 'zqa/tests/*'
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_KEY }}
           VOYAGE_AI_API_KEY: ${{ secrets.VOYAGE_AI_API_KEY }}
