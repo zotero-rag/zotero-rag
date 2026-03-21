@@ -262,14 +262,14 @@ mod tests {
 
     use crate::clients::anthropic::AnthropicClient;
     use crate::clients::gemini::GeminiClient;
+    use crate::clients::ollama::OllamaClient;
     use crate::clients::openai::OpenAIClient;
+    use crate::clients::openrouter::OpenRouterClient;
     use crate::embedding::cohere::CohereClient;
     use crate::embedding::common::Rerank;
     use crate::embedding::voyage::VoyageAIClient;
     use crate::http_client::ReqwestClient;
     use crate::llm::base::ApiClient;
-    use crate::llm::ollama::OllamaClient;
-    use crate::llm::openrouter::OpenRouterClient;
 
     use super::BatchAPIProvider;
 

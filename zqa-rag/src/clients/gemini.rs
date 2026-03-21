@@ -1,3 +1,5 @@
+//! Client definition for the Gemini API.
+
 use std::env;
 
 use crate::{

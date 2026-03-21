@@ -1,3 +1,5 @@
+//! Client definition for the OpenAI API.
+
 use crate::http_client::{HttpClient, ReqwestClient};
 
 /// A client for OpenAI's chat completions (Responses) API.
@@ -51,4 +53,3 @@ where
         }
     }
 }
-
