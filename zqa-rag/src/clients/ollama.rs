@@ -1,4 +1,4 @@
-//! Client definition for the ollama API.
+//! Client definition for the Ollama API.
 
 use crate::http_client::{HttpClient, ReqwestClient};
 
