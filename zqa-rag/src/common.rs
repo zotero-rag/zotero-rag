@@ -57,13 +57,18 @@ pub(crate) async fn request_with_backoff<T: HttpClient>(
         }
 
         if response.status() == StatusCode::TOO_MANY_REQUESTS && attempt < max_retries {
+            log::debug!("Got HTTP 429 response, retrying with backoff (attempt {attempt})");
+
             let delay = calculate_backoff_delay(attempt, &response);
             let _ = tokio::time::sleep(delay).await;
             attempt += 1;
             continue;
         }
 
-        return Err(response.error_for_status().unwrap_err().into());
+        let body = response.text().await?;
+        log::debug!("Request failed: {body}");
+
+        return Err(LLMError::HttpStatusError(body));
     }
 }
 
