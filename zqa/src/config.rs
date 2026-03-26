@@ -331,6 +331,7 @@ impl Config {
             EmbeddingProviderConfig::OpenAI(cfg) => cfg.embedding_model,
             EmbeddingProviderConfig::Gemini(cfg) => cfg.embedding_model,
             EmbeddingProviderConfig::VoyageAI(cfg) => cfg.embedding_model,
+            EmbeddingProviderConfig::Ollama(cfg) => cfg.embedding_model,
             EmbeddingProviderConfig::Cohere(cfg) => cfg.embedding_model,
         })
     }

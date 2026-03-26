@@ -4,6 +4,7 @@
 
 use crate::capabilities::EmbeddingProvider;
 use crate::clients::gemini::GeminiClient;
+use crate::clients::ollama::OllamaClient;
 use crate::clients::openai::OpenAIClient;
 use crate::embedding::cohere::CohereClient;
 use crate::embedding::common::EmbeddingProviderConfig;
@@ -232,6 +233,12 @@ async fn get_db_with_embeddings(
             db.embedding_registry().register(
                 EmbeddingProvider::Cohere.as_str(),
                 Arc::new(CohereClient::<ReqwestClient>::with_config(cfg.clone())),
+            )?;
+        }
+        EmbeddingProviderConfig::Ollama(cfg) => {
+            db.embedding_registry().register(
+                EmbeddingProvider::Ollama.as_str(),
+                Arc::new(OllamaClient::<ReqwestClient>::with_config(cfg.clone())),
             )?;
         }
     }

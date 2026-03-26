@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::{borrow::Cow, env, fmt::Debug};
+use std::{borrow::Cow, fmt::Debug};
 
 use arrow_schema::{DataType, Field};
 use lancedb::embeddings::EmbeddingFunction;
@@ -65,7 +65,7 @@ impl EmbeddingApiResponse for OllamaEmbeddingResponse {
 
 impl<T: HttpClient + Debug + Default + Clone> OllamaClient<T> {
     fn get_embedding_dims(&self) -> Option<usize> {
-        self.config.clone().map(|c| c.embedding_dims)
+        self.config.as_ref().map(|c| c.embedding_dims)
     }
 
     /// Internal method to compute embeddings
@@ -84,13 +84,16 @@ impl<T: HttpClient + Debug + Default + Clone> OllamaClient<T> {
         const BATCH_SIZE: usize = 32;
         const WAIT_AFTER_REQUEST_S: u64 = 0;
 
-        let model = env::var("OLLAMA_EMBEDDING_MODEL")
-            .ok()
-            .unwrap_or_else(|| DEFAULT_OLLAMA_EMBEDDING_MODEL.to_string());
+        let model = self
+            .config
+            .as_ref()
+            .map_or(DEFAULT_OLLAMA_EMBEDDING_MODEL.into(), |c| {
+                c.embedding_model.clone()
+            });
         let base_url = self
             .config
-            .clone()
-            .map_or(DEFAULT_OLLAMA_BASE_URL.into(), |c| c.base_url);
+            .as_ref()
+            .map_or(DEFAULT_OLLAMA_BASE_URL.into(), |c| c.base_url.clone());
         let base_url = base_url.trim_end_matches('/');
 
         let url = format!("{base_url}/api/embed");

@@ -4,6 +4,11 @@
 //! instead of reading from environment variables or TOML files directly.
 //! This makes the rag crate more general and reusable.
 
+use crate::constants::{
+    DEFAULT_OLLAMA_BASE_URL, DEFAULT_OLLAMA_EMBEDDING_DIM, DEFAULT_OLLAMA_EMBEDDING_MODEL,
+    DEFAULT_OLLAMA_MAX_TOKENS, DEFAULT_OLLAMA_MODEL,
+};
+
 /// Configuration for Anthropic LLM provider
 #[derive(Debug, Clone)]
 pub struct AnthropicConfig {
@@ -43,6 +48,18 @@ pub struct OllamaConfig {
     pub embedding_dims: usize,
     /// Base URL for the ollama API (e.g., "http://localhost:11434")
     pub base_url: String,
+}
+
+impl Default for OllamaConfig {
+    fn default() -> Self {
+        Self {
+            model: DEFAULT_OLLAMA_MODEL.into(),
+            max_tokens: DEFAULT_OLLAMA_MAX_TOKENS,
+            embedding_model: DEFAULT_OLLAMA_EMBEDDING_MODEL.into(),
+            embedding_dims: DEFAULT_OLLAMA_EMBEDDING_DIM,
+            base_url: DEFAULT_OLLAMA_BASE_URL.into(),
+        }
+    }
 }
 
 /// Configuration for Gemini LLM and embedding provider
