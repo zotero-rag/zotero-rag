@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::{borrow::Cow, env, fmt::Debug};
 
-use arrow_schema::DataType;
+use arrow_schema::{DataType, Field};
 use lancedb::embeddings::EmbeddingFunction;
 use std::sync::Arc;
 
@@ -127,7 +127,18 @@ where
     }
 
     fn dest_type(&self) -> lancedb::Result<Cow<'_, DataType>> {
-        Ok(Cow::Owned(DataType::Utf8))
+        let embedding_dims = if let Ok(var) = env::var("OLLAMA_EMBEDDING_DIMS")
+            && let Ok(value) = var.parse::<i32>()
+        {
+            value
+        } else {
+            DEFAULT_OLLAMA_EMBEDDING_DIM as i32
+        };
+
+        Ok(Cow::Owned(DataType::FixedSizeList(
+            Arc::new(Field::new("item", DataType::Float32, true)),
+            embedding_dims,
+        )))
     }
 
     fn compute_source_embeddings(

@@ -183,6 +183,9 @@ impl Config {
                 .embedding_model
                 .replace_with_env("OLLAMA_EMBEDDING_MODEL");
             ollama_config
+                .embedding_dims
+                .replace_with_env("OLLAMA_EMBEDDING_DIMS");
+            ollama_config
                 .model_small
                 .replace_with_env("OLLAMA_MODEL_SMALL");
             ollama_config.base_url.replace_with_env("OLLAMA_BASE_URL");
@@ -660,6 +663,19 @@ impl OverwriteFromEnv for String {
     fn replace_with_env(&mut self, var: &str) {
         if let Ok(env_var) = env::var(var) {
             *self = env_var;
+        }
+    }
+}
+
+impl OverwriteFromEnv for Option<usize> {
+    fn replace_with_env(&mut self, var: &str)
+    where
+        Self: Sized,
+    {
+        if let Ok(env_var) = env::var(var)
+            && let Ok(value) = env_var.parse::<usize>()
+        {
+            *self = Some(value);
         }
     }
 }
