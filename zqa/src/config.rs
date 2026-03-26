@@ -275,6 +275,10 @@ impl Config {
                 .cohere
                 .as_ref()
                 .map(|cfg| EmbeddingProviderConfig::Cohere(cfg.clone().into())),
+            "ollama" => self
+                .ollama
+                .as_ref()
+                .map(|cfg| EmbeddingProviderConfig::Ollama(cfg.clone().into())),
             _ => None,
         }
     }

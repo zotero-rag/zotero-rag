@@ -82,6 +82,7 @@ pub fn get_embedding_provider(
         "openai" => Ok(Arc::new(OpenAIClient::<ReqwestClient>::default())),
         "voyageai" => Ok(Arc::new(VoyageAIClient::<ReqwestClient>::default())),
         "gemini" => Ok(Arc::new(GeminiClient::<ReqwestClient>::default())),
+        "ollama" => Ok(Arc::new(OllamaClient::<ReqwestClient>::default())),
         "cohere" => Ok(Arc::new(CohereClient::<ReqwestClient>::default())),
         _ => Err(LLMError::InvalidProviderError(embedding_name.to_string())),
     }
