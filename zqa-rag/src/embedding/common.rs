@@ -14,10 +14,11 @@ use std::{
 use lancedb::embeddings::EmbeddingFunction;
 
 use crate::clients::gemini::GeminiClient;
+use crate::clients::ollama::OllamaClient;
 use crate::clients::openai::OpenAIClient;
 use crate::constants::{
-    DEFAULT_COHERE_EMBEDDING_DIM, DEFAULT_GEMINI_EMBEDDING_DIM, DEFAULT_OPENAI_EMBEDDING_DIM,
-    DEFAULT_VOYAGE_EMBEDDING_DIM,
+    DEFAULT_COHERE_EMBEDDING_DIM, DEFAULT_GEMINI_EMBEDDING_DIM, DEFAULT_OLLAMA_EMBEDDING_DIM,
+    DEFAULT_OPENAI_EMBEDDING_DIM, DEFAULT_VOYAGE_EMBEDDING_DIM,
 };
 use crate::embedding::cohere::CohereClient;
 use crate::embedding::voyage::VoyageAIClient;
@@ -53,6 +54,7 @@ pub fn get_embedding_dims_by_provider(embedding_name: &str) -> u32 {
         "openai" => DEFAULT_OPENAI_EMBEDDING_DIM,
         "voyageai" => DEFAULT_VOYAGE_EMBEDDING_DIM,
         "gemini" => DEFAULT_GEMINI_EMBEDDING_DIM,
+        "ollama" => DEFAULT_OLLAMA_EMBEDDING_DIM as u32,
         "cohere" => DEFAULT_COHERE_EMBEDDING_DIM,
         _ => panic!("Invalid embedding provider."),
     }
@@ -114,6 +116,9 @@ pub fn get_embedding_provider_with_config(
         EmbeddingProviderConfig::Cohere(cfg) => {
             Ok(Arc::new(CohereClient::<ReqwestClient>::with_config(cfg)))
         }
+        EmbeddingProviderConfig::Ollama(cfg) => {
+            Ok(Arc::new(OllamaClient::<ReqwestClient>::with_config(cfg)))
+        }
     }
 }
 
@@ -128,6 +133,8 @@ pub enum EmbeddingProviderConfig {
     Gemini(crate::config::GeminiConfig),
     /// Configuration for Cohere embedding provider
     Cohere(crate::config::CohereConfig),
+    /// Configuration for `ollama` embedding provider
+    Ollama(crate::config::OllamaConfig),
 }
 
 impl EmbeddingProviderConfig {
@@ -138,6 +145,7 @@ impl EmbeddingProviderConfig {
             EmbeddingProviderConfig::OpenAI(_) => "openai",
             EmbeddingProviderConfig::VoyageAI(_) => "voyageai",
             EmbeddingProviderConfig::Gemini(_) => "gemini",
+            EmbeddingProviderConfig::Ollama(_) => "ollama",
             EmbeddingProviderConfig::Cohere(_) => "cohere",
         }
     }
