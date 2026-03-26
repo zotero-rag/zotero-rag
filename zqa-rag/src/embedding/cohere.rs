@@ -205,11 +205,16 @@ mod tests {
     use crate::http_client::ReqwestClient;
     use arrow_array::Array;
     use dotenv::dotenv;
-    use std::sync::Arc;
+    use std::{env, sync::Arc};
     use zqa_macros::{test_eq, test_ok};
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
     async fn test_compute_embeddings() {
+        if env::var("CI").is_ok() {
+            // Skip this test in CI environments until we get ollama there
+            return;
+        }
+
         dotenv().ok();
 
         let array = arrow_array::StringArray::from(vec![

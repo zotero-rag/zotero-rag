@@ -61,6 +61,8 @@ pub enum EmbeddingProvider {
     Cohere,
     /// OpenAI embedding provider
     OpenAI,
+    /// Ollama embedding provider
+    Ollama,
     /// VoyageAI embedding provider
     VoyageAI,
     /// Gemini embedding provider
@@ -74,6 +76,7 @@ impl EmbeddingProvider {
         match self {
             EmbeddingProvider::Cohere => "cohere",
             EmbeddingProvider::OpenAI => "openai",
+            EmbeddingProvider::Ollama => "ollama",
             EmbeddingProvider::VoyageAI => "voyageai",
             EmbeddingProvider::Gemini => "gemini",
         }
@@ -85,6 +88,7 @@ impl EmbeddingProvider {
         [
             EmbeddingProvider::Cohere.as_str(),
             EmbeddingProvider::OpenAI.as_str(),
+            EmbeddingProvider::Ollama.as_str(),
             EmbeddingProvider::VoyageAI.as_str(),
             EmbeddingProvider::Gemini.as_str(),
         ]
@@ -101,7 +105,10 @@ impl EmbeddingProvider {
             // include a buffer for approximation errors
             EmbeddingProvider::OpenAI => ChunkingStrategy::SectionBased(7500),
             // include a buffer for approximation errors; actual limit is 2048
-            EmbeddingProvider::Gemini => ChunkingStrategy::SectionBased(1500),
+            // for local models, 2048 is a reasonable guess for *most* local embedding models
+            EmbeddingProvider::Gemini | EmbeddingProvider::Ollama => {
+                ChunkingStrategy::SectionBased(1500)
+            }
         }
     }
 }
@@ -294,6 +301,7 @@ mod tests {
     #[test]
     fn embedding_providers_implement_embedding_function() {
         assert_embedding_fn::<OpenAIClient<ReqwestClient>>();
+        assert_embedding_fn::<OllamaClient<ReqwestClient>>();
         assert_embedding_fn::<GeminiClient<ReqwestClient>>();
         assert_embedding_fn::<CohereClient<ReqwestClient>>();
         assert_embedding_fn::<VoyageAIClient<ReqwestClient>>();
