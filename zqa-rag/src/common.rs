@@ -36,6 +36,14 @@ fn calculate_backoff_delay(attempt: usize, response: &Response) -> Duration {
 /// server with too many requests. It retries up to `max_retries` times, with a delay of
 /// `2^attempt * base_delay` milliseconds, where `base_delay` is 1000 milliseconds by default. If
 /// the API returns a 429 Too Many Requests with a "Retry-After" header, that is respected instead.
+///
+/// # Errors
+///
+/// * `LLMError::TimeoutError` if there was a timeout.
+/// * `LLMError::CredentialError` if we receive an HTTP 401 Unauthorized or HTTP 403 Forbidden.
+/// * `LLMError::HttpStatusError` for other 4xx and 5xx responses.
+/// * `LLMError::NetworkError` if there was a network connectivity issue.
+/// * `LLMError::GenericError` for all other errors.
 pub(crate) async fn request_with_backoff<T: HttpClient>(
     client: &T,
     url: &str,

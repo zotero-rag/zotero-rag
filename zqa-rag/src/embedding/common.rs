@@ -186,6 +186,8 @@ pub trait EmbeddingApiResponse {
 /// * `api_key` - The API key for the service.
 /// * `api_client` - The `HttpClient` trait implementation to use. For real use, you almost
 ///   certainly want a `ReqwestClient`; the trait allows for easy testing.
+/// * `make_request` - A function that transforms a raw `Vec<String>` inputs to the API's expected
+///   request format
 /// * `embedding_provider` - An owned type containing the name of the embedding provider. This does
 ///   *not* have to be the same as the value in the `EmbeddingProviders` enum, though it is
 ///   recommended that you use that value. This is mainly for logging purposes.

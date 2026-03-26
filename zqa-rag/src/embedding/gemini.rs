@@ -137,11 +137,7 @@ async fn call_gemini_embedding_api(
         request_with_backoff(client, &url, &headers, &request_body, DEFAULT_MAX_RETRIES).await?;
     let body = res.text().await?;
     let json: serde_json::Value = serde_json::from_str(&body)?;
-    let parsed: GeminiEmbeddingResponse = serde_json::from_value(json).map_err(|e| {
-        LLMError::GenericLLMError(format!(
-            "Failed to deserialize Gemini embedding response: {e}"
-        ))
-    })?;
+    let parsed: GeminiEmbeddingResponse = serde_json::from_value(json)?;
 
     Ok(parsed.embedding.values)
 }

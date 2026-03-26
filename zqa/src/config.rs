@@ -180,6 +180,9 @@ impl Config {
         if let Some(ollama_config) = &mut self.ollama {
             ollama_config.model.replace_with_env("OLLAMA_MODEL");
             ollama_config
+                .embedding_model
+                .replace_with_env("OLLAMA_EMBEDDING_MODEL");
+            ollama_config
                 .model_small
                 .replace_with_env("OLLAMA_MODEL_SMALL");
             ollama_config.base_url.replace_with_env("OLLAMA_BASE_URL");
