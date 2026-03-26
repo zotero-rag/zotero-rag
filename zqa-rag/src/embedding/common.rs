@@ -39,7 +39,7 @@ pub struct FailedTexts {
 /// # Arguments
 ///
 /// * `embedding_name` - Embedding provider name. Must be one of "openai",
-///   "voyageai", or "cohere".
+///   "voyageai", "cohere", "gemini", or "ollama".
 ///
 /// # Returns
 ///
