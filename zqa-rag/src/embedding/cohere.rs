@@ -62,7 +62,7 @@ where
         // window. It does not appear that there is a TPM limit. In theory, we could therefore send
         // 2000 requests spread over 1 minute (so 30 requests/second), each with one input.
         const BATCH_SIZE: usize = 30;
-        const WAIT_AFTER_REQUEST_S: u64 = 1;
+        const WAIT_AFTER_REQUEST_S: u64 = 0;
 
         let api_key = self.config.as_ref().map_or_else(
             || env::var("COHERE_API_KEY"),
