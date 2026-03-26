@@ -745,23 +745,28 @@ pub async fn create_or_update_indexes_with_backup(
 #[cfg(test)]
 mod tests {
     use std::env;
-    use zqa_macros::test_ok;
+    use std::sync::Arc;
 
+    use arrow_array::Array;
     use arrow_array::StringArray;
+    use arrow_array::cast::as_fixed_size_list_array;
+    use arrow_array::types::Float32Type;
     use dotenv::dotenv;
     use futures::StreamExt;
+    use lancedb::embeddings::EmbeddingFunction;
     use lancedb::query::ExecutableQuery;
     use serial_test::serial;
-    use zqa_macros::test_eq;
+    use zqa_macros::{test_eq, test_ok};
+    use zqa_pdftools::chunk::Chunker;
 
-    use crate::{
-        config::{OpenAIConfig, VoyageAIConfig},
-        constants::{
-            DEFAULT_OPENAI_EMBEDDING_DIM, DEFAULT_OPENAI_EMBEDDING_MODEL, DEFAULT_OPENAI_MODEL,
-            DEFAULT_VOYAGE_EMBEDDING_DIM, DEFAULT_VOYAGE_EMBEDDING_MODEL,
-            DEFAULT_VOYAGE_RERANK_MODEL,
-        },
+    use crate::capabilities::EmbeddingProvider;
+    use crate::clients::openai::OpenAIClient;
+    use crate::config::{OpenAIConfig, VoyageAIConfig};
+    use crate::constants::{
+        DEFAULT_OPENAI_EMBEDDING_DIM, DEFAULT_OPENAI_EMBEDDING_MODEL, DEFAULT_OPENAI_MODEL,
+        DEFAULT_VOYAGE_EMBEDDING_DIM, DEFAULT_VOYAGE_EMBEDDING_MODEL, DEFAULT_VOYAGE_RERANK_MODEL,
     };
+    use crate::http_client::ReqwestClient;
 
     use super::*;
 
@@ -1185,5 +1190,189 @@ mod tests {
         .await;
         test_ok!(deleted);
         test_eq!(deleted.unwrap(), 0);
+    }
+
+    fn pdf_asset_path() -> String {
+        format!("{}/assets/deeply.pdf", env!("CARGO_MANIFEST_DIR"))
+    }
+
+    /// Verify that a real PDF is chunked into non-empty, well-formed chunks using the
+    /// OpenAI-recommended strategy.
+    #[tokio::test]
+    #[serial]
+    async fn test_pdf_chunking_with_openai_strategy() {
+        let extracted =
+            zqa_pdftools::parse::extract_text(&pdf_asset_path()).expect("Failed to parse PDF");
+
+        let strategy = EmbeddingProvider::OpenAI.recommended_chunking_strategy();
+        let chunks = Chunker::new(extracted, strategy).chunk();
+
+        assert!(!chunks.is_empty(), "Expected at least one chunk from PDF");
+
+        for chunk in &chunks {
+            assert!(
+                !chunk.content.trim().is_empty(),
+                "Chunk {} content must not be empty",
+                chunk.chunk_id
+            );
+        }
+
+        // Chunk IDs must be sequential starting from 1
+        for (i, chunk) in chunks.iter().enumerate() {
+            assert_eq!(chunk.chunk_id, i + 1, "Chunk ID should equal position + 1");
+        }
+
+        // chunk_count must agree with the actual number of chunks produced
+        let expected_count = chunks.len();
+        for chunk in &chunks {
+            assert_eq!(
+                chunk.chunk_count, expected_count,
+                "chunk.chunk_count disagrees with actual chunk count"
+            );
+        }
+
+        let total_chars: usize = chunks.iter().map(|c| c.content.len()).sum();
+        assert!(
+            total_chars > 1000,
+            "Expected at least 1000 characters of text, got {total_chars}"
+        );
+    }
+
+    /// Verify that chunks from a real PDF can be embedded with OpenAI and that the resulting
+    /// vectors are non-zero.
+    #[tokio::test(flavor = "multi_thread")]
+    #[serial]
+    async fn test_pdf_chunk_embeddings_are_non_zero() {
+        dotenv().ok();
+
+        let extracted =
+            zqa_pdftools::parse::extract_text(&pdf_asset_path()).expect("Failed to parse PDF");
+
+        let strategy = EmbeddingProvider::OpenAI.recommended_chunking_strategy();
+        let chunks = Chunker::new(extracted, strategy).chunk();
+
+        // Embed only the first 3 chunks to keep API usage low
+        let sample_texts: Vec<&str> = chunks.iter().take(3).map(|c| c.content.as_str()).collect();
+        assert!(!sample_texts.is_empty(), "Need at least one chunk to embed");
+
+        let client = OpenAIClient::<ReqwestClient>::default();
+        let source: Arc<dyn arrow_array::Array> = Arc::new(StringArray::from(sample_texts.clone()));
+        let embeddings = client.compute_source_embeddings(source);
+
+        assert!(
+            embeddings.is_ok(),
+            "compute_source_embeddings failed: {:?}",
+            embeddings.err()
+        );
+        let embeddings = embeddings.unwrap();
+        let list_array = as_fixed_size_list_array(&embeddings);
+
+        assert_eq!(
+            list_array.len(),
+            sample_texts.len(),
+            "Expected one embedding per chunk"
+        );
+        assert_eq!(
+            list_array.value_length(),
+            DEFAULT_OPENAI_EMBEDDING_DIM as i32,
+            "Embedding dimension mismatch — expected text-embedding-3-small size"
+        );
+
+        for i in 0..list_array.len() {
+            let all_zero = list_array
+                .value(i)
+                .as_primitive::<Float32Type>()
+                .iter()
+                .all(|v| v.is_none_or(|f| f == 0.0));
+            assert!(
+                !all_zero,
+                "Embedding for chunk {i} is all zeros — likely a failed API call"
+            );
+        }
+    }
+
+    /// End-to-end test: chunk a PDF, embed and store the chunks, add an unrelated sentinel
+    /// document, then verify that a query matching the sentinel retrieves it as the top result
+    /// rather than a PDF chunk.
+    #[tokio::test(flavor = "multi_thread")]
+    #[serial]
+    async fn test_retrieval_ranks_relevant_content_higher() {
+        dotenv().ok();
+
+        let extracted =
+            zqa_pdftools::parse::extract_text(&pdf_asset_path()).expect("Failed to parse PDF");
+
+        let strategy = EmbeddingProvider::OpenAI.recommended_chunking_strategy();
+        let chunks = Chunker::new(extracted, strategy).chunk();
+
+        // Build corpus: first 5 PDF chunks + one clearly off-topic sentinel
+        let sentinel_id = "cooking_sentinel";
+        let sentinel_text = "How to bake chocolate chip cookies: cream together butter and \
+            sugar, beat in eggs and vanilla extract, stir in flour, baking soda, and salt, \
+            then fold in chocolate chips. Drop rounded tablespoons onto an ungreased baking \
+            sheet and bake at 375°F for 9 to 11 minutes until golden brown.";
+
+        let pdf_chunk_ids: Vec<String> = (0..chunks.len().min(5))
+            .map(|i| format!("pdf_chunk_{i}"))
+            .collect();
+
+        let mut ids: Vec<&str> = pdf_chunk_ids.iter().map(String::as_str).collect();
+        ids.push(sentinel_id);
+
+        let mut texts: Vec<&str> = chunks.iter().take(5).map(|c| c.content.as_str()).collect();
+        texts.push(sentinel_text);
+
+        let schema = arrow_schema::Schema::new(vec![
+            arrow_schema::Field::new("id", arrow_schema::DataType::Utf8, false),
+            arrow_schema::Field::new("text", arrow_schema::DataType::Utf8, false),
+        ]);
+        let record_batch = RecordBatch::try_new(
+            Arc::new(schema),
+            vec![
+                Arc::new(StringArray::from(ids)),
+                Arc::new(StringArray::from(texts)),
+            ],
+        )
+        .unwrap();
+
+        let embedding_config = get_test_openai_embedding_config();
+        insert_records(
+            vec![record_batch],
+            None,
+            &embedding_config,
+            EmbeddingDefinition::new("text", "openai", Some("embeddings")),
+        )
+        .await
+        .unwrap();
+
+        let results = vector_search(
+            "chocolate chip cookie baking recipe ingredients".to_string(),
+            &embedding_config,
+        )
+        .await;
+        test_ok!(results);
+
+        let results = results.unwrap();
+        assert!(!results.is_empty(), "Expected at least one search result");
+
+        let returned_ids: Vec<String> = results
+            .iter()
+            .flat_map(|batch| {
+                as_string_array(batch.column_by_name("id").unwrap())
+                    .iter()
+                    .filter_map(|v| v.map(str::to_owned))
+            })
+            .collect();
+
+        assert!(
+            !returned_ids.is_empty(),
+            "No id values found in search results"
+        );
+        assert_eq!(
+            returned_ids[0], sentinel_id,
+            "Expected the cooking sentinel to be ranked #1 for a cookie query, \
+             but top result was '{}'. Full ranking: {:?}",
+            returned_ids[0], returned_ids
+        );
     }
 }

@@ -9,15 +9,14 @@ This project provides a command-line interface for querying your Zotero library 
 ### Features
 
 * Extracts text from PDFs and ignores tables/figures (they're unlikely to have useful context for LLMs)
-* Support for OpenAI, Ollama, Anthropic, Gemini, and OpenRouter models for text generation, and Cohere and Voyage AI models for embedding (technically, OpenAI models are supported, but are unlikely to work as of now, see Limitations below).
+* Support for OpenAI, Ollama, Anthropic, Gemini, and OpenRouter models for text generation, and Cohere and Voyage AI models for embedding.
 * Locally-stored embeddings using LanceDB.
 * Search-only mode retrieves papers
 
 ### Limitations
 
-* We do not perform chunking, so OpenAI embeddings are unlikely to work. Use Voyage AI or Cohere in the meantime, both of which perform truncation. In testing, truncation did not change the quality of the generated output.
 * The equation parsing currently leaves a lot to be desired. Specifically, the most likely cases to fail involve equations that involve the `bmatrix`, `cases`, and `align` environments. This part is particularly under active work, but this is the most likely place LLMs will make mistakes due to the PDF parsing not being particularly great for this yet. However, Sonnet 4+ models in particular seem to be relatively decent at this.
-* There are several other feature requests/bugs currently being tracked in [Issues](https://github.com/zotero-rag/zotero-rag/issues). Note that internally, issues are prioritized and stories are planned using [Linear](https://linear.app), so some metadata such as the priorities may not be up-to-date on GitHub Issues.
+* There are several feature requests/bugs currently being tracked in [Issues](https://github.com/zotero-rag/zotero-rag/issues). Note that internally, issues are prioritized and stories are planned using [Linear](https://linear.app), so some metadata such as the priorities may not be up-to-date on GitHub Issues.
 
 ## Installation
 
@@ -68,8 +67,10 @@ You should know that this comes with no warranty and I assume no liability if th
 
 ## Project Structure
 
-The project is organized into three Rust crates:
+The project is organized into five Rust crates:
 
+- **zqa-macros**: Declarative macros; right now, this is just macros for tests
+- **zqa-macros-proc**: Proc macros; it currently has one macro, also for tests
 - **zqa-pdftools**: PDF parsing and text extraction
 - **zqa-rag**: Core RAG implementation with vector database and LLM clients
 - **zqa**: Command-line interface and query processing

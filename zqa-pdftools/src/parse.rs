@@ -1153,7 +1153,7 @@ pub fn extract_text(file_path: &str) -> Result<ExtractedContent, Box<dyn Error>>
             }) {
                 sections.push(SectionBoundary {
                     page_number: marker.page_number,
-                    byte_index: marker.byte_index,
+                    byte_index: marker.byte_index + byte_offset,
                     font_size: Into::<f32>::into(marker.font_size),
                     level: 0,
                     parent_idx: None,
