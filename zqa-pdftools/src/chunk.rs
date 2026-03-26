@@ -124,7 +124,9 @@ impl Chunker {
             }
             ChunkingStrategy::SectionBased(max_tok) => {
                 let text_len = self.content.text_content.len();
-                let sections = &self.content.sections;
+                let mut sections: Vec<_> = self.content.sections.iter().collect();
+                sections.sort_by_key(|s| s.byte_index);
+                let sections = sections;
 
                 if sections.is_empty() {
                     // Treat entire doc as one section and chunk by `max_tok`.
@@ -137,8 +139,8 @@ impl Chunker {
                     );
                 }
 
-                let mut chunk_count = 0;
-                sections
+                let mut running_count = 0;
+                let mut chunks: Vec<DocumentChunk> = sections
                     .iter()
                     .enumerate()
                     .flat_map(|(i, sec)| {
@@ -154,18 +156,27 @@ impl Chunker {
                                 next_sec.page_number.saturating_sub(1)
                             });
 
-                        let chunks = Chunker::chunk_text(
+                        let section_chunks = Chunker::chunk_text(
                             &self.content.text_content[sec.byte_index..byte_end],
                             *max_tok,
-                            chunk_count + 1,
+                            running_count + 1,
                             sec.byte_index,
                             (sec.page_number, page_end),
                         );
-                        chunk_count += chunks.len();
+                        running_count += section_chunks.len();
 
-                        chunks
+                        section_chunks
                     })
-                    .collect()
+                    .collect();
+
+                // chunk_text only knows the count within its own section; patch every chunk
+                // with the true document-wide total now that we have it.
+                let total = chunks.len();
+                for chunk in &mut chunks {
+                    chunk.chunk_count = total;
+                }
+
+                chunks
             }
         }
     }
