@@ -64,6 +64,10 @@ impl EmbeddingApiResponse for OllamaEmbeddingResponse {
 }
 
 impl<T: HttpClient + Debug + Default + Clone> OllamaClient<T> {
+    fn get_embedding_dims(&self) -> Option<usize> {
+        self.config.clone().map(|c| c.embedding_dims)
+    }
+
     /// Internal method to compute embeddings
     ///
     /// # Errors
@@ -78,7 +82,7 @@ impl<T: HttpClient + Debug + Default + Clone> OllamaClient<T> {
         source: Arc<dyn arrow_array::Array>,
     ) -> Result<Arc<dyn arrow_array::Array>, LLMError> {
         const BATCH_SIZE: usize = 32;
-        const WAIT_AFTER_REQUEST_S: u64 = 1;
+        const WAIT_AFTER_REQUEST_S: u64 = 0;
 
         let model = env::var("OLLAMA_EMBEDDING_MODEL")
             .ok()
@@ -108,7 +112,8 @@ impl<T: HttpClient + Debug + Default + Clone> OllamaClient<T> {
                 EmbeddingProvider::Ollama.as_str().to_string(),
                 BATCH_SIZE,
                 WAIT_AFTER_REQUEST_S,
-                DEFAULT_OLLAMA_EMBEDDING_DIM,
+                self.get_embedding_dims()
+                    .unwrap_or(DEFAULT_OLLAMA_EMBEDDING_DIM),
             ))
         })
     }
@@ -127,13 +132,9 @@ where
     }
 
     fn dest_type(&self) -> lancedb::Result<Cow<'_, DataType>> {
-        let embedding_dims = if let Ok(var) = env::var("OLLAMA_EMBEDDING_DIMS")
-            && let Ok(value) = var.parse::<i32>()
-        {
-            value
-        } else {
-            DEFAULT_OLLAMA_EMBEDDING_DIM as i32
-        };
+        let embedding_dims = self
+            .get_embedding_dims()
+            .unwrap_or(DEFAULT_OLLAMA_EMBEDDING_DIM) as i32;
 
         Ok(Cow::Owned(DataType::FixedSizeList(
             Arc::new(Field::new("item", DataType::Float32, true)),
