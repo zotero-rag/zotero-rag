@@ -127,7 +127,7 @@ impl HttpClient for ReqwestClient {
 }
 
 /// A mock implementation of the `HttpClient` trait for testing purposes.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 #[cfg(test)]
 pub(crate) struct MockHttpClient<T: Send + Sync + Clone> {
     /// The response to return when the mock client is called.

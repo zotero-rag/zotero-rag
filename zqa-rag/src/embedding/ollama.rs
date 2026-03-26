@@ -174,21 +174,192 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{DEFAULT_OLLAMA_EMBEDDING_DIM, OllamaClient};
-    use crate::http_client::ReqwestClient;
+    use super::{
+        OllamaClient, OllamaEmbeddingErrorResponse, OllamaEmbeddingResponse,
+        OllamaEmbeddingSuccessResponse,
+    };
+    use crate::{
+        config::OllamaConfig,
+        constants::DEFAULT_OLLAMA_EMBEDDING_DIM,
+        embedding::common::EmbeddingApiResponse,
+        http_client::{MockHttpClient, ReqwestClient},
+    };
     use arrow_array::Array;
-    use dotenv::dotenv;
-    use std::{env, sync::Arc};
+    use lancedb::embeddings::EmbeddingFunction;
+    use std::sync::Arc;
     use zqa_macros::{test_eq, test_ok};
 
+    #[test]
+    fn test_success_response_deserializes() {
+        let json = r#"{"embeddings": [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]}"#;
+        let resp: OllamaEmbeddingResponse = serde_json::from_str(json).unwrap();
+        assert!(resp.is_success());
+        let embs = resp.get_embeddings().unwrap();
+        test_eq!(embs.len(), 2);
+        test_eq!(embs[0], vec![1.0_f32, 2.0, 3.0]);
+    }
+
+    #[test]
+    fn test_error_response_deserializes() {
+        let json = r#"{"error": "model not found"}"#;
+        let resp: OllamaEmbeddingResponse = serde_json::from_str(json).unwrap();
+        assert!(!resp.is_success());
+        test_eq!(resp.get_error_message().unwrap(), "model not found");
+    }
+
+    // -- EmbeddingApiResponse impl --
+
+    #[test]
+    fn test_success_variant_get_embeddings_returns_some() {
+        let resp = OllamaEmbeddingResponse::Success(OllamaEmbeddingSuccessResponse {
+            embeddings: vec![vec![0.1, 0.2]],
+        });
+        assert!(resp.get_embeddings().is_some());
+    }
+
+    #[test]
+    fn test_error_variant_get_embeddings_returns_none() {
+        let resp = OllamaEmbeddingResponse::Error(OllamaEmbeddingErrorResponse {
+            error: "oops".into(),
+        });
+        assert!(resp.get_embeddings().is_none());
+    }
+
+    #[test]
+    fn test_success_variant_get_error_message_returns_none() {
+        let resp =
+            OllamaEmbeddingResponse::Success(OllamaEmbeddingSuccessResponse { embeddings: vec![] });
+        assert!(resp.get_error_message().is_none());
+    }
+
+    #[test]
+    fn test_error_variant_get_error_message_returns_some() {
+        let resp = OllamaEmbeddingResponse::Error(OllamaEmbeddingErrorResponse {
+            error: "bad model".into(),
+        });
+        test_eq!(resp.get_error_message().unwrap(), "bad model");
+    }
+
+    #[test]
+    fn test_dest_type_uses_default_dims_without_config() {
+        use arrow_schema::DataType;
+        let client = OllamaClient::<ReqwestClient>::default();
+        let dt = client.dest_type().unwrap();
+        match dt.as_ref() {
+            DataType::FixedSizeList(_, size) => {
+                test_eq!(*size, DEFAULT_OLLAMA_EMBEDDING_DIM as i32);
+            }
+            other => panic!("Expected FixedSizeList, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_dest_type_uses_config_dims() {
+        use arrow_schema::DataType;
+        let config = OllamaConfig {
+            embedding_dims: 768,
+            ..OllamaConfig::default()
+        };
+        let client = OllamaClient::<ReqwestClient>::with_config(config);
+        let dt = client.dest_type().unwrap();
+        match dt.as_ref() {
+            DataType::FixedSizeList(_, size) => {
+                test_eq!(*size, 768_i32);
+            }
+            other => panic!("Expected FixedSizeList, got {other:?}"),
+        }
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
-    async fn test_compute_embeddings() {
-        if env::var("CI").is_ok() {
-            // Skip this test in CI environments until we get ollama there
+    async fn test_compute_embeddings_with_mock_success_response() {
+        let dim = 4_usize;
+        let mock_response = serde_json::json!({
+            "embeddings": [[0.1_f32, 0.2, 0.3, 0.4], [0.5_f32, 0.6, 0.7, 0.8]]
+        });
+
+        let client = OllamaClient {
+            client: MockHttpClient::new(mock_response),
+            config: Some(OllamaConfig {
+                embedding_dims: dim,
+                ..OllamaConfig::default()
+            }),
+        };
+
+        let array = arrow_array::StringArray::from(vec!["hello", "world"]);
+        let result = client.compute_embeddings_internal(Arc::new(array));
+
+        test_ok!(result);
+
+        let embeddings = result.unwrap();
+        let list_array = arrow_array::cast::as_fixed_size_list_array(&embeddings);
+        test_eq!(list_array.len(), 2);
+        test_eq!(list_array.value_length(), dim as i32);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn test_compute_embeddings_error_response_yields_zero_vectors() {
+        let dim = 4_usize;
+        let mock_response = serde_json::json!({"error": "model not found"});
+
+        let client = OllamaClient {
+            client: MockHttpClient::new(mock_response),
+            config: Some(OllamaConfig {
+                embedding_dims: dim,
+                ..OllamaConfig::default()
+            }),
+        };
+
+        let array = arrow_array::StringArray::from(vec!["hello"]);
+        let result = client.compute_embeddings_internal(Arc::new(array));
+
+        // Error responses produce zero vectors
+        test_ok!(result);
+
+        let embeddings = result.unwrap();
+        let list_array = arrow_array::cast::as_fixed_size_list_array(&embeddings);
+        test_eq!(list_array.len(), 1);
+        test_eq!(list_array.value_length(), dim as i32);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn test_compute_embeddings_config_dispatch_uses_custom_base_url_and_model() {
+        // The mock doesn't care about the URL, but we verify that config values are
+        // accepted and that the Arrow output has the configured dimension.
+        let dim = 8_usize;
+        let embeddings_data: Vec<Vec<f32>> = (0..3)
+            .map(|i| (0..dim).map(|j| i as f32 * 0.1 + j as f32 * 0.01).collect())
+            .collect();
+
+        let mock_response = serde_json::json!({"embeddings": embeddings_data});
+
+        let client = OllamaClient {
+            client: MockHttpClient::new(mock_response),
+            config: Some(OllamaConfig {
+                base_url: "http://custom-ollama:11434".into(),
+                embedding_model: "custom-model".into(),
+                embedding_dims: dim,
+                ..OllamaConfig::default()
+            }),
+        };
+
+        let array = arrow_array::StringArray::from(vec!["a", "b", "c"]);
+        let result = client.compute_embeddings_internal(Arc::new(array));
+
+        test_ok!(result);
+
+        let embeddings = result.unwrap();
+        let list_array = arrow_array::cast::as_fixed_size_list_array(&embeddings);
+        test_eq!(list_array.len(), 3);
+        test_eq!(list_array.value_length(), dim as i32);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn test_compute_embeddings_live() {
+        if std::env::var("CI").is_ok() {
             return;
         }
 
-        dotenv().ok();
+        dotenv::dotenv().ok();
 
         let array = arrow_array::StringArray::from(vec![
             "Hello, World!",
@@ -202,7 +373,6 @@ mod tests {
         let client = OllamaClient::<ReqwestClient>::default();
         let embeddings = client.compute_embeddings_internal(Arc::new(array));
 
-        // Debug the error if there is one
         if embeddings.is_err() {
             println!("Ollama embedding error: {:?}", embeddings.as_ref().err());
         }
@@ -211,7 +381,6 @@ mod tests {
 
         let embeddings = embeddings.unwrap();
         let vector = arrow_array::cast::as_fixed_size_list_array(&embeddings);
-
         test_eq!(vector.len(), 6);
         test_eq!(vector.value_length(), DEFAULT_OLLAMA_EMBEDDING_DIM as i32);
     }
