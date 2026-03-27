@@ -12,17 +12,22 @@ pub struct PlaceholderText {
 }
 
 const SLASH_COMMANDS: &[&str] = &[
-    "/help",
-    "/sync",
-    "/embed",
-    "/embed fix",
+    "/checkhealth",
+    "/config",
     "/dedup",
     "/doctor",
-    "/new",
-    "/resume",
-    "/index",
-    "/stats",
+    "/embed fix",
+    "/embed",
     "/exit",
+    "/help",
+    "/index",
+    "/new",
+    "/process",
+    "/quit",
+    "/resume",
+    "/search",
+    "/stats",
+    "/sync",
 ];
 
 /// Handles completions for the `PlaceholderText` Helper. Note that for showing dimmed
