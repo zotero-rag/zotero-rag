@@ -1,0 +1,12 @@
+name: Coverage
+
+on:
+  pull_request:
+    paths:
+      - '**/*.md'
+
+jobs:
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Skipping coverage check for markdown-only changes"
