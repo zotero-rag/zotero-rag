@@ -22,7 +22,7 @@ The core part of this design is to store data about the imported PDF(s) in state
 struct UserDocument {
     filename: String,
     chunks: Vec<DocumentChunk>,
-    summary: String
+    summary: String,
     // Leave room for other metadata
 }
 ```
