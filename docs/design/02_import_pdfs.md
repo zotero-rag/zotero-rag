@@ -22,14 +22,14 @@ The core part of this design is to store data about the imported PDF(s) in state
 struct UserDocument {
     filename: String,
     chunks: Vec<DocumentChunk>,
-    abstract: String
+    summary: String
     // Leave room for other metadata
 }
 ```
 
 Under the assumption that the first section in a paper is titled "Introduction"; if we do not find it within some threshold, we instead use the first section that is larger than some threshold (under the assumption that the preface is typically relatively small, and the introduction is larger).
 
-The documents imported by the user are made available to the models via tools that spawn sub-agents. Sub-agents are responsible for extracting relevant content from the imported documents; we do this to preserve the token limit of the "root" agent. Moreover, this also prevents polluting the main agent's context if many documents are imported. With this in place, the root agent can be prompted in the system message to use this tool to access the documents if needed. In general, users who import documents will typically refer to them in their query (e.g., "What are the main contributions of the document I added?").
+The documents imported by the user are made available to the models via tools that spawn sub-agents. Sub-agents are responsible for extracting relevant content from the imported documents; we do this to preserve the token limit of the "root" agent. Moreover, this also prevents polluting the main agent's context if many documents are imported. With this in place, the root agent can be prompted in the system message to use this tool to access the documents if needed. In general, users who import documents will typically refer to them in their query (e.g., "What are the main contributions of the document I added?"). Documents that are imported remain in state with the same lifetime as the session, i.e., until the user uses `/new` or exits and reopens the CLI.
 
 The tool provided to the root agent is responsible for all activities related to extracting content via sub-agents. That there even are sub-agents involved is made opaque. This is because the exact mechanism of extracting relevant content may change over time, and is an implementation detail.
 
