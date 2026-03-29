@@ -24,6 +24,7 @@ crossbeam-channel = "0.5.15"
 directories = "6.0.0"
 dotenv = "0.15.0"
 fern = "0.7.1"
+futures = "0.3"
 humantime = "2.2.0"
 indicatif = "0.17.11"
 lancedb = { version = "^0.27.0", default-features = false  }
