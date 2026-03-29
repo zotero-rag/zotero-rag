@@ -58,6 +58,7 @@ pub(crate) struct State {
     /// Accumulated session cost, in US cents (Money pattern)
     pub(crate) session_cost: AtomicU64,
     /// Extracted content for imported documents
+    #[allow(dead_code)]
     pub(crate) imports: Vec<UserDocument>,
 }
 

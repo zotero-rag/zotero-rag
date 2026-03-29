@@ -4,6 +4,7 @@ use std::path::Path;
 use thiserror::Error;
 
 use zqa_pdftools::parse::{ExtractedContent, extract_text};
+use zqa_rag::llm::tools::Tool;
 
 use crate::common::UserDocument;
 
@@ -83,7 +84,7 @@ impl Default for SummaryIndexConfig {
 ///
 /// The "summary" is defined as the contents up to the "Introduction" text. If this does not exist
 /// or is "too far" from the beginning of the document, the first document section within a
-/// threshold is used instead. The returned index is the last index of the summary, so the next
+/// threshold is used instead. The returned index is the exclusive end index of the summary, so the next
 /// index is where the Introduction starts.
 ///
 /// Note that this does *not* guarantee that the index afer the returned position is valid. For
@@ -119,5 +120,239 @@ fn get_summary_end_index(
                 },
                 |w| w[1].byte_index,
             ),
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+enum QueryMethod {
+    Embedding,
+    SubAgent,
+    Hybrid,
+}
+
+#[derive(Deserialize, JsonSchema)]
+struct UserDocumentToolInput {
+    /// The filenames to use. Optional; if `None`, will use all files currently selected by the
+    /// user.
+    filenames: Option<Vec<String>>,
+    /// A query to obtain relevant passages
+    query: String,
+    /// Query method. One of "embedding", "sub_agent", or "hybrid".
+    query_method: QueryMethod,
+}
+
+/// A tool to get relevant contents from user-imported (non-Zotero) documents.
+pub(crate) struct UserDocumentTool {
+    /// The files currently in the session.
+    pub(crate) filenames: Vec<String>,
+}
+
+impl Tool for UserDocumentTool {
+    fn name(&self) -> String {
+        "user_document_tool".into()
+    }
+
+    fn description(&self) -> String {
+        "A tool to get relevant contents from user-imported (non-Zotero) documents.".into()
+    }
+
+    fn parameters(&self) -> schemars::Schema {
+        schema_for!(UserDocumentToolInput)
+    }
+
+    fn call<'a>(
+        &'a self,
+        args: serde_json::Value,
+    ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, String>> + Send + 'a>> {
+        type FileFuture<'a> = Pin<Box<dyn Future<Output = (&'a String, Vec<String>)> + Send + 'a>>;
+        Box::pin(async move {
+            let input: UserDocumentToolInput =
+                serde_json::from_value(args).map_err(|e| format!("Invalid arguments: {e}"))?;
+
+            if self.filenames.is_empty() {
+                return Err("There are no documents in this session. Ask the user to add some by @ing the file name.".into());
+            }
+
+            let filenames = input.filenames.as_ref().unwrap_or(&self.filenames);
+            if let Some(f) = filenames.iter().find(|f| !self.filenames.contains(f)) {
+                return Err(format!("File {f} does not exist in the session."));
+            }
+
+            let mut futures: FuturesUnordered<FileFuture<'_>> = FuturesUnordered::new();
+            for f in filenames {
+                if matches!(
+                    input.query_method,
+                    QueryMethod::SubAgent | QueryMethod::Hybrid
+                ) {
+                    futures.push(Box::pin(async move {
+                        // Spawn sub-agents here
+                        (f, vec!["Some String".to_string()])
+                    }));
+                }
+
+                if matches!(
+                    input.query_method,
+                    QueryMethod::Embedding | QueryMethod::Hybrid
+                ) {
+                    futures.push(Box::pin(async move {
+                        // Spawn embedding-based task here
+                        (f, vec!["Some String".to_string()])
+                    }));
+                }
+            }
+
+            let mut chunks_by_file = HashMap::<&String, Vec<String>>::new();
+            while let Some((filename, chunks)) = futures.next().await {
+                chunks_by_file
+                    .entry(filename)
+                    .and_modify(|v| v.extend(chunks.clone().into_iter()))
+                    .or_insert(chunks);
+            }
+
+            Ok(json!({
+                "results": chunks_by_file
+            }))
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use zqa_macros::{test_eq, test_ok};
+    use zqa_pdftools::parse::{ExtractedContent, SectionBoundary};
+
+    use super::*;
+
+    fn make_doc(text: &str, sections: Vec<SectionBoundary>) -> UserDocument {
+        UserDocument {
+            filename: "test".to_string(),
+            contents: ExtractedContent {
+                text_content: text.to_string(),
+                sections,
+                page_count: 1,
+            },
+            summary: String::new(),
+        }
+    }
+
+    fn make_section(byte_index: usize) -> SectionBoundary {
+        SectionBoundary {
+            page_number: 0,
+            byte_index,
+            level: 1,
+            parent_idx: None,
+            font_size: 12.0,
+        }
+    }
+
+    #[test]
+    fn test_parse_user_document_file_not_found() {
+        let path = PathBuf::from("/nonexistent/path/file.pdf");
+        let result = parse_user_document(&path);
+        assert!(matches!(result, Err(DocumentError::FileNotFound(_))));
+    }
+
+    #[test]
+    fn test_parse_user_document_success() {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("assets/Zotero/storage/7R5XZ5PX/Yedida et al. - 2023 - An expert system for redesigning software for cloud applications.pdf");
+        let result = parse_user_document(&path);
+        test_ok!(result);
+
+        let doc = result.unwrap();
+        test_eq!(doc.filename, path.to_str().unwrap());
+        assert!(!doc.contents.text_content.is_empty());
+        assert!(doc.summary.is_empty());
+    }
+
+    #[test]
+    fn test_summary_end_index_introduction_within_threshold() {
+        // "introduction" starts at byte 50, which is within max_summary_sec_pos=1000
+        let text = format!("{}introduction rest of document", " ".repeat(50));
+        let doc = make_doc(&text, vec![]);
+        let config = SummaryIndexConfig::default();
+        let idx = get_summary_end_index(&doc.contents, config);
+
+        test_eq!(idx, 50);
+    }
+
+    #[test]
+    fn test_summary_end_index_introduction_case_insensitive() {
+        let text = format!("{}Introduction rest of document", " ".repeat(50));
+        let doc = make_doc(&text, vec![]);
+        let config = SummaryIndexConfig::default();
+        let idx = get_summary_end_index(&doc.contents, config);
+
+        test_eq!(idx, 50);
+    }
+
+    #[test]
+    fn test_summary_end_index_introduction_beyond_threshold_falls_back_to_sections() {
+        // "introduction" at 2000, beyond max_summary_sec_pos=1000
+        // Section at byte 200, next section at byte 500 (diff=300 >= min_summary_sec_len=100)
+        let text = format!("{}introduction", "x".repeat(2000));
+        let doc = make_doc(&text, vec![make_section(200), make_section(500)]);
+        let config = SummaryIndexConfig::default();
+        let idx = get_summary_end_index(&doc.contents, config);
+
+        // Should return s.byte_index - 1 = 500 - 1 = 499
+        test_eq!(idx, 499);
+    }
+
+    #[test]
+    fn test_summary_end_index_no_introduction_uses_sections() {
+        let text = "x".repeat(2000);
+        let doc = make_doc(&text, vec![make_section(100), make_section(400)]);
+        let config = SummaryIndexConfig::default();
+        let idx = get_summary_end_index(&doc.contents, config);
+
+        test_eq!(idx, 399);
+    }
+
+    #[test]
+    fn test_summary_end_index_no_introduction_section_too_small() {
+        // Section gap is 10 < min_summary_sec_len=100, so falls through to the default
+        let text = "x".repeat(2000);
+        let doc = make_doc(&text, vec![make_section(100), make_section(110)]);
+        let config = SummaryIndexConfig::default();
+        let idx = get_summary_end_index(&doc.contents, config);
+
+        // Falls to min(len-1, max_summary_sec_pos) = min(1999, 1000) = 1000
+        test_eq!(idx, 1000);
+    }
+
+    #[test]
+    fn test_summary_end_index_no_introduction_no_sections() {
+        let text = "x".repeat(2000);
+        let doc = make_doc(&text, vec![]);
+        let config = SummaryIndexConfig::default();
+        let idx = get_summary_end_index(&doc.contents, config);
+
+        test_eq!(idx, 1000);
+    }
+
+    #[test]
+    fn test_summary_end_index_short_document_no_sections() {
+        // Document shorter than max_summary_sec_pos; returns len-1
+        let text = "short".to_string();
+        let doc = make_doc(&text, vec![]);
+        let config = SummaryIndexConfig::default();
+        let idx = get_summary_end_index(&doc.contents, config);
+
+        test_eq!(idx, 4); // len=5, saturating_sub(1)=4, min(4, 1000)=4
+    }
+
+    #[test]
+    fn test_summary_end_index_section_beyond_threshold_skipped() {
+        // Section starts at 1500, beyond max_summary_sec_pos=1000, so no valid pair found
+        let text = "x".repeat(3000);
+        let doc = make_doc(&text, vec![make_section(1500), make_section(2000)]);
+        let config = SummaryIndexConfig::default();
+        let idx = get_summary_end_index(&doc.contents, config);
+
+        test_eq!(idx, 1000);
     }
 }
