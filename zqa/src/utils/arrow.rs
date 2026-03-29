@@ -307,13 +307,10 @@ pub async fn vector_search(
         return Ok(Vec::new());
     }
 
-    let item_strings = filtered_items
-        .iter()
-        .map(|f| f.text.clone())
-        .collect::<Vec<_>>();
+    let item_strings = filtered_items.iter().map(|f| &f.text).collect::<Vec<_>>();
 
     let rerank_provider = get_reranking_provider(&reranker)?;
-    let indices = rerank_provider.rerank(item_strings, &query).await?;
+    let indices = rerank_provider.rerank(&item_strings, &query).await?;
 
     let reranked_items = indices
         .into_iter()

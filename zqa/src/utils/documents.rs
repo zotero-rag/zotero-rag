@@ -12,8 +12,15 @@ use std::{
 };
 use thiserror::Error;
 
-use zqa_pdftools::parse::{ExtractedContent, extract_text};
-use zqa_rag::llm::tools::Tool;
+use zqa_pdftools::{
+    chunk::{Chunker, ChunkingStrategy},
+    parse::{ExtractedContent, extract_text},
+};
+use zqa_rag::{
+    embedding::common::{EmbeddingProviderConfig, get_embedding_provider},
+    llm::{errors::LLMError, tools::Tool},
+    reranking::common::{RerankProviderConfig, get_reranking_provider},
+};
 
 use crate::common::UserDocument;
 
@@ -29,6 +36,12 @@ impl std::fmt::Display for TextExtractionError {
 
 #[derive(Debug, Error)]
 pub enum DocumentError {
+    #[error("Configuration issue: {0}")]
+    BadConfig(String),
+    #[error("Error getting embedding provider: {0}")]
+    EmbeddingError(#[from] LLMError),
+    #[error("Error computing embeddings: {0}")]
+    LanceError(#[from] lancedb::Error),
     #[error("Path conversion failed: {0}")]
     PathConversionFailed(String),
     #[error("Text extraction failed: {0}")]
@@ -140,6 +153,18 @@ enum QueryMethod {
     Hybrid,
 }
 
+fn dot<'a, T>(a: T, b: T) -> f32
+where
+    T: Iterator<Item = &'a f32>,
+{
+    a.zip(b).map(|(x, y)| x * y).sum()
+}
+
+fn normalize(v: &[f32]) -> Vec<f32> {
+    let norm = v.iter().map(|x| x * x).sum::<f32>().sqrt();
+    v.iter().map(|x| x / norm).collect()
+}
+
 #[derive(Deserialize, JsonSchema)]
 struct UserDocumentToolInput {
     /// The filenames to use. Optional; if `None`, will use all files currently selected by the
@@ -155,6 +180,10 @@ struct UserDocumentToolInput {
 pub(crate) struct UserDocumentTool {
     /// The files currently in the session.
     pub(crate) filenames: Vec<String>,
+    /// For [`QueryMethod::Embedding`] and [`QueryMethod::Hybrid`], the embedding config.
+    pub(crate) embedding_config: Option<EmbeddingProviderConfig>,
+    /// For [`QueryMethod::Embedding`] and [`QueryMethod::Hybrid`], the reranker config.
+    pub(crate) reranker_config: Option<RerankProviderConfig>,
 }
 
 impl Tool for UserDocumentTool {
@@ -174,7 +203,13 @@ impl Tool for UserDocumentTool {
         &'a self,
         args: serde_json::Value,
     ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, String>> + Send + 'a>> {
-        type FileFuture<'a> = Pin<Box<dyn Future<Output = (&'a String, Vec<String>)> + Send + 'a>>;
+        type FileFuture<'a> =
+            Pin<Box<dyn Future<Output = Result<(String, Vec<String>), DocumentError>> + Send + 'a>>;
+
+        // TODO: Tune this in a future story; possibly look at embedding provider
+        // docs and create a constant or a function.
+        const SCORE_THRESHOLD: f32 = 0.7;
+
         Box::pin(async move {
             let input: UserDocumentToolInput =
                 serde_json::from_value(args).map_err(|e| format!("Invalid arguments: {e}"))?;
@@ -189,25 +224,103 @@ impl Tool for UserDocumentTool {
                 return Err(format!("File {f} does not exist in the session."));
             }
 
-            let mut file_futures: FuturesUnordered<FileFuture<'_>> = FuturesUnordered::new();
-            for f in filenames {
-                if matches!(
-                    input.query_method,
-                    QueryMethod::SubAgent | QueryMethod::Hybrid
-                ) {
-                    file_futures.push(Box::pin(async move {
-                        // Spawn sub-agents here
-                        (f, vec!["Some String".to_string()])
-                    }));
-                }
-
+            let futures: FuturesUnordered<FileFuture> = FuturesUnordered::new();
+            for filename in filenames {
                 if matches!(
                     input.query_method,
                     QueryMethod::Embedding | QueryMethod::Hybrid
                 ) {
-                    file_futures.push(Box::pin(async move {
-                        // Spawn embedding-based task here
-                        (f, vec!["Some String".to_string()])
+                    let Some(ref embedding_config) = self.embedding_config else {
+                        return Err("Query method {} was used, but no embedding config was provided during tool creation. This is likely a bug.".into());
+                    };
+
+                    let Some(ref reranker_config) = self.reranker_config else {
+                        return Err("Query method {} was used, but no reranker config was provided during tool creation. This is likely a bug.".into());
+                    };
+
+                    futures.push(Box::pin(async {
+                        let filename = filename.clone();
+
+                        // 1. Chunk document using `Chunker`
+                        // 2. Generate embeddings altogether
+                        //      - possibly contextual embeddings?
+                        // 3. Compute similarities (on our own here)
+                        // 4. Use reranker
+                        // 5. If `QueryMethod::Hybrid`
+                        //   - Find "hot" zones
+                        //   - For the top-k chunks, look at the overlap in sections
+                        //   - If there's a strong overlap (maybe by some percentage threshold),
+                        //     then use the parent link in the `SectionBoundary` to go one level up
+                        //   - Instead of the entire document, ask the agent to find relevant parts
+                        //     from these instead. You can have chunks at different levels passed
+                        //     to the agent.
+                        let contents = extract_text(&filename).map_err(|e| {
+                            DocumentError::TextExtractionFailed(TextExtractionError(format!(
+                                "{filename}: {e}"
+                            )))
+                        })?;
+                        let chunker = Chunker::new(contents, ChunkingStrategy::SectionBased(2048));
+                        let chunks = chunker.chunk();
+
+                        let chunk_texts: Vec<String> =
+                            chunks.into_iter().map(|c| c.content).collect();
+                        let provider = get_embedding_provider(embedding_config.provider_name())?;
+
+                        let chunk_embeddings =
+                            provider.compute_source_embeddings(Arc::new(StringArray::from(
+                                chunk_texts.iter().map(String::as_str).collect::<Vec<_>>(),
+                            )))?;
+                        let chunk_embeddings: &[f32] = chunk_embeddings
+                            .as_ref()
+                            .as_fixed_size_list()
+                            .values()
+                            .as_primitive::<Float32Type>()
+                            .values();
+
+                        let query_embeddings = provider.compute_query_embeddings(Arc::new(
+                            StringArray::from(vec![input.query.as_ref()]),
+                        ))?;
+                        let query_embeddings: &[f32] = query_embeddings
+                            .as_ref()
+                            .as_fixed_size_list()
+                            .values()
+                            .as_primitive::<Float32Type>()
+                            .values();
+                        let dim = query_embeddings.len();
+
+                        let query_normalized = normalize(query_embeddings);
+                        let chunk_embeddings_normalized: Vec<f32> = chunk_embeddings
+                            .chunks_exact(dim)
+                            .flat_map(normalize)
+                            .collect();
+
+                        let scores: Vec<f32> = chunk_embeddings_normalized
+                            .chunks_exact(dim)
+                            .map(|chunk| dot(chunk.iter(), query_normalized.iter()))
+                            .collect();
+
+                        let kept_chunks: Vec<&String> = scores
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, v)| **v >= SCORE_THRESHOLD)
+                            .map(|(i, _)| chunk_texts.get(i).unwrap())
+                            .collect();
+
+                        if kept_chunks.is_empty() {
+                            return Ok((filename, Vec::new()));
+                        }
+
+                        let reranker = get_reranking_provider(reranker_config.provider_name())?;
+                        let reranked_idx = reranker.rerank(&kept_chunks, &input.query).await?;
+                        let reranked_chunks: Vec<&String> = reranked_idx
+                            .iter()
+                            .map(|i| *kept_chunks.get(*i).unwrap())
+                            .collect();
+
+                        Ok((
+                            filename.clone(),
+                            reranked_chunks.into_iter().cloned().collect(),
+                        ))
                     }));
                 }
             }
@@ -218,7 +331,7 @@ impl Tool for UserDocumentTool {
             }
 
             Ok(json!({
-                "results": chunks_by_file
+                "results": []
             }))
         })
     }
