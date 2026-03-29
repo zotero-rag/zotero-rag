@@ -9,6 +9,7 @@ use std::{
         atomic::{AtomicBool, AtomicU64},
     },
 };
+use zqa_pdftools::parse::ExtractedContent;
 use zqa_rag::llm::base::ChatHistoryItem;
 
 use crate::config::Config;
@@ -32,6 +33,16 @@ pub struct Args {
     pub print_summaries: bool,
 }
 
+/// A user-imported document that is not from their Zotero library.
+pub(crate) struct UserDocument {
+    /// The filename as on disk
+    pub(crate) filename: String,
+    /// The result of `extract_text`
+    pub(crate) contents: ExtractedContent,
+    /// The text before "Introduction"
+    pub(crate) summary: String,
+}
+
 /// The application state. This is embedded in the context, and all state variables are
 /// encapsulated in this struct to avoid polluting the `Context`.
 #[derive(Default)]
@@ -44,6 +55,8 @@ pub(crate) struct State {
     pub(crate) title: Arc<Mutex<Option<String>>>,
     /// Accumulated session cost, in US cents (Money pattern)
     pub(crate) session_cost: AtomicU64,
+    /// Extracted content for imported documents
+    pub(crate) imports: Vec<UserDocument>,
 }
 
 /// A structure that holds the application context, including CLI arguments and an writers
