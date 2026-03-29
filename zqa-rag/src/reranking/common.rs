@@ -22,7 +22,7 @@ pub trait Rerank: Send + Sync {
     /// A vector of indices of the items reranked using the provider.
     fn rerank<'a>(
         &'a self,
-        items: Vec<String>,
+        items: &'a [&'a String],
         query: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<Vec<usize>, LLMError>> + Send + 'a>>;
 }
@@ -81,4 +81,15 @@ pub enum RerankProviderConfig {
     VoyageAI(crate::config::VoyageAIConfig),
     /// Configuration for Cohere reranking provider
     Cohere(crate::config::CohereConfig),
+}
+
+impl RerankProviderConfig {
+    #[must_use]
+    /// Return the name of the provider for this config.
+    pub fn provider_name(&self) -> &str {
+        match self {
+            Self::Cohere(_) => "cohere",
+            Self::VoyageAI(_) => "voyageai",
+        }
+    }
 }

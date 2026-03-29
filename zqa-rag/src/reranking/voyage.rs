@@ -9,9 +9,9 @@ use crate::{
 };
 
 #[derive(Serialize, Debug)]
-struct VoyageAIRerankRequest {
+struct VoyageAIRerankRequest<'a> {
     query: String,
-    documents: Vec<String>,
+    documents: &'a [&'a String],
     model: String,
 }
 
@@ -28,7 +28,7 @@ struct VoyageAIRerankResponse {
 impl<T: HttpClient> Rerank for VoyageAIClient<T> {
     fn rerank<'a>(
         &'a self,
-        items: Vec<String>,
+        items: &'a [&'a String],
         query: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<Vec<usize>, LLMError>> + Send + 'a>> {
         Box::pin(async move {
@@ -94,7 +94,7 @@ mod tests {
     async fn test_rerank() {
         dotenv().ok();
 
-        let array = vec![
+        let array = [
             "Hello, World!".to_string(),
             "A second string".to_string(),
             "A third string".to_string(),
@@ -102,7 +102,9 @@ mod tests {
         let query = "A string";
 
         let client = VoyageAIClient::<ReqwestClient>::default();
-        let reranked = client.rerank(array.clone(), query).await;
+        let reranked = client
+            .rerank(array.iter().collect::<Vec<_>>().as_slice(), query)
+            .await;
 
         // Debug the error if there is one
         if reranked.is_err() {
