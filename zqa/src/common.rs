@@ -34,14 +34,13 @@ pub struct Args {
 }
 
 /// A user-imported document that is not from their Zotero library.
+#[allow(dead_code)]
 pub(crate) struct UserDocument {
     /// The filename as on disk
-    #[allow(dead_code)]
     pub(crate) filename: String,
     /// The result of `extract_text`
     pub(crate) contents: ExtractedContent,
     /// The text before "Introduction"
-    #[allow(dead_code)]
     pub(crate) summary: String,
 }
 
