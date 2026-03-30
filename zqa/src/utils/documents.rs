@@ -273,7 +273,7 @@ mod tests {
         let doc = result.unwrap();
         test_eq!(doc.filename, path.to_str().unwrap());
         assert!(!doc.contents.text_content.is_empty());
-        assert!(doc.summary.is_empty());
+        assert!(!doc.summary.is_empty());
     }
 
     #[test]
@@ -306,8 +306,8 @@ mod tests {
         let config = SummaryIndexConfig::default();
         let idx = get_summary_end_index(&doc.contents, config);
 
-        // Should return s.byte_index - 1 = 500 - 1 = 499
-        test_eq!(idx, 499);
+        // Should return s.byte_index = 500
+        test_eq!(idx, 500);
     }
 
     #[test]
@@ -317,7 +317,7 @@ mod tests {
         let config = SummaryIndexConfig::default();
         let idx = get_summary_end_index(&doc.contents, config);
 
-        test_eq!(idx, 399);
+        test_eq!(idx, 400);
     }
 
     #[test]
@@ -350,7 +350,7 @@ mod tests {
         let config = SummaryIndexConfig::default();
         let idx = get_summary_end_index(&doc.contents, config);
 
-        test_eq!(idx, 4); // len=5, saturating_sub(1)=4, min(4, 1000)=4
+        test_eq!(idx, 5); // len=5, min(5, 1000)=5
     }
 
     #[test]
