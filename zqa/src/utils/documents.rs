@@ -120,13 +120,7 @@ fn get_summary_end_index(
                         .len()
                         .min(summary_index_config.max_summary_sec_pos)
                 },
-                |w| {
-                    if let [_, s] = w {
-                        s.byte_index
-                    } else {
-                        unreachable!()
-                    }
-                },
+                |w| w[1].byte_index,
             ),
     }
 }
