@@ -8,14 +8,22 @@ use zqa_pdftools::parse::{ExtractedContent, extract_text};
 
 use crate::common::UserDocument;
 
+/// Newtype wrapper for `zqa_pdftools` type-erased error.
+#[derive(Debug, Error)]
+pub struct TextExtractionError(String);
+
+impl std::fmt::Display for TextExtractionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum DocumentError {
-    #[error("File not found: {0}")]
-    FileNotFound(String),
     #[error("Path conversion failed: {0}")]
     PathConversionFailed(String),
     #[error("Text extraction failed: {0}")]
-    TextExtractionFailed(#[from] Box<dyn std::error::Error>),
+    TextExtractionFailed(TextExtractionError),
 }
 
 /// Parse an imported user document (one not from Zotero, but from the file system), and return a
@@ -31,14 +39,15 @@ pub enum DocumentError {
 ///
 /// # Errors
 ///
-/// * [`DocumentError::FileNotFound`] if `path` does not exist.
 /// * [`DocumentError::PathConversionFailed`] if `path` could not be converted to an `&str`.
 /// * [`DocumentError::TextExtractionFailed`] if `extract_text` returned an error.
 pub(crate) fn parse_user_document(path: &Path) -> Result<UserDocument, DocumentError> {
     let filename = path.to_str().ok_or(DocumentError::PathConversionFailed(
         path.to_string_lossy().to_string(),
     ))?;
-    let contents = extract_text(filename)?;
+    let contents = extract_text(filename).map_err(|e| {
+        DocumentError::TextExtractionFailed(TextExtractionError(format!("{filename}: {e}")))
+    })?;
     let summary_end_index = get_summary_end_index(&contents, SummaryIndexConfig::default());
 
     Ok(UserDocument {
