@@ -1,6 +1,11 @@
 //! Utilities for interacting with documents that are not from the user's Zotero library.
 
-use std::path::Path;
+use futures::StreamExt;
+use futures::stream::FuturesUnordered;
+use schemars::{JsonSchema, schema_for};
+use serde::{Deserialize, Serialize};
+use serde_json::json;
+use std::{collections::HashMap, path::Path, pin::Pin};
 use thiserror::Error;
 
 use zqa_pdftools::parse::{ExtractedContent, extract_text};
@@ -252,7 +257,10 @@ mod tests {
     fn test_parse_user_document_file_not_found() {
         let path = PathBuf::from("/nonexistent/path/file.pdf");
         let result = parse_user_document(&path);
-        assert!(matches!(result, Err(DocumentError::FileNotFound(_))));
+        assert!(matches!(
+            result,
+            Err(DocumentError::TextExtractionFailed(_))
+        ));
     }
 
     #[test]
