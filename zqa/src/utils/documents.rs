@@ -1,6 +1,6 @@
 //! Utilities for interacting with documents that are not from the user's Zotero library.
 
-use std::path::PathBuf;
+use std::path::Path;
 use thiserror::Error;
 
 use zqa_pdftools::parse::extract_text;
@@ -33,7 +33,7 @@ pub enum DocumentError {
 /// * [`DocumentError::FileNotFound`] if `path` does not exist.
 /// * [`DocumentError::PathConversionFailed`] if `path` could not be converted to an `&str`.
 /// * [`DocumentError::TextExtractionFailed`] if `extract_text` returned an error.
-pub fn parse_user_document(path: PathBuf) -> Result<UserDocument, DocumentError> {
+pub(crate) fn parse_user_document(path: &Path) -> Result<UserDocument, DocumentError> {
     if !path.exists() {
         return Err(DocumentError::FileNotFound(
             path.to_string_lossy().to_string(),
@@ -58,6 +58,7 @@ const DEFAULT_MAX_SUMMARY_SEC_POS: usize = 1000;
 /// Configuration passed to [`get_summary_end_index`] with heuristic thresholds for the maximum
 /// summary length, the minimum length of a summary section, and the maximum position for the
 /// *beginning* of the summary section.
+#[derive(Copy, Clone, Debug)]
 pub(crate) struct SummaryIndexConfig {
     /// The minimum length of a section to be considered a summary. Default: 100
     pub(crate) min_summary_sec_len: usize,
