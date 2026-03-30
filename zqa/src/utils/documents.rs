@@ -106,19 +106,16 @@ fn get_summary_end_index(
             .sections
             .windows(2)
             .find(|w| {
-                if let [f, s] = w {
-                    f.byte_index <= summary_index_config.max_summary_sec_pos
-                        && s.byte_index.saturating_sub(f.byte_index)
-                            >= summary_index_config.min_summary_sec_len
-                } else {
-                    false
-                }
+                w[0].byte_index <= summary_index_config.max_summary_sec_pos
+                    && w[1].byte_index.saturating_sub(w[0].byte_index)
+                        >= summary_index_config.min_summary_sec_len
             })
             .map_or_else(
                 || {
-                    parsed_doc
-                        .len()
-                        .min(summary_index_config.max_summary_sec_pos)
+                    // Snap to valid UTF-8 boundary
+                    text.floor_char_boundary(
+                        summary_index_config.max_summary_sec_pos.min(text.len()),
+                    )
                 },
                 |w| w[1].byte_index,
             ),
