@@ -3,9 +3,13 @@
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
 use schemars::{JsonSchema, schema_for};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::json;
-use std::{collections::HashMap, path::Path, pin::Pin};
+use std::{
+    collections::{HashMap, HashSet},
+    path::Path,
+    pin::Pin,
+};
 use thiserror::Error;
 
 use zqa_pdftools::parse::{ExtractedContent, extract_text};
@@ -180,7 +184,8 @@ impl Tool for UserDocumentTool {
             }
 
             let filenames = input.filenames.as_ref().unwrap_or(&self.filenames);
-            if let Some(f) = filenames.iter().find(|f| !self.filenames.contains(f)) {
+            let session_files: HashSet<_> = self.filenames.iter().collect();
+            if let Some(f) = filenames.iter().find(|f| !session_files.contains(f)) {
                 return Err(format!("File {f} does not exist in the session."));
             }
 
@@ -209,10 +214,7 @@ impl Tool for UserDocumentTool {
 
             let mut chunks_by_file = HashMap::<&String, Vec<String>>::new();
             while let Some((filename, chunks)) = futures.next().await {
-                chunks_by_file
-                    .entry(filename)
-                    .and_modify(|v| v.extend(chunks.clone()))
-                    .or_insert(chunks);
+                chunks_by_file.entry(filename).or_default().extend(chunks);
             }
 
             Ok(json!({
