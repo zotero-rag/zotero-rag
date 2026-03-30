@@ -23,7 +23,7 @@ use zqa_pdftools::{
 };
 use zqa_rag::{
     embedding::common::{EmbeddingProviderConfig, get_embedding_provider},
-    llm::{errors::LLMError, tools::Tool},
+    llm::{errors::LLMError, factory::LLMClient, tools::Tool},
     reranking::common::{RerankProviderConfig, get_reranking_provider},
 };
 
@@ -364,6 +364,8 @@ pub(crate) struct UserDocumentTool {
     pub(crate) embedding_config: Option<EmbeddingProviderConfig>,
     /// For [`QueryMethod::Embedding`] and [`QueryMethod::Hybrid`], the reranker config.
     pub(crate) reranker_config: Option<RerankProviderConfig>,
+    /// A configured [`LLMClient`].
+    pub(crate) client: LLMClient,
 }
 
 impl Tool for UserDocumentTool {
