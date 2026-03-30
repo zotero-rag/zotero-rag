@@ -1,11 +1,15 @@
 //! Utilities for interacting with documents that are not from the user's Zotero library.
 
+use arrow_array::StringArray;
+use arrow_array::cast::AsArray;
+use arrow_array::types::Float32Type;
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
 use lancedb::embeddings::EmbeddingFunction;
 use schemars::{JsonSchema, schema_for};
 use serde::Deserialize;
 use serde_json::json;
+use std::sync::Arc;
 use std::{
     collections::{HashMap, HashSet},
     path::Path,
@@ -244,7 +248,7 @@ impl Tool for UserDocumentTool {
                 return Err(format!("File {f} does not exist in the session."));
             }
 
-            let futures: FuturesUnordered<FileFuture> = FuturesUnordered::new();
+            let mut futures: FuturesUnordered<FileFuture> = FuturesUnordered::new();
             for filename in filenames {
                 if matches!(
                     input.query_method,
@@ -347,7 +351,7 @@ impl Tool for UserDocumentTool {
                             let total = section_counts.values().sum::<usize>() as f32;
                             for (section_idx, count) in &section_counts {
                                 let pct = *count as f32 / total;
-                                let effective_idx = if pct < ZOOM_OUT_THRESHOLD {
+                                let effective_idx = if pct >= ZOOM_OUT_THRESHOLD {
                                     // Zoom out to higher-level section, since this one seems
                                     // important
                                     sections
@@ -375,13 +379,18 @@ impl Tool for UserDocumentTool {
                 }
             }
 
-            let mut chunks_by_file = HashMap::<&String, Vec<String>>::new();
-            while let Some((filename, chunks)) = file_futures.next().await {
-                chunks_by_file.entry(filename).or_default().extend(chunks);
+            let mut all_results = Vec::with_capacity(filenames.len());
+            let mut errors = Vec::new();
+            while let Some(res) = futures.next().await {
+                match res {
+                    Ok(res) => all_results.push(res),
+                    Err(e) => errors.push(e.to_string()),
+                }
             }
 
             Ok(json!({
-                "results": []
+                "results": all_results,
+                "errors": errors
             }))
         })
     }
