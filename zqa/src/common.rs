@@ -36,16 +36,19 @@ pub struct Args {
 /// A user-imported document that is not from their Zotero library.
 pub(crate) struct UserDocument {
     /// The filename as on disk
+    #[allow(dead_code)]
     pub(crate) filename: String,
     /// The result of `extract_text`
     pub(crate) contents: ExtractedContent,
     /// The text before "Introduction"
+    #[allow(dead_code)]
     pub(crate) summary: String,
 }
 
 /// The application state. This is embedded in the context, and all state variables are
 /// encapsulated in this struct to avoid polluting the `Context`.
 #[derive(Default)]
+#[allow(dead_code)]
 pub(crate) struct State {
     /// The current conversation's chat history
     pub(crate) chat_history: Arc<Mutex<Vec<ChatHistoryItem>>>,
