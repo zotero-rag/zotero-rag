@@ -128,7 +128,7 @@ fn get_summary_end_index(
     }
 }
 
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[derive(Debug, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 enum QueryMethod {
     Embedding,
@@ -211,7 +211,7 @@ impl Tool for UserDocumentTool {
             while let Some((filename, chunks)) = futures.next().await {
                 chunks_by_file
                     .entry(filename)
-                    .and_modify(|v| v.extend(chunks.clone().into_iter()))
+                    .and_modify(|v| v.extend(chunks.clone()))
                     .or_insert(chunks);
             }
 
