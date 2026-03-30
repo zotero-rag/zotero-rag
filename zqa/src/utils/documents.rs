@@ -167,7 +167,11 @@ where
 
 fn normalize(v: &[f32]) -> Vec<f32> {
     let norm = v.iter().map(|x| x * x).sum::<f32>().sqrt();
-    v.iter().map(|x| x / norm).collect()
+    if norm > f32::EPSILON {
+        v.iter().map(|x| x / norm).collect()
+    } else {
+        vec![0.0; v.len()]
+    }
 }
 
 fn get_embeddings(
