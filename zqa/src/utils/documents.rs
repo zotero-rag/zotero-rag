@@ -46,7 +46,7 @@ pub enum DocumentError {
     #[error("Configuration issue: {0}")]
     BadConfig(String),
     #[error("Error getting embedding provider: {0}")]
-    EmbeddingError(#[from] LLMError),
+    ApiError(#[from] LLMError),
     #[error("Error computing embeddings: {0}")]
     LanceError(#[from] lancedb::Error),
     #[error("Path conversion failed: {0}")]
@@ -196,6 +196,11 @@ have been retrieved for you. Your task is to refine these chunks to be relevant 
     <chunks>
     {chunks}
     </chunks>
+
+    Your returned chunks do not need to be entire chunks from the list above, and you may choose subsets as
+applicable. However, you MUST return the text verbatim.
+
+    Place each chunk on a new line, and separate chunks using 5 dashes (-----).
 "
     )
 }
@@ -215,6 +220,35 @@ fn get_embeddings(
         .values();
 
     Ok(embeddings.to_vec())
+}
+
+async fn call_subagent(
+    query: &str,
+    retrieved_chunks: &[&str],
+    client: &LLMClient,
+) -> Result<String, DocumentError> {
+    let request = ChatRequest {
+        message: get_prompt(
+            query,
+            retrieved_chunks,
+        ),
+        ..ChatRequest::default()
+    };
+
+    client
+        .send_message(&request)
+        .await
+        .map(|response| {
+            let response = ModelResponse::from(&response.content).to_string();
+            
+
+            // TODO: In a future refactor, this will be updated to actually get
+            // a `Vec` of chunks. That requires implementing structured
+            // outputs, which is a larger-scale change
+
+            response.trim().to_string()
+        })
+        .map_err(Into::<DocumentError>::into)
 }
 
 /// Retrieve relevant chunks from one file.
@@ -251,7 +285,7 @@ fn get_embeddings(
 ///
 /// * `DocumentError::TextExtractionFailed` if [`zqa_pdftools::parse::extract_text`] returns an
 ///   error.
-/// * `DocumentError::EmbeddingError` if either the embedding or reranker provider could not be
+/// * `DocumentError::ApiError` if either the embedding or reranker provider could not be
 ///   obtained, or if the embeddings or reranked chunks could not be computed.
 #[allow(clippy::too_many_lines)]
 async fn process_file(
@@ -320,7 +354,7 @@ async fn process_file(
         .map(|i| kept_chunks_owned[*i].as_str())
         .collect();
 
-    let mut final_chunks = match query_method {
+    let final_chunks = match query_method {
         QueryMethod::Hybrid => {
             let sections = &contents.sections;
             let text_content = &contents.text_content;
@@ -371,27 +405,27 @@ async fn process_file(
             .collect(),
     };
 
-    if matches!(query_method, QueryMethod::SubAgent) {
-        let request = ChatRequest {
-            message: get_prompt(
+    match query_method {
+        QueryMethod::SubAgent | QueryMethod::Hybrid => {
+            let result = call_subagent(
                 &query,
                 &final_chunks.iter().map(String::as_str).collect::<Vec<_>>(),
-            ),
-            ..ChatRequest::default()
-        };
+                client,
+            )
+            .await?;
 
-        if let Ok(response) = client.send_message(&request).await {
-            let response = ModelResponse::from(&response.content).to_string();
-            let response = response.trim().to_string();
+            // TODO: This is terribly hacky, and is just a stupid way to do this in general.
+            // However, the right solution is to use structured outputs (see the other todo in this
+            // file).
+            let agent_chunks = result
+                .split("-----")
+                .map(std::string::ToString::to_string)
+                .collect::<Vec<_>>();
 
-            // TODO: In a future refactor, this will be updated to actually get
-            // a `Vec` of chunks. That requires implementing structured
-            // outputs, which is a larger-scale change
-            final_chunks.push(response);
+            Ok((filename, agent_chunks))
         }
+        QueryMethod::Embedding => Ok((filename, final_chunks)),
     }
-
-    Ok((filename, final_chunks))
 }
 
 #[derive(Deserialize, JsonSchema)]
