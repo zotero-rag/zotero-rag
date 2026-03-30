@@ -150,7 +150,7 @@ fn get_summary_end_index(
     }
 }
 
-#[derive(Debug, Deserialize, JsonSchema)]
+#[derive(Copy, Clone, Debug, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 enum QueryMethod {
     Embedding,
@@ -187,6 +187,148 @@ fn get_embeddings(
     Ok(embeddings.to_vec())
 }
 
+/// Retrieve relevant chunks from one file.
+///
+/// This function handles [`QueryMethod::Embedding`] and [`QueryMethod::Hybrid`] currently;
+/// [`QueryMethod::SubAgent`] is WIP. It uses an embedding-based chunk retrieval from the
+/// user-provided file.
+///
+/// To do so, it first extracts the text from the file, and chunks it into 2048-token chunks. From
+/// here, it uses `embedding_config` to generate embeddings for the query and the chunks, and
+/// performs a cosine similarity to prune chunks to those whose similarity scores are greater than
+/// `SCORE_THRESHOLD` (currently: 0.7). It then uses the `reranker_config` to perform reranking of
+/// the retrieved chunks.
+///
+/// For [`QueryMethod::Hybrid`], this function prepares to pass the chunks to an agent by aiming to
+/// provide more context. In particular, it finds "hot zones" in the user document (sections that
+/// have at least the ratio `ZOOM_OUT_THRESHOLD` (currently: 0.25) of the pruned chunks. In these
+/// hot zones, it uses the parent pointer in [`zqa_pdftools::parse::SectionBoundary`] to show the
+/// parent section instead.
+///
+/// # Arguments
+///
+/// * `filename` - The filename of the document to process
+/// * `query` - A query, either from a model or the user
+/// * `query_method` - See [`QueryMethod`]
+/// * `embedding_config` - Configuration for an embedding provider
+/// * `reranker_config` - Configuration for an reranker provider
+///
+/// # Returns
+///
+/// A tuple with the filename and a list of chunks.
+///
+/// # Errors
+///
+/// * `DocumentError::TextExtractionFailed` if [`zqa_pdftools::parse::extract_text`] returns an
+///   error.
+/// * `DocumentError::EmbeddingError` if either the embedding or reranker provider could not be
+///   obtained, or if the embeddings or reranked chunks could not be computed.
+async fn process_file(
+    filename: String,
+    query: String,
+    query_method: QueryMethod,
+    embedding_config: &EmbeddingProviderConfig,
+    reranker_config: &RerankProviderConfig,
+) -> Result<(String, Vec<String>), DocumentError> {
+    // TODO: Tune this in a future story; possibly look at embedding provider
+    // docs and create a constant or a function.
+    const SCORE_THRESHOLD: f32 = 0.7;
+    const ZOOM_OUT_THRESHOLD: f32 = 0.25;
+
+    let contents = extract_text(&filename).map_err(|e| {
+        DocumentError::TextExtractionFailed(TextExtractionError(format!("{filename}: {e}")))
+    })?;
+    let chunker = Chunker::new(contents.clone(), ChunkingStrategy::SectionBased(2048));
+    let chunks = chunker.chunk();
+
+    let chunk_texts: Vec<String> = chunks.into_iter().map(|c| c.content).collect();
+    let provider = get_embedding_provider(embedding_config.provider_name())?;
+
+    let chunk_embeddings =
+        get_embeddings(chunk_texts.iter().map(String::as_str).collect(), &provider)?;
+
+    let query_embeddings = get_embeddings(vec![query.as_str()], &provider)?;
+    let dim = query_embeddings.len();
+
+    let query_normalized = normalize(&query_embeddings);
+    let chunk_embeddings_normalized: Vec<f32> = chunk_embeddings
+        .chunks_exact(dim)
+        .flat_map(normalize)
+        .collect();
+
+    let scores: Vec<f32> = chunk_embeddings_normalized
+        .chunks_exact(dim)
+        .map(|chunk| dot(chunk.iter(), query_normalized.iter()))
+        .collect();
+
+    let kept_chunks: Vec<&String> = scores
+        .iter()
+        .enumerate()
+        .filter(|(_, v)| **v >= SCORE_THRESHOLD)
+        .map(|(i, _)| chunk_texts.get(i).unwrap())
+        .collect();
+
+    if kept_chunks.is_empty() {
+        return Ok((filename, Vec::new()));
+    }
+
+    let reranker = get_reranking_provider(reranker_config.provider_name())?;
+    let reranked_idx = reranker.rerank(&kept_chunks, &query).await?;
+    let reranked_chunks: Vec<&String> = reranked_idx
+        .iter()
+        .map(|i| *kept_chunks.get(*i).unwrap())
+        .collect();
+
+    let final_chunks = if matches!(query_method, QueryMethod::Hybrid) {
+        let sections = &contents.sections;
+        let text_content = &contents.text_content;
+        let mut returned_chunks = Vec::new();
+
+        let mut section_counts: HashMap<usize, usize> = HashMap::new();
+
+        for chunk in &reranked_chunks {
+            let Some(text_idx) = text_content.find(&**chunk) else {
+                continue;
+            };
+
+            // Which section does this chunk belong to?
+            // `contents.sections` is sorted.
+            let section_idx = sections
+                .partition_point(|sec| text_idx >= sec.byte_index)
+                .saturating_sub(1);
+            *section_counts.entry(section_idx).or_insert(0) += 1;
+        }
+
+        let total = section_counts.values().sum::<usize>() as f32;
+        for (section_idx, count) in &section_counts {
+            let pct = *count as f32 / total;
+            let effective_idx = if pct >= ZOOM_OUT_THRESHOLD {
+                // Zoom out to higher-level section, since this one seems
+                // important
+                sections
+                    .get(*section_idx)
+                    .and_then(|s| s.parent_idx)
+                    .unwrap_or(*section_idx)
+            } else {
+                *section_idx
+            };
+
+            // Handle the case for the last section
+            let end_byte = sections
+                .get(effective_idx + 1)
+                .map_or(text_content.len(), |s| s.byte_index);
+            returned_chunks
+                .push(text_content[sections[effective_idx].byte_index..end_byte].to_string());
+        }
+
+        returned_chunks
+    } else {
+        reranked_chunks.iter().map(|s| &**s).cloned().collect()
+    };
+
+    Ok((filename.clone(), final_chunks))
+}
+
 #[derive(Deserialize, JsonSchema)]
 struct UserDocumentToolInput {
     /// The filenames to use. Optional; if `None`, will use all files currently selected by the
@@ -221,18 +363,12 @@ impl Tool for UserDocumentTool {
         schema_for!(UserDocumentToolInput)
     }
 
-    #[allow(clippy::too_many_lines)]
     fn call<'a>(
         &'a self,
         args: serde_json::Value,
     ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, String>> + Send + 'a>> {
         type FileFuture<'a> =
             Pin<Box<dyn Future<Output = Result<(String, Vec<String>), DocumentError>> + Send + 'a>>;
-
-        // TODO: Tune this in a future story; possibly look at embedding provider
-        // docs and create a constant or a function.
-        const SCORE_THRESHOLD: f32 = 0.7;
-        const ZOOM_OUT_THRESHOLD: f32 = 0.25;
 
         Box::pin(async move {
             let input: UserDocumentToolInput =
@@ -255,127 +391,26 @@ impl Tool for UserDocumentTool {
                     QueryMethod::Embedding | QueryMethod::Hybrid
                 ) {
                     let Some(ref embedding_config) = self.embedding_config else {
-                        return Err("Query method {} was used, but no embedding config was provided during tool creation. This is likely a bug.".into());
+                        return Err(format!(
+                            "Query method {:?} was used, but no embedding config was provided during tool creation. This is likely a bug.",
+                            input.query_method
+                        ));
                     };
 
                     let Some(ref reranker_config) = self.reranker_config else {
-                        return Err("Query method {} was used, but no reranker config was provided during tool creation. This is likely a bug.".into());
+                        return Err(format!(
+                            "Query method {:?} was used, but no reranker config was provided during tool creation. This is likely a bug.",
+                            input.query_method
+                        ));
                     };
 
-                    futures.push(Box::pin(async {
-                        let filename = filename.clone();
-
-                        // 1. Chunk document using `Chunker`
-                        // 2. Generate embeddings altogether
-                        //      - possibly contextual embeddings?
-                        // 3. Compute similarities (on our own here)
-                        // 4. Use reranker
-                        // 5. If `QueryMethod::Hybrid`
-                        //   - Find "hot" zones
-                        //   - For the top-k chunks, look at the overlap in sections
-                        //   - If there's a strong overlap (maybe by some percentage threshold),
-                        //     then use the parent link in the `SectionBoundary` to go one level up
-                        //   - Instead of the entire document, ask the agent to find relevant parts
-                        //     from these instead. You can have chunks at different levels passed
-                        //     to the agent.
-                        let contents = extract_text(&filename).map_err(|e| {
-                            DocumentError::TextExtractionFailed(TextExtractionError(format!(
-                                "{filename}: {e}"
-                            )))
-                        })?;
-                        let chunker =
-                            Chunker::new(contents.clone(), ChunkingStrategy::SectionBased(2048));
-                        let chunks = chunker.chunk();
-
-                        let chunk_texts: Vec<String> =
-                            chunks.into_iter().map(|c| c.content).collect();
-                        let provider = get_embedding_provider(embedding_config.provider_name())?;
-
-                        let chunk_embeddings = get_embeddings(
-                            chunk_texts.iter().map(String::as_str).collect(),
-                            &provider,
-                        )?;
-
-                        let query_embeddings =
-                            get_embeddings(vec![input.query.as_str()], &provider)?;
-                        let dim = query_embeddings.len();
-
-                        let query_normalized = normalize(&query_embeddings);
-                        let chunk_embeddings_normalized: Vec<f32> = chunk_embeddings
-                            .chunks_exact(dim)
-                            .flat_map(normalize)
-                            .collect();
-
-                        let scores: Vec<f32> = chunk_embeddings_normalized
-                            .chunks_exact(dim)
-                            .map(|chunk| dot(chunk.iter(), query_normalized.iter()))
-                            .collect();
-
-                        let kept_chunks: Vec<&String> = scores
-                            .iter()
-                            .enumerate()
-                            .filter(|(_, v)| **v >= SCORE_THRESHOLD)
-                            .map(|(i, _)| chunk_texts.get(i).unwrap())
-                            .collect();
-
-                        if kept_chunks.is_empty() {
-                            return Ok((filename, Vec::new()));
-                        }
-
-                        let reranker = get_reranking_provider(reranker_config.provider_name())?;
-                        let reranked_idx = reranker.rerank(&kept_chunks, &input.query).await?;
-                        let reranked_chunks: Vec<&String> = reranked_idx
-                            .iter()
-                            .map(|i| *kept_chunks.get(*i).unwrap())
-                            .collect();
-
-                        let final_chunks = if matches!(input.query_method, QueryMethod::Hybrid) {
-                            let sections = &contents.sections;
-                            let text_content = &contents.text_content;
-                            let mut returned_chunks = Vec::new();
-
-                            let mut section_counts: HashMap<usize, usize> = HashMap::new();
-
-                            for chunk in &reranked_chunks {
-                                let Some(text_idx) = text_content.find(&**chunk) else {
-                                    continue;
-                                };
-
-                                // Which section does this chunk belong to?
-                                // `contents.sections` is sorted.
-                                let section_idx =
-                                    sections.partition_point(|sec| text_idx >= sec.byte_index);
-                                *section_counts.entry(section_idx).or_insert(0) += 1;
-                            }
-
-                            let total = section_counts.values().sum::<usize>() as f32;
-                            for (section_idx, count) in &section_counts {
-                                let pct = *count as f32 / total;
-                                let effective_idx = if pct >= ZOOM_OUT_THRESHOLD {
-                                    // Zoom out to higher-level section, since this one seems
-                                    // important
-                                    sections
-                                        .get(*section_idx)
-                                        .and_then(|s| s.parent_idx)
-                                        .unwrap_or(*section_idx)
-                                } else {
-                                    *section_idx
-                                };
-
-                                returned_chunks.push(
-                                    text_content[sections[effective_idx].byte_index
-                                        ..sections[effective_idx + 1].byte_index]
-                                        .to_string(),
-                                );
-                            }
-
-                            returned_chunks
-                        } else {
-                            reranked_chunks.iter().map(|s| &**s).cloned().collect()
-                        };
-
-                        Ok((filename.clone(), final_chunks))
-                    }));
+                    futures.push(Box::pin(process_file(
+                        filename.clone(),
+                        input.query.clone(),
+                        input.query_method,
+                        embedding_config,
+                        reranker_config,
+                    )));
                 }
             }
 
