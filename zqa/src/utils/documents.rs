@@ -175,11 +175,11 @@ fn normalize(v: &[f32]) -> Vec<f32> {
 }
 
 fn get_embeddings(
-    texts: Vec<&str>,
+    texts: &[&str],
     embedding_provider: &Arc<dyn EmbeddingFunction>,
 ) -> Result<Vec<f32>, DocumentError> {
     let embeddings = embedding_provider.compute_source_embeddings(Arc::new(StringArray::from(
-        texts.into_iter().collect::<Vec<_>>(),
+        texts.iter().map(|s| &**s).collect::<Vec<_>>(),
     )))?;
     let embeddings: &[f32] = embeddings
         .as_ref()
@@ -245,13 +245,16 @@ async fn process_file(
     let chunker = Chunker::new(contents.clone(), ChunkingStrategy::SectionBased(2048));
     let chunks = chunker.chunk();
 
-    let chunk_texts: Vec<String> = chunks.into_iter().map(|c| c.content).collect();
+    let chunk_texts: Vec<String> = chunks.into_iter().map(|c| c.content.clone()).collect();
     let provider = get_embedding_provider(embedding_config.provider_name())?;
 
-    let chunk_embeddings =
-        get_embeddings(chunk_texts.iter().map(String::as_str).collect(), &provider)?;
+    let chunk_text_refs: Vec<&str> = chunk_texts
+        .iter()
+        .map(std::string::String::as_str)
+        .collect();
+    let chunk_embeddings = get_embeddings(&chunk_text_refs, &provider)?;
 
-    let query_embeddings = get_embeddings(vec![query.as_str()], &provider)?;
+    let query_embeddings = get_embeddings(&[query.as_str()], &provider)?;
     let dim = query_embeddings.len();
 
     let query_normalized = normalize(&query_embeddings);
@@ -265,22 +268,28 @@ async fn process_file(
         .map(|chunk| dot(chunk.iter(), query_normalized.iter()))
         .collect();
 
-    let kept_chunks: Vec<&String> = scores
-        .iter()
+    let kept_chunks: Vec<&str> = scores
+        .into_iter()
         .enumerate()
-        .filter(|(_, v)| **v >= SCORE_THRESHOLD)
-        .map(|(i, _)| chunk_texts.get(i).unwrap())
+        .filter(|(_, v)| *v >= SCORE_THRESHOLD)
+        .map(|(i, _)| chunk_texts[i].as_str())
         .collect();
 
     if kept_chunks.is_empty() {
         return Ok((filename, Vec::new()));
     }
 
-    let reranker = get_reranking_provider(reranker_config.provider_name())?;
-    let reranked_idx = reranker.rerank(&kept_chunks, &query).await?;
-    let reranked_chunks: Vec<&String> = reranked_idx
+    let kept_chunks_owned: Vec<String> = kept_chunks
         .iter()
-        .map(|i| *kept_chunks.get(*i).unwrap())
+        .map(std::string::ToString::to_string)
+        .collect();
+    let reranker = get_reranking_provider(reranker_config.provider_name())?;
+    let reranked_idx = reranker
+        .rerank(&kept_chunks_owned.iter().collect::<Vec<_>>(), &query)
+        .await?;
+    let reranked_chunks: Vec<&str> = reranked_idx
+        .iter()
+        .map(|i| kept_chunks_owned[*i].as_str())
         .collect();
 
     let final_chunks = if matches!(query_method, QueryMethod::Hybrid) {
@@ -327,7 +336,10 @@ async fn process_file(
 
         returned_chunks
     } else {
-        reranked_chunks.iter().map(|s| &**s).cloned().collect()
+        reranked_chunks
+            .iter()
+            .map(std::string::ToString::to_string)
+            .collect()
     };
 
     Ok((filename.clone(), final_chunks))
