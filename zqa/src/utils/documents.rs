@@ -1,6 +1,5 @@
 //! Utilities for interacting with documents that are not from the user's Zotero library.
 
-use memchr::memmem;
 use std::path::Path;
 use thiserror::Error;
 
@@ -94,9 +93,14 @@ fn get_summary_end_index(
     parsed_doc: &ExtractedContent,
     summary_index_config: SummaryIndexConfig,
 ) -> usize {
+    const INTRODUCTION_LEN: usize = "introduction".len();
     let text = &parsed_doc.text_content;
 
-    match memmem::find(text.to_ascii_lowercase().as_bytes(), b"introduction") {
+    match text
+        .as_bytes()
+        .windows(INTRODUCTION_LEN)
+        .position(|w| w.eq_ignore_ascii_case(b"introduction"))
+    {
         Some(pos) if pos <= summary_index_config.max_summary_sec_pos => pos,
         _ => parsed_doc
             .sections
