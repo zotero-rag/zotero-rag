@@ -3,7 +3,7 @@
 use std::path::Path;
 use thiserror::Error;
 
-use zqa_pdftools::parse::extract_text;
+use zqa_pdftools::parse::{ExtractedContent, extract_text};
 
 use crate::common::UserDocument;
 
@@ -44,11 +44,12 @@ pub(crate) fn parse_user_document(path: &Path) -> Result<UserDocument, DocumentE
         path.to_string_lossy().to_string(),
     ))?;
     let contents = extract_text(filename)?;
+    let summary_end_index = get_summary_end_index(&contents, SummaryIndexConfig::default());
 
     Ok(UserDocument {
         filename: filename.to_string(),
+        summary: contents.text_content[..summary_end_index].to_string(),
         contents,
-        summary: String::new(),
     })
 }
 
@@ -86,31 +87,37 @@ impl Default for SummaryIndexConfig {
 /// example, if the document is small and unformatted, it is likely that the returned index will be
 /// the last valid index in the contents.
 fn get_summary_end_index(
-    parsed_doc: &UserDocument,
+    parsed_doc: &ExtractedContent,
     summary_index_config: SummaryIndexConfig,
 ) -> usize {
-    let text = &parsed_doc.contents.text_content;
+    let text = &parsed_doc.text_content;
 
     match text.to_ascii_lowercase().find("introduction") {
         Some(pos) if pos <= summary_index_config.max_summary_sec_pos => pos,
         _ => parsed_doc
-            .contents
             .sections
-            .iter()
-            .zip(parsed_doc.contents.sections.iter().skip(1))
-            .find(|(f, s)| {
-                f.byte_index <= summary_index_config.max_summary_sec_pos
-                    && s.byte_index - f.byte_index >= summary_index_config.min_summary_sec_len
+            .windows(2)
+            .find(|w| {
+                if let [f, s] = w {
+                    f.byte_index <= summary_index_config.max_summary_sec_pos
+                        && s.byte_index - f.byte_index >= summary_index_config.min_summary_sec_len
+                } else {
+                    false
+                }
             })
             .map_or_else(
                 || {
                     parsed_doc
-                        .contents
                         .len()
-                        .saturating_sub(1)
                         .min(summary_index_config.max_summary_sec_pos)
                 },
-                |(_, s)| s.byte_index - 1,
+                |w| {
+                    if let [_, s] = w {
+                        s.byte_index
+                    } else {
+                        unreachable!()
+                    }
+                },
             ),
     }
 }
