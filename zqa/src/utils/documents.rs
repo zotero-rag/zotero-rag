@@ -183,7 +183,7 @@ fn normalize(v: &[f32]) -> Vec<f32> {
 /// * `query` - A query from a model or the user
 /// * `retrieved_chunks` - A list of relevant chunks retrieved via embeddings
 fn get_prompt(query: &str, retrieved_chunks: &[&str]) -> String {
-    let chunks = retrieved_chunks.to_vec().join("\n-----\n");
+    let chunks = retrieved_chunks.join("\n-----\n");
 
     format!(
         "You are a research assistant tasked with finding relevant chunks in a user-provided document. Some chunks
@@ -228,10 +228,7 @@ async fn call_subagent(
     client: &LLMClient,
 ) -> Result<String, DocumentError> {
     let request = ChatRequest {
-        message: get_prompt(
-            query,
-            retrieved_chunks,
-        ),
+        message: get_prompt(query, retrieved_chunks),
         ..ChatRequest::default()
     };
 
@@ -240,7 +237,6 @@ async fn call_subagent(
         .await
         .map(|response| {
             let response = ModelResponse::from(&response.content).to_string();
-            
 
             // TODO: In a future refactor, this will be updated to actually get
             // a `Vec` of chunks. That requires implementing structured
@@ -276,6 +272,8 @@ async fn call_subagent(
 /// * `query_method` - See [`QueryMethod`]
 /// * `embedding_config` - Configuration for an embedding provider
 /// * `reranker_config` - Configuration for an reranker provider
+/// * `client` - An optional [`zqa_rag::llm::factory::LLMClient`]. Must be `Some(..)` if
+///   `query_method` is [`QueryMethod::SubAgent`] or [`QueryMethod::Hybrid`].
 ///
 /// # Returns
 ///
@@ -294,7 +292,7 @@ async fn process_file(
     query_method: QueryMethod,
     embedding_config: &EmbeddingProviderConfig,
     reranker_config: &RerankProviderConfig,
-    client: &LLMClient,
+    client: Option<&LLMClient>,
 ) -> Result<(String, Vec<String>), DocumentError> {
     // TODO: Tune this in a future story; possibly look at embedding provider
     // docs and create a constant or a function.
@@ -407,6 +405,12 @@ async fn process_file(
 
     match query_method {
         QueryMethod::SubAgent | QueryMethod::Hybrid => {
+            let Some(client) = client else {
+                return Err(DocumentError::BadConfig(format!(
+                    "Query method {query_method:?} was used, but no LLM client was provided during tool creation. This is likely a bug."
+                )));
+            };
+
             let result = call_subagent(
                 &query,
                 &final_chunks.iter().map(String::as_str).collect::<Vec<_>>(),
@@ -505,20 +509,13 @@ impl Tool for UserDocumentTool {
                         ));
                     };
 
-                    let Some(ref client) = self.client else {
-                        return Err(format!(
-                            "Query method {:?} was used, but no LLM client was provided during tool creation. This is likely a bug.",
-                            input.query_method
-                        ));
-                    };
-
                     futures.push(Box::pin(process_file(
                         filename.clone(),
                         input.query.clone(),
                         input.query_method,
                         embedding_config,
                         reranker_config,
-                        client,
+                        self.client.as_ref(),
                     )));
                 }
             }
