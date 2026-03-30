@@ -1,5 +1,6 @@
 //! Utilities for interacting with documents that are not from the user's Zotero library.
 
+use memchr::memmem;
 use std::path::Path;
 use thiserror::Error;
 
@@ -34,12 +35,6 @@ pub enum DocumentError {
 /// * [`DocumentError::PathConversionFailed`] if `path` could not be converted to an `&str`.
 /// * [`DocumentError::TextExtractionFailed`] if `extract_text` returned an error.
 pub(crate) fn parse_user_document(path: &Path) -> Result<UserDocument, DocumentError> {
-    if !path.exists() {
-        return Err(DocumentError::FileNotFound(
-            path.to_string_lossy().to_string(),
-        ));
-    }
-
     let filename = path.to_str().ok_or(DocumentError::PathConversionFailed(
         path.to_string_lossy().to_string(),
     ))?;
@@ -92,7 +87,7 @@ fn get_summary_end_index(
 ) -> usize {
     let text = &parsed_doc.text_content;
 
-    match text.to_ascii_lowercase().find("introduction") {
+    match memmem::find(text.to_ascii_lowercase().as_bytes(), b"introduction") {
         Some(pos) if pos <= summary_index_config.max_summary_sec_pos => pos,
         _ => parsed_doc
             .sections
@@ -100,7 +95,8 @@ fn get_summary_end_index(
             .find(|w| {
                 if let [f, s] = w {
                     f.byte_index <= summary_index_config.max_summary_sec_pos
-                        && s.byte_index - f.byte_index >= summary_index_config.min_summary_sec_len
+                        && s.byte_index.saturating_sub(f.byte_index)
+                            >= summary_index_config.min_summary_sec_len
                 } else {
                     false
                 }
