@@ -2,6 +2,7 @@
 
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
+use lancedb::embeddings::EmbeddingFunction;
 use schemars::{JsonSchema, schema_for};
 use serde::Deserialize;
 use serde_json::json;
@@ -165,6 +166,23 @@ fn normalize(v: &[f32]) -> Vec<f32> {
     v.iter().map(|x| x / norm).collect()
 }
 
+fn get_embeddings(
+    texts: Vec<&str>,
+    embedding_provider: &Arc<dyn EmbeddingFunction>,
+) -> Result<Vec<f32>, DocumentError> {
+    let embeddings = embedding_provider.compute_source_embeddings(Arc::new(StringArray::from(
+        texts.into_iter().collect::<Vec<_>>(),
+    )))?;
+    let embeddings: &[f32] = embeddings
+        .as_ref()
+        .as_fixed_size_list()
+        .values()
+        .as_primitive::<Float32Type>()
+        .values();
+
+    Ok(embeddings.to_vec())
+}
+
 #[derive(Deserialize, JsonSchema)]
 struct UserDocumentToolInput {
     /// The filenames to use. Optional; if `None`, will use all files currently selected by the
@@ -199,6 +217,7 @@ impl Tool for UserDocumentTool {
         schema_for!(UserDocumentToolInput)
     }
 
+    #[allow(clippy::too_many_lines)]
     fn call<'a>(
         &'a self,
         args: serde_json::Value,
@@ -209,6 +228,7 @@ impl Tool for UserDocumentTool {
         // TODO: Tune this in a future story; possibly look at embedding provider
         // docs and create a constant or a function.
         const SCORE_THRESHOLD: f32 = 0.7;
+        const ZOOM_OUT_THRESHOLD: f32 = 0.25;
 
         Box::pin(async move {
             let input: UserDocumentToolInput =
@@ -259,36 +279,24 @@ impl Tool for UserDocumentTool {
                                 "{filename}: {e}"
                             )))
                         })?;
-                        let chunker = Chunker::new(contents, ChunkingStrategy::SectionBased(2048));
+                        let chunker =
+                            Chunker::new(contents.clone(), ChunkingStrategy::SectionBased(2048));
                         let chunks = chunker.chunk();
 
                         let chunk_texts: Vec<String> =
                             chunks.into_iter().map(|c| c.content).collect();
                         let provider = get_embedding_provider(embedding_config.provider_name())?;
 
-                        let chunk_embeddings =
-                            provider.compute_source_embeddings(Arc::new(StringArray::from(
-                                chunk_texts.iter().map(String::as_str).collect::<Vec<_>>(),
-                            )))?;
-                        let chunk_embeddings: &[f32] = chunk_embeddings
-                            .as_ref()
-                            .as_fixed_size_list()
-                            .values()
-                            .as_primitive::<Float32Type>()
-                            .values();
+                        let chunk_embeddings = get_embeddings(
+                            chunk_texts.iter().map(String::as_str).collect(),
+                            &provider,
+                        )?;
 
-                        let query_embeddings = provider.compute_query_embeddings(Arc::new(
-                            StringArray::from(vec![input.query.as_ref()]),
-                        ))?;
-                        let query_embeddings: &[f32] = query_embeddings
-                            .as_ref()
-                            .as_fixed_size_list()
-                            .values()
-                            .as_primitive::<Float32Type>()
-                            .values();
+                        let query_embeddings =
+                            get_embeddings(vec![input.query.as_str()], &provider)?;
                         let dim = query_embeddings.len();
 
-                        let query_normalized = normalize(query_embeddings);
+                        let query_normalized = normalize(&query_embeddings);
                         let chunk_embeddings_normalized: Vec<f32> = chunk_embeddings
                             .chunks_exact(dim)
                             .flat_map(normalize)
@@ -317,10 +325,52 @@ impl Tool for UserDocumentTool {
                             .map(|i| *kept_chunks.get(*i).unwrap())
                             .collect();
 
-                        Ok((
-                            filename.clone(),
-                            reranked_chunks.into_iter().cloned().collect(),
-                        ))
+                        let final_chunks = if matches!(input.query_method, QueryMethod::Hybrid) {
+                            let sections = &contents.sections;
+                            let text_content = &contents.text_content;
+                            let mut returned_chunks = Vec::new();
+
+                            let mut section_counts: HashMap<usize, usize> = HashMap::new();
+
+                            for chunk in &reranked_chunks {
+                                let Some(text_idx) = text_content.find(&**chunk) else {
+                                    continue;
+                                };
+
+                                // Which section does this chunk belong to?
+                                // `contents.sections` is sorted.
+                                let section_idx =
+                                    sections.partition_point(|sec| text_idx >= sec.byte_index);
+                                *section_counts.entry(section_idx).or_insert(0) += 1;
+                            }
+
+                            let total = section_counts.values().sum::<usize>() as f32;
+                            for (section_idx, count) in &section_counts {
+                                let pct = *count as f32 / total;
+                                let effective_idx = if pct < ZOOM_OUT_THRESHOLD {
+                                    // Zoom out to higher-level section, since this one seems
+                                    // important
+                                    sections
+                                        .get(*section_idx)
+                                        .and_then(|s| s.parent_idx)
+                                        .unwrap_or(*section_idx)
+                                } else {
+                                    *section_idx
+                                };
+
+                                returned_chunks.push(
+                                    text_content[sections[effective_idx].byte_index
+                                        ..sections[effective_idx + 1].byte_index]
+                                        .to_string(),
+                                );
+                            }
+
+                            returned_chunks
+                        } else {
+                            reranked_chunks.iter().map(|s| &**s).cloned().collect()
+                        };
+
+                        Ok((filename.clone(), final_chunks))
                     }));
                 }
             }
