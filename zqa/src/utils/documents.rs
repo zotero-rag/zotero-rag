@@ -189,13 +189,13 @@ impl Tool for UserDocumentTool {
                 return Err(format!("File {f} does not exist in the session."));
             }
 
-            let mut futures: FuturesUnordered<FileFuture<'_>> = FuturesUnordered::new();
+            let mut file_futures: FuturesUnordered<FileFuture<'_>> = FuturesUnordered::new();
             for f in filenames {
                 if matches!(
                     input.query_method,
                     QueryMethod::SubAgent | QueryMethod::Hybrid
                 ) {
-                    futures.push(Box::pin(async move {
+                    file_futures.push(Box::pin(async move {
                         // Spawn sub-agents here
                         (f, vec!["Some String".to_string()])
                     }));
@@ -205,7 +205,7 @@ impl Tool for UserDocumentTool {
                     input.query_method,
                     QueryMethod::Embedding | QueryMethod::Hybrid
                 ) {
-                    futures.push(Box::pin(async move {
+                    file_futures.push(Box::pin(async move {
                         // Spawn embedding-based task here
                         (f, vec!["Some String".to_string()])
                     }));
@@ -213,7 +213,7 @@ impl Tool for UserDocumentTool {
             }
 
             let mut chunks_by_file = HashMap::<&String, Vec<String>>::new();
-            while let Some((filename, chunks)) = futures.next().await {
+            while let Some((filename, chunks)) = file_futures.next().await {
                 chunks_by_file.entry(filename).or_default().extend(chunks);
             }
 
@@ -330,7 +330,7 @@ mod tests {
         let config = SummaryIndexConfig::default();
         let idx = get_summary_end_index(&doc.contents, config);
 
-        // Falls to min(len-1, max_summary_sec_pos) = min(1999, 1000) = 1000
+        // Falls to min(len, max_summary_sec_pos) = min(2000, 1000) = 1000
         test_eq!(idx, 1000);
     }
 
