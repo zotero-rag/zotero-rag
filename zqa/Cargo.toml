@@ -28,6 +28,7 @@ humantime = "2.2.0"
 indicatif = "0.17.11"
 lancedb = { version = "^0.27.0", default-features = false  }
 log = "0.4.27"
+memchr = "2.8.0"
 rpassword = "7.4.0"
 rusqlite = "0.34.0"
 rustyline = "16.0.0"
