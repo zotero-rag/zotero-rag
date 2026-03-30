@@ -6651,7 +6651,6 @@ dependencies = [
  "indicatif 0.17.11",
  "lancedb",
  "log",
- "memchr",
  "rpassword",
  "rusqlite",
  "rustyline",
