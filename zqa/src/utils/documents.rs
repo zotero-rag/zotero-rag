@@ -176,12 +176,14 @@ fn normalize(v: &[f32]) -> Vec<f32> {
     }
 }
 
-fn get_prompt(query: &str, retrieved_chunks: &[&String]) -> String {
-    let chunks = retrieved_chunks
-        .iter()
-        .map(|s| s.as_str())
-        .collect::<Vec<_>>()
-        .join("\n-----\n");
+/// Get the prompt used in [`UserDocumentTool`] when a sub-agent is enabled.
+///
+/// # Arguments
+///
+/// * `query` - A query from a model or the user
+/// * `retrieved_chunks` - A list of relevant chunks retrieved via embeddings
+fn get_prompt(query: &str, retrieved_chunks: &[&str]) -> String {
+    let chunks = retrieved_chunks.to_vec().join("\n-----\n");
 
     format!(
         "You are a research assistant tasked with finding relevant chunks in a user-provided document. Some chunks
@@ -251,6 +253,7 @@ fn get_embeddings(
 ///   error.
 /// * `DocumentError::EmbeddingError` if either the embedding or reranker provider could not be
 ///   obtained, or if the embeddings or reranked chunks could not be computed.
+#[allow(clippy::too_many_lines)]
 async fn process_file(
     filename: String,
     query: String,
@@ -332,7 +335,9 @@ async fn process_file(
 
                 // Which section does this chunk belong to?
                 // `contents.sections` is sorted.
-                let section_idx = sections.partition_point(|sec| text_idx >= sec.byte_index);
+                let section_idx = sections
+                    .partition_point(|sec| text_idx >= sec.byte_index)
+                    .saturating_sub(1);
                 *section_counts.entry(section_idx).or_insert(0) += 1;
             }
 
@@ -350,11 +355,12 @@ async fn process_file(
                     *section_idx
                 };
 
-                returned_chunks.push(
-                    text_content[sections[effective_idx].byte_index
-                        ..sections[effective_idx + 1].byte_index]
-                        .to_string(),
-                );
+                // Handle the case for the last section
+                let end_byte = sections
+                    .get(effective_idx + 1)
+                    .map_or(text_content.len(), |s| s.byte_index);
+                returned_chunks
+                    .push(text_content[sections[effective_idx].byte_index..end_byte].to_string());
             }
 
             returned_chunks
@@ -367,13 +373,13 @@ async fn process_file(
 
     if matches!(query_method, QueryMethod::SubAgent) {
         let request = ChatRequest {
-            chat_history: Vec::new(),
-            max_tokens: Some(20),
-            message: get_prompt(&query, &final_chunks.iter().collect::<Vec<_>>()),
-            tools: None,
-            on_tool_call: None,
-            on_text: None,
+            message: get_prompt(
+                &query,
+                &final_chunks.iter().map(String::as_str).collect::<Vec<_>>(),
+            ),
+            ..ChatRequest::default()
         };
+
         if let Ok(response) = client.send_message(&request).await {
             let response = ModelResponse::from(&response.content).to_string();
             let response = response.trim().to_string();
@@ -408,7 +414,7 @@ pub(crate) struct UserDocumentTool {
     /// For [`QueryMethod::Embedding`] and [`QueryMethod::Hybrid`], the reranker config.
     pub(crate) reranker_config: Option<RerankProviderConfig>,
     /// A configured [`LLMClient`].
-    pub(crate) client: LLMClient,
+    pub(crate) client: Option<LLMClient>,
 }
 
 impl Tool for UserDocumentTool {
@@ -465,13 +471,20 @@ impl Tool for UserDocumentTool {
                         ));
                     };
 
+                    let Some(ref client) = self.client else {
+                        return Err(format!(
+                            "Query method {:?} was used, but no LLM client was provided during tool creation. This is likely a bug.",
+                            input.query_method
+                        ));
+                    };
+
                     futures.push(Box::pin(process_file(
                         filename.clone(),
                         input.query.clone(),
                         input.query_method,
                         embedding_config,
                         reranker_config,
-                        &self.client,
+                        client,
                     )));
                 }
             }
