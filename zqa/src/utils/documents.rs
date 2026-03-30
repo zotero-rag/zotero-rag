@@ -345,6 +345,23 @@ async fn process_file(
     Ok((filename.clone(), final_chunks))
 }
 
+fn get_embeddings(
+    texts: Vec<&str>,
+    embedding_provider: &Arc<dyn EmbeddingFunction>,
+) -> Result<Vec<f32>, DocumentError> {
+    let embeddings = embedding_provider.compute_source_embeddings(Arc::new(StringArray::from(
+        texts.into_iter().collect::<Vec<_>>(),
+    )))?;
+    let embeddings: &[f32] = embeddings
+        .as_ref()
+        .as_fixed_size_list()
+        .values()
+        .as_primitive::<Float32Type>()
+        .values();
+
+    Ok(embeddings.to_vec())
+}
+
 #[derive(Deserialize, JsonSchema)]
 struct UserDocumentToolInput {
     /// The filenames to use. Optional; if `None`, will use all files currently selected by the
@@ -381,6 +398,7 @@ impl Tool for UserDocumentTool {
         schema_for!(UserDocumentToolInput)
     }
 
+    #[allow(clippy::too_many_lines)]
     fn call<'a>(
         &'a self,
         args: serde_json::Value,
