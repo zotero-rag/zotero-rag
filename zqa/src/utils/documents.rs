@@ -572,13 +572,14 @@ mod tests {
     use serde_json::json;
     use zqa_macros::{test_eq, test_ok};
     use zqa_pdftools::parse::{ExtractedContent, SectionBoundary};
-    use zqa_rag::config::{CohereConfig, GeminiConfig, OpenAIConfig, VoyageAIConfig};
+    use zqa_rag::config::{CohereConfig, GeminiConfig, LLMClientConfig, OpenAIConfig, VoyageAIConfig};
     use zqa_rag::constants::{
         DEFAULT_COHERE_EMBEDDING_DIM, DEFAULT_COHERE_EMBEDDING_MODEL, DEFAULT_COHERE_RERANK_MODEL,
         DEFAULT_GEMINI_EMBEDDING_DIM, DEFAULT_GEMINI_EMBEDDING_MODEL, DEFAULT_OPENAI_EMBEDDING_DIM,
-        DEFAULT_OPENAI_EMBEDDING_MODEL, DEFAULT_VOYAGE_EMBEDDING_DIM,
-        DEFAULT_VOYAGE_EMBEDDING_MODEL, DEFAULT_VOYAGE_RERANK_MODEL,
+        DEFAULT_OPENAI_EMBEDDING_MODEL, DEFAULT_OPENAI_MODEL_SMALL, DEFAULT_OPENAI_MAX_TOKENS,
+        DEFAULT_VOYAGE_EMBEDDING_DIM, DEFAULT_VOYAGE_EMBEDDING_MODEL, DEFAULT_VOYAGE_RERANK_MODEL,
     };
+    use zqa_rag::llm::factory::get_client_with_config;
 
     use super::*;
 
@@ -728,6 +729,73 @@ mod tests {
         };
 
         run_user_document_tool_test(tool, "Gemini+VoyageAI").await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_user_document_tool_hybrid_openai() {
+        dotenv().ok();
+
+        let api_key =
+            std::env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY must be set for this test");
+        let voyage_api_key = std::env::var("VOYAGE_AI_API_KEY")
+            .expect("VOYAGE_AI_API_KEY must be set for this test");
+
+        let client = get_client_with_config(LLMClientConfig::OpenAI(
+            zqa_rag::config::OpenAIConfig {
+                api_key: api_key.clone(),
+                model: DEFAULT_OPENAI_MODEL_SMALL.to_string(),
+                max_tokens: DEFAULT_OPENAI_MAX_TOKENS,
+                embedding_model: DEFAULT_OPENAI_EMBEDDING_MODEL.to_string(),
+                embedding_dims: DEFAULT_OPENAI_EMBEDDING_DIM as usize,
+            },
+        ))
+        .expect("Failed to create OpenAI client");
+
+        let pdf_path = test_pdf_path();
+        let tool = UserDocumentTool {
+            filenames: vec![pdf_path.clone()],
+            embedding_config: Some(EmbeddingProviderConfig::OpenAI(OpenAIConfig {
+                api_key,
+                model: String::new(),
+                max_tokens: 0,
+                embedding_model: DEFAULT_OPENAI_EMBEDDING_MODEL.to_string(),
+                embedding_dims: DEFAULT_OPENAI_EMBEDDING_DIM as usize,
+            })),
+            reranker_config: Some(RerankProviderConfig::VoyageAI(VoyageAIConfig {
+                api_key: voyage_api_key,
+                embedding_model: DEFAULT_VOYAGE_EMBEDDING_MODEL.to_string(),
+                embedding_dims: DEFAULT_VOYAGE_EMBEDDING_DIM as usize,
+                reranker: DEFAULT_VOYAGE_RERANK_MODEL.to_string(),
+            })),
+            client: Some(client),
+        };
+
+        let args = serde_json::json!({
+            "filenames": [pdf_path],
+            "query": "What problem does this paper solve?",
+            "query_method": "hybrid",
+        });
+
+        let result = tool.call(args).await;
+        assert!(
+            result.is_ok(),
+            "Hybrid OpenAI UserDocumentTool call failed: {:?}",
+            result.err()
+        );
+
+        let value = result.unwrap();
+        let results = value["results"]
+            .as_array()
+            .expect("results should be an array");
+        assert!(
+            !results.is_empty(),
+            "Hybrid OpenAI results should not be empty"
+        );
+
+        println!(
+            "Hybrid OpenAI UserDocumentTool test passed. Got {} file result(s).",
+            results.len()
+        );
     }
 
     fn make_doc(text: &str, sections: Vec<SectionBoundary>) -> UserDocument {
