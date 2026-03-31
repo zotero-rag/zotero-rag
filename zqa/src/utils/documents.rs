@@ -16,6 +16,7 @@ use std::{
     pin::Pin,
 };
 use thiserror::Error;
+use zqa_rag::llm::base::ChatRequest;
 
 use zqa_pdftools::{
     chunk::{Chunker, ChunkingStrategy},
@@ -23,11 +24,17 @@ use zqa_pdftools::{
 };
 use zqa_rag::{
     embedding::common::{EmbeddingProviderConfig, get_embedding_provider},
-    llm::{errors::LLMError, tools::Tool},
+    llm::{base::ApiClient, errors::LLMError, factory::LLMClient, tools::Tool},
     reranking::common::{RerankProviderConfig, get_reranking_provider},
 };
 
 use crate::common::UserDocument;
+use crate::utils::rag::ModelResponse;
+
+// TODO: Tune this in a future story; possibly look at embedding provider
+// docs and create a constant or a function.
+const SCORE_THRESHOLD: f32 = 0.7;
+const ZOOM_OUT_THRESHOLD: f32 = 0.25;
 
 /// Newtype wrapper for `zqa_pdftools` type-erased error.
 #[derive(Debug, Error)]
@@ -44,7 +51,7 @@ pub enum DocumentError {
     #[error("Configuration issue: {0}")]
     BadConfig(String),
     #[error("Error getting embedding provider: {0}")]
-    EmbeddingError(#[from] LLMError),
+    ApiError(#[from] LLMError),
     #[error("Error computing embeddings: {0}")]
     LanceError(#[from] lancedb::Error),
     #[error("Path conversion failed: {0}")]
@@ -150,11 +157,10 @@ fn get_summary_end_index(
     }
 }
 
-#[derive(Copy, Clone, Debug, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 enum QueryMethod {
     Embedding,
-    SubAgent,
     Hybrid,
 }
 
@@ -174,6 +180,35 @@ fn normalize(v: &[f32]) -> Vec<f32> {
     }
 }
 
+/// Get the prompt used in [`UserDocumentTool`] when a sub-agent is enabled.
+///
+/// # Arguments
+///
+/// * `query` - A query from a model or the user
+/// * `retrieved_chunks` - A list of relevant chunks retrieved via embeddings
+fn get_prompt(query: &str, retrieved_chunks: &[&str]) -> String {
+    let chunks = retrieved_chunks.join("\n-----\n");
+
+    format!(
+        "You are a research assistant tasked with finding relevant chunks in a user-provided document. Some chunks
+have been retrieved for you. Your task is to refine these chunks to be relevant to the user's query.
+
+    <user_query>
+    {query}
+    </user_query>
+
+    <chunks>
+    {chunks}
+    </chunks>
+
+    Your returned chunks do not need to be entire chunks from the list above, and you may choose subsets as
+applicable. However, you MUST return the text verbatim.
+
+    Place each chunk on a new line, and separate chunks using 5 dashes (-----).
+"
+    )
+}
+
 fn get_embeddings(
     texts: &[&str],
     embedding_provider: &Arc<dyn EmbeddingFunction>,
@@ -191,57 +226,69 @@ fn get_embeddings(
     Ok(embeddings.to_vec())
 }
 
-/// Retrieve relevant chunks from one file.
-///
-/// This function handles [`QueryMethod::Embedding`] and [`QueryMethod::Hybrid`] currently;
-/// [`QueryMethod::SubAgent`] is WIP. It uses an embedding-based chunk retrieval from the
-/// user-provided file.
-///
-/// To do so, it first extracts the text from the file, and chunks it into 2048-token chunks. From
-/// here, it uses `embedding_config` to generate embeddings for the query and the chunks, and
-/// performs a cosine similarity to prune chunks to those whose similarity scores are greater than
-/// `SCORE_THRESHOLD` (currently: 0.7). It then uses the `reranker_config` to perform reranking of
-/// the retrieved chunks.
-///
-/// For [`QueryMethod::Hybrid`], this function prepares to pass the chunks to an agent by aiming to
-/// provide more context. In particular, it finds "hot zones" in the user document (sections that
-/// have at least the ratio `ZOOM_OUT_THRESHOLD` (currently: 0.25) of the pruned chunks. In these
-/// hot zones, it uses the parent pointer in [`zqa_pdftools::parse::SectionBoundary`] to show the
-/// parent section instead.
+/// Call a sub-agent LLM to refine retrieved chunks to be relevant to `query`.
 ///
 /// # Arguments
 ///
-/// * `filename` - The filename of the document to process
+/// * `query` - A query from a model or the user
+/// * `retrieved_chunks` - A list of relevant chunks retrieved via embeddings
+/// * `client` - A configured [`LLMClient`] to use for the sub-agent call
+///
+/// # Returns
+///
+/// A string containing the refined chunks, separated by `-----`.
+///
+/// # Errors
+///
+/// * [`DocumentError::ApiError`] if the LLM client returns an error.
+async fn call_subagent(
+    query: &str,
+    retrieved_chunks: &[&str],
+    client: &LLMClient,
+) -> Result<String, DocumentError> {
+    let request = ChatRequest {
+        message: get_prompt(query, retrieved_chunks),
+        ..ChatRequest::default()
+    };
+
+    client
+        .send_message(&request)
+        .await
+        .map(|response| {
+            let response = ModelResponse::from(&response.content).to_string();
+
+            // TODO: In a future refactor, this will be updated to actually get
+            // a `Vec` of chunks. That requires implementing structured
+            // outputs, which is a larger-scale change
+
+            response.trim().to_string()
+        })
+        .map_err(Into::<DocumentError>::into)
+}
+
+/// Perform embedding-only retrieval from unchunked `contents`, based on `query`.
+///
+/// # Arguments
+///
 /// * `query` - A query, either from a model or the user
-/// * `query_method` - See [`QueryMethod`]
+/// * `contents` - The [`zqa_pdftools::parse::ExtractedContent`] from the PDF parser.
 /// * `embedding_config` - Configuration for an embedding provider
 /// * `reranker_config` - Configuration for an reranker provider
 ///
 /// # Returns
 ///
-/// A tuple with the filename and a list of chunks.
+/// A list of chunks.
 ///
 /// # Errors
 ///
-/// * `DocumentError::TextExtractionFailed` if [`zqa_pdftools::parse::extract_text`] returns an
-///   error.
-/// * `DocumentError::EmbeddingError` if either the embedding or reranker provider could not be
+/// * `DocumentError::ApiError` if either the embedding or reranker provider could not be
 ///   obtained, or if the embeddings or reranked chunks could not be computed.
-async fn process_file(
-    filename: String,
-    query: String,
-    query_method: QueryMethod,
+async fn embedding_retrieval(
+    query: &str,
+    contents: &ExtractedContent,
     embedding_config: &EmbeddingProviderConfig,
     reranker_config: &RerankProviderConfig,
-) -> Result<(String, Vec<String>), DocumentError> {
-    // TODO: Tune this in a future story; possibly look at embedding provider
-    // docs and create a constant or a function.
-    const SCORE_THRESHOLD: f32 = 0.7;
-    const ZOOM_OUT_THRESHOLD: f32 = 0.25;
-
-    let contents = extract_text(&filename).map_err(|e| {
-        DocumentError::TextExtractionFailed(TextExtractionError(format!("{filename}: {e}")))
-    })?;
+) -> Result<Vec<String>, DocumentError> {
     let chunker = Chunker::new(contents.clone(), ChunkingStrategy::SectionBased(2048));
     let chunks = chunker.chunk();
 
@@ -254,7 +301,7 @@ async fn process_file(
         .collect();
     let chunk_embeddings = get_embeddings(&chunk_text_refs, &provider)?;
 
-    let query_embeddings = get_embeddings(&[query.as_str()], &provider)?;
+    let query_embeddings = get_embeddings(&[query], &provider)?;
     let dim = query_embeddings.len();
 
     let query_normalized = normalize(&query_embeddings);
@@ -276,23 +323,77 @@ async fn process_file(
         .collect();
 
     if kept_chunks.is_empty() {
-        return Ok((filename, Vec::new()));
+        return Ok(Vec::new());
     }
 
-    let kept_chunks_owned: Vec<String> = kept_chunks
-        .iter()
-        .map(std::string::ToString::to_string)
-        .collect();
     let reranker = get_reranking_provider(reranker_config.provider_name())?;
-    let reranked_idx = reranker
-        .rerank(&kept_chunks_owned.iter().collect::<Vec<_>>(), &query)
-        .await?;
-    let reranked_chunks: Vec<&str> = reranked_idx
-        .iter()
-        .map(|i| kept_chunks_owned[*i].as_str())
+    let reranked_idx = reranker.rerank(&kept_chunks, query).await?;
+
+    let reranked_chunks: Vec<String> = reranked_idx
+        .into_iter()
+        .map(|i| kept_chunks[i].to_string())
         .collect();
 
-    let final_chunks = if matches!(query_method, QueryMethod::Hybrid) {
+    Ok(reranked_chunks)
+}
+
+/// Retrieve relevant chunks from one file.
+///
+/// It uses an embedding-based chunk retrieval from the user-provided file. To do so, it first
+/// extracts the text from the file, and chunks it into 2048-token chunks. From here, it uses
+/// `embedding_config` to generate embeddings for the query and the chunks, and performs a cosine
+/// similarity to prune chunks to those whose similarity scores are greater than `SCORE_THRESHOLD`
+/// (currently: 0.7). It then uses the `reranker_config` to perform reranking of the retrieved chunks.
+///
+/// For [`QueryMethod::Hybrid`], this function prepares to pass the chunks to an agent by aiming to
+/// provide more context. In particular, it finds "hot zones" in the user document (sections that
+/// have at least the ratio `ZOOM_OUT_THRESHOLD` (currently: 0.25) of the pruned chunks. In these
+/// hot zones, it uses the parent pointer in [`zqa_pdftools::parse::SectionBoundary`] to show the
+/// parent section instead.
+///
+/// # Arguments
+///
+/// * `filename` - The filename of the document to process
+/// * `query` - A query, either from a model or the user
+/// * `query_method` - See [`QueryMethod`]
+/// * `embedding_config` - Configuration for an embedding provider
+/// * `reranker_config` - Configuration for an reranker provider
+/// * `client` - An optional [`zqa_rag::llm::factory::LLMClient`]. Must be `Some(..)` if
+///   `query_method` is [`QueryMethod::Hybrid`].
+///
+/// # Returns
+///
+/// A tuple with the filename and a list of chunks.
+///
+/// # Errors
+///
+/// * `DocumentError::TextExtractionFailed` if [`zqa_pdftools::parse::extract_text`] returns an
+///   error.
+/// * `DocumentError::ApiError` if either the embedding or reranker provider could not be
+///   obtained, or if the embeddings or reranked chunks could not be computed.
+async fn process_file(
+    filename: String,
+    query: String,
+    query_method: QueryMethod,
+    embedding_config: &EmbeddingProviderConfig,
+    reranker_config: &RerankProviderConfig,
+    client: Option<&LLMClient>,
+) -> Result<(String, Vec<String>), DocumentError> {
+    let contents = extract_text(&filename).map_err(|e| {
+        DocumentError::TextExtractionFailed(TextExtractionError(format!("{filename}: {e}")))
+    })?;
+
+    let reranked_chunks =
+        embedding_retrieval(&query, &contents, embedding_config, reranker_config).await?;
+
+    if let QueryMethod::Hybrid = query_method {
+        let Some(client) = client else {
+            return Err(DocumentError::BadConfig(
+                "`client` cannot be `None` when `query_method` is 'hybrid'. This is likely a bug."
+                    .to_string(),
+            ));
+        };
+
         let sections = &contents.sections;
         let text_content = &contents.text_content;
         let mut returned_chunks = Vec::new();
@@ -334,15 +435,29 @@ async fn process_file(
                 .push(text_content[sections[effective_idx].byte_index..end_byte].to_string());
         }
 
-        returned_chunks
-    } else {
-        reranked_chunks
-            .iter()
-            .map(std::string::ToString::to_string)
-            .collect()
-    };
+        let result = call_subagent(
+            &query,
+            &returned_chunks
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            client,
+        )
+        .await?;
 
-    Ok((filename.clone(), final_chunks))
+        // TODO: This is terribly hacky, and is just a stupid way to do this in general.
+        // However, the right solution is to use structured outputs (see the other todo in this
+        // file).
+        let agent_chunks = result
+            .split("-----")
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect::<Vec<_>>();
+
+        Ok((filename, agent_chunks))
+    } else {
+        Ok((filename, reranked_chunks))
+    }
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -352,7 +467,7 @@ struct UserDocumentToolInput {
     filenames: Option<Vec<String>>,
     /// A query to obtain relevant passages
     query: String,
-    /// Query method. One of "embedding", "sub_agent", or "hybrid".
+    /// Query method. One of "embedding" or "hybrid".
     query_method: QueryMethod,
 }
 
@@ -364,6 +479,8 @@ pub(crate) struct UserDocumentTool {
     pub(crate) embedding_config: Option<EmbeddingProviderConfig>,
     /// For [`QueryMethod::Embedding`] and [`QueryMethod::Hybrid`], the reranker config.
     pub(crate) reranker_config: Option<RerankProviderConfig>,
+    /// A configured [`LLMClient`]. Must be `Some(..)` when using [`QueryMethod::Hybrid`].
+    pub(crate) client: Option<LLMClient>,
 }
 
 impl Tool for UserDocumentTool {
@@ -400,34 +517,39 @@ impl Tool for UserDocumentTool {
                 return Err(format!("File {f} does not exist in the session."));
             }
 
+            let Some(ref embedding_config) = self.embedding_config else {
+                return Err(format!(
+                    "Query method {:?} was used, but no embedding config was provided during tool creation. This is likely a bug.",
+                    input.query_method
+                ));
+            };
+
+            let Some(ref reranker_config) = self.reranker_config else {
+                return Err(format!(
+                    "Query method {:?} was used, but no reranker config was provided during tool creation. This is likely a bug.",
+                    input.query_method
+                ));
+            };
+
+            if self.client.is_none()
+                && let QueryMethod::Hybrid = input.query_method
+            {
+                return Err(format!(
+                    "Query method {:?} was used, but no LLM client was provided during tool creation. This is likely a bug.",
+                    input.query_method,
+                ));
+            }
+
             let mut futures: FuturesUnordered<FileFuture> = FuturesUnordered::new();
             for filename in filenames {
-                if matches!(
+                futures.push(Box::pin(process_file(
+                    filename.clone(),
+                    input.query.clone(),
                     input.query_method,
-                    QueryMethod::Embedding | QueryMethod::Hybrid
-                ) {
-                    let Some(ref embedding_config) = self.embedding_config else {
-                        return Err(format!(
-                            "Query method {:?} was used, but no embedding config was provided during tool creation. This is likely a bug.",
-                            input.query_method
-                        ));
-                    };
-
-                    let Some(ref reranker_config) = self.reranker_config else {
-                        return Err(format!(
-                            "Query method {:?} was used, but no reranker config was provided during tool creation. This is likely a bug.",
-                            input.query_method
-                        ));
-                    };
-
-                    futures.push(Box::pin(process_file(
-                        filename.clone(),
-                        input.query.clone(),
-                        input.query_method,
-                        embedding_config,
-                        reranker_config,
-                    )));
-                }
+                    embedding_config,
+                    reranker_config,
+                    self.client.as_ref(),
+                )));
             }
 
             let mut all_results = Vec::with_capacity(filenames.len());
@@ -451,10 +573,236 @@ impl Tool for UserDocumentTool {
 mod tests {
     use std::path::PathBuf;
 
+    use dotenv::dotenv;
+    use serde_json::json;
     use zqa_macros::{test_eq, test_ok};
     use zqa_pdftools::parse::{ExtractedContent, SectionBoundary};
+    use zqa_rag::config::{
+        CohereConfig, GeminiConfig, LLMClientConfig, OpenAIConfig, VoyageAIConfig,
+    };
+    use zqa_rag::constants::{
+        DEFAULT_COHERE_EMBEDDING_DIM, DEFAULT_COHERE_EMBEDDING_MODEL, DEFAULT_COHERE_RERANK_MODEL,
+        DEFAULT_GEMINI_EMBEDDING_DIM, DEFAULT_GEMINI_EMBEDDING_MODEL, DEFAULT_OPENAI_EMBEDDING_DIM,
+        DEFAULT_OPENAI_EMBEDDING_MODEL, DEFAULT_OPENAI_MAX_TOKENS, DEFAULT_OPENAI_MODEL_SMALL,
+        DEFAULT_VOYAGE_EMBEDDING_DIM, DEFAULT_VOYAGE_EMBEDDING_MODEL, DEFAULT_VOYAGE_RERANK_MODEL,
+    };
+    use zqa_rag::llm::factory::get_client_with_config;
 
     use super::*;
+
+    fn test_pdf_path() -> String {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("assets/Zotero/storage/7R5XZ5PX/Yedida et al. - 2023 - An expert system for redesigning software for cloud applications.pdf")
+            .to_str()
+            .unwrap()
+            .to_string()
+    }
+
+    async fn run_user_document_tool_test(tool: UserDocumentTool, provider_name: &str) {
+        let pdf_path = test_pdf_path();
+        let args = json!({
+            "filenames": [pdf_path],
+            "query": "What problem does this paper solve?",
+            "query_method": "embedding",
+        });
+
+        let result = tool.call(args).await;
+        assert!(
+            result.is_ok(),
+            "{} UserDocumentTool call failed: {:?}",
+            provider_name,
+            result.err()
+        );
+
+        let value = result.unwrap();
+        let results = value["results"]
+            .as_array()
+            .expect("results should be an array");
+        assert!(
+            !results.is_empty(),
+            "{provider_name} results should not be empty"
+        );
+
+        println!(
+            "{} UserDocumentTool test passed. Got {} file result(s).",
+            provider_name,
+            results.len()
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_user_document_tool_openai_embedding() {
+        dotenv().ok();
+
+        let api_key =
+            std::env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY must be set for this test");
+        let voyage_api_key = std::env::var("VOYAGE_AI_API_KEY")
+            .expect("VOYAGE_AI_API_KEY must be set for this test");
+
+        let tool = UserDocumentTool {
+            filenames: vec![test_pdf_path()],
+            embedding_config: Some(EmbeddingProviderConfig::OpenAI(OpenAIConfig {
+                api_key,
+                model: String::new(),
+                max_tokens: 0,
+                embedding_model: DEFAULT_OPENAI_EMBEDDING_MODEL.to_string(),
+                embedding_dims: DEFAULT_OPENAI_EMBEDDING_DIM as usize,
+            })),
+            reranker_config: Some(RerankProviderConfig::VoyageAI(VoyageAIConfig {
+                api_key: voyage_api_key,
+                embedding_model: DEFAULT_VOYAGE_EMBEDDING_MODEL.to_string(),
+                embedding_dims: DEFAULT_VOYAGE_EMBEDDING_DIM as usize,
+                reranker: DEFAULT_VOYAGE_RERANK_MODEL.to_string(),
+            })),
+            client: None,
+        };
+
+        run_user_document_tool_test(tool, "OpenAI+VoyageAI").await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_user_document_tool_voyageai_embedding() {
+        dotenv().ok();
+
+        let api_key = std::env::var("VOYAGE_AI_API_KEY")
+            .expect("VOYAGE_AI_API_KEY must be set for this test");
+
+        let voyage_config = VoyageAIConfig {
+            api_key,
+            embedding_model: DEFAULT_VOYAGE_EMBEDDING_MODEL.to_string(),
+            embedding_dims: DEFAULT_VOYAGE_EMBEDDING_DIM as usize,
+            reranker: DEFAULT_VOYAGE_RERANK_MODEL.to_string(),
+        };
+
+        let tool = UserDocumentTool {
+            filenames: vec![test_pdf_path()],
+            embedding_config: Some(EmbeddingProviderConfig::VoyageAI(voyage_config.clone())),
+            reranker_config: Some(RerankProviderConfig::VoyageAI(voyage_config)),
+            client: None,
+        };
+
+        run_user_document_tool_test(tool, "VoyageAI").await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_user_document_tool_cohere_embedding() {
+        dotenv().ok();
+
+        let api_key =
+            std::env::var("COHERE_API_KEY").expect("COHERE_API_KEY must be set for this test");
+
+        let cohere_config = CohereConfig {
+            api_key,
+            embedding_model: DEFAULT_COHERE_EMBEDDING_MODEL.to_string(),
+            embedding_dims: DEFAULT_COHERE_EMBEDDING_DIM as usize,
+            reranker: DEFAULT_COHERE_RERANK_MODEL.to_string(),
+        };
+
+        let tool = UserDocumentTool {
+            filenames: vec![test_pdf_path()],
+            embedding_config: Some(EmbeddingProviderConfig::Cohere(cohere_config.clone())),
+            reranker_config: Some(RerankProviderConfig::Cohere(cohere_config)),
+            client: None,
+        };
+
+        run_user_document_tool_test(tool, "Cohere").await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_user_document_tool_gemini_embedding() {
+        dotenv().ok();
+
+        let gemini_api_key = std::env::var("GEMINI_API_KEY")
+            .or_else(|_| std::env::var("GOOGLE_API_KEY"))
+            .expect("GEMINI_API_KEY or GOOGLE_API_KEY must be set for this test");
+        let voyage_api_key = std::env::var("VOYAGE_AI_API_KEY")
+            .expect("VOYAGE_AI_API_KEY must be set for this test");
+
+        let tool = UserDocumentTool {
+            filenames: vec![test_pdf_path()],
+            embedding_config: Some(EmbeddingProviderConfig::Gemini(GeminiConfig {
+                api_key: gemini_api_key,
+                model: String::new(),
+                embedding_model: DEFAULT_GEMINI_EMBEDDING_MODEL.to_string(),
+                embedding_dims: DEFAULT_GEMINI_EMBEDDING_DIM as usize,
+            })),
+            reranker_config: Some(RerankProviderConfig::VoyageAI(VoyageAIConfig {
+                api_key: voyage_api_key,
+                embedding_model: DEFAULT_VOYAGE_EMBEDDING_MODEL.to_string(),
+                embedding_dims: DEFAULT_VOYAGE_EMBEDDING_DIM as usize,
+                reranker: DEFAULT_VOYAGE_RERANK_MODEL.to_string(),
+            })),
+            client: None,
+        };
+
+        run_user_document_tool_test(tool, "Gemini+VoyageAI").await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_user_document_tool_hybrid_openai() {
+        dotenv().ok();
+
+        let api_key =
+            std::env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY must be set for this test");
+        let voyage_api_key = std::env::var("VOYAGE_AI_API_KEY")
+            .expect("VOYAGE_AI_API_KEY must be set for this test");
+
+        let client =
+            get_client_with_config(LLMClientConfig::OpenAI(zqa_rag::config::OpenAIConfig {
+                api_key: api_key.clone(),
+                model: DEFAULT_OPENAI_MODEL_SMALL.to_string(),
+                max_tokens: DEFAULT_OPENAI_MAX_TOKENS,
+                embedding_model: DEFAULT_OPENAI_EMBEDDING_MODEL.to_string(),
+                embedding_dims: DEFAULT_OPENAI_EMBEDDING_DIM as usize,
+            }))
+            .expect("Failed to create OpenAI client");
+
+        let pdf_path = test_pdf_path();
+        let tool = UserDocumentTool {
+            filenames: vec![pdf_path.clone()],
+            embedding_config: Some(EmbeddingProviderConfig::OpenAI(OpenAIConfig {
+                api_key,
+                model: String::new(),
+                max_tokens: 0,
+                embedding_model: DEFAULT_OPENAI_EMBEDDING_MODEL.to_string(),
+                embedding_dims: DEFAULT_OPENAI_EMBEDDING_DIM as usize,
+            })),
+            reranker_config: Some(RerankProviderConfig::VoyageAI(VoyageAIConfig {
+                api_key: voyage_api_key,
+                embedding_model: DEFAULT_VOYAGE_EMBEDDING_MODEL.to_string(),
+                embedding_dims: DEFAULT_VOYAGE_EMBEDDING_DIM as usize,
+                reranker: DEFAULT_VOYAGE_RERANK_MODEL.to_string(),
+            })),
+            client: Some(client),
+        };
+
+        let args = serde_json::json!({
+            "filenames": [pdf_path],
+            "query": "What problem does this paper solve?",
+            "query_method": "hybrid",
+        });
+
+        let result = tool.call(args).await;
+        assert!(
+            result.is_ok(),
+            "Hybrid OpenAI UserDocumentTool call failed: {:?}",
+            result.err()
+        );
+
+        let value = result.unwrap();
+        let results = value["results"]
+            .as_array()
+            .expect("results should be an array");
+        assert!(
+            !results.is_empty(),
+            "Hybrid OpenAI results should not be empty"
+        );
+
+        println!(
+            "Hybrid OpenAI UserDocumentTool test passed. Got {} file result(s).",
+            results.len()
+        );
+    }
 
     fn make_doc(text: &str, sections: Vec<SectionBoundary>) -> UserDocument {
         UserDocument {
@@ -553,7 +901,7 @@ mod tests {
         let config = SummaryIndexConfig::default();
         let idx = get_summary_end_index(&doc.contents, config);
 
-        // Falls to min(len, max_summary_sec_pos) = min(2000, 1000) = 1000
+        // Falls to min(len-1, max_summary_sec_pos) = min(1999, 1000) = 1000
         test_eq!(idx, 1000);
     }
 

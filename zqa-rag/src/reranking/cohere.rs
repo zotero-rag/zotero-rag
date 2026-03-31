@@ -13,7 +13,7 @@ struct CohereRerankRequest<'a> {
     model: String,
     query: String,
     top_n: Option<usize>,
-    documents: &'a [&'a String],
+    documents: &'a [&'a str],
 }
 
 #[derive(Clone, Deserialize)]
@@ -29,7 +29,7 @@ struct CohereRerankResponse {
 impl<T: HttpClient> Rerank for CohereClient<T> {
     fn rerank<'a>(
         &'a self,
-        items: &'a [&'a String],
+        items: &'a [&str],
         query: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<Vec<usize>, LLMError>> + Send + 'a>> {
         Box::pin(async move {
@@ -95,17 +95,11 @@ mod tests {
     async fn test_rerank() {
         dotenv().ok();
 
-        let array = [
-            "Hello, World!".to_string(),
-            "A second string".to_string(),
-            "A third string".to_string(),
-        ];
+        let array = ["Hello, World!", "A second string", "A third string"];
         let query = "A string";
 
         let client = CohereClient::<ReqwestClient>::default();
-        let reranked = client
-            .rerank(array.iter().collect::<Vec<_>>().as_slice(), query)
-            .await;
+        let reranked = client.rerank(&array, query).await;
 
         // Debug the error if there is one
         if reranked.is_err() {
