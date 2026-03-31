@@ -547,10 +547,167 @@ impl Tool for UserDocumentTool {
 mod tests {
     use std::path::PathBuf;
 
+    use dotenv::dotenv;
+    use serde_json::json;
     use zqa_macros::{test_eq, test_ok};
     use zqa_pdftools::parse::{ExtractedContent, SectionBoundary};
+    use zqa_rag::config::{CohereConfig, GeminiConfig, OpenAIConfig, VoyageAIConfig};
+    use zqa_rag::constants::{
+        DEFAULT_COHERE_EMBEDDING_DIM, DEFAULT_COHERE_EMBEDDING_MODEL, DEFAULT_COHERE_RERANK_MODEL,
+        DEFAULT_GEMINI_EMBEDDING_DIM, DEFAULT_GEMINI_EMBEDDING_MODEL, DEFAULT_OPENAI_EMBEDDING_DIM,
+        DEFAULT_OPENAI_EMBEDDING_MODEL, DEFAULT_VOYAGE_EMBEDDING_DIM,
+        DEFAULT_VOYAGE_EMBEDDING_MODEL, DEFAULT_VOYAGE_RERANK_MODEL,
+    };
 
     use super::*;
+
+    fn test_pdf_path() -> String {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("assets/Zotero/storage/7R5XZ5PX/Yedida et al. - 2023 - An expert system for redesigning software for cloud applications.pdf")
+            .to_str()
+            .unwrap()
+            .to_string()
+    }
+
+    async fn run_user_document_tool_test(tool: UserDocumentTool, provider_name: &str) {
+        let pdf_path = test_pdf_path();
+        let args = json!({
+            "filenames": [pdf_path],
+            "query": "What problem does this paper solve?",
+            "query_method": "embedding",
+        });
+
+        let result = tool.call(args).await;
+        assert!(
+            result.is_ok(),
+            "{} UserDocumentTool call failed: {:?}",
+            provider_name,
+            result.err()
+        );
+
+        let value = result.unwrap();
+        let results = value["results"]
+            .as_array()
+            .expect("results should be an array");
+        assert!(
+            !results.is_empty(),
+            "{provider_name} results should not be empty"
+        );
+
+        println!(
+            "{} UserDocumentTool test passed. Got {} file result(s).",
+            provider_name,
+            results.len()
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_user_document_tool_openai_embedding() {
+        dotenv().ok();
+
+        let api_key =
+            std::env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY must be set for this test");
+        let voyage_api_key = std::env::var("VOYAGE_AI_API_KEY")
+            .expect("VOYAGE_AI_API_KEY must be set for this test");
+
+        let tool = UserDocumentTool {
+            filenames: vec![test_pdf_path()],
+            embedding_config: Some(EmbeddingProviderConfig::OpenAI(OpenAIConfig {
+                api_key,
+                model: String::new(),
+                max_tokens: 0,
+                embedding_model: DEFAULT_OPENAI_EMBEDDING_MODEL.to_string(),
+                embedding_dims: DEFAULT_OPENAI_EMBEDDING_DIM as usize,
+            })),
+            reranker_config: Some(RerankProviderConfig::VoyageAI(VoyageAIConfig {
+                api_key: voyage_api_key,
+                embedding_model: DEFAULT_VOYAGE_EMBEDDING_MODEL.to_string(),
+                embedding_dims: DEFAULT_VOYAGE_EMBEDDING_DIM as usize,
+                reranker: DEFAULT_VOYAGE_RERANK_MODEL.to_string(),
+            })),
+            client: None,
+        };
+
+        run_user_document_tool_test(tool, "OpenAI+VoyageAI").await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_user_document_tool_voyageai_embedding() {
+        dotenv().ok();
+
+        let api_key = std::env::var("VOYAGE_AI_API_KEY")
+            .expect("VOYAGE_AI_API_KEY must be set for this test");
+
+        let voyage_config = VoyageAIConfig {
+            api_key,
+            embedding_model: DEFAULT_VOYAGE_EMBEDDING_MODEL.to_string(),
+            embedding_dims: DEFAULT_VOYAGE_EMBEDDING_DIM as usize,
+            reranker: DEFAULT_VOYAGE_RERANK_MODEL.to_string(),
+        };
+
+        let tool = UserDocumentTool {
+            filenames: vec![test_pdf_path()],
+            embedding_config: Some(EmbeddingProviderConfig::VoyageAI(voyage_config.clone())),
+            reranker_config: Some(RerankProviderConfig::VoyageAI(voyage_config)),
+            client: None,
+        };
+
+        run_user_document_tool_test(tool, "VoyageAI").await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_user_document_tool_cohere_embedding() {
+        dotenv().ok();
+
+        let api_key =
+            std::env::var("COHERE_API_KEY").expect("COHERE_API_KEY must be set for this test");
+
+        let cohere_config = CohereConfig {
+            api_key,
+            embedding_model: DEFAULT_COHERE_EMBEDDING_MODEL.to_string(),
+            embedding_dims: DEFAULT_COHERE_EMBEDDING_DIM as usize,
+            reranker: DEFAULT_COHERE_RERANK_MODEL.to_string(),
+        };
+
+        let tool = UserDocumentTool {
+            filenames: vec![test_pdf_path()],
+            embedding_config: Some(EmbeddingProviderConfig::Cohere(cohere_config.clone())),
+            reranker_config: Some(RerankProviderConfig::Cohere(cohere_config)),
+            client: None,
+        };
+
+        run_user_document_tool_test(tool, "Cohere").await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_user_document_tool_gemini_embedding() {
+        dotenv().ok();
+
+        let gemini_api_key = std::env::var("GEMINI_API_KEY")
+            .or_else(|_| std::env::var("GOOGLE_API_KEY"))
+            .expect("GEMINI_API_KEY or GOOGLE_API_KEY must be set for this test");
+        let voyage_api_key = std::env::var("VOYAGE_AI_API_KEY")
+            .expect("VOYAGE_AI_API_KEY must be set for this test");
+
+        let tool = UserDocumentTool {
+            filenames: vec![test_pdf_path()],
+            embedding_config: Some(EmbeddingProviderConfig::Gemini(GeminiConfig {
+                api_key: gemini_api_key,
+                model: String::new(),
+                embedding_model: DEFAULT_GEMINI_EMBEDDING_MODEL.to_string(),
+                embedding_dims: DEFAULT_GEMINI_EMBEDDING_DIM as usize,
+            })),
+            reranker_config: Some(RerankProviderConfig::VoyageAI(VoyageAIConfig {
+                api_key: voyage_api_key,
+                embedding_model: DEFAULT_VOYAGE_EMBEDDING_MODEL.to_string(),
+                embedding_dims: DEFAULT_VOYAGE_EMBEDDING_DIM as usize,
+                reranker: DEFAULT_VOYAGE_RERANK_MODEL.to_string(),
+            })),
+            client: None,
+        };
+
+        run_user_document_tool_test(tool, "Gemini+VoyageAI").await;
+    }
 
     fn make_doc(text: &str, sections: Vec<SectionBoundary>) -> UserDocument {
         UserDocument {
