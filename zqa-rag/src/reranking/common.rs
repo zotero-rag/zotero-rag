@@ -22,7 +22,7 @@ pub trait Rerank: Send + Sync {
     /// A vector of indices of the items reranked using the provider.
     fn rerank<'a>(
         &'a self,
-        items: &'a [&'a String],
+        items: &'a [&str],
         query: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<Vec<usize>, LLMError>> + Send + 'a>>;
 }

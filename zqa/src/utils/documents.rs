@@ -31,6 +31,11 @@ use zqa_rag::{
 use crate::common::UserDocument;
 use crate::utils::rag::ModelResponse;
 
+// TODO: Tune this in a future story; possibly look at embedding provider
+// docs and create a constant or a function.
+const SCORE_THRESHOLD: f32 = 0.7;
+const ZOOM_OUT_THRESHOLD: f32 = 0.25;
+
 /// Newtype wrapper for `zqa_pdftools` type-erased error.
 #[derive(Debug, Error)]
 pub struct TextExtractionError(String);
@@ -246,6 +251,77 @@ async fn call_subagent(
         .map_err(Into::<DocumentError>::into)
 }
 
+/// Perform embedding-only retrieval from unchunked `contents`, based on `query`.
+///
+/// # Arguments
+///
+/// * `query` - A query, either from a model or the user
+/// * `contents` - The [`zqa_pdftools::parse::ExtractedContent`] from the PDF parser.
+/// * `embedding_config` - Configuration for an embedding provider
+/// * `reranker_config` - Configuration for an reranker provider
+///
+/// # Returns
+///
+/// A list of chunks.
+///
+/// # Errors
+///
+/// * `DocumentError::ApiError` if either the embedding or reranker provider could not be
+///   obtained, or if the embeddings or reranked chunks could not be computed.
+async fn embedding_retrieval(
+    query: &str,
+    contents: &ExtractedContent,
+    embedding_config: &EmbeddingProviderConfig,
+    reranker_config: &RerankProviderConfig,
+) -> Result<Vec<String>, DocumentError> {
+    let chunker = Chunker::new(contents.clone(), ChunkingStrategy::SectionBased(2048));
+    let chunks = chunker.chunk();
+
+    let chunk_texts: Vec<String> = chunks.into_iter().map(|c| c.content.clone()).collect();
+    let provider = get_embedding_provider(embedding_config.provider_name())?;
+
+    let chunk_text_refs: Vec<&str> = chunk_texts
+        .iter()
+        .map(std::string::String::as_str)
+        .collect();
+    let chunk_embeddings = get_embeddings(&chunk_text_refs, &provider)?;
+
+    let query_embeddings = get_embeddings(&[query], &provider)?;
+    let dim = query_embeddings.len();
+
+    let query_normalized = normalize(&query_embeddings);
+    let chunk_embeddings_normalized: Vec<f32> = chunk_embeddings
+        .chunks_exact(dim)
+        .flat_map(normalize)
+        .collect();
+
+    let scores: Vec<f32> = chunk_embeddings_normalized
+        .chunks_exact(dim)
+        .map(|chunk| dot(chunk.iter(), query_normalized.iter()))
+        .collect();
+
+    let kept_chunks: Vec<&str> = scores
+        .into_iter()
+        .enumerate()
+        .filter(|(_, v)| *v >= SCORE_THRESHOLD)
+        .map(|(i, _)| chunk_texts[i].as_str())
+        .collect();
+
+    if kept_chunks.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let reranker = get_reranking_provider(reranker_config.provider_name())?;
+    let reranked_idx = reranker.rerank(&kept_chunks, query).await?;
+
+    let reranked_chunks: Vec<String> = reranked_idx
+        .into_iter()
+        .map(|i| kept_chunks[i].to_string())
+        .collect();
+
+    Ok(reranked_chunks)
+}
+
 /// Retrieve relevant chunks from one file.
 ///
 /// It uses an embedding-based chunk retrieval from the user-provided file. To do so, it first
@@ -280,7 +356,6 @@ async fn call_subagent(
 ///   error.
 /// * `DocumentError::ApiError` if either the embedding or reranker provider could not be
 ///   obtained, or if the embeddings or reranked chunks could not be computed.
-#[allow(clippy::too_many_lines)]
 async fn process_file(
     filename: String,
     query: String,
@@ -289,63 +364,12 @@ async fn process_file(
     reranker_config: &RerankProviderConfig,
     client: Option<&LLMClient>,
 ) -> Result<(String, Vec<String>), DocumentError> {
-    // TODO: Tune this in a future story; possibly look at embedding provider
-    // docs and create a constant or a function.
-    const SCORE_THRESHOLD: f32 = 0.7;
-    const ZOOM_OUT_THRESHOLD: f32 = 0.25;
-
     let contents = extract_text(&filename).map_err(|e| {
         DocumentError::TextExtractionFailed(TextExtractionError(format!("{filename}: {e}")))
     })?;
-    let chunker = Chunker::new(contents.clone(), ChunkingStrategy::SectionBased(2048));
-    let chunks = chunker.chunk();
 
-    let chunk_texts: Vec<String> = chunks.into_iter().map(|c| c.content.clone()).collect();
-    let provider = get_embedding_provider(embedding_config.provider_name())?;
-
-    let chunk_text_refs: Vec<&str> = chunk_texts
-        .iter()
-        .map(std::string::String::as_str)
-        .collect();
-    let chunk_embeddings = get_embeddings(&chunk_text_refs, &provider)?;
-
-    let query_embeddings = get_embeddings(&[query.as_str()], &provider)?;
-    let dim = query_embeddings.len();
-
-    let query_normalized = normalize(&query_embeddings);
-    let chunk_embeddings_normalized: Vec<f32> = chunk_embeddings
-        .chunks_exact(dim)
-        .flat_map(normalize)
-        .collect();
-
-    let scores: Vec<f32> = chunk_embeddings_normalized
-        .chunks_exact(dim)
-        .map(|chunk| dot(chunk.iter(), query_normalized.iter()))
-        .collect();
-
-    let kept_chunks: Vec<&str> = scores
-        .into_iter()
-        .enumerate()
-        .filter(|(_, v)| *v >= SCORE_THRESHOLD)
-        .map(|(i, _)| chunk_texts[i].as_str())
-        .collect();
-
-    if kept_chunks.is_empty() {
-        return Ok((filename, Vec::new()));
-    }
-
-    let kept_chunks_owned: Vec<String> = kept_chunks
-        .iter()
-        .map(std::string::ToString::to_string)
-        .collect();
-    let reranker = get_reranking_provider(reranker_config.provider_name())?;
-    let reranked_idx = reranker
-        .rerank(&kept_chunks_owned.iter().collect::<Vec<_>>(), &query)
-        .await?;
-    let reranked_chunks: Vec<&str> = reranked_idx
-        .iter()
-        .map(|i| kept_chunks_owned[*i].as_str())
-        .collect();
+    let reranked_chunks =
+        embedding_retrieval(&query, &contents, embedding_config, reranker_config).await?;
 
     if let QueryMethod::Hybrid = query_method {
         let sections = &contents.sections;
@@ -443,7 +467,7 @@ pub(crate) struct UserDocumentTool {
     pub(crate) embedding_config: Option<EmbeddingProviderConfig>,
     /// For [`QueryMethod::Embedding`] and [`QueryMethod::Hybrid`], the reranker config.
     pub(crate) reranker_config: Option<RerankProviderConfig>,
-    /// A configured [`LLMClient`].
+    /// A configured [`LLMClient`]. Must be `Some(..)` when using [`QueryMethod::Hybrid`].
     pub(crate) client: Option<LLMClient>,
 }
 
