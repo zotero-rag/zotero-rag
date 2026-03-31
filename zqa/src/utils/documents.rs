@@ -383,18 +383,17 @@ async fn process_file(
         DocumentError::TextExtractionFailed(TextExtractionError(format!("{filename}: {e}")))
     })?;
 
-    if client.is_none()
-        && let QueryMethod::Hybrid = query_method
-    {
-        return Err(DocumentError::BadConfig(format!(
-            "Query method {query_method:?} was used, but no LLM client was provided during tool creation. This is likely a bug."
-        )));
-    }
-
     let reranked_chunks =
         embedding_retrieval(&query, &contents, embedding_config, reranker_config).await?;
 
     if let QueryMethod::Hybrid = query_method {
+        let Some(client) = client else {
+            return Err(DocumentError::BadConfig(
+                "`client` cannot be `None` when `query_method` is 'hybrid'. This is likely a bug."
+                    .to_string(),
+            ));
+        };
+
         let sections = &contents.sections;
         let text_content = &contents.text_content;
         let mut returned_chunks = Vec::new();
@@ -436,9 +435,6 @@ async fn process_file(
                 .push(text_content[sections[effective_idx].byte_index..end_byte].to_string());
         }
 
-        let Some(client) = client else {
-            unreachable!("`client` was checked to be `Some(..)`.");
-        };
         let result = call_subagent(
             &query,
             &returned_chunks
@@ -535,6 +531,15 @@ impl Tool for UserDocumentTool {
                 ));
             };
 
+            if self.client.is_none()
+                && let QueryMethod::Hybrid = input.query_method
+            {
+                return Err(format!(
+                    "Query method {:?} was used, but no LLM client was provided during tool creation. This is likely a bug.",
+                    input.query_method,
+                ));
+            }
+
             let mut futures: FuturesUnordered<FileFuture> = FuturesUnordered::new();
             for filename in filenames {
                 futures.push(Box::pin(process_file(
@@ -572,11 +577,13 @@ mod tests {
     use serde_json::json;
     use zqa_macros::{test_eq, test_ok};
     use zqa_pdftools::parse::{ExtractedContent, SectionBoundary};
-    use zqa_rag::config::{CohereConfig, GeminiConfig, LLMClientConfig, OpenAIConfig, VoyageAIConfig};
+    use zqa_rag::config::{
+        CohereConfig, GeminiConfig, LLMClientConfig, OpenAIConfig, VoyageAIConfig,
+    };
     use zqa_rag::constants::{
         DEFAULT_COHERE_EMBEDDING_DIM, DEFAULT_COHERE_EMBEDDING_MODEL, DEFAULT_COHERE_RERANK_MODEL,
         DEFAULT_GEMINI_EMBEDDING_DIM, DEFAULT_GEMINI_EMBEDDING_MODEL, DEFAULT_OPENAI_EMBEDDING_DIM,
-        DEFAULT_OPENAI_EMBEDDING_MODEL, DEFAULT_OPENAI_MODEL_SMALL, DEFAULT_OPENAI_MAX_TOKENS,
+        DEFAULT_OPENAI_EMBEDDING_MODEL, DEFAULT_OPENAI_MAX_TOKENS, DEFAULT_OPENAI_MODEL_SMALL,
         DEFAULT_VOYAGE_EMBEDDING_DIM, DEFAULT_VOYAGE_EMBEDDING_MODEL, DEFAULT_VOYAGE_RERANK_MODEL,
     };
     use zqa_rag::llm::factory::get_client_with_config;
@@ -740,16 +747,15 @@ mod tests {
         let voyage_api_key = std::env::var("VOYAGE_AI_API_KEY")
             .expect("VOYAGE_AI_API_KEY must be set for this test");
 
-        let client = get_client_with_config(LLMClientConfig::OpenAI(
-            zqa_rag::config::OpenAIConfig {
+        let client =
+            get_client_with_config(LLMClientConfig::OpenAI(zqa_rag::config::OpenAIConfig {
                 api_key: api_key.clone(),
                 model: DEFAULT_OPENAI_MODEL_SMALL.to_string(),
                 max_tokens: DEFAULT_OPENAI_MAX_TOKENS,
                 embedding_model: DEFAULT_OPENAI_EMBEDDING_MODEL.to_string(),
                 embedding_dims: DEFAULT_OPENAI_EMBEDDING_DIM as usize,
-            },
-        ))
-        .expect("Failed to create OpenAI client");
+            }))
+            .expect("Failed to create OpenAI client");
 
         let pdf_path = test_pdf_path();
         let tool = UserDocumentTool {
