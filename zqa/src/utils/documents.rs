@@ -226,6 +226,21 @@ fn get_embeddings(
     Ok(embeddings.to_vec())
 }
 
+/// Call a sub-agent LLM to refine retrieved chunks to be relevant to `query`.
+///
+/// # Arguments
+///
+/// * `query` - A query from a model or the user
+/// * `retrieved_chunks` - A list of relevant chunks retrieved via embeddings
+/// * `client` - A configured [`LLMClient`] to use for the sub-agent call
+///
+/// # Returns
+///
+/// A string containing the refined chunks, separated by `-----`.
+///
+/// # Errors
+///
+/// * [`DocumentError::ApiError`] if the LLM client returns an error.
 async fn call_subagent(
     query: &str,
     retrieved_chunks: &[&str],
@@ -434,7 +449,8 @@ async fn process_file(
         // file).
         let agent_chunks = result
             .split("-----")
-            .map(std::string::ToString::to_string)
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
             .collect::<Vec<_>>();
 
         Ok((filename, agent_chunks))
@@ -500,22 +516,22 @@ impl Tool for UserDocumentTool {
                 return Err(format!("File {f} does not exist in the session."));
             }
 
+            let Some(ref embedding_config) = self.embedding_config else {
+                return Err(format!(
+                    "Query method {:?} was used, but no embedding config was provided during tool creation. This is likely a bug.",
+                    input.query_method
+                ));
+            };
+
+            let Some(ref reranker_config) = self.reranker_config else {
+                return Err(format!(
+                    "Query method {:?} was used, but no reranker config was provided during tool creation. This is likely a bug.",
+                    input.query_method
+                ));
+            };
+
             let mut futures: FuturesUnordered<FileFuture> = FuturesUnordered::new();
             for filename in filenames {
-                let Some(ref embedding_config) = self.embedding_config else {
-                    return Err(format!(
-                        "Query method {:?} was used, but no embedding config was provided during tool creation. This is likely a bug.",
-                        input.query_method
-                    ));
-                };
-
-                let Some(ref reranker_config) = self.reranker_config else {
-                    return Err(format!(
-                        "Query method {:?} was used, but no reranker config was provided during tool creation. This is likely a bug.",
-                        input.query_method
-                    ));
-                };
-
                 futures.push(Box::pin(process_file(
                     filename.clone(),
                     input.query.clone(),
