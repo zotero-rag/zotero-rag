@@ -383,6 +383,14 @@ async fn process_file(
         DocumentError::TextExtractionFailed(TextExtractionError(format!("{filename}: {e}")))
     })?;
 
+    if client.is_none()
+        && let QueryMethod::Hybrid = query_method
+    {
+        return Err(DocumentError::BadConfig(format!(
+            "Query method {query_method:?} was used, but no LLM client was provided during tool creation. This is likely a bug."
+        )));
+    }
+
     let reranked_chunks =
         embedding_retrieval(&query, &contents, embedding_config, reranker_config).await?;
 
@@ -390,12 +398,6 @@ async fn process_file(
         let sections = &contents.sections;
         let text_content = &contents.text_content;
         let mut returned_chunks = Vec::new();
-
-        let Some(client) = client else {
-            return Err(DocumentError::BadConfig(format!(
-                "Query method {query_method:?} was used, but no LLM client was provided during tool creation. This is likely a bug."
-            )));
-        };
 
         let mut section_counts: HashMap<usize, usize> = HashMap::new();
 
@@ -434,6 +436,9 @@ async fn process_file(
                 .push(text_content[sections[effective_idx].byte_index..end_byte].to_string());
         }
 
+        let Some(client) = client else {
+            unreachable!("`client` was checked to be `Some(..)`.");
+        };
         let result = call_subagent(
             &query,
             &returned_chunks
