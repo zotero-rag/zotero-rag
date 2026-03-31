@@ -156,7 +156,6 @@ fn get_summary_end_index(
 #[serde(rename_all = "snake_case")]
 enum QueryMethod {
     Embedding,
-    SubAgent,
     Hybrid,
 }
 
@@ -249,15 +248,11 @@ async fn call_subagent(
 
 /// Retrieve relevant chunks from one file.
 ///
-/// This function handles [`QueryMethod::Embedding`] and [`QueryMethod::Hybrid`] currently;
-/// [`QueryMethod::SubAgent`] is WIP. It uses an embedding-based chunk retrieval from the
-/// user-provided file.
-///
-/// To do so, it first extracts the text from the file, and chunks it into 2048-token chunks. From
-/// here, it uses `embedding_config` to generate embeddings for the query and the chunks, and
-/// performs a cosine similarity to prune chunks to those whose similarity scores are greater than
-/// `SCORE_THRESHOLD` (currently: 0.7). It then uses the `reranker_config` to perform reranking of
-/// the retrieved chunks.
+/// It uses an embedding-based chunk retrieval from the user-provided file. To do so, it first
+/// extracts the text from the file, and chunks it into 2048-token chunks. From here, it uses
+/// `embedding_config` to generate embeddings for the query and the chunks, and performs a cosine
+/// similarity to prune chunks to those whose similarity scores are greater than `SCORE_THRESHOLD`
+/// (currently: 0.7). It then uses the `reranker_config` to perform reranking of the retrieved chunks.
 ///
 /// For [`QueryMethod::Hybrid`], this function prepares to pass the chunks to an agent by aiming to
 /// provide more context. In particular, it finds "hot zones" in the user document (sections that
@@ -273,7 +268,7 @@ async fn call_subagent(
 /// * `embedding_config` - Configuration for an embedding provider
 /// * `reranker_config` - Configuration for an reranker provider
 /// * `client` - An optional [`zqa_rag::llm::factory::LLMClient`]. Must be `Some(..)` if
-///   `query_method` is [`QueryMethod::SubAgent`] or [`QueryMethod::Hybrid`].
+///   `query_method` is [`QueryMethod::Hybrid`].
 ///
 /// # Returns
 ///
@@ -352,83 +347,80 @@ async fn process_file(
         .map(|i| kept_chunks_owned[*i].as_str())
         .collect();
 
-    let final_chunks = match query_method {
-        QueryMethod::Hybrid => {
-            let sections = &contents.sections;
-            let text_content = &contents.text_content;
-            let mut returned_chunks = Vec::new();
+    if let QueryMethod::Hybrid = query_method {
+        let sections = &contents.sections;
+        let text_content = &contents.text_content;
+        let mut returned_chunks = Vec::new();
 
-            let mut section_counts: HashMap<usize, usize> = HashMap::new();
+        let Some(client) = client else {
+            return Err(DocumentError::BadConfig(format!(
+                "Query method {query_method:?} was used, but no LLM client was provided during tool creation. This is likely a bug."
+            )));
+        };
 
-            for chunk in &reranked_chunks {
-                let Some(text_idx) = text_content.find(&**chunk) else {
-                    continue;
-                };
+        let mut section_counts: HashMap<usize, usize> = HashMap::new();
 
-                // Which section does this chunk belong to?
-                // `contents.sections` is sorted.
-                let section_idx = sections
-                    .partition_point(|sec| text_idx >= sec.byte_index)
-                    .saturating_sub(1);
-                *section_counts.entry(section_idx).or_insert(0) += 1;
-            }
-
-            let total = section_counts.values().sum::<usize>() as f32;
-            for (section_idx, count) in &section_counts {
-                let pct = *count as f32 / total;
-                let effective_idx = if pct >= ZOOM_OUT_THRESHOLD {
-                    // Zoom out to higher-level section, since this one seems
-                    // important
-                    sections
-                        .get(*section_idx)
-                        .and_then(|s| s.parent_idx)
-                        .unwrap_or(*section_idx)
-                } else {
-                    *section_idx
-                };
-
-                // Handle the case for the last section
-                let end_byte = sections
-                    .get(effective_idx + 1)
-                    .map_or(text_content.len(), |s| s.byte_index);
-                returned_chunks
-                    .push(text_content[sections[effective_idx].byte_index..end_byte].to_string());
-            }
-
-            returned_chunks
-        }
-        _ => reranked_chunks
-            .iter()
-            .map(std::string::ToString::to_string)
-            .collect(),
-    };
-
-    match query_method {
-        QueryMethod::SubAgent | QueryMethod::Hybrid => {
-            let Some(client) = client else {
-                return Err(DocumentError::BadConfig(format!(
-                    "Query method {query_method:?} was used, but no LLM client was provided during tool creation. This is likely a bug."
-                )));
+        for chunk in &reranked_chunks {
+            let Some(text_idx) = text_content.find(&**chunk) else {
+                continue;
             };
 
-            let result = call_subagent(
-                &query,
-                &final_chunks.iter().map(String::as_str).collect::<Vec<_>>(),
-                client,
-            )
-            .await?;
-
-            // TODO: This is terribly hacky, and is just a stupid way to do this in general.
-            // However, the right solution is to use structured outputs (see the other todo in this
-            // file).
-            let agent_chunks = result
-                .split("-----")
-                .map(std::string::ToString::to_string)
-                .collect::<Vec<_>>();
-
-            Ok((filename, agent_chunks))
+            // Which section does this chunk belong to?
+            // `contents.sections` is sorted.
+            let section_idx = sections
+                .partition_point(|sec| text_idx >= sec.byte_index)
+                .saturating_sub(1);
+            *section_counts.entry(section_idx).or_insert(0) += 1;
         }
-        QueryMethod::Embedding => Ok((filename, final_chunks)),
+
+        let total = section_counts.values().sum::<usize>() as f32;
+        for (section_idx, count) in &section_counts {
+            let pct = *count as f32 / total;
+            let effective_idx = if pct >= ZOOM_OUT_THRESHOLD {
+                // Zoom out to higher-level section, since this one seems
+                // important
+                sections
+                    .get(*section_idx)
+                    .and_then(|s| s.parent_idx)
+                    .unwrap_or(*section_idx)
+            } else {
+                *section_idx
+            };
+
+            // Handle the case for the last section
+            let end_byte = sections
+                .get(effective_idx + 1)
+                .map_or(text_content.len(), |s| s.byte_index);
+            returned_chunks
+                .push(text_content[sections[effective_idx].byte_index..end_byte].to_string());
+        }
+
+        let result = call_subagent(
+            &query,
+            &returned_chunks
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            client,
+        )
+        .await?;
+
+        // TODO: This is terribly hacky, and is just a stupid way to do this in general.
+        // However, the right solution is to use structured outputs (see the other todo in this
+        // file).
+        let agent_chunks = result
+            .split("-----")
+            .map(std::string::ToString::to_string)
+            .collect::<Vec<_>>();
+
+        Ok((filename, agent_chunks))
+    } else {
+        let final_chunks = reranked_chunks
+            .iter()
+            .map(std::string::ToString::to_string)
+            .collect();
+
+        Ok((filename, final_chunks))
     }
 }
 
@@ -491,33 +483,28 @@ impl Tool for UserDocumentTool {
 
             let mut futures: FuturesUnordered<FileFuture> = FuturesUnordered::new();
             for filename in filenames {
-                if matches!(
+                let Some(ref embedding_config) = self.embedding_config else {
+                    return Err(format!(
+                        "Query method {:?} was used, but no embedding config was provided during tool creation. This is likely a bug.",
+                        input.query_method
+                    ));
+                };
+
+                let Some(ref reranker_config) = self.reranker_config else {
+                    return Err(format!(
+                        "Query method {:?} was used, but no reranker config was provided during tool creation. This is likely a bug.",
+                        input.query_method
+                    ));
+                };
+
+                futures.push(Box::pin(process_file(
+                    filename.clone(),
+                    input.query.clone(),
                     input.query_method,
-                    QueryMethod::Embedding | QueryMethod::Hybrid
-                ) {
-                    let Some(ref embedding_config) = self.embedding_config else {
-                        return Err(format!(
-                            "Query method {:?} was used, but no embedding config was provided during tool creation. This is likely a bug.",
-                            input.query_method
-                        ));
-                    };
-
-                    let Some(ref reranker_config) = self.reranker_config else {
-                        return Err(format!(
-                            "Query method {:?} was used, but no reranker config was provided during tool creation. This is likely a bug.",
-                            input.query_method
-                        ));
-                    };
-
-                    futures.push(Box::pin(process_file(
-                        filename.clone(),
-                        input.query.clone(),
-                        input.query_method,
-                        embedding_config,
-                        reranker_config,
-                        self.client.as_ref(),
-                    )));
-                }
+                    embedding_config,
+                    reranker_config,
+                    self.client.as_ref(),
+                )));
             }
 
             let mut all_results = Vec::with_capacity(filenames.len());
