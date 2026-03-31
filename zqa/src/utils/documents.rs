@@ -439,12 +439,7 @@ async fn process_file(
 
         Ok((filename, agent_chunks))
     } else {
-        let final_chunks = reranked_chunks
-            .iter()
-            .map(std::string::ToString::to_string)
-            .collect();
-
-        Ok((filename, final_chunks))
+        Ok((filename, reranked_chunks))
     }
 }
 
@@ -455,7 +450,7 @@ struct UserDocumentToolInput {
     filenames: Option<Vec<String>>,
     /// A query to obtain relevant passages
     query: String,
-    /// Query method. One of "embedding", "sub_agent", or "hybrid".
+    /// Query method. One of "embedding" or "hybrid".
     query_method: QueryMethod,
 }
 
