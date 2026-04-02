@@ -1009,9 +1009,9 @@ pub(crate) async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<()
         log::debug!("No previous history.");
     }
 
-    rl.set_helper(Some(PlaceholderText {
-        placeholder_text: "Type in a question or /help for options".to_string(),
-    }));
+    rl.set_helper(Some(PlaceholderText::new(
+        "Type in a question or /help for options".to_string(),
+    )));
 
     loop {
         let readline = rl.readline(">>> ");
