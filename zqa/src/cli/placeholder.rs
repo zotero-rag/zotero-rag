@@ -118,7 +118,7 @@ impl Completer for PlaceholderText {
             && let Some(at_pos) = line[..pos].rfind('@')
             && let Some(path) = path_ref.as_deref()
         {
-            return Ok((at_pos + 1, vec![path.to_string()]));
+            return Ok((at_pos + 1, vec![path[2..].to_string()]));
         }
 
         if line[..pos].ends_with('@') {
@@ -153,7 +153,7 @@ impl Hinter for PlaceholderText {
 
         // I was very proud of this `if` chain, don't you dare remove it
         if let Some(at_pos) = line[..pos].rfind('@')
-            && let Some(space_pos) = line[..pos].rfind(' ').map_or_else(|| Some(0), Some)
+            && let Some(space_pos) = Some(line[..pos].rfind(' ').unwrap_or(0))
             && at_pos >= space_pos  // Equality case handles first char '@', no space yet
             && at_pos < pos
         {
@@ -162,10 +162,11 @@ impl Hinter for PlaceholderText {
                 .matcher
                 .try_borrow_mut()
                 .ok()
-                .and_then(|mut matcher| get_best_file_match(query, &mut matcher));
+                .and_then(|mut matcher| get_best_file_match(query, &mut matcher))
+                .map(|m| format!("  {m}"));
             self.shown_hint.replace(best_match.clone());
 
-            return best_match;
+            return best_match.map(|f| format!("{f} (Tab to accept)"));
         }
 
         self.shown_hint.replace(None);
