@@ -85,7 +85,7 @@ fn get_best_file_match(query: &str, matcher: &mut nucleo_matcher::Matcher) -> Op
     .match_list(filenames, matcher);
 
     let best = file_matches.first()?.0.clone();
-    let prefix_len = cwd.to_str()?.len() + query.len() + 1;
+    let prefix_len = cwd.to_str()?.len() + 1;
 
     if best.starts_with(cwd.to_str()?) && best.len() >= prefix_len {
         Some(best[prefix_len..].to_string())
@@ -115,9 +115,10 @@ impl Completer for PlaceholderText {
         }
 
         if let Ok(path_ref) = self.shown_hint.try_borrow()
+            && let Some(at_pos) = line[..pos].rfind('@')
             && let Some(path) = path_ref.as_deref()
         {
-            return Ok((pos, vec![path.to_string()]));
+            return Ok((at_pos + 1, vec![path.to_string()]));
         }
 
         if line[..pos].ends_with('@') {
@@ -150,6 +151,7 @@ impl Hinter for PlaceholderText {
                 .map(|cmd| cmd[pos..].to_string());
         }
 
+        // I was very proud of this `if` chain, don't you dare remove it
         if let Some(at_pos) = line[..pos].rfind('@')
             && let Some(space_pos) = line[..pos].rfind(' ').map_or_else(|| Some(0), Some)
             && at_pos >= space_pos  // Equality case handles first char '@', no space yet
@@ -166,6 +168,7 @@ impl Hinter for PlaceholderText {
             return best_match;
         }
 
+        self.shown_hint.replace(None);
         None
     }
 }
@@ -194,3 +197,163 @@ impl Validator for PlaceholderText {
 }
 
 impl Helper for PlaceholderText {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serial_test::serial;
+    use std::fs::File;
+    use std::io::Write;
+    use tempfile::TempDir;
+
+    fn create_temp_pdf(dir: &TempDir, name: &str) -> std::path::PathBuf {
+        let path = dir.path().join(name);
+        let mut file = File::create(&path).expect("Failed to create temp file");
+        file.write_all(b"%PDF-1.4\n")
+            .expect("Failed to write PDF content");
+        path
+    }
+
+    #[test]
+    #[serial]
+    fn test_get_best_file_match_exact_match() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let original_cwd = std::env::current_dir().expect("Failed to get cwd");
+
+        std::env::set_current_dir(temp_dir.path()).expect("Failed to change dir");
+
+        create_temp_pdf(&temp_dir, "document.pdf");
+
+        let mut matcher =
+            nucleo_matcher::Matcher::new(nucleo_matcher::Config::DEFAULT.match_paths());
+
+        let result = get_best_file_match("document", &mut matcher);
+
+        std::env::set_current_dir(&original_cwd).ok();
+
+        assert_eq!(result, Some("document.pdf".to_string()));
+    }
+
+    #[test]
+    #[serial]
+    fn test_get_best_file_match_fuzzy_match() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let original_cwd = std::env::current_dir().expect("Failed to get cwd");
+
+        std::env::set_current_dir(temp_dir.path()).expect("Failed to change dir");
+
+        create_temp_pdf(&temp_dir, "my_awesome_paper.pdf");
+
+        let mut matcher =
+            nucleo_matcher::Matcher::new(nucleo_matcher::Config::DEFAULT.match_paths());
+
+        let result = get_best_file_match("paper", &mut matcher);
+
+        std::env::set_current_dir(&original_cwd).ok();
+
+        assert_eq!(result, Some("my_awesome_paper.pdf".to_string()));
+    }
+
+    #[test]
+    #[serial]
+    fn test_get_best_file_match_no_pdfs() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let original_cwd = std::env::current_dir().expect("Failed to get cwd");
+
+        std::env::set_current_dir(temp_dir.path()).expect("Failed to change dir");
+
+        let mut matcher =
+            nucleo_matcher::Matcher::new(nucleo_matcher::Config::DEFAULT.match_paths());
+
+        let result = get_best_file_match("anything", &mut matcher);
+
+        std::env::set_current_dir(&original_cwd).ok();
+
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    #[serial]
+    fn test_get_best_file_match_multiple_pdfs() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let original_cwd = std::env::current_dir().expect("Failed to get cwd");
+
+        std::env::set_current_dir(temp_dir.path()).expect("Failed to change dir");
+
+        create_temp_pdf(&temp_dir, "paper_alpha.pdf");
+        create_temp_pdf(&temp_dir, "paper_beta.pdf");
+        create_temp_pdf(&temp_dir, "thesis.pdf");
+
+        let mut matcher =
+            nucleo_matcher::Matcher::new(nucleo_matcher::Config::DEFAULT.match_paths());
+
+        let result = get_best_file_match("paper", &mut matcher);
+
+        std::env::set_current_dir(&original_cwd).ok();
+
+        assert!(result.is_some());
+        let filename = result.unwrap();
+        assert!(filename == "paper_alpha.pdf" || filename == "paper_beta.pdf");
+    }
+
+    #[test]
+    #[serial]
+    fn test_get_best_file_match_ignores_non_pdfs() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let original_cwd = std::env::current_dir().expect("Failed to get cwd");
+
+        std::env::set_current_dir(temp_dir.path()).expect("Failed to change dir");
+
+        let txt_path = temp_dir.path().join("document.txt");
+        File::create(&txt_path).expect("Failed to create txt file");
+
+        let mut matcher =
+            nucleo_matcher::Matcher::new(nucleo_matcher::Config::DEFAULT.match_paths());
+
+        let result = get_best_file_match("document", &mut matcher);
+
+        std::env::set_current_dir(&original_cwd).ok();
+
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    #[serial]
+    fn test_get_best_file_match_case_insensitive_extension() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let original_cwd = std::env::current_dir().expect("Failed to get cwd");
+
+        std::env::set_current_dir(temp_dir.path()).expect("Failed to change dir");
+
+        create_temp_pdf(&temp_dir, "document.PDF");
+
+        let mut matcher =
+            nucleo_matcher::Matcher::new(nucleo_matcher::Config::DEFAULT.match_paths());
+
+        let result = get_best_file_match("document", &mut matcher);
+
+        std::env::set_current_dir(&original_cwd).ok();
+
+        assert_eq!(result, Some("document.PDF".to_string()));
+    }
+
+    #[test]
+    #[serial]
+    fn test_get_best_file_match_empty_query() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let original_cwd = std::env::current_dir().expect("Failed to get cwd");
+
+        std::env::set_current_dir(temp_dir.path()).expect("Failed to change dir");
+
+        create_temp_pdf(&temp_dir, "document.pdf");
+
+        let mut matcher =
+            nucleo_matcher::Matcher::new(nucleo_matcher::Config::DEFAULT.match_paths());
+
+        let result = get_best_file_match("", &mut matcher);
+
+        std::env::set_current_dir(&original_cwd).ok();
+
+        assert!(result.is_some());
+    }
+}
