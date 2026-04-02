@@ -120,7 +120,7 @@ impl Completer for PlaceholderText {
             return Ok((pos, vec![path.to_string()]));
         }
 
-        if line[..pos].chars().next_back() == Some('@') {
+        if line[..pos].ends_with('@') {
             return FilenameCompleter::new()
                 .complete_path(line, pos)
                 .map(|(_, pairs)| pairs.into_iter().map(|p| p.replacement).collect::<Vec<_>>())
@@ -151,9 +151,9 @@ impl Hinter for PlaceholderText {
         }
 
         if let Some(at_pos) = line[..pos].rfind('@')
-            && let Some(space_pos) = line[..pos].rfind(' ').map_or_else(|| Some(0), |v| Some(v))
+            && let Some(space_pos) = line[..pos].rfind(' ').map_or_else(|| Some(0), Some)
             && at_pos >= space_pos  // Equality case handles first char '@', no space yet
-            && at_pos <= pos - 1
+            && at_pos < pos
         {
             let query = &line[at_pos + 1..pos];
             let best_match = self
