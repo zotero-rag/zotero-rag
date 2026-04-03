@@ -48,10 +48,12 @@ impl std::fmt::Display for TextExtractionError {
 
 #[derive(Debug, Error)]
 pub enum DocumentError {
-    #[error("Configuration issue: {0}")]
-    BadConfig(String),
     #[error("Error getting embedding provider: {0}")]
     ApiError(#[from] LLMError),
+    #[error("Configuration issue: {0}")]
+    BadConfig(String),
+    #[error("Failed to process document: {0}")]
+    DocumentProcessingFailed(String),
     #[error("Error computing embeddings: {0}")]
     LanceError(#[from] lancedb::Error),
     #[error("Path conversion failed: {0}")]
@@ -461,6 +463,12 @@ async fn process_document(
     }
 }
 
+#[derive(serde::Serialize)]
+struct DocumentQueryResult {
+    filename: String,
+    chunks: Vec<String>,
+}
+
 #[derive(Deserialize, JsonSchema)]
 struct UserDocumentToolInput {
     /// The filenames to use. Optional; if `None`, will use all files currently selected by the
@@ -502,7 +510,7 @@ impl Tool for UserDocumentTool {
         args: serde_json::Value,
     ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, String>> + Send + 'a>> {
         type FileFuture<'a> =
-            Pin<Box<dyn Future<Output = Result<Vec<String>, DocumentError>> + Send + 'a>>;
+            Pin<Box<dyn Future<Output = Result<DocumentQueryResult, DocumentError>> + Send + 'a>>;
 
         Box::pin(async move {
             let input: UserDocumentToolInput =
@@ -522,9 +530,24 @@ impl Tool for UserDocumentTool {
                 return Err(format!("File {f} does not exist in the session."));
             }
 
-            let filenames = match &input.filenames {
-                Some(files) => files.iter().map(std::string::String::as_str).collect(),
-                None => all_files,
+            let selected_documents: Vec<(&str, &UserDocument)> = if let Some(filenames) = &input.filenames { filenames
+            .iter()
+            .map(|filename| {
+                self.documents
+                    .get_key_value(filename)
+                    .map(|(name, doc)| (name.as_str(), doc))
+                    .ok_or_else(|| {
+                        format!("File {filename} does not exist in the session.")
+                    })
+            })
+            .collect::<Result<_, _>>()? } else {
+                let mut docs = self
+                    .documents
+                    .iter()
+                    .map(|(filename, doc)| (filename.as_str(), doc))
+                    .collect::<Vec<_>>();
+                docs.sort_by(|(a, _), (b, _)| a.cmp(b)); // deterministic output
+                docs
             };
 
             let Some(ref embedding_config) = self.embedding_config else {
@@ -551,24 +574,36 @@ impl Tool for UserDocumentTool {
             }
 
             let mut futures: FuturesUnordered<FileFuture> = FuturesUnordered::new();
-            for filename in &filenames {
-                if let Some(doc) = self.documents.get(*filename) {
-                    futures.push(Box::pin(process_document(
+            for (filename, doc) in selected_documents {
+                let filename = filename.to_string();
+                let query = input.query.clone();
+
+                futures.push(Box::pin(async move {
+                    let chunks = process_document(
                         doc,
-                        input.query.clone(),
+                        query,
                         input.query_method,
                         embedding_config,
                         reranker_config,
                         self.client.as_ref(),
-                    )));
-                }
+                    )
+                    .await
+                    .map_err(|e| {
+                        DocumentError::DocumentProcessingFailed(format!(
+                            "Embedding-based retrieval failed: {e}"
+                        ))
+                    })?;
+
+                    Ok(DocumentQueryResult { filename, chunks })
+                }));
             }
 
-            let mut all_results = Vec::with_capacity(filenames.len());
+            let mut all_results = Vec::new();
             let mut errors = Vec::new();
+
             while let Some(res) = futures.next().await {
                 match res {
-                    Ok(res) => all_results.push(res),
+                    Ok(result) => all_results.push(result),
                     Err(e) => errors.push(e.to_string()),
                 }
             }
