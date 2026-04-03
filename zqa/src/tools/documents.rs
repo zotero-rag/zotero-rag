@@ -62,6 +62,47 @@ pub enum DocumentError {
     TextExtractionFailed(TextExtractionError),
 }
 
+pub(crate) struct DocumentsToolContext {
+    pub(crate) documents: HashMap<String, Arc<UserDocument>>,
+    pub(crate) embedding_config: Option<EmbeddingProviderConfig>,
+    pub(crate) reranker_config: Option<RerankProviderConfig>,
+    pub(crate) client: Option<LLMClient>,
+}
+
+pub(crate) struct DocumentsToolFactory {
+    ctx: Arc<DocumentsToolContext>,
+}
+
+impl DocumentsToolFactory {
+    pub(crate) fn new(
+        imports: Vec<UserDocument>,
+        embedding_config: Option<EmbeddingProviderConfig>,
+        reranker_config: Option<RerankProviderConfig>,
+        client: Option<LLMClient>,
+    ) -> Self {
+        let documents = imports
+            .into_iter()
+            .map(|doc| (doc.filename.clone(), Arc::new(doc)))
+            .collect();
+
+        Self {
+            ctx: Arc::new(DocumentsToolContext {
+                documents,
+                embedding_config,
+                reranker_config,
+                client,
+            }),
+        }
+    }
+
+    pub(crate) fn build_tools(&self) -> Vec<Box<dyn Tool>> {
+        vec![
+            Box::new(ListDocumentsTool::new(Arc::clone(&self.ctx))),
+            Box::new(QueryDocumentsTool::new(Arc::clone(&self.ctx))),
+        ]
+    }
+}
+
 /// Parse an imported user document (one not from Zotero, but from the file system), and return a
 /// [`UserDocument`] to store in state.
 ///
@@ -375,19 +416,14 @@ async fn embedding_retrieval(
 ///   obtained, or if the embeddings or reranked chunks could not be computed.
 async fn process_document(
     document: &UserDocument,
-    query: String,
+    query: &str,
     query_method: QueryMethod,
     embedding_config: &EmbeddingProviderConfig,
     reranker_config: &RerankProviderConfig,
     client: Option<&LLMClient>,
 ) -> Result<Vec<String>, DocumentError> {
-    let reranked_chunks = embedding_retrieval(
-        &query,
-        &document.contents,
-        embedding_config,
-        reranker_config,
-    )
-    .await?;
+    let reranked_chunks =
+        embedding_retrieval(query, &document.contents, embedding_config, reranker_config).await?;
 
     if let QueryMethod::Hybrid = query_method {
         let Some(client) = client else {
@@ -439,7 +475,7 @@ async fn process_document(
         }
 
         let result = call_subagent(
-            &query,
+            query,
             &returned_chunks
                 .iter()
                 .map(String::as_str)
@@ -464,13 +500,13 @@ async fn process_document(
 }
 
 #[derive(serde::Serialize)]
-struct DocumentQueryResult {
+struct QueryDocumentsResult {
     filename: String,
     chunks: Vec<String>,
 }
 
 #[derive(Deserialize, JsonSchema)]
-struct UserDocumentToolInput {
+struct QueryDocumentsToolInput {
     /// The filenames to use. Optional; if `None`, will use all files currently selected by the
     /// user.
     filenames: Option<Vec<String>>,
@@ -480,19 +516,53 @@ struct UserDocumentToolInput {
     query_method: QueryMethod,
 }
 
-/// A tool to get relevant contents from user-imported (non-Zotero) documents.
-pub(crate) struct UserDocumentTool {
-    /// The documents currently in the session.
-    pub(crate) documents: HashMap<String, UserDocument>,
-    /// For [`QueryMethod::Embedding`] and [`QueryMethod::Hybrid`], the embedding config.
-    pub(crate) embedding_config: Option<EmbeddingProviderConfig>,
-    /// For [`QueryMethod::Embedding`] and [`QueryMethod::Hybrid`], the reranker config.
-    pub(crate) reranker_config: Option<RerankProviderConfig>,
-    /// A configured [`LLMClient`]. Must be `Some(..)` when using [`QueryMethod::Hybrid`].
-    pub(crate) client: Option<LLMClient>,
+/// A tool to list available user-imported documents.
+pub(crate) struct ListDocumentsTool {
+    ctx: Arc<DocumentsToolContext>,
 }
 
-impl Tool for UserDocumentTool {
+impl ListDocumentsTool {
+    pub(crate) fn new(ctx: Arc<DocumentsToolContext>) -> Self {
+        Self { ctx }
+    }
+}
+
+impl Tool for ListDocumentsTool {
+    fn name(&self) -> String {
+        "list_documents".into()
+    }
+
+    fn description(&self) -> String {
+        "List all user-imported documents available in the session.".into()
+    }
+
+    fn parameters(&self) -> schemars::Schema {
+        schemars::schema_for!(())
+    }
+
+    fn call<'a>(
+        &'a self,
+        _args: serde_json::Value,
+    ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, String>> + Send + 'a>> {
+        Box::pin(async move {
+            let files: Vec<&str> = self.ctx.documents.keys().map(String::as_str).collect();
+            Ok(json!({ "documents": files }))
+        })
+    }
+}
+
+/// A tool to get relevant contents from user-imported (non-Zotero) documents.
+pub(crate) struct QueryDocumentsTool {
+    ctx: Arc<DocumentsToolContext>,
+}
+
+impl QueryDocumentsTool {
+    pub(crate) fn new(ctx: Arc<DocumentsToolContext>) -> Self {
+        Self { ctx }
+    }
+}
+
+impl Tool for QueryDocumentsTool {
     fn name(&self) -> String {
         "user_document_tool".into()
     }
@@ -502,7 +572,7 @@ impl Tool for UserDocumentTool {
     }
 
     fn parameters(&self) -> schemars::Schema {
-        schema_for!(UserDocumentToolInput)
+        schema_for!(QueryDocumentsToolInput)
     }
 
     fn call<'a>(
@@ -510,17 +580,17 @@ impl Tool for UserDocumentTool {
         args: serde_json::Value,
     ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, String>> + Send + 'a>> {
         type FileFuture<'a> =
-            Pin<Box<dyn Future<Output = Result<DocumentQueryResult, DocumentError>> + Send + 'a>>;
+            Pin<Box<dyn Future<Output = Result<QueryDocumentsResult, DocumentError>> + Send + 'a>>;
 
         Box::pin(async move {
-            let input: UserDocumentToolInput =
+            let input: QueryDocumentsToolInput =
                 serde_json::from_value(args).map_err(|e| format!("Invalid arguments: {e}"))?;
 
-            if self.documents.is_empty() {
+            if self.ctx.documents.is_empty() {
                 return Err("There are no documents in this session. Ask the user to add some by @ing the file name.".into());
             }
 
-            let all_files: Vec<&str> = self.documents.iter().map(|s| s.0.as_str()).collect();
+            let all_files: Vec<&str> = self.ctx.documents.iter().map(|s| s.0.as_str()).collect();
             let session_files: HashSet<_> = all_files.iter().collect();
             if let Some(filenames) = &input.filenames
                 && let Some(f) = filenames
@@ -553,21 +623,21 @@ impl Tool for UserDocumentTool {
                     docs
                 };
 
-            let Some(ref embedding_config) = self.embedding_config else {
+            let Some(ref embedding_config) = self.ctx.embedding_config else {
                 return Err(format!(
                     "Query method {:?} was used, but no embedding config was provided during tool creation. This is likely a bug.",
                     input.query_method
                 ));
             };
 
-            let Some(ref reranker_config) = self.reranker_config else {
+            let Some(ref reranker_config) = self.ctx.reranker_config else {
                 return Err(format!(
                     "Query method {:?} was used, but no reranker config was provided during tool creation. This is likely a bug.",
                     input.query_method
                 ));
             };
 
-            if self.client.is_none()
+            if self.ctx.client.is_none()
                 && let QueryMethod::Hybrid = input.query_method
             {
                 return Err(format!(
@@ -579,16 +649,15 @@ impl Tool for UserDocumentTool {
             let mut futures: FuturesUnordered<FileFuture> = FuturesUnordered::new();
             for (filename, doc) in selected_documents {
                 let filename = filename.to_string();
-                let query = input.query.clone();
 
-                futures.push(Box::pin(async move {
+                futures.push(Box::pin(async {
                     let chunks = process_document(
                         doc,
-                        query,
+                        &input.query,
                         input.query_method,
                         embedding_config,
                         reranker_config,
-                        self.client.as_ref(),
+                        self.ctx.client.as_ref(),
                     )
                     .await
                     .map_err(|e| {
@@ -597,7 +666,7 @@ impl Tool for UserDocumentTool {
                         ))
                     })?;
 
-                    Ok(DocumentQueryResult { filename, chunks })
+                    Ok(QueryDocumentsResult { filename, chunks })
                 }));
             }
 
@@ -654,7 +723,7 @@ mod tests {
         }
     }
 
-    async fn run_user_document_tool_test(tool: UserDocumentTool, provider_name: &str) {
+    async fn run_user_document_tool_test(tool: QueryDocumentsTool, provider_name: &str) {
         let args = json!({
             "filenames": ["mono2micro.pdf"],
             "query": "What problem does this paper solve?",
@@ -694,8 +763,8 @@ mod tests {
         let voyage_api_key = std::env::var("VOYAGE_AI_API_KEY")
             .expect("VOYAGE_AI_API_KEY must be set for this test");
 
-        let tool = UserDocumentTool {
-            documents: HashMap::from([("mono2micro.pdf".into(), test_pdf())]),
+        let ctx = Arc::new(DocumentsToolContext {
+            documents: HashMap::from([("mono2micro.pdf".into(), Arc::new(test_pdf()))]),
             embedding_config: Some(EmbeddingProviderConfig::OpenAI(OpenAIConfig {
                 api_key,
                 model: String::new(),
@@ -710,7 +779,8 @@ mod tests {
                 reranker: DEFAULT_VOYAGE_RERANK_MODEL.to_string(),
             })),
             client: None,
-        };
+        });
+        let tool = QueryDocumentsTool::new(ctx);
 
         run_user_document_tool_test(tool, "OpenAI+VoyageAI").await;
     }
@@ -729,12 +799,13 @@ mod tests {
             reranker: DEFAULT_VOYAGE_RERANK_MODEL.to_string(),
         };
 
-        let tool = UserDocumentTool {
-            documents: HashMap::from([("mono2micro.pdf".into(), test_pdf())]),
+        let ctx = Arc::new(DocumentsToolContext {
+            documents: HashMap::from([("mono2micro.pdf".into(), Arc::new(test_pdf()))]),
             embedding_config: Some(EmbeddingProviderConfig::VoyageAI(voyage_config.clone())),
             reranker_config: Some(RerankProviderConfig::VoyageAI(voyage_config)),
             client: None,
-        };
+        });
+        let tool = QueryDocumentsTool::new(ctx);
 
         run_user_document_tool_test(tool, "VoyageAI").await;
     }
@@ -753,12 +824,13 @@ mod tests {
             reranker: DEFAULT_COHERE_RERANK_MODEL.to_string(),
         };
 
-        let tool = UserDocumentTool {
-            documents: HashMap::from([("mono2micro.pdf".into(), test_pdf())]),
+        let ctx = Arc::new(DocumentsToolContext {
+            documents: HashMap::from([("mono2micro.pdf".into(), Arc::new(test_pdf()))]),
             embedding_config: Some(EmbeddingProviderConfig::Cohere(cohere_config.clone())),
             reranker_config: Some(RerankProviderConfig::Cohere(cohere_config)),
             client: None,
-        };
+        });
+        let tool = QueryDocumentsTool::new(ctx);
 
         run_user_document_tool_test(tool, "Cohere").await;
     }
@@ -773,8 +845,8 @@ mod tests {
         let voyage_api_key = std::env::var("VOYAGE_AI_API_KEY")
             .expect("VOYAGE_AI_API_KEY must be set for this test");
 
-        let tool = UserDocumentTool {
-            documents: HashMap::from([("mono2micro.pdf".into(), test_pdf())]),
+        let ctx = Arc::new(DocumentsToolContext {
+            documents: HashMap::from([("mono2micro.pdf".into(), Arc::new(test_pdf()))]),
             embedding_config: Some(EmbeddingProviderConfig::Gemini(GeminiConfig {
                 api_key: gemini_api_key,
                 model: String::new(),
@@ -788,7 +860,8 @@ mod tests {
                 reranker: DEFAULT_VOYAGE_RERANK_MODEL.to_string(),
             })),
             client: None,
-        };
+        });
+        let tool = QueryDocumentsTool::new(ctx);
 
         run_user_document_tool_test(tool, "Gemini+VoyageAI").await;
     }
@@ -813,8 +886,8 @@ mod tests {
             .expect("Failed to create OpenAI client");
 
         let _documents = test_pdf();
-        let tool = UserDocumentTool {
-            documents: HashMap::from([("mono2micro.pdf".into(), test_pdf())]),
+        let ctx = Arc::new(DocumentsToolContext {
+            documents: HashMap::from([("mono2micro.pdf".into(), Arc::new(test_pdf()))]),
             embedding_config: Some(EmbeddingProviderConfig::OpenAI(OpenAIConfig {
                 api_key,
                 model: String::new(),
@@ -829,7 +902,8 @@ mod tests {
                 reranker: DEFAULT_VOYAGE_RERANK_MODEL.to_string(),
             })),
             client: Some(client),
-        };
+        });
+        let tool = QueryDocumentsTool::new(ctx);
 
         let args = serde_json::json!({
             "filenames": ["mono2micro.pdf"],
