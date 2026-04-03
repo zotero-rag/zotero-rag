@@ -287,7 +287,7 @@ pub async fn full_library_to_arrow(
 /// # Errors
 ///
 /// * `ArrowError::LanceError` if vector search fails.
-/// * ArrowError::LLMError if reranking fails.
+/// * `ArrowError::LLMError` if reranking fails.
 pub async fn vector_search(
     query: String,
     embedding_config: &EmbeddingProviderConfig,
