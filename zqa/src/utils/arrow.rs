@@ -287,6 +287,7 @@ pub async fn full_library_to_arrow(
 /// # Errors
 ///
 /// * `ArrowError::LanceError` if vector search fails.
+/// * ArrowError::LLMError if reranking fails.
 pub async fn vector_search(
     query: String,
     embedding_config: &EmbeddingProviderConfig,
@@ -314,7 +315,7 @@ pub async fn vector_search(
     let Ok(rerank_provider) = get_reranking_provider(&reranker) else {
         log::warn!(
             "'{reranker}' is not a valid reranking provider (supported: voyageai, cohere). \
-        Skipping reranking and returning results as-is."
+Skipping reranking and returning results as-is."
         );
 
         return Ok(filtered_items);
