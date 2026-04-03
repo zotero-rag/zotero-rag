@@ -1,4 +1,4 @@
-//! Utilities for interacting with documents that are not from the user's Zotero library.
+//! Tools for interacting with documents that are not from the user's Zotero library.
 
 use arrow_array::StringArray;
 use arrow_array::cast::AsArray;
@@ -337,13 +337,13 @@ async fn embedding_retrieval(
     Ok(reranked_chunks)
 }
 
-/// Retrieve relevant chunks from one file.
+/// Retrieve relevant chunks from one document.
 ///
 /// It uses an embedding-based chunk retrieval from the user-provided file. To do so, it first
-/// extracts the text from the file, and chunks it into 2048-token chunks. From here, it uses
-/// `embedding_config` to generate embeddings for the query and the chunks, and performs a cosine
-/// similarity to prune chunks to those whose similarity scores are greater than `SCORE_THRESHOLD`
-/// (currently: 0.7). It then uses the `reranker_config` to perform reranking of the retrieved chunks.
+/// chunks it into 2048-token chunks. From here, it uses `embedding_config` to generate embeddings
+/// for the query and the chunks, and performs a cosine similarity to prune chunks to those whose
+/// similarity scores are greater than `SCORE_THRESHOLD` (currently: 0.7). It then uses the
+/// `reranker_config` to perform reranking of the retrieved chunks.
 ///
 /// For [`QueryMethod::Hybrid`], this function prepares to pass the chunks to an agent by aiming to
 /// provide more context. In particular, it finds "hot zones" in the user document (sections that
@@ -353,7 +353,7 @@ async fn embedding_retrieval(
 ///
 /// # Arguments
 ///
-/// * `filename` - The filename of the document to process
+/// * `document` - The document to process
 /// * `query` - A query, either from a model or the user
 /// * `query_method` - See [`QueryMethod`]
 /// * `embedding_config` - Configuration for an embedding provider
@@ -363,7 +363,7 @@ async fn embedding_retrieval(
 ///
 /// # Returns
 ///
-/// A tuple with the filename and a list of chunks.
+/// A list of chunks.
 ///
 /// # Errors
 ///
@@ -371,20 +371,21 @@ async fn embedding_retrieval(
 ///   error.
 /// * `DocumentError::ApiError` if either the embedding or reranker provider could not be
 ///   obtained, or if the embeddings or reranked chunks could not be computed.
-async fn process_file(
-    filename: String,
+async fn process_document(
+    document: &UserDocument,
     query: String,
     query_method: QueryMethod,
     embedding_config: &EmbeddingProviderConfig,
     reranker_config: &RerankProviderConfig,
     client: Option<&LLMClient>,
-) -> Result<(String, Vec<String>), DocumentError> {
-    let contents = extract_text(&filename).map_err(|e| {
-        DocumentError::TextExtractionFailed(TextExtractionError(format!("{filename}: {e}")))
-    })?;
-
-    let reranked_chunks =
-        embedding_retrieval(&query, &contents, embedding_config, reranker_config).await?;
+) -> Result<Vec<String>, DocumentError> {
+    let reranked_chunks = embedding_retrieval(
+        &query,
+        &document.contents,
+        embedding_config,
+        reranker_config,
+    )
+    .await?;
 
     if let QueryMethod::Hybrid = query_method {
         let Some(client) = client else {
@@ -394,8 +395,8 @@ async fn process_file(
             ));
         };
 
-        let sections = &contents.sections;
-        let text_content = &contents.text_content;
+        let sections = &document.contents.sections;
+        let text_content = &document.contents.text_content;
         let mut returned_chunks = Vec::new();
 
         let mut section_counts: HashMap<usize, usize> = HashMap::new();
@@ -454,9 +455,9 @@ async fn process_file(
             .filter(|s| !s.is_empty())
             .collect::<Vec<_>>();
 
-        Ok((filename, agent_chunks))
+        Ok(agent_chunks)
     } else {
-        Ok((filename, reranked_chunks))
+        Ok(reranked_chunks)
     }
 }
 
@@ -473,8 +474,8 @@ struct UserDocumentToolInput {
 
 /// A tool to get relevant contents from user-imported (non-Zotero) documents.
 pub(crate) struct UserDocumentTool {
-    /// The files currently in the session.
-    pub(crate) filenames: Vec<String>,
+    /// The documents currently in the session.
+    pub(crate) documents: HashMap<String, UserDocument>,
     /// For [`QueryMethod::Embedding`] and [`QueryMethod::Hybrid`], the embedding config.
     pub(crate) embedding_config: Option<EmbeddingProviderConfig>,
     /// For [`QueryMethod::Embedding`] and [`QueryMethod::Hybrid`], the reranker config.
@@ -501,21 +502,30 @@ impl Tool for UserDocumentTool {
         args: serde_json::Value,
     ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, String>> + Send + 'a>> {
         type FileFuture<'a> =
-            Pin<Box<dyn Future<Output = Result<(String, Vec<String>), DocumentError>> + Send + 'a>>;
+            Pin<Box<dyn Future<Output = Result<Vec<String>, DocumentError>> + Send + 'a>>;
 
         Box::pin(async move {
             let input: UserDocumentToolInput =
                 serde_json::from_value(args).map_err(|e| format!("Invalid arguments: {e}"))?;
 
-            if self.filenames.is_empty() {
+            if self.documents.is_empty() {
                 return Err("There are no documents in this session. Ask the user to add some by @ing the file name.".into());
             }
 
-            let filenames = input.filenames.as_ref().unwrap_or(&self.filenames);
-            let session_files: HashSet<_> = self.filenames.iter().collect();
-            if let Some(f) = filenames.iter().find(|f| !session_files.contains(f)) {
+            let all_files: Vec<&str> = self.documents.iter().map(|s| s.0.as_str()).collect();
+            let session_files: HashSet<_> = all_files.iter().collect();
+            if let Some(filenames) = &input.filenames
+                && let Some(f) = filenames
+                    .iter()
+                    .find(|f| !session_files.contains(&f.as_str()))
+            {
                 return Err(format!("File {f} does not exist in the session."));
             }
+
+            let filenames = match &input.filenames {
+                Some(files) => files.iter().map(std::string::String::as_str).collect(),
+                None => all_files,
+            };
 
             let Some(ref embedding_config) = self.embedding_config else {
                 return Err(format!(
@@ -541,15 +551,17 @@ impl Tool for UserDocumentTool {
             }
 
             let mut futures: FuturesUnordered<FileFuture> = FuturesUnordered::new();
-            for filename in filenames {
-                futures.push(Box::pin(process_file(
-                    filename.clone(),
-                    input.query.clone(),
-                    input.query_method,
-                    embedding_config,
-                    reranker_config,
-                    self.client.as_ref(),
-                )));
+            for filename in &filenames {
+                if let Some(doc) = self.documents.get(*filename) {
+                    futures.push(Box::pin(process_document(
+                        doc,
+                        input.query.clone(),
+                        input.query_method,
+                        embedding_config,
+                        reranker_config,
+                        self.client.as_ref(),
+                    )));
+                }
             }
 
             let mut all_results = Vec::with_capacity(filenames.len());
@@ -590,18 +602,23 @@ mod tests {
 
     use super::*;
 
-    fn test_pdf_path() -> String {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    fn test_pdf() -> UserDocument {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("assets/Zotero/storage/7R5XZ5PX/Yedida et al. - 2023 - An expert system for redesigning software for cloud applications.pdf")
-            .to_str()
-            .unwrap()
-            .to_string()
+            .to_string_lossy()
+            .to_string();
+        let text = extract_text(&path);
+
+        UserDocument {
+            filename: "mono2micro.pdf".into(),
+            contents: text.unwrap(),
+            summary: String::new(),
+        }
     }
 
     async fn run_user_document_tool_test(tool: UserDocumentTool, provider_name: &str) {
-        let pdf_path = test_pdf_path();
         let args = json!({
-            "filenames": [pdf_path],
+            "filenames": ["mono2micro.pdf"],
             "query": "What problem does this paper solve?",
             "query_method": "embedding",
         });
@@ -640,7 +657,7 @@ mod tests {
             .expect("VOYAGE_AI_API_KEY must be set for this test");
 
         let tool = UserDocumentTool {
-            filenames: vec![test_pdf_path()],
+            documents: HashMap::from([("mono2micro.pdf".into(), test_pdf())]),
             embedding_config: Some(EmbeddingProviderConfig::OpenAI(OpenAIConfig {
                 api_key,
                 model: String::new(),
@@ -675,7 +692,7 @@ mod tests {
         };
 
         let tool = UserDocumentTool {
-            filenames: vec![test_pdf_path()],
+            documents: HashMap::from([("mono2micro.pdf".into(), test_pdf())]),
             embedding_config: Some(EmbeddingProviderConfig::VoyageAI(voyage_config.clone())),
             reranker_config: Some(RerankProviderConfig::VoyageAI(voyage_config)),
             client: None,
@@ -699,7 +716,7 @@ mod tests {
         };
 
         let tool = UserDocumentTool {
-            filenames: vec![test_pdf_path()],
+            documents: HashMap::from([("mono2micro.pdf".into(), test_pdf())]),
             embedding_config: Some(EmbeddingProviderConfig::Cohere(cohere_config.clone())),
             reranker_config: Some(RerankProviderConfig::Cohere(cohere_config)),
             client: None,
@@ -719,7 +736,7 @@ mod tests {
             .expect("VOYAGE_AI_API_KEY must be set for this test");
 
         let tool = UserDocumentTool {
-            filenames: vec![test_pdf_path()],
+            documents: HashMap::from([("mono2micro.pdf".into(), test_pdf())]),
             embedding_config: Some(EmbeddingProviderConfig::Gemini(GeminiConfig {
                 api_key: gemini_api_key,
                 model: String::new(),
@@ -757,9 +774,9 @@ mod tests {
             }))
             .expect("Failed to create OpenAI client");
 
-        let pdf_path = test_pdf_path();
+        let _documents = test_pdf();
         let tool = UserDocumentTool {
-            filenames: vec![pdf_path.clone()],
+            documents: HashMap::from([("mono2micro.pdf".into(), test_pdf())]),
             embedding_config: Some(EmbeddingProviderConfig::OpenAI(OpenAIConfig {
                 api_key,
                 model: String::new(),
@@ -777,7 +794,7 @@ mod tests {
         };
 
         let args = serde_json::json!({
-            "filenames": [pdf_path],
+            "filenames": ["mono2micro.pdf"],
             "query": "What problem does this paper solve?",
             "query_method": "hybrid",
         });
