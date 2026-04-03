@@ -16,7 +16,7 @@ use zqa_rag::embedding::common::EmbeddingProviderConfig;
 /// ```toml
 /// model_provider = "anthropic"  # Generation model provider
 /// embedding_provider = "voyageai"  # Embedding/reranker model provider
-/// reranker_provider = "voyageai"  # Usually this will be the same as your `embedding_provider`
+/// reranker_provider = "voyageai"  # Set to "" or "none" to disable reranking
 /// max_concurrent_requests = 5  # Max concurrent embedding requests
 /// max_retries = 3  # Max retries when network requests fail
 ///
@@ -80,7 +80,7 @@ pub struct Config {
     #[serde(default = "default_embedding_provider")]
     pub embedding_provider: String,
 
-    /// Reranker provider (voyageai, cohere)
+    /// Reranker provider (voyageai, cohere). Set to "" or "none" to disable reranking.
     #[serde(default = "default_reranker_provider")]
     pub reranker_provider: String,
 

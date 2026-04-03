@@ -287,7 +287,6 @@ pub async fn full_library_to_arrow(
 /// # Errors
 ///
 /// * `ArrowError::LanceError` if vector search fails.
-/// * `ArrowError::LLMError` if the reranking provider could not be found or reranking fails.
 pub async fn vector_search(
     query: String,
     embedding_config: &EmbeddingProviderConfig,
@@ -307,12 +306,25 @@ pub async fn vector_search(
         return Ok(Vec::new());
     }
 
+    // Explicitly disabled reranking
+    if reranker.is_empty() || reranker.eq_ignore_ascii_case("none") {
+        return Ok(filtered_items);
+    }
+
+    let Ok(rerank_provider) = get_reranking_provider(&reranker) else {
+        log::warn!(
+            "'{reranker}' is not a valid reranking provider (supported: voyageai, cohere). \
+        Skipping reranking and returning results as-is."
+        );
+
+        return Ok(filtered_items);
+    };
+
     let item_strings = filtered_items
         .iter()
         .map(|f| f.text.as_str())
         .collect::<Vec<_>>();
 
-    let rerank_provider = get_reranking_provider(&reranker)?;
     let indices = rerank_provider.rerank(&item_strings, &query).await?;
 
     let reranked_items = indices
