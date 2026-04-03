@@ -35,6 +35,7 @@ pub struct Args {
 
 /// A user-imported document that is not from their Zotero library.
 #[allow(dead_code)]
+#[derive(Clone)]
 pub(crate) struct UserDocument {
     /// The filename as on disk
     pub(crate) filename: String,
