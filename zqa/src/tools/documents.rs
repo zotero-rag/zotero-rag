@@ -530,25 +530,28 @@ impl Tool for UserDocumentTool {
                 return Err(format!("File {f} does not exist in the session."));
             }
 
-            let selected_documents: Vec<(&str, &UserDocument)> = if let Some(filenames) = &input.filenames { filenames
-            .iter()
-            .map(|filename| {
-                self.documents
-                    .get_key_value(filename)
-                    .map(|(name, doc)| (name.as_str(), doc))
-                    .ok_or_else(|| {
-                        format!("File {filename} does not exist in the session.")
-                    })
-            })
-            .collect::<Result<_, _>>()? } else {
-                let mut docs = self
-                    .documents
-                    .iter()
-                    .map(|(filename, doc)| (filename.as_str(), doc))
-                    .collect::<Vec<_>>();
-                docs.sort_by(|(a, _), (b, _)| a.cmp(b)); // deterministic output
-                docs
-            };
+            let selected_documents: Vec<(&str, &UserDocument)> =
+                if let Some(filenames) = &input.filenames {
+                    filenames
+                        .iter()
+                        .map(|filename| {
+                            self.documents
+                                .get_key_value(filename)
+                                .map(|(name, doc)| (name.as_str(), doc))
+                                .ok_or_else(|| {
+                                    format!("File {filename} does not exist in the session.")
+                                })
+                        })
+                        .collect::<Result<_, _>>()?
+                } else {
+                    let mut docs = self
+                        .documents
+                        .iter()
+                        .map(|(filename, doc)| (filename.as_str(), doc))
+                        .collect::<Vec<_>>();
+                    docs.sort_by(|(a, _), (b, _)| a.cmp(b)); // deterministic output
+                    docs
+                };
 
             let Some(ref embedding_config) = self.embedding_config else {
                 return Err(format!(
