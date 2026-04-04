@@ -156,11 +156,32 @@ pub(crate) fn tokenize(content: &[u8]) -> Vec<Token<'_>> {
                 }
             }
             State::Name { start } => {
-                if content[i].is_ascii_alphanumeric() {
-                    i += 1;
-                } else {
+                // PDF names can contain many characters, including underscores
+                // We'll accept any character that's not a delimiter or whitespace
+                // Delimiters: ( ) < > [ ] { } / %
+                // Whitespace: null, tab, newline, formfeed, carriage return, space
+                if matches!(
+                    content[i],
+                    b'(' | b')'
+                        | b'<'
+                        | b'>'
+                        | b'['
+                        | b']'
+                        | b'{'
+                        | b'}'
+                        | b'/'
+                        | b'%'
+                        | b'\x00'
+                        | b'\t'
+                        | b'\n'
+                        | b'\x0c'
+                        | b'\r'
+                        | b' '
+                ) {
                     tokens.push(Token::Name(&content[start..i]));
                     state = State::Normal;
+                } else {
+                    i += 1;
                 }
             }
         }
@@ -270,5 +291,27 @@ mod tests {
         assert!(tokens.contains(&Token::Literal(b"World")));
         assert!(tokens.contains(&Token::Op(b"TJ")));
         assert!(tokens.contains(&Token::Op(b"ET")));
+    }
+
+    #[test]
+    fn test_tokenize_font_name_with_underscore() {
+        let content = b"/T1_0 1 Tf";
+        let tokens = tokenize(content);
+        let expected = vec![Token::Name(b"T1_0"), Token::Number(b"1"), Token::Op(b"Tf")];
+
+        assert_eq!(tokens, expected);
+    }
+
+    #[test]
+    fn test_tokenize_font_name_with_number() {
+        let content = b"/F28_2 12.0 Tf";
+        let tokens = tokenize(content);
+        let expected = vec![
+            Token::Name(b"F28_2"),
+            Token::Number(b"12.0"),
+            Token::Op(b"Tf"),
+        ];
+
+        assert_eq!(tokens, expected);
     }
 }
