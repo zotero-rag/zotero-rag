@@ -22,12 +22,12 @@ pub enum CLIError {
     #[error("Configuration error: {0}")]
     ConfigError(String),
     #[error("Mutex poisoning error: {0}")]
-    MutexPoisoningError(String),
+    LockPoisoningError(String),
 }
 
 impl<T> From<PoisonError<T>> for CLIError {
     fn from(value: PoisonError<T>) -> Self {
-        Self::MutexPoisoningError(value.to_string())
+        Self::LockPoisoningError(value.to_string())
     }
 }
 

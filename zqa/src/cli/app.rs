@@ -2,6 +2,7 @@ use crate::cli::placeholder::PlaceholderText;
 use crate::cli::prompts::{get_summarize_prompt, get_title_prompt};
 use crate::cli::readline::get_readline_config;
 use crate::state::{SavedChatHistory, save_conversation};
+use crate::tools::documents::{DocumentsToolFactory, parse_user_document};
 use crate::tools::retrieval::RetrievalTool;
 use crate::tools::summarization::SummarizationTool;
 use crate::utils::arrow::{DbFields, get_schema, library_to_arrow, vector_search};
@@ -34,12 +35,232 @@ use crate::utils::terminal::{DIM_TEXT, RESET};
 use crate::{full_library_to_arrow, utils::library::parse_library_metadata};
 use arrow_ipc::reader::FileReader;
 use arrow_ipc::writer::FileWriter;
+use std::path::Path;
 use std::sync::{Arc, Mutex, atomic};
 use std::{
     fs::File,
     io::{self, BufRead, Write},
     time::Instant,
 };
+
+/// Import a document specified by a user-specified path into the current context.
+///
+/// # Arguments
+///
+/// * `ctx` - A `Context` object that contains CLI args and objects that implement
+///   [`std::io::Write`] for `stdout` and `stderr`.
+/// * `path` - A [`Path`] reference to the file.
+///
+/// # Returns
+///
+/// The key in the `ctx.state.imports` map.
+///
+/// # Errors
+///
+/// * `CLIError::IOError` if the path could not be canonicalized.
+/// * `CLIError::ConfigError` if importing failed; this is usually due to some config error.
+fn import_document<O: Write, E: Write>(
+    ctx: &mut Context<O, E>,
+    path: &Path,
+) -> Result<String, CLIError> {
+    let original_path = path;
+    let key = get_document_session_key(original_path)?;
+
+    // Do expensive work before taking the write lock.
+    let document = Arc::new(
+        parse_user_document(&path)
+            .map_err(|e| CLIError::ConfigError(format!("Failed to import {key}: {e}")))?,
+    );
+
+    let mut imports = ctx.state.imports.write()?;
+    imports.insert(key.clone(), document);
+
+    Ok(key)
+}
+
+/// Given a path to a file, attempt to return a relative path, or return the full canonical path
+/// string. This returns a relative path if either `path` is relative, or if the specified `path` is
+/// in the cwd or a subdirectory thereof.
+///
+/// # Arguments
+///
+/// * `path` - Path reference to the file.
+///
+/// # Errors
+///
+/// * `CLIError::IOError` if the path could not be canonicalized.
+fn get_document_session_key(path: &Path) -> Result<String, CLIError> {
+    let canonical_path = path.canonicalize()?;
+
+    if path.is_relative() {
+        return Ok(path.to_string_lossy().into_owned());
+    }
+
+    if let Ok(cwd) = std::env::current_dir()
+        && let Ok(canonical_cwd) = cwd.canonicalize()
+        && let Ok(relative_path) = canonical_path.strip_prefix(&canonical_cwd)
+    {
+        return Ok(relative_path.to_string_lossy().into_owned());
+    }
+
+    Ok(canonical_path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| canonical_path.to_string_lossy().into_owned()))
+}
+
+/// Remove a document from the context, given its key.
+///
+/// Yes, I know it's silly to have this one function that has two lines and is called only once; the
+/// rationale here is that if you're debugging user-imported document-related features, you'll want
+/// quick access to the functions that perform operations, so locality of behavior wins here.
+///
+/// # Arguments
+///
+/// * `ctx` - A `Context` object that contains CLI args and objects that implement
+///   [`std::io::Write`] for `stdout` and `stderr`.
+/// * `key` - The key of the file in `ctx.state.imports`.
+///
+/// # Returns
+///
+/// Boolean denoting operation success.
+///
+/// # Errors
+///
+/// * `CLIError::LockPoisoningError` if the `RwLock` is poisoned.
+fn remove_document<O: Write, E: Write>(
+    ctx: &mut Context<O, E>,
+    key: &str,
+) -> Result<bool, CLIError> {
+    let mut imports = ctx.state.imports.write()?;
+    Ok(imports.remove(key).is_some())
+}
+
+/// Clear all imported documents from the session.
+///
+/// # Arguments
+///
+/// * `ctx` - A `Context` object that contains CLI args and objects that implement
+///   [`std::io::Write`] for `stdout` and `stderr`.
+///
+/// # Returns
+///
+/// The number of removed documents.
+fn clear_documents<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Result<usize, CLIError> {
+    let mut imports = ctx.state.imports.write()?;
+    let count = imports.len();
+    imports.clear();
+
+    Ok(count)
+}
+
+/// Extract file paths referenced as `@path.pdf` or `@"path with spaces.pdf"`.
+///
+/// # Arguments
+///
+/// * `query` - User query
+///
+/// # Returns
+///
+/// A list of file paths from the user's query.
+fn get_document_mentions(query: &str) -> Vec<String> {
+    let mut mentions = Vec::new();
+    let mut cursor = 0;
+
+    while let Some(at_offset) = query[cursor..].find('@') {
+        let at_idx = cursor + at_offset;
+        if at_idx > 0
+            && query[..at_idx]
+                .chars()
+                .last()
+                .is_some_and(|c| !c.is_whitespace())
+        {
+            cursor = at_idx + 1;
+            continue;
+        }
+
+        let rest = &query[at_idx + 1..];
+        // If the user has such a pathological filename that we'd need to look at escaping...
+        // maybe PEBCAK.
+        if let Some(rest) = rest.strip_prefix('"')
+            && let Some(end_quote_idx) = rest.find('"')
+        {
+            let mention = &rest[..end_quote_idx];
+            if !mention.is_empty() {
+                mentions.push(mention.to_string());
+            }
+
+            // at_idx + 1 + 1 for the stripped " prefix.
+            cursor = at_idx + 2 + end_quote_idx + 1;
+        } else {
+            let end_idx = rest.find(char::is_whitespace).unwrap_or(rest.len());
+            let mention = &rest[..end_idx];
+            if !mention.is_empty() {
+                mentions.push(mention.to_string());
+            }
+            cursor = at_idx + 1 + end_idx;
+        }
+    }
+
+    mentions
+}
+
+/// Given a user query, import all mentioned paths into the state.
+///
+/// # Arguments
+///
+/// * `ctx` - A `Context` object that contains CLI args and objects that implement
+///   [`std::io::Write`] for `stdout` and `stderr`.
+/// * `query` - The user query
+///
+/// # Errors
+///
+/// * `CLIError::IOError` if the path could not be canonicalized or if writing to `ctx.err` failed.
+/// * `CLIError::ConfigError` if importing failed; this is usually due to some config error.
+fn import_documents_from_query<O: Write, E: Write>(
+    ctx: &mut Context<O, E>,
+    query: &str,
+) -> Result<(), CLIError> {
+    for mention in get_document_mentions(query) {
+        let path = import_document(ctx, Path::new(&mention))?;
+        writeln!(&mut ctx.err, "{DIM_TEXT}Imported document: {path}{RESET}")?;
+    }
+
+    Ok(())
+}
+
+/// Get tools to work with user-imported documents.
+///
+/// # Arguments
+///
+/// * `ctx` - A `Context` object that contains CLI args and objects that implement
+///   [`std::io::Write`] for `stdout` and `stderr`.
+///
+/// # Returns
+///
+/// A list of tools from [`crate::tools::documents::DocumentsToolFactory`].
+///
+/// # Errors
+///
+/// * `LLMError::InvalidProviderError` if the provider is not supported
+fn get_user_document_tools<O: Write, E: Write>(
+    ctx: &mut Context<O, E>,
+) -> Result<Vec<Box<dyn Tool>>, CLIError> {
+    let imports = ctx.state.imports.clone();
+    let embedding_config = ctx.config.get_embedding_config();
+    let reranker_config = ctx.config.get_reranker_config();
+
+    let client = ctx
+        .config
+        .get_generation_config()
+        .map(get_client_with_config)
+        .transpose()?;
+
+    Ok(
+        DocumentsToolFactory::new(&imports, embedding_config, reranker_config, client)
+            .build_tools(),
+    )
+}
 
 /// A file that contains parsed PDF texts from the user's Zotero library. In case the
 /// embedding generation fails, the user does not need to rerun the full PDF parsing,
@@ -54,7 +275,7 @@ const BATCH_ITER_FILE: &str = "batch_iter.bin";
 /// # Arguments:
 ///
 /// * `ctx` - A `Context` object that contains CLI args and objects that implement
-///   `std::io::Write` for `stdout` and `stderr`.
+///   [`std::io::Write`] for `stdout` and `stderr`.
 /// * `fix_zeros` - If `true`, fixes zero-embedding vectors, but does not handle PDFs
 ///   parsed but not embedded.
 async fn embed<O: Write, E: Write>(
@@ -252,7 +473,7 @@ async fn dedup<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Result<usize, CLI
 /// # Arguments:
 ///
 /// * `ctx` - A `Context` object that contains CLI args and objects that implement
-///   `std::io::Write` for `stdout` and `stderr`.
+///   [`std::io::Write`] for `stdout` and `stderr`.
 async fn checkhealth<O: Write, E: Write>(ctx: &mut Context<O, E>) {
     let _ = match lancedb_health_check(&ctx.config.embedding_provider).await {
         Ok(result) => writeln!(ctx.out, "{result}"),
@@ -284,7 +505,7 @@ async fn update_indices<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Result<(
 /// # Arguments:
 ///
 /// * `ctx` - A `Context` object that contains CLI args and objects that implement
-///   `std::io::Write` for `stdout` and `stderr`.
+///   [`std::io::Write`] for `stdout` and `stderr`.
 async fn doctor<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Result<(), CLIError> {
     if let Err(e) = rag_doctor(&ctx.config.embedding_provider, &mut ctx.out).await {
         writeln!(ctx.err, "{e}")?;
@@ -302,7 +523,7 @@ async fn doctor<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Result<(), CLIEr
 /// # Arguments:
 ///
 /// * `ctx` - A `Context` object that contains CLI args and objects that implement
-///   `std::io::Write` for `stdout` and `stderr`.
+///   [`std::io::Write`] for `stdout` and `stderr`.
 pub(crate) async fn process<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Result<(), CLIError> {
     const WARNING_THRESHOLD: usize = 100;
 
@@ -414,7 +635,7 @@ fn format_number(num: u32) -> String {
 /// # Arguments
 ///
 /// * `ctx` - A `Context` object that contains CLI args and objects that implement
-///   `std::io::Write` for `stdout` and `stderr`.
+///   [`std::io::Write`] for `stdout` and `stderr`.
 async fn search_for_papers<O: Write, E: Write>(
     query: String,
     ctx: &mut Context<O, E>,
@@ -455,7 +676,7 @@ async fn search_for_papers<O: Write, E: Write>(
 ///
 /// * `query` - The user query.
 /// * `ctx` - A `Context` object that contains CLI args and objects that implement
-///   `std::io::Write` for `stdout` and `stderr`.
+///   [`std::io::Write`] for `stdout` and `stderr`.
 #[allow(clippy::too_many_lines)]
 async fn run_query<O: Write, E: Write>(
     query: String,
@@ -523,7 +744,10 @@ async fn run_query<O: Write, E: Write>(
     let retrieval_tool = RetrievalTool::new(embedding_config, reranker_provider);
     let summarization_tool = SummarizationTool::new(llm_client.clone());
     let summarization_tool_clone = summarization_tool.clone();
-    let tools: Vec<Box<dyn Tool>> = vec![Box::new(retrieval_tool), Box::new(summarization_tool)];
+    let mut tools: Vec<Box<dyn Tool>> =
+        vec![Box::new(retrieval_tool), Box::new(summarization_tool)];
+    let document_tools = get_user_document_tools(ctx)?;
+    tools.extend(document_tools);
 
     let chat_history = Arc::clone(&ctx.state.chat_history);
 
@@ -660,7 +884,7 @@ async fn run_query<O: Write, E: Write>(
 /// # Arguments
 ///
 /// * `ctx` - A `Context` object that contains CLI args and objects that implement
-///   `std::io::Write` for `stdout` and `stderr`.
+///   [`std::io::Write`] for `stdout` and `stderr`.
 async fn stats<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Result<(), CLIError> {
     match db_statistics().await {
         Ok(stats) => writeln!(&mut ctx.out, "{stats}")?,
@@ -679,13 +903,13 @@ async fn stats<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Result<(), CLIErr
 /// # Arguments
 ///
 /// * `ctx` - A `Context` object that contains CLI args and objects that implement
-///   `std::io::Write` for `stdout` and `stderr`.
+///   [`std::io::Write`] for `stdout` and `stderr`.
 /// * `reader` - A buffered reader used to read the user's selection.
 ///
 /// # Errors
 ///
 /// * `CLIError::IOError` - If `writeln!` or reading input fails.
-/// * `CLIError::MutexPoisoningError` - If a lock on the context chat history could not be
+/// * `CLIError::LockPoisoningError` - If a lock on the context chat history could not be
 ///   obtained.
 fn resume<O: Write, E: Write, R: BufRead>(
     ctx: &mut Context<O, E>,
@@ -790,7 +1014,7 @@ fn save_current_conversation<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Res
 ///
 /// * `command` - The command string entered by the user.
 /// * `ctx` - A `Context` object that contains CLI args and objects that implement
-///   `std::io::Write` for `stdout` and `stderr`.
+///   [`std::io::Write`] for `stdout` and `stderr`.
 ///
 /// # Returns
 ///
@@ -961,6 +1185,14 @@ pub(crate) async fn handle_command<O: Write, E: Write>(
                 return Ok(true);
             }
 
+            if let Err(e) = import_documents_from_query(ctx, query) {
+                writeln!(
+                    &mut ctx.err,
+                    "Failed to import referenced documents. You may find relevant error messages below:\n\t{e}",
+                )?;
+                return Ok(true);
+            }
+
             if let Err(e) = run_query(query.into(), ctx).await {
                 writeln!(
                     &mut ctx.err,
@@ -977,7 +1209,7 @@ pub(crate) async fn handle_command<O: Write, E: Write>(
 /// # Arguments
 ///
 /// * `ctx` - A `Context` object that contains CLI args and objects that implement
-///   `std::io::Write` for `stdout` and `stderr`.
+///   [`std::io::Write`] for `stdout` and `stderr`.
 ///
 /// # Errors
 ///
@@ -1049,7 +1281,9 @@ pub(crate) async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<()
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use crate::cli::app::{BATCH_ITER_FILE, handle_command, resume};
+    use crate::cli::app::{
+        BATCH_ITER_FILE, get_document_mentions, get_document_session_key, handle_command, resume,
+    };
     use crate::common::State;
     use crate::config::{Config, VoyageAIConfig};
     use crate::state::{SavedChatHistory, save_conversation};
@@ -1449,6 +1683,50 @@ pub(crate) mod tests {
             let err = String::from_utf8(ctx.err.into_inner()).unwrap();
             test_contains!(err, "Invalid selection.");
         });
+    }
+
+    #[test]
+    fn test_get_document_mentions_unquoted() {
+        let mentions = get_document_mentions("Compare @symbols.pdf with @subtables.pdf");
+        test_eq!(mentions, vec!["symbols.pdf", "subtables.pdf"]);
+    }
+
+    #[test]
+    fn test_get_document_mentions_quoted_spaces() {
+        let mentions = get_document_mentions("Summarize @\"image 1.pdf\" for me");
+        test_eq!(mentions, vec!["image 1.pdf"]);
+    }
+
+    #[test]
+    fn test_get_document_mentions_ignores_email_like_text() {
+        let mentions = get_document_mentions("email me at test@example.com about @symbols.pdf");
+        test_eq!(mentions, vec!["symbols.pdf"]);
+    }
+
+    #[test]
+    fn test_get_document_session_key_preserves_relative_input() {
+        let original = std::path::Path::new("papers/image 1.pdf");
+        let canonical = std::path::Path::new("/tmp/papers/image 1.pdf");
+        let key = get_document_session_key(original, canonical);
+        test_eq!(key, "papers/image 1.pdf");
+    }
+
+    #[test]
+    #[serial]
+    fn test_get_document_session_key_makes_absolute_path_relative_to_cwd() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let original_cwd = std::env::current_dir().unwrap();
+        let nested_dir = temp_dir.path().join("papers");
+        std::fs::create_dir_all(&nested_dir).unwrap();
+        let path = nested_dir.join("image 1.pdf");
+        std::fs::File::create(&path).unwrap();
+        let canonical = path.canonicalize().unwrap();
+
+        std::env::set_current_dir(temp_dir.path()).unwrap();
+        let key = get_document_session_key(&canonical, &canonical);
+        std::env::set_current_dir(original_cwd).unwrap();
+
+        test_eq!(key, "papers/image 1.pdf");
     }
 
     #[tokio::test]
