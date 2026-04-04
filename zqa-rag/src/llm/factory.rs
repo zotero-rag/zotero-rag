@@ -43,7 +43,8 @@ impl ApiClient for LLMClient {
 /// Returns an ApiClient implementation with provided configuration
 ///
 /// # Errors
-/// Returns LLMError::InvalidProviderError if the provider is not supported
+///
+/// * `LLMError::InvalidProviderError` if the provider is not supported
 pub fn get_client_with_config(config: LLMClientConfig) -> Result<LLMClient, LLMError> {
     match config {
         LLMClientConfig::Anthropic(cfg) => {
