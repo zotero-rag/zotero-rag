@@ -29,8 +29,12 @@ use crate::utils::rag::ModelResponse;
 
 // TODO: Tune this in a future story; possibly look at embedding provider
 // docs and create a constant or a function.
+
+/// Threshold for cosine similarity to keep a chunk
 const SCORE_THRESHOLD: f32 = 0.5;
+/// If no chunks are found, this is how many chunks we keep.
 const FALLBACK_CHUNK_LIMIT: usize = 8;
+/// Threshold for percentage of chunks falling in one section, to "zoom out" to the parent section.
 const ZOOM_OUT_THRESHOLD: f32 = 0.25;
 
 /// Newtype wrapper for `zqa_pdftools` type-erased error.
@@ -43,6 +47,7 @@ impl std::fmt::Display for TextExtractionError {
     }
 }
 
+/// Errors arising from working with user-imported documents.
 #[derive(Debug, Error)]
 pub enum DocumentError {
     #[error("Error getting embedding provider: {0}")]
@@ -59,21 +64,31 @@ pub enum DocumentError {
     TextExtractionFailed(TextExtractionError),
 }
 
+/// A context object containing a thread-safe reference to user-imported documents and configs
+/// necessary to process them.
 pub(crate) struct DocumentsToolContext {
+    /// User documents. These are shared with the tools created by [`DocumentsToolFactory`].
     pub(crate) documents: Arc<RwLock<HashMap<String, Arc<UserDocument>>>>,
-    pub(crate) embedding_config: Option<EmbeddingProviderConfig>,
+    /// The config for the embedding provider.
+    pub(crate) embedding_config: EmbeddingProviderConfig,
+    /// The config for the reranking provider. May be `None`, in which case reranking is skipped.
     pub(crate) reranker_config: Option<RerankProviderConfig>,
+    /// The client to interface with the LLM provider's text generation endpoint.
     pub(crate) client: Option<LLMClient>,
 }
 
+/// Factory to create the canonical toolset used by agents to interact with the user-imported
+/// documents. It holds a thread-safe reference to a [`DocumentsToolContext`], which is effectively
+/// the single source of truth for what documents are visible to agents.
 pub(crate) struct DocumentsToolFactory {
     ctx: Arc<DocumentsToolContext>,
 }
 
 impl DocumentsToolFactory {
+    /// Create a new factory.
     pub(crate) fn new(
         imports: &Arc<RwLock<HashMap<String, Arc<UserDocument>>>>,
-        embedding_config: Option<EmbeddingProviderConfig>,
+        embedding_config: EmbeddingProviderConfig,
         reranker_config: Option<RerankProviderConfig>,
         client: Option<LLMClient>,
     ) -> Self {
@@ -89,6 +104,8 @@ impl DocumentsToolFactory {
         }
     }
 
+    /// Return a list of tools to interact with the user-imported documents. As of now, all the
+    /// tools are effectively pure functions in that they do not modify anything in the context.
     pub(crate) fn build_tools(&self) -> Vec<Box<dyn Tool>> {
         vec![
             Box::new(ListDocumentsTool::new(Arc::clone(&self.ctx))),
@@ -128,7 +145,9 @@ pub(crate) fn parse_user_document(path: &Path) -> Result<UserDocument, DocumentE
     })
 }
 
+/// Default value for the minimum length of a section to be considered a summary.
 const DEFAULT_MIN_SUMMARY_SEC_LEN: usize = 100;
+/// Default value for the maximum position a summary section can start.
 const DEFAULT_MAX_SUMMARY_SEC_POS: usize = 1000;
 
 /// Configuration passed to [`get_summary_end_index`] with heuristic thresholds for the maximum
@@ -194,13 +213,17 @@ fn get_summary_end_index(
     }
 }
 
+/// The query method to use.
 #[derive(Debug, Clone, Copy, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 enum QueryMethod {
+    /// Only rely on embeddings + optionally, reranking if a config was provided.
     Embedding,
+    /// Use an agent to clean up the chunks fetched by the embedding + optional reranking pipeline.
     Hybrid,
 }
 
+/// SIMD-friendly dot-product.
 fn dot<'a, T>(a: T, b: T) -> f32
 where
     T: Iterator<Item = &'a f32>,
@@ -208,6 +231,7 @@ where
     a.zip(b).map(|(x, y)| x * y).sum()
 }
 
+/// Scale the provided vector to unit norm.
 fn normalize(v: &[f32]) -> Vec<f32> {
     let norm = v.iter().map(|x| x * x).sum::<f32>().sqrt();
     if norm > f32::EPSILON {
@@ -246,6 +270,7 @@ applicable. However, you MUST return the text verbatim.
     )
 }
 
+/// Get embeddings for a list of texts using the specified embedding provider.
 fn get_embeddings(
     texts: &[&str],
     embedding_provider: &Arc<dyn EmbeddingFunction>,
@@ -330,12 +355,12 @@ async fn embedding_retrieval(
     let chunks = chunker.chunk();
 
     let chunk_texts: Vec<String> = chunks.into_iter().map(|c| c.content.clone()).collect();
-    let provider = get_embedding_provider(embedding_config.provider_name())?;
-
     let chunk_text_refs: Vec<&str> = chunk_texts
         .iter()
         .map(std::string::String::as_str)
         .collect();
+
+    let provider = get_embedding_provider(embedding_config.provider_name())?;
     let chunk_embeddings = get_embeddings(&chunk_text_refs, &provider)?;
 
     let query_embeddings = get_embeddings(&[query], &provider)?;
@@ -493,11 +518,13 @@ async fn process_document(
             };
 
             // Handle the case for the last section
-            let end_byte = sections
-                .get(effective_idx + 1)
-                .map_or(text_content.len(), |s| s.byte_index);
-            returned_chunks
-                .push(text_content[sections[effective_idx].byte_index..end_byte].to_string());
+            if sections.len() > effective_idx {
+                let end_byte = sections
+                    .get(effective_idx + 1)
+                    .map_or(text_content.len(), |s| s.byte_index);
+                returned_chunks
+                    .push(text_content[sections[effective_idx].byte_index..end_byte].to_string());
+            }
         }
 
         if returned_chunks.is_empty() {
@@ -534,12 +561,16 @@ async fn process_document(
     }
 }
 
+/// Result of the [`QueryDocumentsTool`].
 #[derive(serde::Serialize)]
 struct QueryDocumentsResult {
+    /// The filename, corresponding to a key in the context's `documents`.
     filename: String,
+    /// The chunks extracted from the file.
     chunks: Vec<String>,
 }
 
+/// Input to [`QueryDocumentsTool`].
 #[derive(Deserialize, JsonSchema)]
 struct QueryDocumentsToolInput {
     /// The filenames to use. Optional; if `None`, will use all files currently selected by the
@@ -551,6 +582,8 @@ struct QueryDocumentsToolInput {
     query_method: QueryMethod,
 }
 
+/// The [`ListDocumentsTool`] takes no input, but we need an empty struct as opposed to a unit type
+/// to pass to `schema_for`.
 #[derive(Deserialize, JsonSchema)]
 struct ListDocumentsToolInput {}
 
@@ -634,54 +667,19 @@ impl Tool for QueryDocumentsTool {
         Box::pin(async move {
             let input: QueryDocumentsToolInput =
                 serde_json::from_value(args).map_err(|e| format!("Invalid arguments: {e}"))?;
-            let embedding_config = self.ctx.embedding_config.clone().ok_or_else(|| {
-                log::debug!("Invalid query method {:?} (no embedding config provided)", input.query_method);
-         format!(
-             "Query method {:?} was used, but no embedding config was provided during tool creation. This is          likely a bug.",
-             input.query_method
-         )
-     })?;
 
-            if self.ctx.documents.is_empty() {
-                return Err("There are no documents in this session. Ask the user to add some by @ing the file name.".into());
-            }
+            let embedding_config = self.ctx.embedding_config.clone();
+            let reranker_config = self.ctx.reranker_config.clone().ok_or_else(|| {
+                log::debug!("Invalid query method {:?} (no reranker config provided)", input.query_method);
+                format!("Query method {:?} was used, but no reranker config was provided during tool creation. This is likely a bug.",
+                    input.query_method
+                 )
+             })?;
 
-            let all_files: Vec<&str> = self.ctx.documents.iter().map(|s| s.0.as_str()).collect();
-            let session_files: HashSet<_> = all_files.iter().collect();
-            if let Some(filenames) = &input.filenames
-                && let Some(f) = filenames
-                    .iter()
-                    .find(|f| !session_files.contains(&f.as_str()))
-            {
-                return Err(format!("File {f} does not exist in the session."));
-            }
-
-            let selected_documents: Vec<(&str, &UserDocument)> =
-                if let Some(filenames) = &input.filenames {
-                    filenames
-                        .iter()
-                        .map(|filename| {
-                            self.documents
-                                .get_key_value(filename)
-                                .map(|(name, doc)| (name.as_str(), doc))
-                                .ok_or_else(|| {
-                                    format!("File {filename} does not exist in the session.")
-                                })
-                        })
-                        .collect::<Result<_, _>>()?
-                } else {
-                    let mut docs = self
-                        .documents
-                        .iter()
-                        .map(|(filename, doc)| (filename.as_str(), doc))
-                        .collect::<Vec<_>>();
-                    docs.sort_by(|(a, _), (b, _)| a.cmp(b)); // deterministic output
-                    docs
-                };
-
-            let Some(ref embedding_config) = self.ctx.embedding_config else {
-                return Err(format!(
-                    "Query method {:?} was used, but no embedding config was provided during tool creation. This is likely a bug.",
+            let client = self.ctx.client.clone();
+            if client.is_none() && matches!(input.query_method, QueryMethod::Hybrid) {
+                log::debug!(
+                    "Invalid query method {:?} (no LLM client passed)",
                     input.query_method
                 );
 
@@ -700,10 +698,11 @@ impl Tool for QueryDocumentsTool {
                     log::debug!("Error in QueryDocumentsTool: no documents in session.");
 
                     return Err(
-                 "There are no documents in this session. Ask the user to add some by @ing the file name."
-                     .into(),
-             );
+                        "There are no documents in this session. Ask the user to add some by @ing the file name."
+                        .into(),
+                    );
                 }
+
                 if let Some(filenames) = &input.filenames {
                     filenames
                         .iter()
@@ -864,13 +863,13 @@ mod tests {
                 "mono2micro.pdf".into(),
                 Arc::new(test_pdf()),
             )]))),
-            embedding_config: Some(EmbeddingProviderConfig::OpenAI(OpenAIConfig {
+            embedding_config: EmbeddingProviderConfig::OpenAI(OpenAIConfig {
                 api_key,
                 model: String::new(),
                 max_tokens: 0,
                 embedding_model: DEFAULT_OPENAI_EMBEDDING_MODEL.to_string(),
                 embedding_dims: DEFAULT_OPENAI_EMBEDDING_DIM as usize,
-            })),
+            }),
             reranker_config: Some(RerankProviderConfig::VoyageAI(VoyageAIConfig {
                 api_key: voyage_api_key,
                 embedding_model: DEFAULT_VOYAGE_EMBEDDING_MODEL.to_string(),
@@ -903,7 +902,7 @@ mod tests {
                 "mono2micro.pdf".into(),
                 Arc::new(test_pdf()),
             )]))),
-            embedding_config: Some(EmbeddingProviderConfig::VoyageAI(voyage_config.clone())),
+            embedding_config: EmbeddingProviderConfig::VoyageAI(voyage_config.clone()),
             reranker_config: Some(RerankProviderConfig::VoyageAI(voyage_config)),
             client: None,
         });
@@ -931,7 +930,7 @@ mod tests {
                 "mono2micro.pdf".into(),
                 Arc::new(test_pdf()),
             )]))),
-            embedding_config: Some(EmbeddingProviderConfig::Cohere(cohere_config.clone())),
+            embedding_config: EmbeddingProviderConfig::Cohere(cohere_config.clone()),
             reranker_config: Some(RerankProviderConfig::Cohere(cohere_config)),
             client: None,
         });
@@ -955,12 +954,12 @@ mod tests {
                 "mono2micro.pdf".into(),
                 Arc::new(test_pdf()),
             )]))),
-            embedding_config: Some(EmbeddingProviderConfig::Gemini(GeminiConfig {
+            embedding_config: EmbeddingProviderConfig::Gemini(GeminiConfig {
                 api_key: gemini_api_key,
                 model: String::new(),
                 embedding_model: DEFAULT_GEMINI_EMBEDDING_MODEL.to_string(),
                 embedding_dims: DEFAULT_GEMINI_EMBEDDING_DIM as usize,
-            })),
+            }),
             reranker_config: Some(RerankProviderConfig::VoyageAI(VoyageAIConfig {
                 api_key: voyage_api_key,
                 embedding_model: DEFAULT_VOYAGE_EMBEDDING_MODEL.to_string(),
@@ -999,13 +998,13 @@ mod tests {
                 "mono2micro.pdf".into(),
                 Arc::new(test_pdf()),
             )]))),
-            embedding_config: Some(EmbeddingProviderConfig::OpenAI(OpenAIConfig {
+            embedding_config: EmbeddingProviderConfig::OpenAI(OpenAIConfig {
                 api_key,
                 model: String::new(),
                 max_tokens: 0,
                 embedding_model: DEFAULT_OPENAI_EMBEDDING_MODEL.to_string(),
                 embedding_dims: DEFAULT_OPENAI_EMBEDDING_DIM as usize,
-            })),
+            }),
             reranker_config: Some(RerankProviderConfig::VoyageAI(VoyageAIConfig {
                 api_key: voyage_api_key,
                 embedding_model: DEFAULT_VOYAGE_EMBEDDING_MODEL.to_string(),
