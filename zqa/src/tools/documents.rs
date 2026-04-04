@@ -655,6 +655,7 @@ impl Tool for QueryDocumentsTool {
         schema_for!(QueryDocumentsToolInput)
     }
 
+    #[allow(clippy::too_many_lines)]
     fn call<'a>(
         &'a self,
         args: serde_json::Value,
