@@ -31,7 +31,7 @@ use crate::utils::rag::ModelResponse;
 // docs and create a constant or a function.
 
 /// Threshold for cosine similarity to keep a chunk
-const SCORE_THRESHOLD: f32 = 0.5;
+const SCORE_THRESHOLD: f32 = 0.7;
 /// If no chunks are found, this is how many chunks we keep.
 const FALLBACK_CHUNK_LIMIT: usize = 8;
 /// Threshold for percentage of chunks falling in one section, to "zoom out" to the parent section.
@@ -349,9 +349,9 @@ async fn embedding_retrieval(
     query: &str,
     contents: &ExtractedContent,
     embedding_config: &EmbeddingProviderConfig,
-    reranker_config: &RerankProviderConfig,
+    reranker_config: Option<&RerankProviderConfig>,
 ) -> Result<Vec<String>, DocumentError> {
-    let chunker = Chunker::new(contents.clone(), ChunkingStrategy::SectionBased(4096));
+    let chunker = Chunker::new(contents.clone(), ChunkingStrategy::SectionBased(2048));
     let chunks = chunker.chunk();
 
     let chunk_texts: Vec<String> = chunks.into_iter().map(|c| c.content.clone()).collect();
@@ -409,6 +409,13 @@ async fn embedding_retrieval(
         return Ok(Vec::new());
     }
 
+    let Some(reranker_config) = reranker_config else {
+        return Ok(kept_chunks
+            .iter()
+            .map(std::string::ToString::to_string)
+            .collect());
+    };
+
     let reranker = get_reranking_provider(reranker_config.provider_name())?;
     let reranked_idx = reranker.rerank(&kept_chunks, query).await?;
 
@@ -459,7 +466,7 @@ async fn process_document(
     query: &str,
     query_method: QueryMethod,
     embedding_config: &EmbeddingProviderConfig,
-    reranker_config: &RerankProviderConfig,
+    reranker_config: Option<&RerankProviderConfig>,
     client: Option<&LLMClient>,
 ) -> Result<Vec<String>, DocumentError> {
     let reranked_chunks =
@@ -670,13 +677,7 @@ impl Tool for QueryDocumentsTool {
                 serde_json::from_value(args).map_err(|e| format!("Invalid arguments: {e}"))?;
 
             let embedding_config = self.ctx.embedding_config.clone();
-            let reranker_config = self.ctx.reranker_config.clone().ok_or_else(|| {
-                log::debug!("Invalid query method {:?} (no reranker config provided)", input.query_method);
-                format!("Query method {:?} was used, but no reranker config was provided during tool creation. This is likely a bug.",
-                    input.query_method
-                 )
-             })?;
-
+            let reranker_config = self.ctx.reranker_config.clone();
             let client = self.ctx.client.clone();
             if client.is_none() && matches!(input.query_method, QueryMethod::Hybrid) {
                 log::debug!(
@@ -743,7 +744,7 @@ impl Tool for QueryDocumentsTool {
                         &query,
                         query_method,
                         &embedding_config,
-                        &reranker_config,
+                        reranker_config.as_ref(),
                         client.as_ref(),
                     )
                     .await

@@ -133,11 +133,9 @@ fn get_active_mention(line: &str, pos: usize) -> Option<MentionSpan<'_>> {
             query,
             force_quotes: true,
         })
+    } else if after_at.contains(char::is_whitespace) {
+        None
     } else {
-        if after_at.contains(char::is_whitespace) {
-            return None;
-        }
-
         Some(MentionSpan {
             start: at_pos + 1,
             query: after_at,
