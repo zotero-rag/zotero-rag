@@ -3,9 +3,10 @@ use fern;
 use humantime;
 use log::LevelFilter;
 use std::{
+    collections::HashMap,
     io::Write,
     sync::{
-        Arc, Mutex,
+        Arc, Mutex, RwLock,
         atomic::{AtomicBool, AtomicU64},
     },
 };
@@ -60,7 +61,7 @@ pub(crate) struct State {
     pub(crate) session_cost: AtomicU64,
     /// Extracted content for imported documents
     #[allow(dead_code)]
-    pub(crate) imports: Vec<UserDocument>,
+    pub(crate) imports: Arc<RwLock<HashMap<String, Arc<UserDocument>>>>,
 }
 
 /// A structure that holds the application context, including CLI arguments and an writers
