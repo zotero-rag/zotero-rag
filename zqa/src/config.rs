@@ -9,6 +9,7 @@ use zqa_rag::config::LLMClientConfig;
 use zqa_rag::constants::*;
 use zqa_rag::constants::{DEFAULT_OPENAI_EMBEDDING_DIM, DEFAULT_OPENAI_EMBEDDING_MODEL};
 use zqa_rag::embedding::common::EmbeddingProviderConfig;
+use zqa_rag::reranking::common::RerankProviderConfig;
 
 /// TOML config. Below is an example config with all the defaults. The TOML config is
 /// overridden by environment variables.
@@ -284,16 +285,16 @@ impl Config {
     }
 
     #[must_use]
-    pub fn get_reranker_config(&self) -> Option<EmbeddingProviderConfig> {
+    pub fn get_reranker_config(&self) -> Option<RerankProviderConfig> {
         match self.reranker_provider.as_str() {
             "voyageai" => self
                 .voyageai
                 .as_ref()
-                .map(|cfg| EmbeddingProviderConfig::VoyageAI(cfg.clone().into())),
+                .map(|cfg| RerankProviderConfig::VoyageAI(cfg.clone().into())),
             "cohere" => self
                 .cohere
                 .as_ref()
-                .map(|cfg| EmbeddingProviderConfig::Cohere(cfg.clone().into())),
+                .map(|cfg| RerankProviderConfig::Cohere(cfg.clone().into())),
             _ => None,
         }
     }

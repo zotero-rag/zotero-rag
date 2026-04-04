@@ -9,12 +9,8 @@ use lancedb::embeddings::EmbeddingFunction;
 use schemars::{JsonSchema, schema_for};
 use serde::Deserialize;
 use serde_json::json;
-use std::sync::Arc;
-use std::{
-    collections::{HashMap, HashSet},
-    path::Path,
-    pin::Pin,
-};
+use std::sync::{Arc, RwLock};
+use std::{collections::HashMap, path::Path, pin::Pin};
 use thiserror::Error;
 use zqa_rag::llm::base::ChatRequest;
 
@@ -33,7 +29,8 @@ use crate::utils::rag::ModelResponse;
 
 // TODO: Tune this in a future story; possibly look at embedding provider
 // docs and create a constant or a function.
-const SCORE_THRESHOLD: f32 = 0.7;
+const SCORE_THRESHOLD: f32 = 0.5;
+const FALLBACK_CHUNK_LIMIT: usize = 8;
 const ZOOM_OUT_THRESHOLD: f32 = 0.25;
 
 /// Newtype wrapper for `zqa_pdftools` type-erased error.
@@ -63,7 +60,7 @@ pub enum DocumentError {
 }
 
 pub(crate) struct DocumentsToolContext {
-    pub(crate) documents: HashMap<String, Arc<UserDocument>>,
+    pub(crate) documents: Arc<RwLock<HashMap<String, Arc<UserDocument>>>>,
     pub(crate) embedding_config: Option<EmbeddingProviderConfig>,
     pub(crate) reranker_config: Option<RerankProviderConfig>,
     pub(crate) client: Option<LLMClient>,
@@ -75,15 +72,12 @@ pub(crate) struct DocumentsToolFactory {
 
 impl DocumentsToolFactory {
     pub(crate) fn new(
-        imports: Vec<UserDocument>,
+        imports: &Arc<RwLock<HashMap<String, Arc<UserDocument>>>>,
         embedding_config: Option<EmbeddingProviderConfig>,
         reranker_config: Option<RerankProviderConfig>,
         client: Option<LLMClient>,
     ) -> Self {
-        let documents = imports
-            .into_iter()
-            .map(|doc| (doc.filename.clone(), Arc::new(doc)))
-            .collect();
+        let documents = Arc::clone(imports);
 
         Self {
             ctx: Arc::new(DocumentsToolContext {
@@ -223,7 +217,7 @@ fn normalize(v: &[f32]) -> Vec<f32> {
     }
 }
 
-/// Get the prompt used in [`UserDocumentTool`] when a sub-agent is enabled.
+/// Get the prompt used in [`QueryDocumentsTool`] when a sub-agent is enabled.
 ///
 /// # Arguments
 ///
@@ -332,7 +326,7 @@ async fn embedding_retrieval(
     embedding_config: &EmbeddingProviderConfig,
     reranker_config: &RerankProviderConfig,
 ) -> Result<Vec<String>, DocumentError> {
-    let chunker = Chunker::new(contents.clone(), ChunkingStrategy::SectionBased(2048));
+    let chunker = Chunker::new(contents.clone(), ChunkingStrategy::SectionBased(4096));
     let chunks = chunker.chunk();
 
     let chunk_texts: Vec<String> = chunks.into_iter().map(|c| c.content.clone()).collect();
@@ -358,12 +352,33 @@ async fn embedding_retrieval(
         .map(|chunk| dot(chunk.iter(), query_normalized.iter()))
         .collect();
 
-    let kept_chunks: Vec<&str> = scores
-        .into_iter()
+    let mut kept_chunks: Vec<&str> = scores
+        .iter()
+        .copied()
         .enumerate()
         .filter(|(_, v)| *v >= SCORE_THRESHOLD)
         .map(|(i, _)| chunk_texts[i].as_str())
         .collect();
+
+    log::debug!("[embedding_retrieval] Kept chunks: {kept_chunks:#?}");
+
+    if kept_chunks.is_empty() {
+        let mut scored_indices = scores.iter().copied().enumerate().collect::<Vec<_>>();
+        scored_indices.sort_by(|a, b| b.1.total_cmp(&a.1));
+
+        kept_chunks = scored_indices
+            .into_iter()
+            .take(FALLBACK_CHUNK_LIMIT)
+            .map(|(i, _)| chunk_texts[i].as_str())
+            .collect();
+
+        log::debug!(
+            "No chunks passed score threshold {}; falling back to top {} chunk(s) for query '{}'",
+            SCORE_THRESHOLD,
+            kept_chunks.len(),
+            query
+        );
+    }
 
     if kept_chunks.is_empty() {
         return Ok(Vec::new());
@@ -425,6 +440,17 @@ async fn process_document(
     let reranked_chunks =
         embedding_retrieval(query, &document.contents, embedding_config, reranker_config).await?;
 
+    log::debug!("Reranked chunks: {reranked_chunks:#?}");
+
+    if reranked_chunks.is_empty() {
+        log::debug!(
+            "No document chunks passed retrieval for query '{}' in file '{}'",
+            query,
+            document.filename
+        );
+        return Ok(Vec::new());
+    }
+
     if let QueryMethod::Hybrid = query_method {
         let Some(client) = client else {
             return Err(DocumentError::BadConfig(
@@ -474,6 +500,15 @@ async fn process_document(
                 .push(text_content[sections[effective_idx].byte_index..end_byte].to_string());
         }
 
+        if returned_chunks.is_empty() {
+            log::debug!(
+                "No expanded section chunks found for query '{}' in file '{}'; falling back to reranked chunks",
+                query,
+                document.filename
+            );
+            return Ok(reranked_chunks);
+        }
+
         let result = call_subagent(
             query,
             &returned_chunks
@@ -516,6 +551,9 @@ struct QueryDocumentsToolInput {
     query_method: QueryMethod,
 }
 
+#[derive(Deserialize, JsonSchema)]
+struct ListDocumentsToolInput {}
+
 /// A tool to list available user-imported documents.
 pub(crate) struct ListDocumentsTool {
     ctx: Arc<DocumentsToolContext>,
@@ -537,15 +575,24 @@ impl Tool for ListDocumentsTool {
     }
 
     fn parameters(&self) -> schemars::Schema {
-        schemars::schema_for!(())
+        schema_for!(ListDocumentsToolInput)
     }
 
     fn call<'a>(
         &'a self,
-        _args: serde_json::Value,
+        args: serde_json::Value,
     ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, String>> + Send + 'a>> {
         Box::pin(async move {
-            let files: Vec<&str> = self.ctx.documents.keys().map(String::as_str).collect();
+            let args = if args.is_null() { json!({}) } else { args };
+            let _: ListDocumentsToolInput =
+                serde_json::from_value(args).map_err(|e| format!("Invalid arguments: {e}"))?;
+
+            let docs = Arc::clone(&self.ctx.documents);
+            let map = docs
+                .read()
+                .map_err(|e| format!("Failed to obtain RwLock in ListDocumentsTool: {e}"))?;
+            let files: Vec<&str> = map.keys().map(String::as_str).collect();
+
             Ok(json!({ "documents": files }))
         })
     }
@@ -582,9 +629,18 @@ impl Tool for QueryDocumentsTool {
         type FileFuture<'a> =
             Pin<Box<dyn Future<Output = Result<QueryDocumentsResult, DocumentError>> + Send + 'a>>;
 
+        log::debug!("QueryDocumentsTool called with args: {args}");
+
         Box::pin(async move {
             let input: QueryDocumentsToolInput =
                 serde_json::from_value(args).map_err(|e| format!("Invalid arguments: {e}"))?;
+            let embedding_config = self.ctx.embedding_config.clone().ok_or_else(|| {
+                log::debug!("Invalid query method {:?} (no embedding config provided)", input.query_method);
+         format!(
+             "Query method {:?} was used, but no embedding config was provided during tool creation. This is          likely a bug.",
+             input.query_method
+         )
+     })?;
 
             if self.ctx.documents.is_empty() {
                 return Err("There are no documents in this session. Ask the user to add some by @ing the file name.".into());
@@ -627,40 +683,72 @@ impl Tool for QueryDocumentsTool {
                 return Err(format!(
                     "Query method {:?} was used, but no embedding config was provided during tool creation. This is likely a bug.",
                     input.query_method
-                ));
-            };
+                );
 
-            let Some(ref reranker_config) = self.ctx.reranker_config else {
-                return Err(format!(
-                    "Query method {:?} was used, but no reranker config was provided during tool creation. This is likely a bug.",
-                    input.query_method
-                ));
-            };
-
-            if self.ctx.client.is_none()
-                && let QueryMethod::Hybrid = input.query_method
-            {
                 return Err(format!(
                     "Query method {:?} was used, but no LLM client was provided during tool creation. This is likely a bug.",
                     input.query_method,
                 ));
             }
+            let selected_documents: Vec<(String, Arc<UserDocument>)> = {
+                let docs_map = self.ctx.documents.read().map_err(|e| {
+                    log::debug!("Failed to obtain RwLock in QueryDocumentsTool: {e}");
+                    format!("Failed to obtain RwLock in QueryDocumentsTool: {e}")
+                })?;
+
+                if docs_map.is_empty() {
+                    log::debug!("Error in QueryDocumentsTool: no documents in session.");
+
+                    return Err(
+                 "There are no documents in this session. Ask the user to add some by @ing the file name."
+                     .into(),
+             );
+                }
+                if let Some(filenames) = &input.filenames {
+                    filenames
+                        .iter()
+                        .map(|filename| {
+                            docs_map
+                                .get(filename)
+                                .map(|doc| (filename.clone(), Arc::clone(doc)))
+                                .ok_or_else(|| {
+                                    log::debug!("File {filename} does not exist in the session.");
+                                    format!("File {filename} does not exist in the session.")
+                                })
+                        })
+                        .collect::<Result<_, _>>()?
+                } else {
+                    let mut docs = docs_map
+                        .iter()
+                        .map(|(filename, doc)| (filename.clone(), Arc::clone(doc)))
+                        .collect::<Vec<_>>();
+                    docs.sort_by(|(a, _), (b, _)| a.cmp(b));
+                    docs
+                }
+            };
+
+            let query = input.query;
+            let query_method = input.query_method;
 
             let mut futures: FuturesUnordered<FileFuture> = FuturesUnordered::new();
             for (filename, doc) in selected_documents {
-                let filename = filename.to_string();
+                let query = query.clone();
+                let embedding_config = embedding_config.clone();
+                let reranker_config = reranker_config.clone();
+                let client = client.clone();
 
-                futures.push(Box::pin(async {
+                futures.push(Box::pin(async move {
                     let chunks = process_document(
-                        doc,
-                        &input.query,
-                        input.query_method,
-                        embedding_config,
-                        reranker_config,
-                        self.ctx.client.as_ref(),
+                        doc.as_ref(),
+                        &query,
+                        query_method,
+                        &embedding_config,
+                        &reranker_config,
+                        client.as_ref(),
                     )
                     .await
                     .map_err(|e| {
+                        log::debug!("Embedding-based retrieval failed: {e}");
                         DocumentError::DocumentProcessingFailed(format!(
                             "Embedding-based retrieval failed: {e}"
                         ))
@@ -679,6 +767,14 @@ impl Tool for QueryDocumentsTool {
                     Err(e) => errors.push(e.to_string()),
                 }
             }
+
+            log::debug!(
+                "QueryDocumentsTool returned: {:?}",
+                json!({
+                    "results": all_results,
+                    "errors": errors
+                })
+            );
 
             Ok(json!({
                 "results": all_results,
@@ -733,7 +829,7 @@ mod tests {
         let result = tool.call(args).await;
         assert!(
             result.is_ok(),
-            "{} UserDocumentTool call failed: {:?}",
+            "{} QueryDocumentsTool call failed: {:?}",
             provider_name,
             result.err()
         );
@@ -748,7 +844,7 @@ mod tests {
         );
 
         println!(
-            "{} UserDocumentTool test passed. Got {} file result(s).",
+            "{} QueryDocumentsTool test passed. Got {} file result(s).",
             provider_name,
             results.len()
         );
@@ -764,7 +860,10 @@ mod tests {
             .expect("VOYAGE_AI_API_KEY must be set for this test");
 
         let ctx = Arc::new(DocumentsToolContext {
-            documents: HashMap::from([("mono2micro.pdf".into(), Arc::new(test_pdf()))]),
+            documents: Arc::new(RwLock::new(HashMap::from([(
+                "mono2micro.pdf".into(),
+                Arc::new(test_pdf()),
+            )]))),
             embedding_config: Some(EmbeddingProviderConfig::OpenAI(OpenAIConfig {
                 api_key,
                 model: String::new(),
@@ -800,7 +899,10 @@ mod tests {
         };
 
         let ctx = Arc::new(DocumentsToolContext {
-            documents: HashMap::from([("mono2micro.pdf".into(), Arc::new(test_pdf()))]),
+            documents: Arc::new(RwLock::new(HashMap::from([(
+                "mono2micro.pdf".into(),
+                Arc::new(test_pdf()),
+            )]))),
             embedding_config: Some(EmbeddingProviderConfig::VoyageAI(voyage_config.clone())),
             reranker_config: Some(RerankProviderConfig::VoyageAI(voyage_config)),
             client: None,
@@ -825,7 +927,10 @@ mod tests {
         };
 
         let ctx = Arc::new(DocumentsToolContext {
-            documents: HashMap::from([("mono2micro.pdf".into(), Arc::new(test_pdf()))]),
+            documents: Arc::new(RwLock::new(HashMap::from([(
+                "mono2micro.pdf".into(),
+                Arc::new(test_pdf()),
+            )]))),
             embedding_config: Some(EmbeddingProviderConfig::Cohere(cohere_config.clone())),
             reranker_config: Some(RerankProviderConfig::Cohere(cohere_config)),
             client: None,
@@ -846,7 +951,10 @@ mod tests {
             .expect("VOYAGE_AI_API_KEY must be set for this test");
 
         let ctx = Arc::new(DocumentsToolContext {
-            documents: HashMap::from([("mono2micro.pdf".into(), Arc::new(test_pdf()))]),
+            documents: Arc::new(RwLock::new(HashMap::from([(
+                "mono2micro.pdf".into(),
+                Arc::new(test_pdf()),
+            )]))),
             embedding_config: Some(EmbeddingProviderConfig::Gemini(GeminiConfig {
                 api_key: gemini_api_key,
                 model: String::new(),
@@ -887,7 +995,10 @@ mod tests {
 
         let _documents = test_pdf();
         let ctx = Arc::new(DocumentsToolContext {
-            documents: HashMap::from([("mono2micro.pdf".into(), Arc::new(test_pdf()))]),
+            documents: Arc::new(RwLock::new(HashMap::from([(
+                "mono2micro.pdf".into(),
+                Arc::new(test_pdf()),
+            )]))),
             embedding_config: Some(EmbeddingProviderConfig::OpenAI(OpenAIConfig {
                 api_key,
                 model: String::new(),
@@ -914,7 +1025,7 @@ mod tests {
         let result = tool.call(args).await;
         assert!(
             result.is_ok(),
-            "Hybrid OpenAI UserDocumentTool call failed: {:?}",
+            "Hybrid OpenAI QueryDocumentsTool call failed: {:?}",
             result.err()
         );
 
@@ -928,7 +1039,7 @@ mod tests {
         );
 
         println!(
-            "Hybrid OpenAI UserDocumentTool test passed. Got {} file result(s).",
+            "Hybrid OpenAI QueryDocumentsTool test passed. Got {} file result(s).",
             results.len()
         );
     }

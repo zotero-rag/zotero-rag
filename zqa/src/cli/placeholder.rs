@@ -2,7 +2,7 @@ use std::cell::RefCell;
 
 use nucleo_matcher::pattern;
 use rustyline::Helper;
-use rustyline::completion::{Completer, FilenameCompleter};
+use rustyline::completion::Completer;
 use rustyline::highlight::Highlighter;
 use rustyline::hint::Hinter;
 use rustyline::validate::{ValidationResult, Validator};
@@ -32,6 +32,13 @@ impl PlaceholderText {
             shown_hint: RefCell::new(None),
         }
     }
+}
+
+#[derive(Clone, Copy)]
+struct MentionSpan<'a> {
+    start: usize,
+    query: &'a str,
+    force_quotes: bool,
 }
 
 const SLASH_COMMANDS: &[&str] = &[
@@ -94,6 +101,75 @@ fn get_best_file_match(query: &str, matcher: &mut nucleo_matcher::Matcher) -> Op
     }
 }
 
+fn format_mention_completion(path: &str, force_quotes: bool) -> String {
+    if force_quotes || path.contains(char::is_whitespace) {
+        format!("\"{path}\"")
+    } else {
+        path.to_string()
+    }
+}
+
+fn get_active_mention(line: &str, pos: usize) -> Option<MentionSpan<'_>> {
+    let prefix = &line[..pos];
+    let at_pos = prefix.rfind('@')?;
+
+    if at_pos > 0
+        && prefix[..at_pos]
+            .chars()
+            .last()
+            .is_some_and(|c| !c.is_whitespace())
+    {
+        return None;
+    }
+
+    let after_at = &prefix[at_pos + 1..];
+    if let Some(query) = after_at.strip_prefix('"') {
+        if query.contains('"') {
+            return None;
+        }
+
+        Some(MentionSpan {
+            start: at_pos + 1,
+            query,
+            force_quotes: true,
+        })
+    } else {
+        if after_at.contains(char::is_whitespace) {
+            return None;
+        }
+
+        Some(MentionSpan {
+            start: at_pos + 1,
+            query: after_at,
+            force_quotes: false,
+        })
+    }
+}
+
+fn get_file_completion_candidates(prefix: &str) -> Option<Vec<String>> {
+    let cwd = std::env::current_dir().ok()?;
+    let mut candidates = std::fs::read_dir(cwd)
+        .ok()?
+        .filter_map(std::result::Result::ok)
+        .filter(|f| {
+            f.path()
+                .extension()
+                .is_some_and(|e| e.eq_ignore_ascii_case("pdf"))
+        })
+        .filter_map(|f| {
+            let name = f.file_name().into_string().ok()?;
+            if prefix.is_empty() || name.starts_with(prefix) {
+                Some(name)
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>();
+
+    candidates.sort();
+    Some(candidates)
+}
+
 /// Handles completions for the `PlaceholderText` Helper. Note that for showing dimmed
 /// placeholders, we don't need to support completions at all.
 impl Completer for PlaceholderText {
@@ -114,18 +190,22 @@ impl Completer for PlaceholderText {
             return Ok((0, candidates));
         }
 
-        if let Ok(path_ref) = self.shown_hint.try_borrow()
-            && let Some(at_pos) = line[..pos].rfind('@')
-            && let Some(path) = path_ref.as_deref()
-        {
-            return Ok((at_pos + 1, vec![path[2..].to_string()]));
-        }
+        if let Some(mention) = get_active_mention(line, pos) {
+            if let Ok(path_ref) = self.shown_hint.try_borrow()
+                && let Some(path) = path_ref.as_deref()
+            {
+                return Ok((
+                    mention.start,
+                    vec![format_mention_completion(path, mention.force_quotes)],
+                ));
+            }
 
-        if line[..pos].ends_with('@') {
-            return FilenameCompleter::new()
-                .complete_path(line, pos)
-                .map(|(_, pairs)| pairs.into_iter().map(|p| p.replacement).collect::<Vec<_>>())
-                .map(|v| (pos, v));
+            let candidates = get_file_completion_candidates(mention.query)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|path| format_mention_completion(&path, mention.force_quotes))
+                .collect();
+            return Ok((mention.start, candidates));
         }
 
         Ok((0, Vec::new()))
@@ -151,22 +231,20 @@ impl Hinter for PlaceholderText {
                 .map(|cmd| cmd[pos..].to_string());
         }
 
-        // I was very proud of this `if` chain, don't you dare remove it
-        if let Some(at_pos) = line[..pos].rfind('@')
-            && let Some(space_pos) = Some(line[..pos].rfind(' ').unwrap_or(0))
-            && at_pos >= space_pos  // Equality case handles first char '@', no space yet
-            && at_pos < pos
-        {
-            let query = &line[at_pos + 1..pos];
+        if let Some(mention) = get_active_mention(line, pos) {
             let best_match = self
                 .matcher
                 .try_borrow_mut()
                 .ok()
-                .and_then(|mut matcher| get_best_file_match(query, &mut matcher))
-                .map(|m| format!("  {m}"));
+                .and_then(|mut matcher| get_best_file_match(mention.query, &mut matcher));
             self.shown_hint.replace(best_match.clone());
 
-            return best_match.map(|f| format!("{f} (Tab to accept)"));
+            return best_match.map(|path| {
+                format!(
+                    "{} (Tab to accept)",
+                    format_mention_completion(&path, mention.force_quotes)
+                )
+            });
         }
 
         self.shown_hint.replace(None);
@@ -356,5 +434,31 @@ mod tests {
         std::env::set_current_dir(&original_cwd).ok();
 
         assert!(result.is_some());
+    }
+
+    #[test]
+    fn test_format_mention_completion_quotes_spaces() {
+        assert_eq!(
+            format_mention_completion("image 1.pdf", false),
+            "\"image 1.pdf\""
+        );
+    }
+
+    #[test]
+    fn test_get_active_mention_unquoted() {
+        let mention = get_active_mention("Compare @symbols.pdf", "Compare @symbols.pdf".len())
+            .expect("Expected active mention");
+        assert_eq!(mention.start, 9);
+        assert_eq!(mention.query, "symbols.pdf");
+        assert!(!mention.force_quotes);
+    }
+
+    #[test]
+    fn test_get_active_mention_quoted() {
+        let line = "Compare @\"image 1.pdf";
+        let mention = get_active_mention(line, line.len()).expect("Expected active mention");
+        assert_eq!(mention.start, 9);
+        assert_eq!(mention.query, "image 1.pdf");
+        assert!(mention.force_quotes);
     }
 }
