@@ -76,12 +76,14 @@ where
         source: Arc<dyn arrow_array::Array>,
         input_type: &'static str,
     ) -> Result<Arc<dyn arrow_array::Array>, LLMError> {
-        // ZeroEntropy uses a bytes-per-minute (BPM) limit instead of tokens per minute. This is a
-        // bit weird, but it does make our job a touch easier.
-        // ZeroEntropy default limits: 2.5M BPM, 1000 RPM, bursting to 20M BPM.
-        // With array inputs we can send 30 texts per request and ~30 requests/s comfortably.
-        const BATCH_SIZE: usize = 30;
-        const WAIT_AFTER_REQUEST_S: u64 = 0;
+        // ZeroEntropy uses a bytes-per-minute (BPM) limit instead of tokens per minute.
+        // Default limits: 2.5M BPM, 1000 RPM.
+        // If we assume ~30,000 tokens per paper (we have to make *some* guess), and assume that a
+        // token is ~4 bytes (we're assuming most papers are mostly written in ASCII characters and
+        // are therefore 1 byte in UTF-8), that's ~120k bytes per paper. This gives us ~2.5M/120k ~
+        // 20 papers per minute. So a batch of 1 paper every 3s is a half-decent estimate.
+        const BATCH_SIZE: usize = 1;
+        const WAIT_AFTER_REQUEST_S: u64 = 3;
 
         let api_key = self.config.as_ref().map_or_else(
             || env::var("ZEROENTROPY_API_KEY"),
