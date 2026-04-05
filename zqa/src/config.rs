@@ -83,11 +83,11 @@ pub struct Config {
     #[serde(default = "default_model_provider")]
     pub model_provider: String,
 
-    /// Embedding provider (anthropic, openai, voyageai, gemini, cohere)
+    /// Embedding provider (anthropic, openai, voyageai, gemini, cohere, zeroentropy)
     #[serde(default = "default_embedding_provider")]
     pub embedding_provider: String,
 
-    /// Reranker provider (voyageai, cohere). Set to "" or "none" to disable reranking.
+    /// Reranker provider (voyageai, cohere, zeroentropy). Set to "" or "none" to disable reranking.
     #[serde(default = "default_reranker_provider")]
     pub reranker_provider: String,
 
@@ -255,7 +255,9 @@ impl Config {
         // ZeroEntropy options
         if let Some(ze_config) = &mut self.zeroentropy {
             // embedding_dims is not exposed as an env option
-            ze_config.reranker.replace_with_env("ZEROENTROPY_RERANKER");
+            ze_config
+                .reranker
+                .replace_with_env("ZEROENTROPY_RERANK_MODEL");
             ze_config
                 .embedding_model
                 .replace_with_env("ZEROENTROPY_EMBEDDING_MODEL");
