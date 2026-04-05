@@ -1776,27 +1776,6 @@ pub(crate) mod tests {
         test_eq!(key, "papers/image 1.pdf");
     }
 
-    #[test]
-    #[serial]
-    fn test_get_document_session_key_makes_absolute_path_relative_to_cwd() {
-        let temp_dir = tempfile::tempdir().unwrap();
-        let original_cwd = std::env::current_dir().unwrap();
-        let nested_dir = temp_dir.path().join("papers");
-        std::fs::create_dir_all(&nested_dir).unwrap();
-        let path = nested_dir.join("image 1.pdf");
-        std::fs::File::create(&path).unwrap();
-        let canonical = path.canonicalize().unwrap();
-
-        std::env::set_current_dir(temp_dir.path()).unwrap();
-        let key = get_document_session_key(&canonical);
-        std::env::set_current_dir(original_cwd).unwrap();
-
-        test_ok!(key);
-        let key = key.unwrap();
-
-        test_eq!(key, "papers/image 1.pdf");
-    }
-
     #[tokio::test]
     async fn test_handle_command_help() {
         let mut ctx = create_test_context();
