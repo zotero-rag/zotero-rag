@@ -262,6 +262,10 @@ fn get_user_document_tools<O: Write, E: Write>(
     ctx: &mut Context<O, E>,
 ) -> Result<Vec<Box<dyn Tool>>, CLIError> {
     let imports = ctx.state.imports.clone();
+    if imports.read()?.is_empty() {
+        return Ok(Vec::new());
+    }
+
     let embedding_config = ctx.config.get_embedding_config().ok_or_else(|| {
         CLIError::ConfigError(
             "No embedding config found; mentioned documents won't be imported.".into(),
