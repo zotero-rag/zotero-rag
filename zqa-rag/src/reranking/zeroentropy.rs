@@ -19,16 +19,35 @@ struct ZeroEntropyRerankRequest<'a> {
     top_n: Option<usize>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
 struct ZeroEntropyRerankResult {
     index: usize,
     #[allow(dead_code)]
     relevance_score: f32,
 }
 
-#[derive(Deserialize)]
-struct ZeroEntropyRerankResponse {
+/// Successful response from the ZeroEntropy reranking API.
+#[derive(Deserialize, Debug)]
+struct ZeroEntropyRerankSuccess {
+    /// The embedding results, one per input text.
     results: Vec<ZeroEntropyRerankResult>,
+}
+
+/// Error response from the ZeroEntropy API.
+#[derive(Serialize, Deserialize, Debug)]
+struct ZeroEntropyRerankError {
+    /// Human-readable error detail (may be a string or a validation error array).
+    detail: Option<serde_json::Value>,
+}
+
+/// Response from the ZeroEntropy reranking API.
+#[derive(Deserialize, Debug)]
+#[serde(untagged)]
+enum ZeroEntropyRerankResponse {
+    /// Successful embedding response.
+    Success(ZeroEntropyRerankSuccess),
+    /// Error response.
+    Error(ZeroEntropyRerankError),
 }
 
 impl<T: HttpClient> Rerank for ZeroEntropyClient<T> {
@@ -79,7 +98,16 @@ impl<T: HttpClient> Rerank for ZeroEntropyClient<T> {
                     LLMError::DeserializationError(e.to_string())
                 })?;
 
-            Ok(ze_response.results.iter().map(|r| r.index).collect())
+            match ze_response {
+                ZeroEntropyRerankResponse::Success(res) => {
+                    Ok(res.results.iter().map(|r| r.index).collect())
+                }
+                ZeroEntropyRerankResponse::Error(e) => Err(LLMError::HttpStatusError(
+                    serde_json::to_string_pretty(&e).unwrap_or(
+                        "Failed to convert error response from ZeroEntropy into a string.".into(),
+                    ),
+                )),
+            }
         })
     }
 }
