@@ -67,6 +67,8 @@ pub enum EmbeddingProvider {
     VoyageAI,
     /// Gemini embedding provider
     Gemini,
+    /// ZeroEntropy embedding provider
+    ZeroEntropy,
 }
 
 impl EmbeddingProvider {
@@ -79,6 +81,7 @@ impl EmbeddingProvider {
             EmbeddingProvider::Ollama => "ollama",
             EmbeddingProvider::VoyageAI => "voyageai",
             EmbeddingProvider::Gemini => "gemini",
+            EmbeddingProvider::ZeroEntropy => "zeroentropy",
         }
     }
 
@@ -91,6 +94,7 @@ impl EmbeddingProvider {
             EmbeddingProvider::Ollama.as_str(),
             EmbeddingProvider::VoyageAI.as_str(),
             EmbeddingProvider::Gemini.as_str(),
+            EmbeddingProvider::ZeroEntropy.as_str(),
         ]
         .contains(&provider)
     }
@@ -99,9 +103,9 @@ impl EmbeddingProvider {
     #[must_use]
     pub fn recommended_chunking_strategy(&self) -> ChunkingStrategy {
         match self {
-            EmbeddingProvider::Cohere | EmbeddingProvider::VoyageAI => {
-                ChunkingStrategy::WholeDocument
-            }
+            EmbeddingProvider::Cohere
+            | EmbeddingProvider::VoyageAI
+            | EmbeddingProvider::ZeroEntropy => ChunkingStrategy::WholeDocument,
             // include a buffer for approximation errors
             EmbeddingProvider::OpenAI => ChunkingStrategy::SectionBased(7500),
             // include a buffer for approximation errors; actual limit is 2048
@@ -239,6 +243,8 @@ pub enum RerankerProviders {
     Cohere,
     /// VoyageAI reranking provider
     VoyageAI,
+    /// ZeroEntropy reranking provider
+    ZeroEntropy,
 }
 
 impl RerankerProviders {
@@ -248,6 +254,7 @@ impl RerankerProviders {
         match self {
             RerankerProviders::Cohere => "cohere",
             RerankerProviders::VoyageAI => "voyageai",
+            RerankerProviders::ZeroEntropy => "zeroentropy",
         }
     }
 
@@ -257,6 +264,7 @@ impl RerankerProviders {
         [
             RerankerProviders::Cohere.as_str(),
             RerankerProviders::VoyageAI.as_str(),
+            RerankerProviders::ZeroEntropy.as_str(),
         ]
         .contains(&provider)
     }
@@ -273,6 +281,7 @@ mod tests {
     use crate::clients::openrouter::OpenRouterClient;
     use crate::embedding::cohere::CohereClient;
     use crate::embedding::voyage::VoyageAIClient;
+    use crate::embedding::zeroentropy::ZeroEntropyClient;
     use crate::http_client::ReqwestClient;
     use crate::llm::base::ApiClient;
     use crate::reranking::common::Rerank;
@@ -305,6 +314,7 @@ mod tests {
         assert_embedding_fn::<GeminiClient<ReqwestClient>>();
         assert_embedding_fn::<CohereClient<ReqwestClient>>();
         assert_embedding_fn::<VoyageAIClient<ReqwestClient>>();
+        assert_embedding_fn::<ZeroEntropyClient<ReqwestClient>>();
     }
 
     /// Verify that [`super::BatchEmbeddingProvider::VoyageAI`] has a corresponding client that
@@ -320,5 +330,6 @@ mod tests {
     fn reranker_providers_implement_rerank() {
         assert_reranker::<CohereClient<ReqwestClient>>();
         assert_reranker::<VoyageAIClient<ReqwestClient>>();
+        assert_reranker::<ZeroEntropyClient<ReqwestClient>>();
     }
 }

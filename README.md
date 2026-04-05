@@ -9,7 +9,7 @@ This project provides a command-line interface for querying your Zotero library 
 ### Features
 
 * Extracts text from PDFs and ignores tables/figures (they're unlikely to have useful context for LLMs)
-* Support for OpenAI, Ollama, Anthropic, Gemini, and OpenRouter models for text generation, and Cohere and Voyage AI models for embedding.
+* Support for OpenAI, Ollama, Anthropic, Gemini, and OpenRouter models for text generation, Cohere, Gemini, Voyage AI, and ZeroEntropy models for embedding, and Cohere, Voyage AI, and ZeroEntropy models for reranking.
 * Locally-stored embeddings using LanceDB.
 * Search-only mode retrieves papers
 
@@ -43,6 +43,8 @@ When you first run the CLI, you will be guided through setting up a config. This
 Although you *could* store your API keys in this config, I recommend you don't. Instead, leave the API keys in the config file blank, and use environment variables or a `.env` file where you're working. The reason is that this is stored in `~/.config/zqa`, so if you have a tool like GNU Stow managing your dotfiles, it could pick it up accidentally (technically you'd have to set it up to do this, but I digress), and you could inadvertently commit your keys to GitHub! For example, [my config](https://github.com/yrahul3910/dotfiles/blob/master/.config/zqa/config.toml) leaves placeholders for the API keys, and I have `.env` files in the directories where I actually use this. Now, I can safely use `stow` to keep my config synced across machines. If you insist on having your API keys in your config, however, I strongly encourage that you add `zqa/config.toml` to a `.gitignore`, just in case.
 
 Once you have a config set up, you should first run `/process`, which will use your embedding provider to create a vector database. **This step takes a long time!** On my machine, with about 1100 papers in my Zotero library, this took about 4 hours. This is mostly to respect the API's rate limits; the PDF parsing itself took about 40 minutes (though if you're using a release build, this will likely be much faster). I recommend leaving this running in the background, possibly while you're sleeping. It's possible that some PDFs fail to process when you're back; this is fine, and you can re-run `/process` at any time to handle failed/new Zotero entries.
+
+**Update:** If you're using the "nightly" version, this should be significantly faster.
 
 The easiest way to get started is to run `/help`. This gives you a list of things you can do. If you only need to use this to ask questions, you simply type in your question and hit Enter. It's likely you might want to do other things as well; for example, `/search <query>` gives you papers in your library that are most relevant, with no further processing. This is particularly useful if you know some relevant keywords or ideas used by that paper. This also takes about 3 seconds and is *very* cheap, so it's an appealing option.
 
@@ -188,6 +190,10 @@ OLLAMA_MODEL_SMALL=
 OLLAMA_BASE_URL=
 OLLAMA_EMBEDDING_MODEL=
 OLLAMA_EMBEDDING_DIMS=
+
+ZEROENTROPY_API_KEY=
+ZEROENTROPY_RERANK_MODEL=
+ZEROENTROPY_EMBEDDING_MODEL=
 
 MAX_CONCURRENT_REQUESTS=5
 ```

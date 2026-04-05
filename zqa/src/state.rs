@@ -325,14 +325,16 @@ pub(crate) fn oobe<R: BufRead>(reader: &mut R, is_terminal: bool) -> Result<(), 
     println!("(G)emini");
     println!("(O)penAI");
     println!("[V]oyage AI");
+    println!("(Z)eroEntropy");
     println!();
-    let embedding_provider = read_char(reader, 'v', &['c', 'g', 'o', 'v']);
+    let embedding_provider = read_char(reader, 'v', &['c', 'g', 'o', 'v', 'z']);
 
     config.embedding_provider = match embedding_provider {
         'c' => "cohere",
         'g' => "gemini",
         'o' => "openai",
         'v' => "voyageai",
+        'z' => "zeroentropy",
         _ => {
             unreachable!("Unknown model provider");
         }
@@ -354,20 +356,28 @@ pub(crate) fn oobe<R: BufRead>(reader: &mut R, is_terminal: bool) -> Result<(), 
         'c' | 'g' | 'o' => {
             println!("[C]ohere");
             println!("(V)oyage AI");
+            println!("(Z)eroEntropy");
         }
         'v' => {
             println!("(C)ohere");
             println!("[V]oyage AI");
+            println!("(Z)eroEntropy");
+        }
+        'z' => {
+            println!("(C)ohere");
+            println!("(V)oyage AI");
+            println!("[Z]eroEntropy");
         }
         _ => {
             unreachable!("Embedding provider was validated.");
         }
     }
     println!();
-    let reranker_provider = read_char(reader, embedding_provider, &['c', 'v']);
+    let reranker_provider = read_char(reader, embedding_provider, &['c', 'v', 'z']);
     config.reranker_provider = match reranker_provider {
         'c' => "cohere",
         'v' => "voyageai",
+        'z' => "zeroentropy",
         _ => unreachable!("Reranker provider was validated."),
     }
     .into();
@@ -433,6 +443,10 @@ pub(crate) fn oobe<R: BufRead>(reader: &mut R, is_terminal: bool) -> Result<(), 
                 let voyage_config = config.voyageai.as_mut().unwrap();
                 voyage_config.api_key = Some(embedding_api_key);
             }
+            'z' => {
+                let ze_config = config.zeroentropy.as_mut().unwrap();
+                ze_config.api_key = Some(embedding_api_key);
+            }
             _ => unreachable!("Embedding provider was validated."),
         }
     }
@@ -446,6 +460,10 @@ pub(crate) fn oobe<R: BufRead>(reader: &mut R, is_terminal: bool) -> Result<(), 
             'v' => {
                 let voyage_config = config.voyageai.as_mut().unwrap();
                 voyage_config.api_key = Some(reranker_api_key);
+            }
+            'z' => {
+                let ze_config = config.zeroentropy.as_mut().unwrap();
+                ze_config.api_key = Some(reranker_api_key);
             }
             _ => unreachable!("Reranker provider was validated."),
         }

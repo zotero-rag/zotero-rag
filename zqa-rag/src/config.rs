@@ -101,6 +101,19 @@ pub struct CohereConfig {
     pub reranker: String,
 }
 
+/// Configuration for ZeroEntropy embedding and reranking provider
+#[derive(Debug, Clone)]
+pub struct ZeroEntropyConfig {
+    /// API key for ZeroEntropy
+    pub api_key: String,
+    /// Embedding model name
+    pub embedding_model: String,
+    /// Embedding dimensions (one of 2560, 1280, 640, 320, 160, 80, or 40)
+    pub embedding_dims: usize,
+    /// Reranker model name
+    pub reranker: String,
+}
+
 /// Configuration for OpenRouter provider
 #[derive(Debug, Clone)]
 pub struct OpenRouterConfig {
