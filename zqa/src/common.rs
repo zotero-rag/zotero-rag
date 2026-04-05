@@ -56,13 +56,13 @@ pub(crate) struct State {
     /// A title generated for the current conversation
     pub(crate) title: Arc<Mutex<Option<String>>>,
     /// Accumulated session cost, in US cents (Money pattern)
+    /// TODO: How do providers handle other currencies?
     pub(crate) session_cost: AtomicU64,
     /// Extracted content for imported documents
-    #[allow(dead_code)]
     pub(crate) imports: Arc<RwLock<HashMap<String, Arc<UserDocument>>>>,
 }
 
-/// A structure that holds the application context, including CLI arguments and an writers
+/// A structure that holds the application context, including CLI arguments and writers
 /// for `stdout` and `stderr`.
 pub(crate) struct Context<OutStream: Write, ErrStream: Write> {
     /// Application state

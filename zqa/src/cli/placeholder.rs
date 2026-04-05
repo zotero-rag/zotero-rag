@@ -1,4 +1,6 @@
 use std::cell::RefCell;
+use std::collections::HashMap;
+use std::sync::{Arc, RwLock};
 
 use nucleo_matcher::pattern;
 use rustyline::Helper;
@@ -7,11 +9,16 @@ use rustyline::highlight::Highlighter;
 use rustyline::hint::Hinter;
 use rustyline::validate::{ValidationResult, Validator};
 
+use crate::common::UserDocument;
+
 /// A struct that will implement placeholder text using readline. The placeholder text itself is
 /// configurable, and the various `impl`s necessary to interface with `rustyline` (the readline
 /// implementation) handle the rest.
 pub struct PlaceholderText {
-    pub placeholder_text: String,
+    pub(crate) text: String,
+
+    /// Documents in the [`crate::common::State`].
+    pub(crate) documents: Arc<RwLock<HashMap<String, Arc<UserDocument>>>>,
 
     /// The `nucleo` matcher object. Instantiating this is fairly expensive since it pre-allocates
     /// memory; and the docs recommend persisting it for multiple queries.
@@ -23,9 +30,13 @@ pub struct PlaceholderText {
 
 impl PlaceholderText {
     #[must_use]
-    pub fn new(placeholder_text: String) -> Self {
+    pub(crate) fn new(
+        placeholder_text: String,
+        documents: Arc<RwLock<HashMap<String, Arc<UserDocument>>>>,
+    ) -> Self {
         Self {
-            placeholder_text,
+            text: placeholder_text,
+            documents,
             matcher: RefCell::new(nucleo_matcher::Matcher::new(
                 nucleo_matcher::Config::DEFAULT.match_paths(),
             )),
@@ -179,6 +190,16 @@ impl Completer for PlaceholderText {
         pos: usize,
         _ctx: &rustyline::Context<'_>,
     ) -> rustyline::Result<(usize, Vec<Self::Candidate>)> {
+        if line.starts_with("/docs remove ") {
+            let candidates: Vec<String> = if let Ok(lock) = self.documents.read() {
+                lock.keys().cloned().collect()
+            } else {
+                Vec::new()
+            };
+
+            return Ok((pos, candidates));
+        }
+
         if line.starts_with('/') {
             let candidates: Vec<String> = SLASH_COMMANDS
                 .iter()
@@ -218,7 +239,7 @@ impl Hinter for PlaceholderText {
     fn hint(&self, line: &str, pos: usize, _ctx: &rustyline::Context<'_>) -> Option<Self::Hint> {
         if pos == 0 {
             self.shown_hint.replace(None);
-            return Some(self.placeholder_text.clone());
+            return Some(self.text.clone());
         }
 
         if line.starts_with('/') {

@@ -247,16 +247,21 @@ fn normalize(v: &[f32]) -> Vec<f32> {
 ///
 /// * `query` - A query from a model or the user
 /// * `retrieved_chunks` - A list of relevant chunks retrieved via embeddings
-fn get_prompt(query: &str, retrieved_chunks: &[&str]) -> String {
+/// * `summary` - Extracted summary. See [`get_summary_end_index`].
+fn get_prompt(query: &str, retrieved_chunks: &[&str], summary: &str) -> String {
     let chunks = retrieved_chunks.join("\n-----\n");
 
     format!(
         "You are a research assistant tasked with finding relevant chunks in a user-provided document. Some chunks
-have been retrieved for you. Your task is to refine these chunks to be relevant to the user's query.
+have been retrieved for you. You are also provided with what is possibly the paper's abstract, though this might not be fully accurate. Your task is to refine the chunks to be relevant to the user's query.
 
     <user_query>
     {query}
     </user_query>
+
+    <paper_abstract>
+    {summary}
+    </paper_abstract>
 
     <chunks>
     {chunks}
@@ -294,6 +299,7 @@ fn get_embeddings(
 ///
 /// * `query` - A query from a model or the user
 /// * `retrieved_chunks` - A list of relevant chunks retrieved via embeddings
+/// * `summary` - Extracted summary. See [`get_summary_end_index`].
 /// * `client` - A configured [`LLMClient`] to use for the sub-agent call
 ///
 /// # Returns
@@ -306,10 +312,11 @@ fn get_embeddings(
 async fn call_subagent(
     query: &str,
     retrieved_chunks: &[&str],
+    summary: &str,
     client: &LLMClient,
 ) -> Result<String, DocumentError> {
     let request = ChatRequest {
-        message: get_prompt(query, retrieved_chunks),
+        message: get_prompt(query, retrieved_chunks, summary),
         ..ChatRequest::default()
     };
 
@@ -549,6 +556,7 @@ async fn process_document(
                 .iter()
                 .map(String::as_str)
                 .collect::<Vec<_>>(),
+            &document.summary,
             client,
         )
         .await?;
