@@ -63,8 +63,12 @@ fn import_document<O: Write, E: Write>(
     ctx: &mut Context<O, E>,
     path: &Path,
 ) -> Result<String, CLIError> {
-    let original_path = path;
-    let key = get_document_session_key(original_path)?;
+    let key = get_document_session_key(path)?;
+    let imports = Arc::clone(&ctx.state.imports);
+
+    if imports.read()?.contains_key(&key) {
+        return Ok(key);
+    }
 
     // Do expensive work before taking the write lock.
     let document = Arc::new(
@@ -72,8 +76,7 @@ fn import_document<O: Write, E: Write>(
             .map_err(|e| CLIError::ConfigError(format!("Failed to import {key}: {e}")))?,
     );
 
-    let mut imports = ctx.state.imports.write()?;
-    imports.insert(key.clone(), document);
+    imports.write()?.insert(key.clone(), document);
 
     Ok(key)
 }
@@ -1206,8 +1209,8 @@ pub(crate) async fn handle_command<O: Write, E: Write>(
 
                 embed(ctx, true).await?;
                 return Ok(true);
-            } else if query.starts_with("/docs ") {
-                let subcmd = query.strip_prefix("/docs ").unwrap().trim();
+            } else if query.starts_with("/docs") {
+                let subcmd = query.strip_prefix("/docs").unwrap().trim();
                 let parts: Vec<&str> = subcmd.splitn(2, ' ').collect();
 
                 match parts[0] {
