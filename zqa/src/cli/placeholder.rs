@@ -55,6 +55,9 @@ struct MentionSpan<'a> {
 const SLASH_COMMANDS: &[&str] = &[
     "/checkhealth",
     "/config",
+    "/docs clear",
+    "/docs list",
+    "/docs remove",
     "/dedup",
     "/doctor",
     "/embed fix",

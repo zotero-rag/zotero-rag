@@ -1064,6 +1064,18 @@ pub(crate) async fn handle_command<O: Write, E: Write>(
             )?;
             writeln!(
                 &mut ctx.out,
+                "/docs clear\tClear all documents in this session."
+            )?;
+            writeln!(
+                &mut ctx.out,
+                "/docs list\tList all documents in this session."
+            )?;
+            writeln!(
+                &mut ctx.out,
+                "/docs remove <key>\tRemove a document with a specified key from the session."
+            )?;
+            writeln!(
+                &mut ctx.out,
                 "/embed\t\tRepair failed DB creation by re-adding embeddings."
             )?;
             writeln!(
