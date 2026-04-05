@@ -136,6 +136,21 @@ fn remove_document<O: Write, E: Write>(
     Ok(imports.remove(key).is_some())
 }
 
+/// List documents currently in the session.
+///
+/// # Arguments
+///
+/// * `ctx` - A `Context` object that contains CLI args and objects that implement
+///   [`std::io::Write`] for `stdout` and `stderr`.
+///
+/// # Returns
+///
+/// A list of document keys currently in the session.
+fn list_documents<O: Write, E: Write>(ctx: &Context<O, E>) -> Result<Vec<String>, CLIError> {
+    let imports = ctx.state.imports.read()?;
+    Ok(imports.keys().cloned().collect())
+}
+
 /// Clear all imported documents from the session.
 ///
 /// # Arguments
@@ -1194,11 +1209,38 @@ pub(crate) async fn handle_command<O: Write, E: Write>(
                     "clear" => {
                         return clear_documents(ctx).map(|_| true);
                     }
+                    "list" => {
+                        let docs = list_documents(ctx)?;
+                        if docs.is_empty() {
+                            writeln!(
+                                &mut ctx.out,
+                                "No documents currently in state. Use @ in a message to add some."
+                            )?;
+                            return Ok(true);
+                        }
+
+                        writeln!(&mut ctx.out, "Available documents:")?;
+                        for doc in &docs {
+                            writeln!(&mut ctx.out, "{doc}")?;
+                        }
+
+                        return Ok(true);
+                    }
                     "remove" => {
-                        return remove_document(ctx, "foo");
+                        let parts: Vec<&str> = subcmd.splitn(2, ' ').collect();
+                        if parts.len() < 2 || parts[1].is_empty() {
+                            writeln!(&mut ctx.err, "Usage: /docs remove <document_key>")?;
+                            writeln!(
+                                &mut ctx.err,
+                                "Use /docs list to get the document keys in session."
+                            )?;
+                            return Ok(true);
+                        }
+                        return remove_document(ctx, parts[1]).map(|_| true);
                     }
                     _ => {
                         writeln!(&mut ctx.err, "Invalid subcommand to /docs: {subcmd}")?;
+                        writeln!(&mut ctx.err, "Options: clear, list, remove")?;
                         return Ok(true);
                     }
                 }
