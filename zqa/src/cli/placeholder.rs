@@ -197,7 +197,7 @@ impl Completer for PlaceholderText {
                 Vec::new()
             };
 
-            return Ok((pos, candidates));
+            return Ok(("/docs remove ".len(), candidates));
         }
 
         if line.starts_with('/') {

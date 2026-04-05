@@ -1192,9 +1192,9 @@ pub(crate) async fn handle_command<O: Write, E: Write>(
                 }
 
                 return Ok(true);
-            } else if query.starts_with("/embed ") {
+            } else if query.starts_with("/embed") {
                 // Handle `/embed fix`
-                let subcmd = query.strip_prefix("/embed ").unwrap().trim();
+                let subcmd = query.strip_prefix("/embed").unwrap().trim();
                 if subcmd != "fix" {
                     writeln!(&mut ctx.err, "Invalid subcommand to /embed: {subcmd}")?;
                     return Ok(true);
