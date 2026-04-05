@@ -66,6 +66,12 @@ use zqa_rag::reranking::common::RerankProviderConfig;
 /// embedding_dims = 1536
 /// api_key = "..."
 ///
+/// [zeroentropy]
+/// reranker = "zerank-2"
+/// embedding_model = "zembed-1"
+/// embedding_dims = 2560
+/// api_key = "..."
+///
 /// [openrouter]
 /// api_key = "..."
 /// model = "anthropic/claude-sonnet-4.5"
@@ -120,6 +126,10 @@ pub struct Config {
     /// OpenRouter-specific configuration
     #[serde(default)]
     pub openrouter: Option<OpenRouterConfig>,
+
+    /// ZeroEntropy-specific configuration
+    #[serde(default)]
+    pub zeroentropy: Option<ZeroEntropyConfig>,
 }
 
 impl Display for Config {
@@ -242,6 +252,16 @@ impl Config {
             cohere_config.api_key.replace_with_env("COHERE_API_KEY");
         }
 
+        // ZeroEntropy options
+        if let Some(ze_config) = &mut self.zeroentropy {
+            // embedding_dims is not exposed as an env option
+            ze_config.reranker.replace_with_env("ZEROENTROPY_RERANKER");
+            ze_config
+                .embedding_model
+                .replace_with_env("ZEROENTROPY_EMBEDDING_MODEL");
+            ze_config.api_key.replace_with_env("ZEROENTROPY_API_KEY");
+        }
+
         // OpenRouter options
         if let Some(openrouter_config) = &mut self.openrouter {
             openrouter_config.model.replace_with_env("OPENROUTER_MODEL");
@@ -280,6 +300,10 @@ impl Config {
                 .ollama
                 .as_ref()
                 .map(|cfg| EmbeddingProviderConfig::Ollama(cfg.clone().into())),
+            "zeroentropy" => self
+                .zeroentropy
+                .as_ref()
+                .map(|cfg| EmbeddingProviderConfig::ZeroEntropy(cfg.clone().into())),
             _ => None,
         }
     }
@@ -295,6 +319,10 @@ impl Config {
                 .cohere
                 .as_ref()
                 .map(|cfg| RerankProviderConfig::Cohere(cfg.clone().into())),
+            "zeroentropy" => self
+                .zeroentropy
+                .as_ref()
+                .map(|cfg| RerankProviderConfig::ZeroEntropy(cfg.clone().into())),
             _ => None,
         }
     }
@@ -338,6 +366,7 @@ impl Config {
             EmbeddingProviderConfig::VoyageAI(cfg) => cfg.embedding_model,
             EmbeddingProviderConfig::Ollama(cfg) => cfg.embedding_model,
             EmbeddingProviderConfig::Cohere(cfg) => cfg.embedding_model,
+            EmbeddingProviderConfig::ZeroEntropy(cfg) => cfg.embedding_model,
         })
     }
 
@@ -378,6 +407,10 @@ impl Config {
         }
 
         if let Some(cfg) = clone.cohere.as_mut() {
+            cfg.api_key = redact(cfg.api_key.as_ref());
+        }
+
+        if let Some(cfg) = clone.zeroentropy.as_mut() {
             cfg.api_key = redact(cfg.api_key.as_ref());
         }
 
@@ -604,6 +637,33 @@ impl Default for CohereConfig {
     }
 }
 
+/// ZeroEntropy provider configuration
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ZeroEntropyConfig {
+    /// Reranker model name
+    pub reranker: Option<String>,
+
+    /// Embedding model name
+    pub embedding_model: Option<String>,
+
+    /// Embedding dimensions (one of 2560, 1280, 640, 320, 160, 80, or 40)
+    pub embedding_dims: Option<usize>,
+
+    /// API key
+    pub api_key: Option<String>,
+}
+
+impl Default for ZeroEntropyConfig {
+    fn default() -> Self {
+        Self {
+            reranker: Some(DEFAULT_ZEROENTROPY_RERANK_MODEL.into()),
+            embedding_model: Some(DEFAULT_ZEROENTROPY_EMBEDDING_MODEL.into()),
+            embedding_dims: Some(DEFAULT_ZEROENTROPY_EMBEDDING_DIM as usize),
+            api_key: None,
+        }
+    }
+}
+
 /// `OpenRouter` configuration
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct OpenRouterConfig {
@@ -709,6 +769,7 @@ impl Default for Config {
             voyageai: Some(VoyageAIConfig::default()),
             cohere: Some(CohereConfig::default()),
             openrouter: Some(OpenRouterConfig::default()),
+            zeroentropy: Some(ZeroEntropyConfig::default()),
         }
     }
 }
@@ -830,6 +891,33 @@ impl From<CohereConfig> for zqa_rag::config::CohereConfig {
             reranker: config
                 .reranker
                 .unwrap_or_else(|| DEFAULT_COHERE_RERANK_MODEL.to_string()),
+        }
+    }
+}
+
+impl From<ZeroEntropyConfig> for zqa_rag::config::ZeroEntropyConfig {
+    fn from(config: ZeroEntropyConfig) -> Self {
+        use zqa_rag::constants::{
+            DEFAULT_ZEROENTROPY_EMBEDDING_DIM, DEFAULT_ZEROENTROPY_EMBEDDING_MODEL,
+            DEFAULT_ZEROENTROPY_RERANK_MODEL,
+        };
+
+        Self {
+            api_key: config
+                .api_key
+                .or_else(|| env::var("ZEROENTROPY_API_KEY").ok())
+                .expect(
+                    "ZeroEntropy API key not found. Please set it in your config file or as ZEROENTROPY_API_KEY.",
+                ),
+            embedding_model: config
+                .embedding_model
+                .unwrap_or_else(|| DEFAULT_ZEROENTROPY_EMBEDDING_MODEL.to_string()),
+            embedding_dims: config
+                .embedding_dims
+                .unwrap_or(DEFAULT_ZEROENTROPY_EMBEDDING_DIM as usize),
+            reranker: config
+                .reranker
+                .unwrap_or_else(|| DEFAULT_ZEROENTROPY_RERANK_MODEL.to_string()),
         }
     }
 }

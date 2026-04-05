@@ -32,6 +32,7 @@ async fn test_integration_works() {
         openai: None,
         cohere: None,
         openrouter: None,
+        zeroentropy: None,
         anthropic: Some(AnthropicConfig {
             model: Some("claude-sonnet-4-5".into()),
             model_small: Some("claude-haiku-4-5".into()),

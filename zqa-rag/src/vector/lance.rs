@@ -9,6 +9,7 @@ use crate::clients::openai::OpenAIClient;
 use crate::embedding::cohere::CohereClient;
 use crate::embedding::common::EmbeddingProviderConfig;
 use crate::embedding::voyage::VoyageAIClient;
+use crate::embedding::zeroentropy::ZeroEntropyClient;
 use crate::http_client::ReqwestClient;
 use crate::vector::backup::with_backup;
 use crate::vector::checkhealth::get_zero_vectors;
@@ -239,6 +240,12 @@ async fn get_db_with_embeddings(
             db.embedding_registry().register(
                 EmbeddingProvider::Ollama.as_str(),
                 Arc::new(OllamaClient::<ReqwestClient>::with_config(cfg.clone())),
+            )?;
+        }
+        EmbeddingProviderConfig::ZeroEntropy(cfg) => {
+            db.embedding_registry().register(
+                EmbeddingProvider::ZeroEntropy.as_str(),
+                Arc::new(ZeroEntropyClient::<ReqwestClient>::with_config(cfg.clone())),
             )?;
         }
     }

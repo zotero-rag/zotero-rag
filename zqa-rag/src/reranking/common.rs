@@ -3,7 +3,7 @@
 use std::{pin::Pin, sync::Arc};
 
 use crate::{
-    embedding::{cohere::CohereClient, voyage::VoyageAIClient},
+    embedding::{cohere::CohereClient, voyage::VoyageAIClient, zeroentropy::ZeroEntropyClient},
     http_client::ReqwestClient,
     llm::errors::LLMError,
 };
@@ -44,6 +44,7 @@ pub fn get_reranking_provider(provider: &str) -> Result<Arc<dyn Rerank>, LLMErro
     match provider {
         "voyageai" => Ok(Arc::new(VoyageAIClient::<ReqwestClient>::default())),
         "cohere" => Ok(Arc::new(CohereClient::<ReqwestClient>::default())),
+        "zeroentropy" => Ok(Arc::new(ZeroEntropyClient::<ReqwestClient>::default())),
         _ => Err(LLMError::InvalidProviderError(provider.to_string())),
     }
 }
@@ -71,6 +72,9 @@ pub fn get_reranking_provider_with_config(
         RerankProviderConfig::Cohere(cfg) => {
             Ok(Arc::new(CohereClient::<ReqwestClient>::with_config(cfg)))
         }
+        RerankProviderConfig::ZeroEntropy(cfg) => Ok(Arc::new(
+            ZeroEntropyClient::<ReqwestClient>::with_config(cfg),
+        )),
     }
 }
 
@@ -81,6 +85,8 @@ pub enum RerankProviderConfig {
     VoyageAI(crate::config::VoyageAIConfig),
     /// Configuration for Cohere reranking provider
     Cohere(crate::config::CohereConfig),
+    /// Configuration for ZeroEntropy reranking provider
+    ZeroEntropy(crate::config::ZeroEntropyConfig),
 }
 
 impl RerankProviderConfig {
@@ -90,6 +96,7 @@ impl RerankProviderConfig {
         match self {
             Self::Cohere(_) => "cohere",
             Self::VoyageAI(_) => "voyageai",
+            Self::ZeroEntropy(_) => "zeroentropy",
         }
     }
 }

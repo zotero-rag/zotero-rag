@@ -6,3 +6,4 @@ pub(crate) mod gemini;
 pub(crate) mod ollama;
 pub(crate) mod openai;
 pub(crate) mod voyage;
+pub(crate) mod zeroentropy;

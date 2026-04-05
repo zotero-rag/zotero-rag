@@ -18,10 +18,11 @@ use crate::clients::ollama::OllamaClient;
 use crate::clients::openai::OpenAIClient;
 use crate::constants::{
     DEFAULT_COHERE_EMBEDDING_DIM, DEFAULT_GEMINI_EMBEDDING_DIM, DEFAULT_OLLAMA_EMBEDDING_DIM,
-    DEFAULT_OPENAI_EMBEDDING_DIM, DEFAULT_VOYAGE_EMBEDDING_DIM,
+    DEFAULT_OPENAI_EMBEDDING_DIM, DEFAULT_VOYAGE_EMBEDDING_DIM, DEFAULT_ZEROENTROPY_EMBEDDING_DIM,
 };
 use crate::embedding::cohere::CohereClient;
 use crate::embedding::voyage::VoyageAIClient;
+use crate::embedding::zeroentropy::ZeroEntropyClient;
 use crate::http_client::{HttpClient, ReqwestClient};
 use crate::llm::errors::LLMError;
 
@@ -56,6 +57,7 @@ pub fn get_embedding_dims_by_provider(embedding_name: &str) -> u32 {
         "gemini" => DEFAULT_GEMINI_EMBEDDING_DIM,
         "ollama" => DEFAULT_OLLAMA_EMBEDDING_DIM as u32,
         "cohere" => DEFAULT_COHERE_EMBEDDING_DIM,
+        "zeroentropy" => DEFAULT_ZEROENTROPY_EMBEDDING_DIM,
         _ => panic!("Invalid embedding provider."),
     }
 }
@@ -84,6 +86,7 @@ pub fn get_embedding_provider(
         "gemini" => Ok(Arc::new(GeminiClient::<ReqwestClient>::default())),
         "ollama" => Ok(Arc::new(OllamaClient::<ReqwestClient>::default())),
         "cohere" => Ok(Arc::new(CohereClient::<ReqwestClient>::default())),
+        "zeroentropy" => Ok(Arc::new(ZeroEntropyClient::<ReqwestClient>::default())),
         _ => Err(LLMError::InvalidProviderError(embedding_name.to_string())),
     }
 }
@@ -120,6 +123,9 @@ pub fn get_embedding_provider_with_config(
         EmbeddingProviderConfig::Ollama(cfg) => {
             Ok(Arc::new(OllamaClient::<ReqwestClient>::with_config(cfg)))
         }
+        EmbeddingProviderConfig::ZeroEntropy(cfg) => Ok(Arc::new(
+            ZeroEntropyClient::<ReqwestClient>::with_config(cfg),
+        )),
     }
 }
 
@@ -136,6 +142,8 @@ pub enum EmbeddingProviderConfig {
     Cohere(crate::config::CohereConfig),
     /// Configuration for `ollama` embedding provider
     Ollama(crate::config::OllamaConfig),
+    /// Configuration for ZeroEntropy embedding provider
+    ZeroEntropy(crate::config::ZeroEntropyConfig),
 }
 
 impl EmbeddingProviderConfig {
@@ -148,6 +156,7 @@ impl EmbeddingProviderConfig {
             EmbeddingProviderConfig::Gemini(_) => "gemini",
             EmbeddingProviderConfig::Ollama(_) => "ollama",
             EmbeddingProviderConfig::Cohere(_) => "cohere",
+            EmbeddingProviderConfig::ZeroEntropy(_) => "zeroentropy",
         }
     }
 }
