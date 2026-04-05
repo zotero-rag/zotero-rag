@@ -90,11 +90,11 @@ fn import_document<O: Write, E: Write>(
 ///
 /// * `CLIError::IOError` if the path could not be canonicalized.
 fn get_document_session_key(path: &Path) -> Result<String, CLIError> {
-    let canonical_path = path.canonicalize()?;
-
     if path.is_relative() {
         return Ok(path.to_string_lossy().into_owned());
     }
+
+    let canonical_path = path.canonicalize()?;
 
     if let Ok(cwd) = std::env::current_dir()
         && let Ok(canonical_cwd) = cwd.canonicalize()
@@ -1204,8 +1204,9 @@ pub(crate) async fn handle_command<O: Write, E: Write>(
                 return Ok(true);
             } else if query.starts_with("/docs ") {
                 let subcmd = query.strip_prefix("/docs ").unwrap().trim();
+                let parts: Vec<&str> = subcmd.splitn(2, ' ').collect();
 
-                match subcmd {
+                match parts[0] {
                     "clear" => {
                         return clear_documents(ctx).map(|_| true);
                     }
@@ -1227,7 +1228,6 @@ pub(crate) async fn handle_command<O: Write, E: Write>(
                         return Ok(true);
                     }
                     "remove" => {
-                        let parts: Vec<&str> = subcmd.splitn(2, ' ').collect();
                         if parts.len() < 2 || parts[1].is_empty() {
                             writeln!(&mut ctx.err, "Usage: /docs remove <document_key>")?;
                             writeln!(
