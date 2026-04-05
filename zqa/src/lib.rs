@@ -70,7 +70,7 @@ fn check_api_keys_exist(config: &Config, log_level: log::LevelFilter) {
 
         // Technically this isn't catastrophic; the user might want to just `/search`, but it
         // isn't expected.
-        if log_level <= log::LevelFilter::Warn {
+        if log_level != log::LevelFilter::Off && log_level <= log::LevelFilter::Warn {
             log::warn!("{warning}");
         } else {
             eprintln!("{YELLOW_BOLD}warn: {RESET}{YELLOW}{warning}{RESET}");
@@ -90,7 +90,7 @@ fn check_api_keys_exist(config: &Config, log_level: log::LevelFilter) {
     }) {
         let err = "No API key is set for embedding models. Most commands will not work. Set up a config at ~/.config/zqa/config.toml or in a `.env` file.";
 
-        if log_level <= log::LevelFilter::Error {
+        if log_level != log::LevelFilter::Off && log_level <= log::LevelFilter::Error {
             log::error!("{err}");
         } else {
             eprintln!("{RED_BOLD}error: {RESET}{RED}{err}{RESET}");
@@ -111,7 +111,7 @@ fn check_api_keys_exist(config: &Config, log_level: log::LevelFilter) {
     {
         let err = "No API key is set for reranking. Most commands will not work. Set up a config at ~/.config/zqa/config.toml; if you want to opt out of reranking, set `reranker_provider` to an empty string or \"none\" instead.";
 
-        if log_level <= log::LevelFilter::Error {
+        if log_level != log::LevelFilter::Off && log_level <= log::LevelFilter::Error {
             log::error!("{err}");
         } else {
             eprintln!("{RED_BOLD}error: {RESET}{RED}{err}{RESET}");
