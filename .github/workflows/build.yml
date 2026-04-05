@@ -52,6 +52,7 @@ jobs:
         OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         COHERE_API_KEY: ${{ secrets.COHERE_API_KEY }}
+        ZEROENTROPY_API_KEY: ${{ secrets.ZEROENTROPY_API_KEY }}
         OPENROUTER_MODEL: google/gemini-2.5-flash
         ANTHROPIC_MODEL: claude-haiku-4-5-20251001
         OPENAI_EMBEDDING_MODEL: text-embedding-3-small
