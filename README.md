@@ -44,7 +44,7 @@ Although you *could* store your API keys in this config, I recommend you don't. 
 
 Once you have a config set up, you should first run `/process`, which will use your embedding provider to create a vector database. **This step takes a long time!** On my machine, with about 1100 papers in my Zotero library, this took about 4 hours. This is mostly to respect the API's rate limits; the PDF parsing itself took about 40 minutes (though if you're using a release build, this will likely be much faster). I recommend leaving this running in the background, possibly while you're sleeping. It's possible that some PDFs fail to process when you're back; this is fine, and you can re-run `/process` at any time to handle failed/new Zotero entries.
 
-**Update:** If you're using the "nightly" version, this should be significantly faster.
+**Note:** If you're using the "nightly" version, this should be *significantly* faster. The PDF parser has been rewritten, and took about 3 seconds for the same library, and getting embeddings took about 35 minutes.
 
 The easiest way to get started is to run `/help`. This gives you a list of things you can do. If you only need to use this to ask questions, you simply type in your question and hit Enter. It's likely you might want to do other things as well; for example, `/search <query>` gives you papers in your library that are most relevant, with no further processing. This is particularly useful if you know some relevant keywords or ideas used by that paper. This also takes about 3 seconds and is *very* cheap, so it's an appealing option.
 
