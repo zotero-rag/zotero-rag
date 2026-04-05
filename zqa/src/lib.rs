@@ -21,8 +21,15 @@ use cli::app::cli;
 use common::{Args, Context, setup_logger};
 use config::Config;
 use state::{check_or_create_first_run_file, oobe};
+use zqa_rag::{
+    config::LLMClientConfig, embedding::common::EmbeddingProviderConfig,
+    reranking::common::RerankProviderConfig,
+};
 
-use crate::common::State;
+use crate::{
+    common::State,
+    utils::terminal::{RED, RED_BOLD, RESET, YELLOW, YELLOW_BOLD},
+};
 
 fn load_config() -> Config {
     // Load the configs in priority order: TOML < env < CLI args
@@ -47,6 +54,71 @@ fn load_config() -> Config {
     config
 }
 
+/// Check that API keys exist for generation, embedding, and reranking for the given `config`.
+fn check_api_keys_exist(config: &Config, log_level: log::LevelFilter) {
+    if config.get_generation_config().is_none_or(|c| {
+        (match c {
+            LLMClientConfig::Anthropic(cfg) => cfg.api_key,
+            LLMClientConfig::OpenAI(cfg) => cfg.api_key,
+            LLMClientConfig::Gemini(cfg) => cfg.api_key,
+            LLMClientConfig::OpenRouter(cfg) => cfg.api_key,
+            LLMClientConfig::Ollama(_) => "api_key".into(), // Doesn't need one
+        })
+        .is_empty()
+    }) {
+        let warning = "No API key is set for generation models. Some commands will not work. Set up a config at ~/.config/zqa/config.toml or in a `.env` file.";
+
+        // Technically this isn't catastrophic; the user might want to just `/search`, but it
+        // isn't expected.
+        if log_level <= log::LevelFilter::Warn {
+            log::warn!("{warning}");
+        } else {
+            eprintln!("{YELLOW_BOLD}warn: {RESET}{YELLOW}{warning}{RESET}");
+        }
+    }
+
+    if config.get_embedding_config().is_none_or(|c| {
+        (match c {
+            EmbeddingProviderConfig::OpenAI(cfg) => cfg.api_key,
+            EmbeddingProviderConfig::Cohere(cfg) => cfg.api_key,
+            EmbeddingProviderConfig::VoyageAI(cfg) => cfg.api_key,
+            EmbeddingProviderConfig::Gemini(cfg) => cfg.api_key,
+            EmbeddingProviderConfig::ZeroEntropy(cfg) => cfg.api_key,
+            EmbeddingProviderConfig::Ollama(_) => "api_key".into(),
+        })
+        .is_empty()
+    }) {
+        let err = "No API key is set for embedding models. Most commands will not work. Set up a config at ~/.config/zqa/config.toml or in a `.env` file.";
+
+        if log_level <= log::LevelFilter::Error {
+            log::error!("{err}");
+        } else {
+            eprintln!("{RED_BOLD}error: {RESET}{RED}{err}{RESET}");
+        }
+    }
+
+    // Reranking is a bit more complex: we allow empty or "none" as provider names to opt out of
+    // reranking; but if one is set, we need an API key
+    if !["", "none"].contains(&config.reranker_provider.as_str())
+        && config.get_reranker_config().is_none_or(|c| {
+            (match c {
+                RerankProviderConfig::VoyageAI(cfg) => cfg.api_key,
+                RerankProviderConfig::Cohere(cfg) => cfg.api_key,
+                RerankProviderConfig::ZeroEntropy(cfg) => cfg.api_key,
+            })
+            .is_empty()
+        })
+    {
+        let err = "No API key is set for reranking. Most commands will not work. Set up a config at ~/.config/zqa/config.toml; if you want to opt out of reranking, set `reranker_provider` to an empty string or \"none\" instead.";
+
+        if log_level <= log::LevelFilter::Error {
+            log::error!("{err}");
+        } else {
+            eprintln!("{RED_BOLD}error: {RESET}{RED}{err}{RESET}");
+        }
+    }
+}
+
 /// Main entry point for the zqa application.
 ///
 /// This function handles configuration loading, first-run setup, and launches the CLI.
@@ -63,6 +135,8 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut config = load_config();
     let args = Args::parse();
 
+    check_api_keys_exist(&config, args.log_level);
+
     // Avoid RUST_LOG from interfering by not instantiating the logger if it's disabled.
     setup_logger(args.log_level).expect("Failed to set up logger.");
 
@@ -76,13 +150,9 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     if args.log_level < log::LevelFilter::Info && args.print_summaries {
         let warning = "`--print-summaries` requires `--log-level=info`. This will have no effect.";
 
-        if args.log_level >= log::LevelFilter::Warn {
+        if args.log_level <= log::LevelFilter::Warn {
             log::warn!("{warning}");
         } else {
-            const YELLOW: &str = "\x1b[33m";
-            const YELLOW_BOLD: &str = "\x1b[33;1m";
-            const RESET: &str = "\x1b[0m";
-
             eprintln!("{YELLOW_BOLD}warn: {RESET}{YELLOW}{warning}{RESET}");
         }
     }
