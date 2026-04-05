@@ -68,7 +68,7 @@ fn import_document<O: Write, E: Write>(
 
     // Do expensive work before taking the write lock.
     let document = Arc::new(
-        parse_user_document(&path)
+        parse_user_document(path)
             .map_err(|e| CLIError::ConfigError(format!("Failed to import {key}: {e}")))?,
     );
 
@@ -103,10 +103,10 @@ fn get_document_session_key(path: &Path) -> Result<String, CLIError> {
         return Ok(relative_path.to_string_lossy().into_owned());
     }
 
-    Ok(canonical_path
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_else(|| canonical_path.to_string_lossy().into_owned()))
+    Ok(canonical_path.file_name().map_or_else(
+        || canonical_path.to_string_lossy().into_owned(),
+        |name| name.to_string_lossy().into_owned(),
+    ))
 }
 
 /// Remove a document from the context, given its key.
@@ -247,7 +247,11 @@ fn get_user_document_tools<O: Write, E: Write>(
     ctx: &mut Context<O, E>,
 ) -> Result<Vec<Box<dyn Tool>>, CLIError> {
     let imports = ctx.state.imports.clone();
-    let embedding_config = ctx.config.get_embedding_config();
+    let embedding_config = ctx.config.get_embedding_config().ok_or_else(|| {
+        CLIError::ConfigError(
+            "No embedding config found; mentioned documents won't be imported.".into(),
+        )
+    })?;
     let reranker_config = ctx.config.get_reranker_config();
 
     let client = ctx
@@ -1173,9 +1177,9 @@ pub(crate) async fn handle_command<O: Write, E: Write>(
                 }
 
                 return Ok(true);
-            } else if query.starts_with("/embed") {
+            } else if query.starts_with("/embed ") {
                 // Handle `/embed fix`
-                let subcmd = query.strip_prefix("/embed").unwrap().trim();
+                let subcmd = query.strip_prefix("/embed ").unwrap().trim();
                 if subcmd != "fix" {
                     writeln!(&mut ctx.err, "Invalid subcommand to /embed: {subcmd}")?;
                     return Ok(true);
@@ -1183,6 +1187,21 @@ pub(crate) async fn handle_command<O: Write, E: Write>(
 
                 embed(ctx, true).await?;
                 return Ok(true);
+            } else if query.starts_with("/docs ") {
+                let subcmd = query.strip_prefix("/docs ").unwrap().trim();
+
+                match subcmd {
+                    "clear" => {
+                        return clear_documents(ctx).map(|_| true);
+                    }
+                    "remove" => {
+                        return remove_document(ctx, "foo");
+                    }
+                    _ => {
+                        writeln!(&mut ctx.err, "Invalid subcommand to /docs: {subcmd}")?;
+                        return Ok(true);
+                    }
+                }
             }
 
             if let Err(e) = import_documents_from_query(ctx, query) {
@@ -1243,6 +1262,7 @@ pub(crate) async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<()
 
     rl.set_helper(Some(PlaceholderText::new(
         "Type in a question or /help for options".to_string(),
+        Arc::clone(&ctx.state.imports),
     )));
 
     loop {
@@ -1706,8 +1726,11 @@ pub(crate) mod tests {
     #[test]
     fn test_get_document_session_key_preserves_relative_input() {
         let original = std::path::Path::new("papers/image 1.pdf");
-        let canonical = std::path::Path::new("/tmp/papers/image 1.pdf");
-        let key = get_document_session_key(original, canonical);
+        let key = get_document_session_key(original);
+
+        test_ok!(key);
+        let key = key.unwrap();
+
         test_eq!(key, "papers/image 1.pdf");
     }
 
@@ -1723,8 +1746,11 @@ pub(crate) mod tests {
         let canonical = path.canonicalize().unwrap();
 
         std::env::set_current_dir(temp_dir.path()).unwrap();
-        let key = get_document_session_key(&canonical, &canonical);
+        let key = get_document_session_key(&canonical);
         std::env::set_current_dir(original_cwd).unwrap();
+
+        test_ok!(key);
+        let key = key.unwrap();
 
         test_eq!(key, "papers/image 1.pdf");
     }
