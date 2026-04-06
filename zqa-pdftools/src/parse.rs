@@ -221,8 +221,10 @@ fn get_script_marker_edits(y_history: &[(usize, f32)], parsed: &mut String) -> V
             // The offset measures how much we need to shift the opening curly braces by. This
             // is because while symbols are single characters in math fonts (such as CMEX),
             // they expand to a longer string, so we account for the difference in lengths.
-            let offset = if parsed.as_bytes().get(y_history[j].0) == Some(&BACKSLASH_ASCII) {
-                parsed[y_history[j].0..].find(' ').unwrap()
+            let offset = if parsed.as_bytes().get(y_history[j].0) == Some(&BACKSLASH_ASCII)
+                && let Some(space_pos) = parsed[y_history[j].0..].find(' ')
+            {
+                space_pos
             } else {
                 0
             };
