@@ -627,7 +627,7 @@ pub(crate) async fn process<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Resu
             writeln!(&mut ctx.out, "Parsing library failed: {e}")?;
             writeln!(
                 &mut ctx.out,
-                "The parsed PDFs have been saved in 'batch_iter.bin'. Run '/embed fix' to retry embedding."
+                "The parsed PDFs have been saved in 'batch_iter.bin'. Run '/embed' to retry embedding."
             )?;
         }
     }
