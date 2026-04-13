@@ -1610,7 +1610,11 @@ mod tests {
         let doc = Document::load(path).unwrap();
         let page_id = doc.page_iter().next().unwrap();
 
-        let mut parser = PdfParser::default();
+        let mut parser = PdfParser {
+            cur_font_id: "F30".to_string(),
+            cur_font: "CMMI7".to_string(),
+            ..PdfParser::default()
+        };
 
         // F30 is CMMI7
         parser.cur_font_id = "F30".to_string();
