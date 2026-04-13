@@ -286,9 +286,7 @@ pub async fn delete_rows(
             .collect::<Vec<_>>()
             .join(" OR ");
 
-        if !delete_pred.is_empty() {
-            table.delete(&delete_pred).await?;
-        }
+        table.delete(&delete_pred).await?;
     }
 
     Ok(())
