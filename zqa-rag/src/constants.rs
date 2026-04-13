@@ -25,10 +25,10 @@ pub const DEFAULT_OLLAMA_EMBEDDING_DIM: usize = 4096;
 pub const DEFAULT_OLLAMA_BASE_URL: &str = "http://localhost:11434";
 
 /// Default OpenAI model for chat completions
-pub const DEFAULT_OPENAI_MODEL: &str = "gpt-5.2";
+pub const DEFAULT_OPENAI_MODEL: &str = "gpt-5.4";
 
 /// Default OpenAI model for conversation title generation
-pub const DEFAULT_OPENAI_MODEL_SMALL: &str = "gpt-5-mini";
+pub const DEFAULT_OPENAI_MODEL_SMALL: &str = "gpt-5.4-mini";
 
 /// Default OpenAI generation max tokens
 pub const DEFAULT_OPENAI_MAX_TOKENS: u32 = 8192;
@@ -52,13 +52,13 @@ pub const DEFAULT_ANTHROPIC_MAX_TOKENS: u32 = 64000;
 pub const DEFAULT_GEMINI_MODEL: &str = "gemini-3.1-pro-preview";
 
 /// Default Gemini model for conversation title generation
-pub const DEFAULT_GEMINI_MODEL_SMALL: &str = "gemini-3-flash-preview";
+pub const DEFAULT_GEMINI_MODEL_SMALL: &str = "gemini-3.1-flash-lite-preview";
 
-/// Gemini gemini-embedding-001 dimension
+/// Gemini gemini-embedding-2-preview dimension
 pub const DEFAULT_GEMINI_EMBEDDING_DIM: u32 = 3072;
 
 /// Default Gemini embedding model
-pub const DEFAULT_GEMINI_EMBEDDING_MODEL: &str = "gemini-embedding-001";
+pub const DEFAULT_GEMINI_EMBEDDING_MODEL: &str = "gemini-embedding-2-preview";
 
 /// Default OpenRouter model
 pub const DEFAULT_OPENROUTER_MODEL: &str = "anthropic/claude-sonnet-4.6";
