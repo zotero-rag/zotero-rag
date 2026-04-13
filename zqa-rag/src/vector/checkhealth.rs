@@ -381,7 +381,7 @@ mod tests {
     use crate::vector::lance::insert_records;
     use arrow_array::{RecordBatch, StringArray};
     use dotenv::dotenv;
-    use lancedb::embeddings::EmbeddingDefinition;
+
     use serial_test::serial;
     use std::env;
     use std::sync::Arc;
@@ -437,7 +437,7 @@ mod tests {
                 api_key: env::var("VOYAGE_AI_API_KEY").unwrap_or_default(),
                 reranker: DEFAULT_VOYAGE_RERANK_MODEL.into(),
             }),
-            EmbeddingDefinition::new("pdf_text", "voyageai", Some("embeddings")),
+            "pdf_text",
         )
         .await
         .unwrap();

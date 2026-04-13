@@ -633,8 +633,7 @@ pub async fn search_by_column(
 /// * `merge_on`: `None` if you want to create or overwrite the current database; otherwise, a
 ///   reference to an array of keys to merge on.
 /// * `embedding_config`: The embedding provider configuration
-/// * `embedding_params`: An `EmbeddingDefinition` object that contains the source column that has
-///   the text data, the destination column name, and the embedding function to use.
+/// * `source_col` - The name of the column containing the source text to embed.
 ///
 /// # Returns
 /// A Connection to the LanceDB database if successful
@@ -645,9 +644,14 @@ pub async fn insert_records(
     data: Vec<RecordBatch>,
     merge_on: Option<&[&str]>,
     embedding_config: &EmbeddingProviderConfig,
-    embedding_params: EmbeddingDefinition,
+    source_col: &str,
 ) -> Result<Connection, LanceError> {
     let db = get_db_with_embeddings(embedding_config).await?;
+    let embedding_params = EmbeddingDefinition::new(
+        source_col,
+        embedding_config.provider_name(),
+        Some("embeddings"),
+    );
 
     if lancedb_exists().await
         && let Some(merge_on) = merge_on
@@ -693,7 +697,7 @@ pub async fn insert_records(
 /// * `merge_on`: `None` if you want to create or overwrite the current database; otherwise, a
 ///   reference to an array of keys to merge on.
 /// * `embedding_config`: The embedding provider configuration
-/// * `embedding_params`: An `EmbeddingDefinition` object
+/// * `source_col` - The name of the column containing the source text to embed.
 ///
 /// # Returns
 /// A Connection to the LanceDB database if successful
@@ -704,15 +708,9 @@ pub async fn insert_records_with_backup(
     data: Vec<RecordBatch>,
     merge_on: Option<&[&str]>,
     embedding_config: &EmbeddingProviderConfig,
-    embedding_params: EmbeddingDefinition,
+    source_col: &str,
 ) -> Result<Connection, LanceError> {
-    with_backup(insert_records(
-        data,
-        merge_on,
-        embedding_config,
-        embedding_params,
-    ))
-    .await
+    with_backup(insert_records(data, merge_on, embedding_config, source_col)).await
 }
 
 /// Delete rows with backup support. Creates a backup before the operation and
@@ -802,17 +800,7 @@ mod tests {
         let batches = vec![record_batch];
 
         let embedding_config = get_test_openai_embedding_config();
-        let db = insert_records(
-            batches,
-            None,
-            &embedding_config,
-            EmbeddingDefinition::new(
-                "data_openai",      // source column
-                "openai",           // embedding name, either "openai" or "anthropic"
-                Some("embeddings"), // dest column
-            ),
-        )
-        .await;
+        let db = insert_records(batches, None, &embedding_config, "data_openai").await;
 
         test_ok!(db);
         let db = db.unwrap();
@@ -866,7 +854,7 @@ mod tests {
                 api_key: env::var("VOYAGE_AI_API_KEY").unwrap(),
                 reranker: DEFAULT_VOYAGE_RERANK_MODEL.into(),
             }),
-            EmbeddingDefinition::new("data_voyage", "voyageai", Some("embeddings")),
+            "data_voyage",
         )
         .await;
 
@@ -901,32 +889,6 @@ mod tests {
 
     #[tokio::test]
     #[serial]
-    async fn test_invalid_embedding_provider_rejected() {
-        dotenv().ok();
-
-        let schema = arrow_schema::Schema::new(vec![arrow_schema::Field::new(
-            "data",
-            arrow_schema::DataType::Utf8,
-            false,
-        )]);
-        let data = StringArray::from(vec!["Hello", "World"]);
-        let record_batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(data)]).unwrap();
-        let batches = vec![record_batch];
-
-        let embedding_config = get_test_openai_embedding_config();
-        let db = insert_records(
-            batches,
-            None,
-            &embedding_config,
-            EmbeddingDefinition::new("data", "invalid", Some("embeddings")),
-        )
-        .await;
-
-        assert!(db.is_err());
-    }
-
-    #[tokio::test]
-    #[serial]
     async fn test_search_by_key() {
         dotenv().ok();
 
@@ -945,14 +907,9 @@ mod tests {
         let batches = vec![record_batch];
 
         let embedding_config = get_test_openai_embedding_config();
-        let _db = insert_records(
-            batches,
-            None,
-            &embedding_config,
-            EmbeddingDefinition::new("content", "openai", Some("embeddings")),
-        )
-        .await
-        .unwrap();
+        let _db = insert_records(batches, None, &embedding_config, "content")
+            .await
+            .unwrap();
 
         // Test finding an existing key
         let result = search_by_key("id", "key2").await;
@@ -996,14 +953,9 @@ mod tests {
         let batches = vec![record_batch];
 
         let embedding_config = get_test_openai_embedding_config();
-        let _db = insert_records(
-            batches,
-            None,
-            &embedding_config,
-            EmbeddingDefinition::new("item", "openai", Some("embeddings")),
-        )
-        .await
-        .unwrap();
+        let _db = insert_records(batches, None, &embedding_config, "item")
+            .await
+            .unwrap();
 
         // Test finding multiple matching values
         let values = vec!["fruit", "grain"];
@@ -1066,14 +1018,9 @@ mod tests {
         .unwrap();
 
         let embedding_config = get_test_openai_embedding_config();
-        let _db = insert_records(
-            vec![record_batch],
-            None,
-            &embedding_config,
-            EmbeddingDefinition::new("text", "openai", Some("embeddings")),
-        )
-        .await
-        .unwrap();
+        let _db = insert_records(vec![record_batch], None, &embedding_config, "text")
+            .await
+            .unwrap();
 
         // First call — should create both indices
         let result = create_or_update_indexes("text", "embeddings").await;
@@ -1103,14 +1050,9 @@ mod tests {
         .unwrap();
 
         let embedding_config = get_test_openai_embedding_config();
-        let _db = insert_records(
-            vec![record_batch],
-            None,
-            &embedding_config,
-            EmbeddingDefinition::new("title", "openai", Some("embeddings")),
-        )
-        .await
-        .unwrap();
+        let _db = insert_records(vec![record_batch], None, &embedding_config, "title")
+            .await
+            .unwrap();
 
         let deleted = dedup_rows(&embedding_config, schema, "title", "id").await;
         test_ok!(deleted);
@@ -1142,14 +1084,9 @@ mod tests {
         .unwrap();
 
         let embedding_config = get_test_openai_embedding_config();
-        let _db = insert_records(
-            vec![record_batch],
-            None,
-            &embedding_config,
-            EmbeddingDefinition::new("title", "openai", Some("embeddings")),
-        )
-        .await
-        .unwrap();
+        let _db = insert_records(vec![record_batch], None, &embedding_config, "title")
+            .await
+            .unwrap();
 
         let deleted = dedup_rows(&embedding_config, schema, "title", "id").await;
         test_ok!(deleted);
@@ -1174,14 +1111,9 @@ mod tests {
         .unwrap();
 
         let embedding_config = get_test_openai_embedding_config();
-        let _db = insert_records(
-            vec![record_batch],
-            None,
-            &embedding_config,
-            EmbeddingDefinition::new("title", "openai", Some("embeddings")),
-        )
-        .await
-        .unwrap();
+        let _db = insert_records(vec![record_batch], None, &embedding_config, "title")
+            .await
+            .unwrap();
 
         // Schema with non-existent columns — should return Ok(0) rather than an error
         let missing_schema = arrow_schema::Schema::new(vec![
@@ -1343,14 +1275,9 @@ mod tests {
         .unwrap();
 
         let embedding_config = get_test_openai_embedding_config();
-        insert_records(
-            vec![record_batch],
-            None,
-            &embedding_config,
-            EmbeddingDefinition::new("text", "openai", Some("embeddings")),
-        )
-        .await
-        .unwrap();
+        insert_records(vec![record_batch], None, &embedding_config, "text")
+            .await
+            .unwrap();
 
         let results = vector_search(
             "chocolate chip cookie baking recipe ingredients".to_string(),
