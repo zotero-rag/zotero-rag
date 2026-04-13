@@ -34,8 +34,8 @@ use crate::{
 fn load_config() -> Config {
     // Load the configs in priority order: TOML < env < CLI args
     let mut config = Config::default();
-    if let Some(xdg_config_dir) = directories::UserDirs::new() {
-        let config_path = xdg_config_dir
+    if let Some(user_dirs) = directories::UserDirs::new() {
+        let config_path = user_dirs
             .home_dir()
             .join(".config")
             .join("zqa")
@@ -62,7 +62,7 @@ fn check_api_keys_exist(config: &Config, log_level: log::LevelFilter) {
             LLMClientConfig::OpenAI(cfg) => cfg.api_key,
             LLMClientConfig::Gemini(cfg) => cfg.api_key,
             LLMClientConfig::OpenRouter(cfg) => cfg.api_key,
-            LLMClientConfig::Ollama(_) => "api_key".into(), // Doesn't need one
+            LLMClientConfig::Ollama(_) => String::new(), // Doesn't need one
         })
         .is_empty()
     }) {
@@ -84,7 +84,7 @@ fn check_api_keys_exist(config: &Config, log_level: log::LevelFilter) {
             EmbeddingProviderConfig::VoyageAI(cfg) => cfg.api_key,
             EmbeddingProviderConfig::Gemini(cfg) => cfg.api_key,
             EmbeddingProviderConfig::ZeroEntropy(cfg) => cfg.api_key,
-            EmbeddingProviderConfig::Ollama(_) => "api_key".into(),
+            EmbeddingProviderConfig::Ollama(_) => String::new(),
         })
         .is_empty()
     }) {
@@ -161,7 +161,9 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     let is_first_run = check_or_create_first_run_file()
         .or_else(|e| {
-            println!("Error setting up. (R)etry, (I)gnore, (S)how error and ignore, or (Q)uit: ");
+            println!(
+                "Error setting up: {e}. (R)etry, (I)gnore, (S)how error and ignore, or (Q)uit: "
+            );
 
             let mut input = String::new();
             io::stdin()

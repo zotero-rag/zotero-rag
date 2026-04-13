@@ -437,7 +437,7 @@ async fn fix_zero_embeddings<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Res
         nonempty_zero_subset,
         ctx.config
             .get_embedding_config()
-            .ok_or(CLIError::ArrowError(
+            .ok_or(CLIError::ConfigError(
                 "Could not get embedding config".into(),
             ))?,
     )
@@ -1205,7 +1205,9 @@ pub(crate) async fn handle_command<O: Write, E: Write>(
 
                 match parts[0] {
                     "clear" => {
-                        return clear_documents(ctx).map(|_| true);
+                        clear_documents(ctx)?;
+
+                        return Ok(true);
                     }
                     "list" => {
                         let docs = list_documents(ctx)?;
@@ -1233,7 +1235,9 @@ pub(crate) async fn handle_command<O: Write, E: Write>(
                             )?;
                             return Ok(true);
                         }
-                        return remove_document(ctx, parts[1]).map(|_| true);
+                        remove_document(ctx, parts[1])?;
+
+                        return Ok(true);
                     }
                     _ => {
                         writeln!(&mut ctx.err, "Invalid subcommand to /docs: {subcmd}")?;

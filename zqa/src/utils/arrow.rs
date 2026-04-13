@@ -266,6 +266,8 @@ pub async fn full_library_to_arrow(
 /// underlying implementation of `vector_search` simpler and potentially allows other RAG
 /// applications to be built on top of it.
 ///
+/// TODO: A limit of 10 results is currently returned, but this will be changed in a future version.
+///
 /// In some sense, this function is the reverse of the `library_to_arrow` function, which creates a
 /// `RecordBatch` from vectors after calling `parse_library`.
 ///
@@ -293,7 +295,7 @@ pub async fn vector_search(
     embedding_config: &EmbeddingProviderConfig,
     reranker: String,
 ) -> Result<Vec<ZoteroItem>, ArrowError> {
-    let batches = rag_vector_search(query.clone(), embedding_config).await?;
+    let batches = rag_vector_search(query.clone(), embedding_config, 10).await?;
 
     let items: ZoteroItemSet = batches.into();
     let items: Vec<ZoteroItem> = items.into();

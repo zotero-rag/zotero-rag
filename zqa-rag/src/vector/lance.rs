@@ -444,11 +444,14 @@ pub async fn get_lancedb_items(
 /// method. Returns a vector of Arrow `RecordBatch` objects containing the results.
 ///
 /// # Arguments
-/// * query: The query string to search for
-/// * embedding_config: The embedding provider configuration
+///
+/// * `query` - The query string to search for
+/// * `embedding_config` - The embedding provider configuration
+/// * `limit` - Limit on the number of returned results
 ///
 /// # Returns
-/// * batches: A vector of Arrow `RecordBatch` objects containing the results.
+///
+/// A vector of Arrow `RecordBatch` objects containing the results.
 ///
 /// # Errors
 ///
@@ -459,6 +462,7 @@ pub async fn get_lancedb_items(
 pub async fn vector_search(
     query: String,
     embedding_config: &EmbeddingProviderConfig,
+    limit: usize,
 ) -> Result<Vec<RecordBatch>, LanceError> {
     let start_time = Instant::now();
     let db = get_db_with_embeddings(embedding_config).await?;
@@ -493,7 +497,7 @@ pub async fn vector_search(
     let start_time = Instant::now();
     let stream = tbl
         .query()
-        .limit(10)
+        .limit(limit)
         .nearest_to(query_vec)?
         .execute()
         .await?;
@@ -1261,6 +1265,7 @@ mod tests {
         let results = vector_search(
             "chocolate chip cookie baking recipe ingredients".to_string(),
             &embedding_config,
+            10,
         )
         .await;
         test_ok!(results);

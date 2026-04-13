@@ -289,10 +289,6 @@ impl PdfParser {
         }
     }
 
-    fn with_default_config() -> Self {
-        Self::new(PdfParserThresholds::default())
-    }
-
     /// Checks if a given font in a specific page of a document is a CID-keyed font.
     ///
     /// If it is, returns the `ToUnicode` CMap for that font; otherwise, returns
@@ -353,7 +349,11 @@ impl PdfParser {
                                 ))
                             })?,
                     )
-                    .unwrap();
+                    .map_err(|e| {
+                        PdfError::InternalError(format!(
+                            "Font {font_key}'s Subtype value is not valid UTF-8: {e}"
+                        ))
+                    })?;
 
                     if ["Type1", "TrueType"].contains(&font_subtype) {
                         FontEncoding::Simple
@@ -373,7 +373,11 @@ impl PdfParser {
                                         "Expected font {font_key}'s Encoding key to be a `name`"
                                     ))
                                 })?)
-                                .unwrap();
+                                .map_err(|e| {
+                                    PdfError::EncodingError(format!(
+                                        "Font {font_key}'s Encoding name is not valid UTF-8: {e}"
+                                    ))
+                                })?;
 
                             if ["WinAnsiEncoding", "MacRomanEncoding"].contains(&font_encoding) {
                                 FontEncoding::Simple
@@ -1057,10 +1061,13 @@ fn get_font<'a>(
         .ok_or(PdfError::FontNotFound(font_key.into()))?;
     let font_hash = font_obj.as_hashmap();
 
-    Ok(font_hash
+    font_hash
         .iter()
-        .map(|(k, v)| (str::from_utf8(k).expect("Invalid UTF in font object"), v))
-        .collect())
+        .map(|(k, v)| {
+            let key_str = std::str::from_utf8(k)?;
+            Ok((key_str, v))
+        })
+        .collect::<Result<_, _>>()
 }
 
 /// Given a PDF `Document` reference, a page ID, and a font key (e.g., "F19"), return the font
@@ -1140,7 +1147,7 @@ pub fn extract_text(file_path: &str) -> Result<ExtractedContent, Box<dyn Error>>
         log::debug!("\tParsing page {} of {page_count}", page_num + 1);
 
         let byte_offset = full_text.len();
-        let mut parser = PdfParser::with_default_config();
+        let mut parser = PdfParser::default();
         let result = parser.parse_content(&doc, page_id, page_num, body_font_size.is_none())?;
 
         if let Some(size) = result.body_font_size {
@@ -1603,7 +1610,7 @@ mod tests {
         let doc = Document::load(path).unwrap();
         let page_id = doc.page_iter().next().unwrap();
 
-        let mut parser = PdfParser::with_default_config();
+        let mut parser = PdfParser::default();
 
         // F30 is CMMI7
         parser.cur_font_id = "F30".to_string();
