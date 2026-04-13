@@ -1,5 +1,5 @@
 use dotenv::dotenv;
-use lancedb::embeddings::EmbeddingDefinition;
+
 use log::LevelFilter;
 use std::env;
 use zqa::common::setup_logger;
@@ -58,7 +58,7 @@ async fn test_integration_works() {
         batches,
         None,
         &config.get_embedding_config().unwrap(),
-        EmbeddingDefinition::new("pdf_text", "voyageai", Some("embeddings")),
+        "pdf_text",
     )
     .await;
 

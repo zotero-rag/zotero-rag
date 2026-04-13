@@ -11,7 +11,7 @@ use crate::utils::rag::ModelResponse;
 use arrow_array::{self, RecordBatch, StringArray};
 use arrow_schema::Schema;
 use chrono::Local;
-use lancedb::embeddings::EmbeddingDefinition;
+
 use rustyline::error::ReadlineError;
 use zqa_rag::capabilities::ModelProvider;
 use zqa_rag::llm::base::{
@@ -337,7 +337,6 @@ async fn embed<O: Write, E: Write>(
     }
     writeln!(ctx.out, ".")?;
 
-    let embedding_provider = &ctx.config.embedding_provider;
     let db = insert_records(
         batches,
         Some(&[DbFields::LibraryKey.as_ref()]),
@@ -346,11 +345,7 @@ async fn embed<O: Write, E: Write>(
             .ok_or(CLIError::ConfigError(
                 "Could not get embedding config".into(),
             ))?,
-        EmbeddingDefinition::new(
-            &DbFields::PdfText.into(), // source column
-            embedding_provider,
-            Some(&DbFields::Embeddings.into()), // dest column
-        ),
+        DbFields::PdfText.as_ref(),
     )
     .await;
 
@@ -466,11 +461,7 @@ async fn fix_zero_embeddings<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Res
             .ok_or(CLIError::ConfigError(
                 "Could not get embedding config".into(),
             ))?,
-        EmbeddingDefinition::new(
-            &DbFields::PdfText.into(), // source column
-            &ctx.config.embedding_provider,
-            Some(&DbFields::Embeddings.into()), // dest column
-        ),
+        DbFields::PdfText.as_ref(),
     )
     .await?;
 
@@ -601,7 +592,6 @@ pub(crate) async fn process<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Resu
     writer.write(&record_batch)?;
     writer.finish()?;
 
-    let embedding_provider = ctx.config.embedding_provider.as_str();
     let result = insert_records(
         batches,
         Some(&[DbFields::LibraryKey.as_ref()]),
@@ -610,11 +600,7 @@ pub(crate) async fn process<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Resu
             .ok_or(CLIError::ConfigError(
                 "Could not get embedding config".into(),
             ))?,
-        EmbeddingDefinition::new(
-            DbFields::PdfText.as_ref(), // source column
-            embedding_provider,
-            Some(DbFields::Embeddings.as_ref()), // dest column
-        ),
+        DbFields::PdfText.as_ref(),
     )
     .await;
 
