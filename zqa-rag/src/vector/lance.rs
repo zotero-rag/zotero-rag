@@ -628,11 +628,12 @@ pub async fn search_by_column(
 /// table.
 ///
 /// # Arguments
-/// * `data`: An Arrow `RecordBatchIterator` containing data. See
+///
+/// * `data` -  An Arrow `RecordBatchIterator` containing data. See
 ///   https://docs.rs/lancedb/latest/lancedb/index.html for an example of creating this.
-/// * `merge_on`: `None` if you want to create or overwrite the current database; otherwise, a
+/// * `merge_on` - `None` if you want to create or overwrite the current database; otherwise, a
 ///   reference to an array of keys to merge on.
-/// * `embedding_config`: The embedding provider configuration
+/// * `embedding_config` - The embedding provider configuration
 /// * `source_col` - The name of the column containing the source text to embed.
 ///
 /// # Returns
@@ -647,11 +648,6 @@ pub async fn insert_records(
     source_col: &str,
 ) -> Result<Connection, LanceError> {
     let db = get_db_with_embeddings(embedding_config).await?;
-    let embedding_params = EmbeddingDefinition::new(
-        source_col,
-        embedding_config.provider_name(),
-        Some("embeddings"),
-    );
 
     if lancedb_exists().await
         && let Some(merge_on) = merge_on
@@ -677,6 +673,12 @@ pub async fn insert_records(
             .await
             .map_err(|e| LanceError::TableUpdateError(e.to_string()))?;
     } else {
+        let embedding_params = EmbeddingDefinition::new(
+            source_col,
+            embedding_config.provider_name(),
+            Some("embeddings"),
+        );
+
         // Create a new table and add rows
         db.create_table(TABLE_NAME, data)
             .mode(CreateTableMode::Overwrite)
@@ -693,10 +695,11 @@ pub async fn insert_records(
 /// restores it if the operation fails.
 ///
 /// # Arguments
-/// * `data`: An Arrow `RecordBatchIterator` containing data
-/// * `merge_on`: `None` if you want to create or overwrite the current database; otherwise, a
+///
+/// * `data` - An Arrow `RecordBatchIterator` containing data
+/// * `merge_on` - `None` if you want to create or overwrite the current database; otherwise, a
 ///   reference to an array of keys to merge on.
-/// * `embedding_config`: The embedding provider configuration
+/// * `embedding_config` - The embedding provider configuration
 /// * `source_col` - The name of the column containing the source text to embed.
 ///
 /// # Returns
