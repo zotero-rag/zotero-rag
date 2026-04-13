@@ -14,7 +14,6 @@ use crate::http_client::ReqwestClient;
 use crate::vector::backup::with_backup;
 use crate::vector::checkhealth::get_zero_vectors;
 
-use arrow_array::cast::as_string_array;
 use arrow_array::{
     RecordBatch, RecordBatchIterator, StringArray, cast::AsArray, types::Float32Type,
 };
@@ -253,52 +252,37 @@ async fn get_db_with_embeddings(
     Ok(db)
 }
 
-/// Given a `RecordBatch` of items, delete records in the database where the `key` matches. Note
-/// that the `key` has to exist in the schema in both `rows` and the database.
+/// Given a column name and a list of key values, delete all matching rows from the database.
 ///
-/// # Arguments:
+/// # Arguments
 ///
-/// * `rows` - A `RecordBatch` of items to delete
-/// * `key` - The column to delete by
-/// * `embedding_config` - The embedding provider configuration
+/// * `column` - The name of the column to match against.
+/// * `keys` - The list of values to delete. Rows whose `column` value is in this list are deleted.
+/// * `embedding_config` - The embedding provider configuration.
 ///
 /// # Errors
 ///
 /// * `LanceError::ConnectionError` - If the database connection fails
 /// * `LanceError::InvalidStateError` - If the table doesn't exist
-/// * `LanceError::ParameterError` - If the key column is not found in the rows
+/// * `LanceError::Other` - If the delete query fails
 pub async fn delete_rows(
-    rows: RecordBatch,
-    key: &str,
+    column: &str,
+    keys: &[impl AsRef<str>],
     embedding_config: &EmbeddingProviderConfig,
 ) -> Result<(), LanceError> {
+    if keys.is_empty() {
+        return Ok(());
+    }
+
     let db = get_db_with_embeddings(embedding_config).await?;
     let table = db.open_table(TABLE_NAME).execute().await.map_err(|_| {
         LanceError::InvalidStateError(format!("The table {TABLE_NAME} does not exist"))
     })?;
 
-    let key_col = rows
-        .column_by_name(key)
-        .ok_or(LanceError::ParameterError(format!(
-            "Column '{key}' does not exist."
-        )))?;
-
-    // Avoid potentially deleting all rows
-    if key_col.is_empty() {
-        return Ok(());
-    }
-
-    for key_chunk in as_string_array(key_col)
-        .iter()
-        .collect::<Vec<_>>()
-        .chunks(100)
-    {
-        #[allow(clippy::single_char_pattern)]
+    for key_chunk in keys.chunks(100) {
         let delete_pred = key_chunk
             .iter()
-            .filter_map(|maybe_key| {
-                maybe_key.map(|k| format!("{} = '{}'", key, k.replace("'", "''")))
-            })
+            .map(|k| format!("{column} = '{}'", k.as_ref().replace('\'', "''")))
             .collect::<Vec<_>>()
             .join(" OR ");
 
@@ -407,16 +391,7 @@ pub async fn dedup_rows(
         // Delete duplicate rows
         let deleted_count = duplicate_keys.len();
         if !duplicate_keys.is_empty() {
-            let schema_fields = vec![arrow_schema::Field::new(
-                key,
-                arrow_schema::DataType::Utf8,
-                false,
-            )];
-            let schema = arrow_schema::Schema::new(schema_fields);
-            let array = StringArray::from_iter_values(duplicate_keys);
-            let record_batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(array) as _])?;
-
-            delete_rows(record_batch, key, embedding_config).await?;
+            delete_rows(key, &duplicate_keys, embedding_config).await?;
         }
 
         return Ok(deleted_count);
@@ -720,18 +695,20 @@ pub async fn insert_records_with_backup(
 /// restores it if the operation fails.
 ///
 /// # Arguments
-/// * `rows` - A `RecordBatch` of items to delete
-/// * `key` - The column to delete by
-/// * `embedding_config` - The embedding provider configuration
+///
+/// * `column` - The name of the column to match against.
+/// * `keys` - The list of values to delete. Rows whose `column` value is in this list are deleted.
+/// * `embedding_config` - The embedding provider configuration.
 ///
 /// # Errors
-/// Returns a `LanceError` if backup creation, database operations, or restoration fails
+///
+/// Returns a `LanceError` if backup creation, database operations, or restoration fails.
 pub async fn delete_rows_with_backup(
-    rows: RecordBatch,
-    key: &str,
+    column: &str,
+    keys: &[impl AsRef<str>],
     embedding_config: &EmbeddingProviderConfig,
 ) -> Result<(), LanceError> {
-    with_backup(delete_rows(rows, key, embedding_config)).await
+    with_backup(delete_rows(column, keys, embedding_config)).await
 }
 
 /// Create or update indexes with backup support. Creates a backup before the operation and
@@ -758,6 +735,7 @@ mod tests {
     use arrow_array::Array;
     use arrow_array::StringArray;
     use arrow_array::cast::as_fixed_size_list_array;
+    use arrow_array::cast::as_string_array;
     use arrow_array::types::Float32Type;
     use dotenv::dotenv;
     use futures::StreamExt;

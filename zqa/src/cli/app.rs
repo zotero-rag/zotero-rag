@@ -8,8 +8,7 @@ use crate::tools::summarization::SummarizationTool;
 use crate::utils::arrow::{DbFields, get_schema, library_to_arrow, vector_search};
 use crate::utils::library::{ZoteroItem, ZoteroItemSet, get_authors, get_new_library_items};
 use crate::utils::rag::ModelResponse;
-use arrow_array::{self, RecordBatch, StringArray};
-use arrow_schema::Schema;
+use arrow_array::{self, RecordBatch};
 use chrono::Local;
 
 use rustyline::error::ReadlineError;
@@ -413,17 +412,10 @@ async fn fix_zero_embeddings<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Res
         .iter()
         .map(|item| item.metadata.library_key.as_str())
         .collect();
-    let key_array = StringArray::from(zero_subset_keys);
-    let delete_schema = Arc::new(Schema::new(vec![arrow_schema::Field::new(
-        DbFields::LibraryKey,
-        arrow_schema::DataType::Utf8,
-        false,
-    )]));
-    let zero_subset_batch = RecordBatch::try_new(delete_schema, vec![Arc::new(key_array)])?;
 
     delete_rows(
-        zero_subset_batch,
         DbFields::LibraryKey.as_ref(),
+        &zero_subset_keys,
         &ctx.config
             .get_embedding_config()
             .ok_or(CLIError::ConfigError(
