@@ -3,6 +3,7 @@
 
 use crate::capabilities::EmbeddingProvider;
 use crate::embedding::common::get_embedding_dims_by_provider;
+use crate::providers::ProviderId;
 
 use super::lance::LanceError;
 use super::lance::{TABLE_NAME, get_db_uri};
@@ -228,9 +229,12 @@ fn calculate_directory_size(path: &std::path::Path) -> Result<u64, std::io::Erro
 ///     * An `InvalidStateError` if the table is in some invalid state
 pub(crate) async fn get_zero_vectors(
     tbl: &Table,
-    embedding_provider: EmbeddingProvider,
+    provider_id: ProviderId,
     query_limit: usize,
 ) -> Result<Vec<RecordBatch>, LanceError> {
+    let embedding_provider = provider_id.try_into().map_err(|message: String| {
+        LanceError::ParameterError(format!("Could not determine embedding provider: {message}"))
+    })?;
     let embedding_size = get_embedding_dims_by_provider(embedding_provider);
 
     let stream = tbl
@@ -362,7 +366,7 @@ pub async fn lancedb_health_check(
     // We can't have `result.num_rows` be `None` at this point.
     if let Some(query_limit) = &result.num_rows {
         result.zero_embedding_items = match query_limit {
-            Ok(count) => Some(Ok(get_zero_vectors(&tbl, embedding_provider, *count).await?)),
+            Ok(count) => Some(Ok(get_zero_vectors(&tbl, ProviderId::from(&embedding_provider), *count).await?)),
             Err(e) => Some(Err(LanceError::QueryError(e.to_string()))),
         }
     }

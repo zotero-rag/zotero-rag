@@ -37,13 +37,7 @@ impl ModelProvider {
     /// Returns the string representation of the provider.
     #[must_use]
     pub fn as_str(&self) -> &'static str {
-        match self {
-            ModelProvider::Anthropic => "anthropic",
-            ModelProvider::Ollama => "ollama",
-            ModelProvider::OpenAI => "openai",
-            ModelProvider::OpenRouter => "openrouter",
-            ModelProvider::Gemini => "gemini",
-        }
+        ProviderId::from(self).as_str()
     }
 
     /// Returns whether the provider is contained in the list of providers.
@@ -84,14 +78,7 @@ impl EmbeddingProvider {
     /// Returns the string representation of the provider.
     #[must_use]
     pub fn as_str(&self) -> &'static str {
-        match self {
-            EmbeddingProvider::Cohere => "cohere",
-            EmbeddingProvider::OpenAI => "openai",
-            EmbeddingProvider::Ollama => "ollama",
-            EmbeddingProvider::VoyageAI => "voyageai",
-            EmbeddingProvider::Gemini => "gemini",
-            EmbeddingProvider::ZeroEntropy => "zeroentropy",
-        }
+        ProviderId::from(self).as_str()
     }
 
     /// Returns whether the provider is contained in the list of providers.
@@ -261,11 +248,7 @@ impl RerankerProvider {
     /// Returns the string representation of the provider.
     #[must_use]
     pub fn as_str(&self) -> &'static str {
-        match self {
-            RerankerProvider::Cohere => "cohere",
-            RerankerProvider::VoyageAI => "voyageai",
-            RerankerProvider::ZeroEntropy => "zeroentropy",
-        }
+        ProviderId::from(self).as_str()
     }
 
     /// Returns whether the provider is contained in the list of providers.

@@ -60,24 +60,38 @@ impl FromStr for ProviderId {
     }
 }
 
-impl From<ModelProvider> for ProviderId {
-    fn from(value: ModelProvider) -> Self {
-        Self::from_str(value.as_str())
-            .expect("ModelProvider instances contain valid provider names.")
+impl From<&ModelProvider> for ProviderId {
+    fn from(value: &ModelProvider) -> Self {
+        match value {
+            ModelProvider::Anthropic => Self::Anthropic,
+            ModelProvider::Ollama => Self::Ollama,
+            ModelProvider::OpenAI => Self::OpenAI,
+            ModelProvider::OpenRouter => Self::OpenRouter,
+            ModelProvider::Gemini => Self::Gemini,
+        }
     }
 }
 
-impl From<EmbeddingProvider> for ProviderId {
-    fn from(value: EmbeddingProvider) -> Self {
-        Self::from_str(value.as_str())
-            .expect("EmbeddingProvider instances contain valid provider names.")
+impl From<&EmbeddingProvider> for ProviderId {
+    fn from(value: &EmbeddingProvider) -> Self {
+        match value {
+            EmbeddingProvider::Cohere => Self::Cohere,
+            EmbeddingProvider::OpenAI => Self::OpenAI,
+            EmbeddingProvider::Ollama => Self::Ollama,
+            EmbeddingProvider::VoyageAI => Self::VoyageAI,
+            EmbeddingProvider::Gemini => Self::Gemini,
+            EmbeddingProvider::ZeroEntropy => Self::ZeroEntropy,
+        }
     }
 }
 
-impl From<RerankerProvider> for ProviderId {
-    fn from(value: RerankerProvider) -> Self {
-        Self::from_str(value.as_str())
-            .expect("RerankerProvider instances contain valid provider names.")
+impl From<&RerankerProvider> for ProviderId {
+    fn from(value: &RerankerProvider) -> Self {
+        match value {
+            RerankerProvider::Cohere => Self::Cohere,
+            RerankerProvider::VoyageAI => Self::VoyageAI,
+            RerankerProvider::ZeroEntropy => Self::ZeroEntropy,
+        }
     }
 }
 
@@ -122,5 +136,64 @@ impl TryFrom<ProviderId> for ModelProvider {
             ProviderId::OpenRouter => Ok(ModelProvider::OpenRouter),
             _ => Err(format!("Provider {value} does not support generation.")),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::str::FromStr;
+
+    use crate::capabilities::{EmbeddingProvider, ModelProvider, RerankerProvider};
+
+    use super::ProviderId;
+
+    #[test]
+    fn provider_id_parses_all_supported_names() {
+        assert_eq!(ProviderId::from_str("anthropic"), Ok(ProviderId::Anthropic));
+        assert_eq!(ProviderId::from_str("openai"), Ok(ProviderId::OpenAI));
+        assert_eq!(ProviderId::from_str("openrouter"), Ok(ProviderId::OpenRouter));
+        assert_eq!(ProviderId::from_str("gemini"), Ok(ProviderId::Gemini));
+        assert_eq!(ProviderId::from_str("ollama"), Ok(ProviderId::Ollama));
+        assert_eq!(ProviderId::from_str("voyageai"), Ok(ProviderId::VoyageAI));
+        assert_eq!(ProviderId::from_str("cohere"), Ok(ProviderId::Cohere));
+        assert_eq!(ProviderId::from_str("zeroentropy"), Ok(ProviderId::ZeroEntropy));
+    }
+
+    #[test]
+    fn provider_id_rejects_invalid_names() {
+        assert!(ProviderId::from_str("not-a-provider").is_err());
+    }
+
+    #[test]
+    fn capability_enums_convert_to_provider_ids() {
+        assert_eq!(ProviderId::from(&ModelProvider::OpenAI), ProviderId::OpenAI);
+        assert_eq!(ProviderId::from(&EmbeddingProvider::Gemini), ProviderId::Gemini);
+        assert_eq!(
+            ProviderId::from(&RerankerProvider::ZeroEntropy),
+            ProviderId::ZeroEntropy
+        );
+    }
+
+    #[test]
+    fn provider_ids_convert_to_supported_capability_enums() {
+        assert_eq!(
+            EmbeddingProvider::try_from(ProviderId::OpenAI),
+            Ok(EmbeddingProvider::OpenAI)
+        );
+        assert_eq!(
+            RerankerProvider::try_from(ProviderId::Cohere),
+            Ok(RerankerProvider::Cohere)
+        );
+        assert_eq!(
+            ModelProvider::try_from(ProviderId::Anthropic),
+            Ok(ModelProvider::Anthropic)
+        );
+    }
+
+    #[test]
+    fn provider_ids_reject_unsupported_capability_conversions() {
+        assert!(EmbeddingProvider::try_from(ProviderId::Anthropic).is_err());
+        assert!(RerankerProvider::try_from(ProviderId::OpenAI).is_err());
+        assert!(ModelProvider::try_from(ProviderId::VoyageAI).is_err());
     }
 }
