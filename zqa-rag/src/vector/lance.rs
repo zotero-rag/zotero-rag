@@ -216,7 +216,10 @@ pub async fn db_statistics() -> Result<TableStatistics, LanceError> {
 async fn get_db_with_embeddings(
     embedding_config: &EmbeddingProviderConfig,
 ) -> Result<Connection, LanceError> {
-    let db = connect(&get_db_uri()).execute().await?;
+    let db = connect(&get_db_uri())
+        .execute()
+        .await
+        .map_err(|e| LanceError::ConnectionError(e.to_string()))?;
     let registry = provider_registry();
 
     registry.register_embedding_with_lancedb(&db, embedding_config)?;

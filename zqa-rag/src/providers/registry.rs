@@ -398,6 +398,17 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn default_registry_registers_embedding_with_lancedb() {
+        let registry = provider_registry();
+        let db = lancedb::connect("memory://test-registry-success")
+            .execute()
+            .await
+            .expect("memory db should be created");
+        let result = registry.register_embedding_with_lancedb(&db, &openai_embedding_config());
+        assert!(result.is_ok());
+    }
+
     #[test]
     fn empty_registry_rejects_unregistered_llm_provider() {
         let registry = ProviderRegistry::new();
