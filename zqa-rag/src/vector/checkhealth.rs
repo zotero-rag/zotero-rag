@@ -366,7 +366,12 @@ pub async fn lancedb_health_check(
     // We can't have `result.num_rows` be `None` at this point.
     if let Some(query_limit) = &result.num_rows {
         result.zero_embedding_items = match query_limit {
-            Ok(count) => Some(Ok(get_zero_vectors(&tbl, ProviderId::from(&embedding_provider), *count).await?)),
+            Ok(count) => Some(Ok(get_zero_vectors(
+                &tbl,
+                ProviderId::from(&embedding_provider),
+                *count,
+            )
+            .await?)),
             Err(e) => Some(Err(LanceError::QueryError(e.to_string()))),
         }
     }

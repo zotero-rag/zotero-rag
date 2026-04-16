@@ -76,7 +76,8 @@ impl Tool for RetrievalTool {
     fn call(
         &self,
         args: serde_json::Value,
-    ) -> std::pin::Pin<Box<dyn Future<Output = Result<serde_json::Value, String>> + Send + '_>> {
+    ) -> std::pin::Pin<Box<dyn Future<Output = Result<serde_json::Value, String>> + Send + '_>>
+    {
         let start = Instant::now();
         let embedding_config = self.embedding_config.clone();
         let reranker_config = self.reranker_config.clone();
@@ -84,13 +85,10 @@ impl Tool for RetrievalTool {
         Box::pin(async move {
             let input: RetrievalToolInput =
                 serde_json::from_value(args).map_err(|e| format!("Invalid arguments: {e}"))?;
-            let mut results = vector_search(
-                input.query,
-                &embedding_config,
-                reranker_config.as_ref(),
-            )
-            .await
-            .map_err(|e| format!("Search failed: {e}"))?;
+            let mut results =
+                vector_search(input.query, &embedding_config, reranker_config.as_ref())
+                    .await
+                    .map_err(|e| format!("Search failed: {e}"))?;
 
             get_authors(&mut results).map_err(|e| format!("Failed to get authors: {e}"))?;
             log::info!(

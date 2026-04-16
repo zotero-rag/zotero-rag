@@ -151,12 +151,18 @@ mod tests {
     fn provider_id_parses_all_supported_names() {
         assert_eq!(ProviderId::from_str("anthropic"), Ok(ProviderId::Anthropic));
         assert_eq!(ProviderId::from_str("openai"), Ok(ProviderId::OpenAI));
-        assert_eq!(ProviderId::from_str("openrouter"), Ok(ProviderId::OpenRouter));
+        assert_eq!(
+            ProviderId::from_str("openrouter"),
+            Ok(ProviderId::OpenRouter)
+        );
         assert_eq!(ProviderId::from_str("gemini"), Ok(ProviderId::Gemini));
         assert_eq!(ProviderId::from_str("ollama"), Ok(ProviderId::Ollama));
         assert_eq!(ProviderId::from_str("voyageai"), Ok(ProviderId::VoyageAI));
         assert_eq!(ProviderId::from_str("cohere"), Ok(ProviderId::Cohere));
-        assert_eq!(ProviderId::from_str("zeroentropy"), Ok(ProviderId::ZeroEntropy));
+        assert_eq!(
+            ProviderId::from_str("zeroentropy"),
+            Ok(ProviderId::ZeroEntropy)
+        );
     }
 
     #[test]
@@ -167,7 +173,10 @@ mod tests {
     #[test]
     fn capability_enums_convert_to_provider_ids() {
         assert_eq!(ProviderId::from(&ModelProvider::OpenAI), ProviderId::OpenAI);
-        assert_eq!(ProviderId::from(&EmbeddingProvider::Gemini), ProviderId::Gemini);
+        assert_eq!(
+            ProviderId::from(&EmbeddingProvider::Gemini),
+            ProviderId::Gemini
+        );
         assert_eq!(
             ProviderId::from(&RerankerProvider::ZeroEntropy),
             ProviderId::ZeroEntropy
