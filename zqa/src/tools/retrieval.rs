@@ -3,7 +3,9 @@ use std::time::Instant;
 use schemars::{JsonSchema, schema_for};
 use serde::Deserialize;
 use serde_json::json;
-use zqa_rag::{embedding::common::EmbeddingProviderConfig, llm::tools::Tool};
+use zqa_rag::{
+    capabilities::RerankerProvider, embedding::common::EmbeddingProviderConfig, llm::tools::Tool,
+};
 
 use crate::utils::{
     arrow::vector_search,
@@ -20,7 +22,7 @@ pub(crate) struct RetrievalTool {
     /// used when initially creating the database.
     pub(crate) embedding_config: EmbeddingProviderConfig,
     /// The reranker provider to use.
-    pub(crate) reranker_provider: String,
+    pub(crate) reranker_provider: Option<RerankerProvider>,
 }
 
 impl RetrievalTool {
@@ -28,7 +30,7 @@ impl RetrievalTool {
     /// reranker provider, and a schema key.
     pub(crate) fn new(
         embedding_config: EmbeddingProviderConfig,
-        reranker_provider: String,
+        reranker_provider: Option<RerankerProvider>,
     ) -> Self {
         Self {
             embedding_config,
@@ -76,7 +78,7 @@ impl Tool for RetrievalTool {
     ) -> std::pin::Pin<Box<dyn Future<Output = Result<serde_json::Value, String>> + Send>> {
         let start = Instant::now();
         let embedding_config = self.embedding_config.clone();
-        let reranker_provider = self.reranker_provider.clone();
+        let reranker_provider = self.reranker_provider;
         Box::pin(async move {
             let input: RetrievalToolInput =
                 serde_json::from_value(args).map_err(|e| format!("Invalid arguments: {e}"))?;
@@ -132,7 +134,7 @@ mod tests {
                 embedding_dims: DEFAULT_VOYAGE_EMBEDDING_DIM as usize,
                 reranker: DEFAULT_VOYAGE_RERANK_MODEL.into(),
             }),
-            "voyageai".into(),
+            Some(RerankerProvider::VoyageAI),
         )
     }
 

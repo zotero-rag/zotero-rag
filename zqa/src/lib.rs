@@ -27,11 +27,12 @@ use zqa_rag::{
 };
 
 use crate::{
+    cli::errors::CLIError,
     common::State,
     utils::terminal::{RED, RED_BOLD, RESET, YELLOW, YELLOW_BOLD},
 };
 
-fn load_config() -> Config {
+fn load_config() -> Result<Config, CLIError> {
     // Load the configs in priority order: TOML < env < CLI args
     let mut config = Config::default();
     if let Some(user_dirs) = directories::UserDirs::new() {
@@ -44,14 +45,14 @@ fn load_config() -> Config {
         if config_path.exists() {
             // We want to panic here if the config is invalid; it's early enough that we can
             // reasonably ask a user to fix the underlying issue.
-            config = Config::from_file(config_path).unwrap();
+            config = Config::from_file(config_path)?;
         }
     }
 
     // Overwrite with env
     config.read_env().unwrap();
 
-    config
+    Ok(config)
 }
 
 /// Check that API keys exist for generation, embedding, and reranking for the given `config`.
@@ -99,7 +100,7 @@ fn check_api_keys_exist(config: &Config, log_level: log::LevelFilter) {
 
     // Reranking is a bit more complex: we allow empty or "none" as provider names to opt out of
     // reranking; but if one is set, we need an API key
-    if !["", "none"].contains(&config.reranker_provider.as_str())
+    if config.reranker_provider.is_some()
         && config.get_reranker_config().is_none_or(|c| {
             (match c {
                 RerankProviderConfig::VoyageAI(cfg) => cfg.api_key,
@@ -132,7 +133,7 @@ fn check_api_keys_exist(config: &Config, log_level: log::LevelFilter) {
 /// * If the logger could not be set up
 /// * If the input could not be read from `stdin`.
 pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
-    let mut config = load_config();
+    let mut config = load_config()?;
     let args = Args::parse();
 
     check_api_keys_exist(&config, args.log_level);
@@ -193,7 +194,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
             eprintln!("Error during setup: {e}");
         } else {
             // Reload possibly different config from OOBE
-            config = load_config();
+            config = load_config()?;
         }
     }
 

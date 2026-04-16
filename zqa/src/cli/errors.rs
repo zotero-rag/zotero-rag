@@ -3,7 +3,7 @@ use thiserror::Error;
 
 use zqa_rag::{llm::errors::LLMError, vector::lance::LanceError};
 
-use crate::utils;
+use crate::{config::ConfigError, utils};
 
 #[derive(Debug, Error)]
 pub enum CLIError {
@@ -23,6 +23,12 @@ pub enum CLIError {
     ConfigError(String),
     #[error("Mutex poisoning error: {0}")]
     LockPoisoningError(String),
+}
+
+impl From<ConfigError> for CLIError {
+    fn from(value: ConfigError) -> Self {
+        Self::ConfigError(value.to_string())
+    }
 }
 
 impl<T> From<PoisonError<T>> for CLIError {
