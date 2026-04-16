@@ -18,7 +18,7 @@ use zqa_rag::reranking::common::RerankProviderConfig;
 /// ```toml
 /// model_provider = "anthropic"  # Generation model provider
 /// embedding_provider = "voyageai"  # Embedding/reranker model provider
-/// reranker_provider = "voyageai"  # Set to "" or "none" to disable reranking
+/// reranker_provider = "voyageai"  # Omit this to skip reranking
 /// max_concurrent_requests = 5  # Max concurrent embedding requests
 /// max_retries = 3  # Max retries when network requests fail
 ///
@@ -88,9 +88,7 @@ pub struct Config {
     #[serde(default = "default_embedding_provider")]
     pub embedding_provider: EmbeddingProvider,
 
-    /// Reranker provider (voyageai, cohere, zeroentropy). Set to "" or "none" to disable reranking.
-    /// TODO: Add tests for "" and "none"
-    #[serde(default = "default_reranker_provider")]
+    /// Reranker provider (voyageai, cohere, zeroentropy). Omit this to disable reranking.
     pub reranker_provider: Option<RerankerProvider>,
 
     /// Maximum number of concurrent embedding requests

@@ -371,7 +371,7 @@ async fn embed<O: Write, E: Write>(
 ///
 /// * `ctx` - A `Context` object that contains CLI args and objects that implement
 async fn fix_zero_embeddings<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Result<(), CLIError> {
-    let healthcheck = lancedb_health_check(&ctx.config.embedding_provider).await?;
+    let healthcheck = lancedb_health_check(ctx.config.embedding_provider).await?;
 
     if let Some(Ok(zero_items)) = healthcheck.zero_embedding_items {
         let num_zeros: usize = zero_items
@@ -483,7 +483,7 @@ async fn dedup<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Result<usize, CLI
 /// * `ctx` - A `Context` object that contains CLI args and objects that implement
 ///   [`std::io::Write`] for `stdout` and `stderr`.
 async fn checkhealth<O: Write, E: Write>(ctx: &mut Context<O, E>) {
-    let _ = match lancedb_health_check(&ctx.config.embedding_provider).await {
+    let _ = match lancedb_health_check(ctx.config.embedding_provider).await {
         Ok(result) => writeln!(ctx.out, "{result}"),
         Err(e) => writeln!(ctx.err, "{e}"),
     };
@@ -515,7 +515,7 @@ async fn update_indices<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Result<(
 /// * `ctx` - A `Context` object that contains CLI args and objects that implement
 ///   [`std::io::Write`] for `stdout` and `stderr`.
 async fn doctor<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Result<(), CLIError> {
-    if let Err(e) = rag_doctor(&ctx.config.embedding_provider, &mut ctx.out).await {
+    if let Err(e) = rag_doctor(ctx.config.embedding_provider, &mut ctx.out).await {
         writeln!(ctx.err, "{e}")?;
     }
 
@@ -685,7 +685,7 @@ async fn run_query<O: Write, E: Write>(
     query: String,
     ctx: &mut Context<O, E>,
 ) -> Result<(), CLIError> {
-    let model_provider = ctx.config.model_provider.clone();
+    let model_provider = ctx.config.model_provider;
 
     // Create LLM client with config
     let llm_client = ctx
@@ -777,7 +777,7 @@ async fn run_query<O: Write, E: Write>(
     // Invariant: by this point, `generation_model_name` cannot be `None`.
     let generation_model_name = generation_model_name.unwrap_or_default();
     let pricing = {
-        let mp = model_provider.clone();
+        let mp = model_provider;
         let gmn = generation_model_name.clone();
         tokio::task::spawn_blocking(move || get_model_pricing(mp.as_str(), &gmn, None))
             .await

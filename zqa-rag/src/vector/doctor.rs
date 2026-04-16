@@ -68,7 +68,7 @@ fn symptom(out: &mut impl Write, msg: &str) -> Result<(), LanceError> {
 ///
 /// Returns an error if writing to the output stream fails or if the health check is in an invalid state.
 pub async fn doctor(
-    embedding_provider: &EmbeddingProvider,
+    embedding_provider: EmbeddingProvider,
     stdout: &mut impl Write,
 ) -> Result<(), LanceError> {
     let healthcheck_results = lancedb_health_check(embedding_provider).await?;
