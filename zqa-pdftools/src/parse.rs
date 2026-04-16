@@ -461,7 +461,7 @@ impl PdfParser {
                                             .collect::<Result<_, _>>()
                                             .map_err(|_| PdfError::InvalidUtf8)?;
 
-                                        let unicode: String = decode_utf16(code_units.into_iter())
+                                        let unicode: String = decode_utf16(code_units)
                                             .map(|r| {
                                                 r.map_err(|e| {
                                                     PdfError::EncodingError(format!(
