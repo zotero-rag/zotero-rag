@@ -283,7 +283,7 @@ pub async fn get_zero_vector_records(
     })?;
 
     // Get all records with zero embeddings
-    let zero_batches = get_zero_vectors(&table, embedding_config.provider(), 10000).await?;
+    let zero_batches = get_zero_vectors(&table, embedding_config.provider_id(), 10000).await?;
     Ok(zero_batches)
 }
 
@@ -623,7 +623,7 @@ pub async fn insert_records(
     } else {
         let embedding_params = EmbeddingDefinition::new(
             source_col,
-            embedding_config.provider_name(),
+            embedding_config.provider_id().as_str(),
             Some("embeddings"),
         );
 
