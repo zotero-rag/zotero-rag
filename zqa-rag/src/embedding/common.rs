@@ -41,7 +41,11 @@ impl std::fmt::Display for FailedTexts {
         ))?;
 
         for text in &self.texts {
-            let words = text.split(' ').take(10).collect::<String>();
+            let words = text
+                .split_whitespace()
+                .take(10)
+                .collect::<Vec<_>>()
+                .join(" ");
 
             f.write_fmt(format_args!("\t{words}\n"))?;
         }
@@ -54,19 +58,14 @@ impl std::fmt::Display for FailedTexts {
 ///
 /// # Arguments
 ///
-/// * `embedding_name` - Embedding provider name. Must be one of "openai",
-///   "voyageai", "cohere", "gemini", or "ollama".
+/// * `embedding_provider` - Embedding provider enum.
 ///
 /// # Returns
 ///
 /// The dimensions of the embedding provider.
-///
-/// # Panics
-///
-/// * If an invalid embedding provider name is provided.
 #[must_use]
-pub fn get_embedding_dims_by_provider(embedding_name: &EmbeddingProvider) -> u32 {
-    match embedding_name {
+pub fn get_embedding_dims_by_provider(embedding_provider: EmbeddingProvider) -> u32 {
+    match embedding_provider {
         EmbeddingProvider::OpenAI => DEFAULT_OPENAI_EMBEDDING_DIM,
         EmbeddingProvider::VoyageAI => DEFAULT_VOYAGE_EMBEDDING_DIM,
         EmbeddingProvider::Gemini => DEFAULT_GEMINI_EMBEDDING_DIM,
@@ -349,7 +348,7 @@ where
             texts: failed_texts,
         };
 
-        return Err(LLMError::EmbeddingFailedError(failed));
+        log::error!("Some texts failed to embed:\n{failed}");
     }
 
     log::info!(

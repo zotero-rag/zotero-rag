@@ -122,7 +122,7 @@ pub async fn get_schema(embedding_provider: EmbeddingProvider) -> arrow_schema::
                     arrow_schema::DataType::Float32,
                     true,
                 )),
-                get_embedding_dims_by_provider(&embedding_provider) as i32,
+                get_embedding_dims_by_provider(embedding_provider) as i32,
             ),
             false,
         ));

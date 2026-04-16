@@ -43,8 +43,6 @@ fn load_config() -> Result<Config, CLIError> {
             .join("config.toml");
 
         if config_path.exists() {
-            // We want to panic here if the config is invalid; it's early enough that we can
-            // reasonably ask a user to fix the underlying issue.
             config = Config::from_file(config_path)?;
         }
     }

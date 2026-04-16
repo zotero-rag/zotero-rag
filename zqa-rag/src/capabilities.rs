@@ -11,7 +11,8 @@ use crate::llm::errors::LLMError;
 /// Providers of models that can generate text. Clients for these providers should implement
 /// the `ApiClient` trait. Generally speaking, for this reason, these structs and all their trait
 /// implementations will be in the `llm/` directory.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Copy, Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
 pub enum ModelProvider {
     /// Anthropic model provider
     Anthropic,
@@ -55,7 +56,8 @@ impl ModelProvider {
 /// Providers of embedding models. Structs corresponding to these should implement LanceDB's
 /// `EmbeddingFunction` trait. Depending on if the provider also has models that support text
 /// generation, you will find the structs in `llm/` or `embedding/`.
-#[derive(Copy, Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Copy, Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
 pub enum EmbeddingProvider {
     /// Cohere embedding provider
     Cohere,
@@ -237,7 +239,8 @@ impl BatchEmbeddingProvider {
 
 /// Providers of reranker (also called cross-encoder) models. Structs corresponding to values here
 /// should implement the `Rerank` trait.
-#[derive(Copy, Clone, Debug, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
 pub enum RerankerProvider {
     /// Cohere reranking provider
     Cohere,

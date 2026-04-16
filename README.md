@@ -100,7 +100,7 @@ The TOML config goes in `~/.config/zqa/config.toml`, and has the following struc
 ```toml
 model_provider = "anthropic"  # Generation model provider
 embedding_provider = "voyageai"  # Embedding/reranker model provider
-reranker_provider = "voyageai"  # Set to "" or "none" to disable reranking
+reranker_provider = "voyageai"  # Omit this to disable reranking
 max_concurrent_requests = 5  # Max concurrent embedding requests
 max_retries = 3  # Max retries when network requests fail
 
