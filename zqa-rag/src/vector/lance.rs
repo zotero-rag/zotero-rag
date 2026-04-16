@@ -2,15 +2,9 @@
 //! LanceDB's features, including connecting, inserting, querying, and deleting. For certain
 //! operations, variants with backup support are provided.
 
-use crate::capabilities::EmbeddingProvider;
-use crate::clients::gemini::GeminiClient;
-use crate::clients::ollama::OllamaClient;
-use crate::clients::openai::OpenAIClient;
-use crate::embedding::cohere::CohereClient;
 use crate::embedding::common::EmbeddingProviderConfig;
-use crate::embedding::voyage::VoyageAIClient;
-use crate::embedding::zeroentropy::ZeroEntropyClient;
-use crate::http_client::ReqwestClient;
+use crate::providers::provider_id::ProviderId;
+use crate::providers::registry::default_provider_registry;
 use crate::vector::backup::with_backup;
 use crate::vector::checkhealth::get_zero_vectors;
 
@@ -99,6 +93,16 @@ impl Display for TableStatistics {
 
         Ok(())
     }
+}
+
+pub trait LanceEmbeddingRegistrar: Send + Sync {
+    fn provider_id(&self) -> ProviderId;
+
+    fn register_with_lancedb(
+        &self,
+        db: &lancedb::Connection,
+        config: &EmbeddingProviderConfig,
+    ) -> Result<(), LanceError>;
 }
 
 /// Checks if an existing LanceDB exists and has a valid table
@@ -205,50 +209,10 @@ pub async fn db_statistics() -> Result<TableStatistics, LanceError> {
 async fn get_db_with_embeddings(
     embedding_config: &EmbeddingProviderConfig,
 ) -> Result<Connection, LanceError> {
-    let db = connect(&get_db_uri())
-        .execute()
-        .await
-        .map_err(|e| LanceError::ConnectionError(e.to_string()))?;
+    let db = connect(&get_db_uri()).execute().await?;
+    let registry = default_provider_registry();
 
-    match embedding_config {
-        EmbeddingProviderConfig::OpenAI(cfg) => {
-            db.embedding_registry().register(
-                EmbeddingProvider::OpenAI.as_str(),
-                Arc::new(OpenAIClient::<ReqwestClient>::with_config(cfg.clone())),
-            )?;
-        }
-        EmbeddingProviderConfig::VoyageAI(cfg) => {
-            db.embedding_registry().register(
-                EmbeddingProvider::VoyageAI.as_str(),
-                Arc::new(VoyageAIClient::<ReqwestClient>::with_config(cfg.clone())),
-            )?;
-        }
-        EmbeddingProviderConfig::Gemini(cfg) => {
-            db.embedding_registry().register(
-                EmbeddingProvider::Gemini.as_str(),
-                Arc::new(GeminiClient::<ReqwestClient>::with_config(cfg.clone())),
-            )?;
-        }
-        EmbeddingProviderConfig::Cohere(cfg) => {
-            db.embedding_registry().register(
-                EmbeddingProvider::Cohere.as_str(),
-                Arc::new(CohereClient::<ReqwestClient>::with_config(cfg.clone())),
-            )?;
-        }
-        EmbeddingProviderConfig::Ollama(cfg) => {
-            db.embedding_registry().register(
-                EmbeddingProvider::Ollama.as_str(),
-                Arc::new(OllamaClient::<ReqwestClient>::with_config(cfg.clone())),
-            )?;
-        }
-        EmbeddingProviderConfig::ZeroEntropy(cfg) => {
-            db.embedding_registry().register(
-                EmbeddingProvider::ZeroEntropy.as_str(),
-                Arc::new(ZeroEntropyClient::<ReqwestClient>::with_config(cfg.clone())),
-            )?;
-        }
-    }
-
+    registry.register_embedding_with_lancedb(&db, embedding_config)?;
     Ok(db)
 }
 

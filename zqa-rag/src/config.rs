@@ -4,9 +4,12 @@
 //! instead of reading from environment variables or TOML files directly.
 //! This makes the rag crate more general and reusable.
 
-use crate::constants::{
-    DEFAULT_OLLAMA_BASE_URL, DEFAULT_OLLAMA_EMBEDDING_DIM, DEFAULT_OLLAMA_EMBEDDING_MODEL,
-    DEFAULT_OLLAMA_MAX_TOKENS, DEFAULT_OLLAMA_MODEL,
+use crate::{
+    constants::{
+        DEFAULT_OLLAMA_BASE_URL, DEFAULT_OLLAMA_EMBEDDING_DIM, DEFAULT_OLLAMA_EMBEDDING_MODEL,
+        DEFAULT_OLLAMA_MAX_TOKENS, DEFAULT_OLLAMA_MODEL,
+    },
+    providers::ProviderId,
 };
 
 /// Configuration for Anthropic LLM provider
@@ -136,4 +139,16 @@ pub enum LLMClientConfig {
     OpenRouter(crate::config::OpenRouterConfig),
     /// Gemini client configuration
     Gemini(crate::config::GeminiConfig),
+}
+
+impl LLMClientConfig {
+    pub const fn provider_id(&self) -> ProviderId {
+        match self {
+            Self::Anthropic(_) => ProviderId::Anthropic,
+            Self::Ollama(_) => ProviderId::Ollama,
+            Self::OpenAI(_) => ProviderId::OpenAI,
+            Self::OpenRouter(_) => ProviderId::OpenRouter,
+            Self::Gemini(_) => ProviderId::Gemini,
+        }
+    }
 }
