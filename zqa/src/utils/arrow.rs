@@ -7,6 +7,7 @@ use crate::{
     utils::library::{ZoteroItem, ZoteroItemSet},
 };
 use zqa_rag::{
+    capabilities::{EmbeddingProvider, RerankerProvider},
     embedding::common::{
         EmbeddingProviderConfig, get_embedding_dims_by_provider, get_embedding_provider_with_config,
     },
@@ -95,12 +96,14 @@ impl From<LanceError> for ArrowError {
 /// Get the schema for our `LanceDB` table. This is required for both getting library items and
 /// checkhealth.
 ///
-/// # Arguments:
-/// * `embedding_name` - The embedding used by the current DB.
+/// # Arguments
 ///
-/// # Returns:
+/// * `embedding_provider` - The embedding used by the current DB.
+///
+/// # Returns
+///
 /// The schema in Arrow format.
-pub async fn get_schema(embedding_name: &str) -> arrow_schema::Schema {
+pub async fn get_schema(embedding_provider: EmbeddingProvider) -> arrow_schema::Schema {
     // Convert ZoteroItemMetadata to something that can be converted to Arrow
     // Need to extract fields and create appropriate Arrow arrays
     let mut schema_fields = vec![
@@ -119,7 +122,7 @@ pub async fn get_schema(embedding_name: &str) -> arrow_schema::Schema {
                     arrow_schema::DataType::Float32,
                     true,
                 )),
-                get_embedding_dims_by_provider(embedding_name) as i32,
+                get_embedding_dims_by_provider(&embedding_provider) as i32,
             ),
             false,
         ));
@@ -149,7 +152,7 @@ pub async fn library_to_arrow(
     items: Vec<ZoteroItem>,
     embedding_config: EmbeddingProviderConfig,
 ) -> Result<RecordBatch, ArrowError> {
-    let schema = Arc::new(get_schema(embedding_config.provider_name()).await);
+    let schema = Arc::new(get_schema(embedding_config.provider()).await);
 
     // Convert ZoteroItemMetadata to Arrow arrays
     let library_keys = StringArray::from(
@@ -293,7 +296,7 @@ pub async fn full_library_to_arrow(
 pub async fn vector_search(
     query: String,
     embedding_config: &EmbeddingProviderConfig,
-    reranker: String,
+    reranker: Option<RerankerProvider>,
 ) -> Result<Vec<ZoteroItem>, ArrowError> {
     let batches = rag_vector_search(query.clone(), embedding_config, 10).await?;
 
@@ -309,20 +312,11 @@ pub async fn vector_search(
         return Ok(Vec::new());
     }
 
-    // Explicitly disabled reranking
-    if reranker.is_empty() || reranker.eq_ignore_ascii_case("none") {
-        return Ok(filtered_items);
-    }
-
-    let Ok(rerank_provider) = get_reranking_provider(&reranker) else {
-        log::warn!(
-            "'{reranker}' is not a valid reranking provider (supported: voyageai, cohere). \
-Skipping reranking and returning results as-is."
-        );
-
+    let Some(reranker) = reranker else {
         return Ok(filtered_items);
     };
 
+    let rerank_provider = get_reranking_provider(reranker);
     let item_strings = filtered_items
         .iter()
         .map(|f| f.text.as_str())

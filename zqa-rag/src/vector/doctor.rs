@@ -3,7 +3,10 @@
 
 use std::io::Write;
 
-use crate::vector::{checkhealth::lancedb_health_check, lance::LanceError};
+use crate::{
+    capabilities::EmbeddingProvider,
+    vector::{checkhealth::lancedb_health_check, lance::LanceError},
+};
 
 const HELP: &str = "\x1b[32;1m";
 const SYMPTOM: &str = "\x1b[33;1m";
@@ -64,7 +67,10 @@ fn symptom(out: &mut impl Write, msg: &str) -> Result<(), LanceError> {
 /// # Errors
 ///
 /// Returns an error if writing to the output stream fails or if the health check is in an invalid state.
-pub async fn doctor(embedding_provider: &str, stdout: &mut impl Write) -> Result<(), LanceError> {
+pub async fn doctor(
+    embedding_provider: &EmbeddingProvider,
+    stdout: &mut impl Write,
+) -> Result<(), LanceError> {
     let healthcheck_results = lancedb_health_check(embedding_provider).await?;
 
     if !healthcheck_results.directory_exists {

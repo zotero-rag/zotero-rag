@@ -12,6 +12,7 @@ use serde_json::json;
 use std::sync::{Arc, RwLock};
 use std::{collections::HashMap, path::Path, pin::Pin};
 use thiserror::Error;
+use zqa_rag::embedding::common::get_embedding_provider_with_config;
 use zqa_rag::llm::base::ChatRequest;
 
 use zqa_pdftools::{
@@ -19,7 +20,7 @@ use zqa_pdftools::{
     parse::{ExtractedContent, extract_text},
 };
 use zqa_rag::{
-    embedding::common::{EmbeddingProviderConfig, get_embedding_provider},
+    embedding::common::EmbeddingProviderConfig,
     llm::{base::ApiClient, errors::LLMError, factory::LLMClient, tools::Tool},
     reranking::common::{RerankProviderConfig, get_reranking_provider},
 };
@@ -367,7 +368,7 @@ async fn embedding_retrieval(
         .map(std::string::String::as_str)
         .collect();
 
-    let provider = get_embedding_provider(embedding_config.provider_name())?;
+    let provider = get_embedding_provider_with_config(embedding_config.clone())?;
     let chunk_embeddings = get_embeddings(&chunk_text_refs, &provider)?;
 
     let query_embeddings = get_embeddings(&[query], &provider)?;
@@ -423,7 +424,7 @@ async fn embedding_retrieval(
             .collect());
     };
 
-    let reranker = get_reranking_provider(reranker_config.provider_name())?;
+    let reranker = get_reranking_provider(reranker_config.provider());
     let reranked_idx = reranker.rerank(&kept_chunks, query).await?;
 
     let reranked_chunks: Vec<String> = reranked_idx

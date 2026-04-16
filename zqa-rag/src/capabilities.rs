@@ -11,7 +11,7 @@ use crate::llm::errors::LLMError;
 /// Providers of models that can generate text. Clients for these providers should implement
 /// the `ApiClient` trait. Generally speaking, for this reason, these structs and all their trait
 /// implementations will be in the `llm/` directory.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum ModelProvider {
     /// Anthropic model provider
     Anthropic,
@@ -55,7 +55,7 @@ impl ModelProvider {
 /// Providers of embedding models. Structs corresponding to these should implement LanceDB's
 /// `EmbeddingFunction` trait. Depending on if the provider also has models that support text
 /// generation, you will find the structs in `llm/` or `embedding/`.
-#[derive(Clone, Debug)]
+#[derive(Copy, Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum EmbeddingProvider {
     /// Cohere embedding provider
     Cohere,
@@ -237,8 +237,8 @@ impl BatchEmbeddingProvider {
 
 /// Providers of reranker (also called cross-encoder) models. Structs corresponding to values here
 /// should implement the `Rerank` trait.
-#[derive(Clone, Debug)]
-pub enum RerankerProviders {
+#[derive(Copy, Clone, Debug, Serialize, Deserialize)]
+pub enum RerankerProvider {
     /// Cohere reranking provider
     Cohere,
     /// VoyageAI reranking provider
@@ -247,14 +247,14 @@ pub enum RerankerProviders {
     ZeroEntropy,
 }
 
-impl RerankerProviders {
+impl RerankerProvider {
     /// Returns the string representation of the provider.
     #[must_use]
     pub fn as_str(&self) -> &'static str {
         match self {
-            RerankerProviders::Cohere => "cohere",
-            RerankerProviders::VoyageAI => "voyageai",
-            RerankerProviders::ZeroEntropy => "zeroentropy",
+            RerankerProvider::Cohere => "cohere",
+            RerankerProvider::VoyageAI => "voyageai",
+            RerankerProvider::ZeroEntropy => "zeroentropy",
         }
     }
 
@@ -262,9 +262,9 @@ impl RerankerProviders {
     #[must_use]
     pub fn contains(provider: &str) -> bool {
         [
-            RerankerProviders::Cohere.as_str(),
-            RerankerProviders::VoyageAI.as_str(),
-            RerankerProviders::ZeroEntropy.as_str(),
+            RerankerProvider::Cohere.as_str(),
+            RerankerProvider::VoyageAI.as_str(),
+            RerankerProvider::ZeroEntropy.as_str(),
         ]
         .contains(&provider)
     }

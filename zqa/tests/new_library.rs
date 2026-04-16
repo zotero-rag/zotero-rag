@@ -6,6 +6,7 @@ use zqa::common::setup_logger;
 use zqa::config::{AnthropicConfig, Config, VoyageAIConfig};
 use zqa::full_library_to_arrow;
 use zqa_macros::test_ok;
+use zqa_rag::capabilities::{EmbeddingProvider, ModelProvider, RerankerProvider};
 use zqa_rag::constants::{
     DEFAULT_MAX_CONCURRENT_REQUESTS, DEFAULT_MAX_RETRIES, DEFAULT_VOYAGE_EMBEDDING_DIM,
 };
@@ -22,9 +23,9 @@ async fn test_integration_works() {
     }
 
     let config = Config {
-        model_provider: "anthropic".into(),
-        embedding_provider: "voyageai".into(),
-        reranker_provider: "voyageai".into(),
+        model_provider: ModelProvider::Anthropic,
+        embedding_provider: EmbeddingProvider::VoyageAI,
+        reranker_provider: Some(RerankerProvider::VoyageAI),
         max_concurrent_requests: DEFAULT_MAX_CONCURRENT_REQUESTS,
         max_retries: DEFAULT_MAX_RETRIES,
         gemini: None,

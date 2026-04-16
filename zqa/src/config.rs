@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use std::{env, num::ParseIntError, path::Path};
 use thiserror;
 use thiserror::Error;
+use zqa_rag::capabilities::{EmbeddingProvider, ModelProvider, RerankerProvider};
 use zqa_rag::config::LLMClientConfig;
 #[allow(clippy::wildcard_imports)]
 use zqa_rag::constants::*;
@@ -81,15 +82,16 @@ use zqa_rag::reranking::common::RerankProviderConfig;
 pub struct Config {
     /// Generation model provider (anthropic, openai, gemini, openrouter)
     #[serde(default = "default_model_provider")]
-    pub model_provider: String,
+    pub model_provider: ModelProvider,
 
     /// Embedding provider (anthropic, openai, voyageai, gemini, cohere, zeroentropy)
     #[serde(default = "default_embedding_provider")]
-    pub embedding_provider: String,
+    pub embedding_provider: EmbeddingProvider,
 
     /// Reranker provider (voyageai, cohere, zeroentropy). Set to "" or "none" to disable reranking.
+    /// TODO: Add tests for "" and "none"
     #[serde(default = "default_reranker_provider")]
-    pub reranker_provider: String,
+    pub reranker_provider: Option<RerankerProvider>,
 
     /// Maximum number of concurrent embedding requests
     #[serde(default = "default_max_concurrent_requests")]
@@ -312,16 +314,16 @@ impl Config {
 
     #[must_use]
     pub fn get_reranker_config(&self) -> Option<RerankProviderConfig> {
-        match self.reranker_provider.as_str() {
-            "voyageai" => self
+        match self.reranker_provider {
+            Some(RerankerProvider::VoyageAI) => self
                 .voyageai
                 .as_ref()
                 .map(|cfg| RerankProviderConfig::VoyageAI(cfg.clone().into())),
-            "cohere" => self
+            Some(RerankerProvider::Cohere) => self
                 .cohere
                 .as_ref()
                 .map(|cfg| RerankProviderConfig::Cohere(cfg.clone().into())),
-            "zeroentropy" => self
+            Some(RerankerProvider::ZeroEntropy) => self
                 .zeroentropy
                 .as_ref()
                 .map(|cfg| RerankProviderConfig::ZeroEntropy(cfg.clone().into())),
@@ -690,16 +692,17 @@ impl Default for OpenRouterConfig {
 }
 
 // Default value functions
-fn default_model_provider() -> String {
-    "anthropic".to_string()
+fn default_model_provider() -> ModelProvider {
+    ModelProvider::Anthropic
 }
 
-fn default_embedding_provider() -> String {
-    "voyageai".to_string()
+fn default_embedding_provider() -> EmbeddingProvider {
+    EmbeddingProvider::VoyageAI
 }
 
-fn default_reranker_provider() -> String {
-    "voyageai".to_string()
+#[allow(clippy::unnecessary_wraps)]
+fn default_reranker_provider() -> Option<RerankerProvider> {
+    Some(RerankerProvider::VoyageAI)
 }
 
 fn default_max_concurrent_requests() -> usize {
@@ -973,8 +976,8 @@ mod tests {
         "#;
 
         let config: Config = toml::from_str(toml_str).unwrap();
-        test_eq!(config.model_provider, "anthropic");
-        test_eq!(config.embedding_provider, "voyageai");
+        test_eq!(config.model_provider, ModelProvider::Anthropic);
+        test_eq!(config.embedding_provider, EmbeddingProvider::VoyageAI);
         test_eq!(config.max_concurrent_requests, 5);
         test_eq!(config.max_retries, 3);
 
@@ -995,8 +998,8 @@ mod tests {
         "#;
 
         let config: Config = toml::from_str(toml_str).unwrap();
-        test_eq!(config.model_provider, "openai");
-        test_eq!(config.embedding_provider, "voyageai"); // default
+        test_eq!(config.model_provider, ModelProvider::OpenAI);
+        test_eq!(config.embedding_provider, EmbeddingProvider::VoyageAI); // default
         test_eq!(config.max_concurrent_requests, 5); // default
     }
 

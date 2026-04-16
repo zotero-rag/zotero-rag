@@ -1,6 +1,7 @@
 //! Utilities for checking the health of the LanceDB database. This includes helpers to provide
 //! possible diagnostics for common issues.
 
+use crate::capabilities::EmbeddingProvider;
 use crate::embedding::common::get_embedding_dims_by_provider;
 
 use super::lance::LanceError;
@@ -227,7 +228,7 @@ fn calculate_directory_size(path: &std::path::Path) -> Result<u64, std::io::Erro
 ///     * An `InvalidStateError` if the table is in some invalid state
 pub(crate) async fn get_zero_vectors(
     tbl: &Table,
-    embedding_provider: &str,
+    embedding_provider: &EmbeddingProvider,
     query_limit: usize,
 ) -> Result<Vec<RecordBatch>, LanceError> {
     let embedding_size = get_embedding_dims_by_provider(embedding_provider);
@@ -297,7 +298,7 @@ async fn check_indexes(tbl: &lancedb::table::Table) -> Result<Vec<(String, Strin
 /// * `LanceError::QueryError` - If querying for zero vectors or index information fails
 #[must_use = "This function has no side-effects, so you likely want to inspect this value."]
 pub async fn lancedb_health_check(
-    embedding_provider: &str,
+    embedding_provider: &EmbeddingProvider,
 ) -> Result<HealthCheckResult, LanceError> {
     let mut result = HealthCheckResult {
         directory_exists: false,
@@ -372,6 +373,7 @@ pub async fn lancedb_health_check(
 #[cfg(test)]
 mod tests {
     use super::lancedb_health_check;
+    use crate::capabilities::EmbeddingProvider;
     use crate::config::VoyageAIConfig;
     use crate::constants::DEFAULT_VOYAGE_EMBEDDING_DIM;
     use crate::constants::DEFAULT_VOYAGE_EMBEDDING_MODEL;
@@ -396,7 +398,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(get_db_uri());
         let _ = std::fs::remove_dir_all(format!("zqa-rag/{}", get_db_uri()));
 
-        let result = lancedb_health_check("voyageai").await;
+        let result = lancedb_health_check(&EmbeddingProvider::VoyageAI).await;
         test_ok!(result);
 
         let health_result = result.unwrap();
@@ -443,7 +445,7 @@ mod tests {
         .unwrap();
 
         // Now test health check
-        let result = lancedb_health_check("voyageai").await;
+        let result = lancedb_health_check(&EmbeddingProvider::VoyageAI).await;
         test_ok!(result);
 
         let health_result = result.unwrap();

@@ -12,7 +12,6 @@ use arrow_array::{self, RecordBatch};
 use chrono::Local;
 
 use rustyline::error::ReadlineError;
-use zqa_rag::capabilities::ModelProvider;
 use zqa_rag::llm::base::{
     ASSISTANT_ROLE, ApiClient, ChatHistoryContent, ChatHistoryItem, ChatRequest, ToolUseStats,
     USER_ROLE,
@@ -469,7 +468,7 @@ async fn dedup<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Result<usize, CLI
             .ok_or(CLIError::ConfigError(
                 "Could not get embedding config".into(),
             ))?,
-        get_schema(&ctx.config.embedding_provider).await,
+        get_schema(ctx.config.embedding_provider).await,
         DbFields::Title.as_ref(),
         DbFields::LibraryKey.as_ref(),
     )
@@ -652,7 +651,7 @@ async fn search_for_papers<O: Write, E: Write>(
             .ok_or(CLIError::ConfigError(
                 "Could not get embedding config".into(),
             ))?,
-        ctx.config.reranker_provider.clone(),
+        ctx.config.reranker_provider,
     )
     .await?;
     let _ = get_authors(&mut search_results);
@@ -687,11 +686,6 @@ async fn run_query<O: Write, E: Write>(
     ctx: &mut Context<O, E>,
 ) -> Result<(), CLIError> {
     let model_provider = ctx.config.model_provider.clone();
-    if !ModelProvider::contains(&model_provider) {
-        return Err(CLIError::LLMError(format!(
-            "Model provider {model_provider} is not valid."
-        )));
-    }
 
     // Create LLM client with config
     let llm_client = ctx
@@ -711,7 +705,7 @@ async fn run_query<O: Write, E: Write>(
         .ok_or(CLIError::ConfigError(
             "Could not get embedding config".into(),
         ))?;
-    let reranker_provider = ctx.config.reranker_provider.clone();
+    let reranker_provider = ctx.config.reranker_provider;
 
     // Spawn a background title generation task from the query alone, in parallel with summarization.
     // Only generate a title if we don't already have one (i.e., first query in the conversation).
@@ -785,7 +779,7 @@ async fn run_query<O: Write, E: Write>(
     let pricing = {
         let mp = model_provider.clone();
         let gmn = generation_model_name.clone();
-        tokio::task::spawn_blocking(move || get_model_pricing(&mp, &gmn, None))
+        tokio::task::spawn_blocking(move || get_model_pricing(mp.as_str(), &gmn, None))
             .await
             .ok()
             .flatten()
@@ -1364,6 +1358,7 @@ pub(crate) mod tests {
     use temp_env;
     use zqa_macros::{test_contains, test_eq, test_ok};
     use zqa_macros_proc::retry;
+    use zqa_rag::capabilities::RerankerProvider;
     use zqa_rag::constants::{
         DEFAULT_VOYAGE_EMBEDDING_DIM, DEFAULT_VOYAGE_EMBEDDING_MODEL, DEFAULT_VOYAGE_RERANK_MODEL,
     };
@@ -1417,7 +1412,7 @@ pub(crate) mod tests {
                 embedding_dims: DEFAULT_VOYAGE_EMBEDDING_DIM as usize,
                 reranker: DEFAULT_VOYAGE_RERANK_MODEL.into(),
             }),
-            "voyageai".into(),
+            Some(RerankerProvider::VoyageAI),
         )
     }
 

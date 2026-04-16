@@ -8,7 +8,10 @@ use std::{
     path::PathBuf,
 };
 use thiserror::Error;
-use zqa_rag::llm::base::ChatHistoryItem;
+use zqa_rag::{
+    capabilities::{EmbeddingProvider, ModelProvider, RerankerProvider},
+    llm::base::ChatHistoryItem,
+};
 
 use crate::config::{BaseDirError, Config, get_config_dir};
 
@@ -306,16 +309,15 @@ pub(crate) fn oobe<R: BufRead>(reader: &mut R, is_terminal: bool) -> Result<(), 
     };
 
     config.model_provider = match model_provider {
-        'a' => "anthropic",
-        'l' => "ollama",
-        'o' => "openai",
-        'g' => "gemini",
-        'r' => "openrouter",
+        'a' => ModelProvider::Anthropic,
+        'l' => ModelProvider::Ollama,
+        'o' => ModelProvider::OpenAI,
+        'g' => ModelProvider::Gemini,
+        'r' => ModelProvider::OpenRouter,
         _ => {
             unreachable!("Unknown model provider");
         }
-    }
-    .into();
+    };
 
     println!("What provider do you want to use for embeddings?");
     println!(
@@ -330,16 +332,15 @@ pub(crate) fn oobe<R: BufRead>(reader: &mut R, is_terminal: bool) -> Result<(), 
     let embedding_provider = read_char(reader, 'v', &['c', 'g', 'o', 'v', 'z']);
 
     config.embedding_provider = match embedding_provider {
-        'c' => "cohere",
-        'g' => "gemini",
-        'o' => "openai",
-        'v' => "voyageai",
-        'z' => "zeroentropy",
+        'c' => EmbeddingProvider::Cohere,
+        'g' => EmbeddingProvider::Gemini,
+        'o' => EmbeddingProvider::OpenAI,
+        'v' => EmbeddingProvider::VoyageAI,
+        'z' => EmbeddingProvider::ZeroEntropy,
         _ => {
             unreachable!("Unknown model provider");
         }
-    }
-    .into();
+    };
 
     let embedding_api_key = if embedding_provider == model_provider {
         model_api_key.clone()
@@ -375,12 +376,11 @@ pub(crate) fn oobe<R: BufRead>(reader: &mut R, is_terminal: bool) -> Result<(), 
     println!();
     let reranker_provider = read_char(reader, embedding_provider, &['c', 'v', 'z']);
     config.reranker_provider = match reranker_provider {
-        'c' => "cohere",
-        'v' => "voyageai",
-        'z' => "zeroentropy",
+        'c' => Some(RerankerProvider::Cohere),
+        'v' => Some(RerankerProvider::VoyageAI),
+        'z' => Some(RerankerProvider::ZeroEntropy),
         _ => unreachable!("Reranker provider was validated."),
-    }
-    .into();
+    };
 
     let reranker_api_key = if reranker_provider == embedding_provider {
         embedding_api_key.clone()

@@ -6,13 +6,11 @@ use indicatif::ProgressBar;
 use reqwest::header::HeaderMap;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use std::{
-    fs,
-    time::{Duration, Instant},
-};
+use std::time::{Duration, Instant};
 
 use lancedb::embeddings::EmbeddingFunction;
 
+use crate::capabilities::EmbeddingProvider;
 use crate::clients::gemini::GeminiClient;
 use crate::clients::ollama::OllamaClient;
 use crate::clients::openai::OpenAIClient;
@@ -27,12 +25,29 @@ use crate::http_client::{HttpClient, ReqwestClient};
 use crate::llm::errors::LLMError;
 
 /// A struct containing information about texts that failed to embed.
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct FailedTexts {
     /// The embedding provider that was used.
     pub embedding_provider: String,
     /// The texts that failed to embed.
     pub texts: Vec<String>,
+}
+
+impl std::fmt::Display for FailedTexts {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_fmt(format_args!(
+            "Embedding provider: {}\n\nTexts that failed:\n",
+            &self.embedding_provider
+        ))?;
+
+        for text in &self.texts {
+            let words = text.split(' ').take(10).collect::<String>();
+
+            f.write_fmt(format_args!("\t{words}\n"))?;
+        }
+
+        Ok(())
+    }
 }
 
 /// Returns the embedding dimension given an embedding provider.
@@ -50,44 +65,14 @@ pub struct FailedTexts {
 ///
 /// * If an invalid embedding provider name is provided.
 #[must_use]
-pub fn get_embedding_dims_by_provider(embedding_name: &str) -> u32 {
+pub fn get_embedding_dims_by_provider(embedding_name: &EmbeddingProvider) -> u32 {
     match embedding_name {
-        "openai" => DEFAULT_OPENAI_EMBEDDING_DIM,
-        "voyageai" => DEFAULT_VOYAGE_EMBEDDING_DIM,
-        "gemini" => DEFAULT_GEMINI_EMBEDDING_DIM,
-        "ollama" => DEFAULT_OLLAMA_EMBEDDING_DIM as u32,
-        "cohere" => DEFAULT_COHERE_EMBEDDING_DIM,
-        "zeroentropy" => DEFAULT_ZEROENTROPY_EMBEDDING_DIM,
-        _ => panic!("Invalid embedding provider."),
-    }
-}
-
-/// Gets an embedding provider, i.e., an atomically reference-counted, heap-allocated
-/// `EmbeddingFunction` implementation.
-///
-/// # Arguments
-///
-/// * `embedding_name`: Embedding provider name. Must be one of "openai", "gemini",
-///   "voyageai", or "cohere".
-///
-/// # Returns
-///
-/// An thread-safe object that can compute query embeddings.
-///
-/// # Errors
-///
-/// Returns an error if the embedding provider name is not recognized.
-pub fn get_embedding_provider(
-    embedding_name: &str,
-) -> Result<Arc<dyn EmbeddingFunction>, LLMError> {
-    match embedding_name {
-        "openai" => Ok(Arc::new(OpenAIClient::<ReqwestClient>::default())),
-        "voyageai" => Ok(Arc::new(VoyageAIClient::<ReqwestClient>::default())),
-        "gemini" => Ok(Arc::new(GeminiClient::<ReqwestClient>::default())),
-        "ollama" => Ok(Arc::new(OllamaClient::<ReqwestClient>::default())),
-        "cohere" => Ok(Arc::new(CohereClient::<ReqwestClient>::default())),
-        "zeroentropy" => Ok(Arc::new(ZeroEntropyClient::<ReqwestClient>::default())),
-        _ => Err(LLMError::InvalidProviderError(embedding_name.to_string())),
+        EmbeddingProvider::OpenAI => DEFAULT_OPENAI_EMBEDDING_DIM,
+        EmbeddingProvider::VoyageAI => DEFAULT_VOYAGE_EMBEDDING_DIM,
+        EmbeddingProvider::Gemini => DEFAULT_GEMINI_EMBEDDING_DIM,
+        EmbeddingProvider::Ollama => DEFAULT_OLLAMA_EMBEDDING_DIM as u32,
+        EmbeddingProvider::Cohere => DEFAULT_COHERE_EMBEDDING_DIM,
+        EmbeddingProvider::ZeroEntropy => DEFAULT_ZEROENTROPY_EMBEDDING_DIM,
     }
 }
 
@@ -147,6 +132,19 @@ pub enum EmbeddingProviderConfig {
 }
 
 impl EmbeddingProviderConfig {
+    /// Returns the embedding provider enum
+    #[must_use]
+    pub fn provider(&self) -> EmbeddingProvider {
+        match self {
+            EmbeddingProviderConfig::OpenAI(_) => EmbeddingProvider::OpenAI,
+            EmbeddingProviderConfig::VoyageAI(_) => EmbeddingProvider::VoyageAI,
+            EmbeddingProviderConfig::Gemini(_) => EmbeddingProvider::Gemini,
+            EmbeddingProviderConfig::Ollama(_) => EmbeddingProvider::Ollama,
+            EmbeddingProviderConfig::Cohere(_) => EmbeddingProvider::Cohere,
+            EmbeddingProviderConfig::ZeroEntropy(_) => EmbeddingProvider::ZeroEntropy,
+        }
+    }
+
     /// Returns the name of the embedding provider.
     #[must_use]
     pub fn provider_name(&self) -> &str {
@@ -327,8 +325,8 @@ where
             total_masked += mask.iter().filter(|mask| !**mask).count();
         } else {
             let error_message = error_message.unwrap_or_else(|| String::from("No error found."));
-            eprintln!("Got a 4xx response from the {embedding_provider} API: {error_message}\n",);
-            eprintln!("We tried sending the request: {request:#?}\n");
+            log::error!("Got a 4xx response from the {embedding_provider} API: {error_message}\n",);
+            log::error!("We tried sending the request: {request:#?}\n");
 
             fail_count += batch.len();
             failed_texts.extend(batch.iter().filter_map(|text| text.as_ref()).cloned());
@@ -350,15 +348,8 @@ where
             embedding_provider,
             texts: failed_texts,
         };
-        let encoded = serde_json::to_string_pretty(&failed)?;
 
-        if let Err(e) = fs::write("failed.json", encoded) {
-            eprintln!("We could not write out the failed texts to 'failed.json': {e}");
-        } else {
-            println!(
-                "We have written the failed texts to 'failed.json'. Consider using /repair to fix this."
-            );
-        }
+        return Err(LLMError::EmbeddingFailedError(failed));
     }
 
     log::info!(

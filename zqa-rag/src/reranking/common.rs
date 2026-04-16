@@ -3,6 +3,7 @@
 use std::{pin::Pin, sync::Arc};
 
 use crate::{
+    capabilities::RerankerProvider,
     embedding::{cohere::CohereClient, voyage::VoyageAIClient, zeroentropy::ZeroEntropyClient},
     http_client::ReqwestClient,
     llm::errors::LLMError,
@@ -40,12 +41,12 @@ pub trait Rerank: Send + Sync {
 /// # Errors
 ///
 /// Returns an error if the provider name is not recognized.
-pub fn get_reranking_provider(provider: &str) -> Result<Arc<dyn Rerank>, LLMError> {
+#[must_use]
+pub fn get_reranking_provider(provider: RerankerProvider) -> Arc<dyn Rerank> {
     match provider {
-        "voyageai" => Ok(Arc::new(VoyageAIClient::<ReqwestClient>::default())),
-        "cohere" => Ok(Arc::new(CohereClient::<ReqwestClient>::default())),
-        "zeroentropy" => Ok(Arc::new(ZeroEntropyClient::<ReqwestClient>::default())),
-        _ => Err(LLMError::InvalidProviderError(provider.to_string())),
+        RerankerProvider::VoyageAI => Arc::new(VoyageAIClient::<ReqwestClient>::default()),
+        RerankerProvider::Cohere => Arc::new(CohereClient::<ReqwestClient>::default()),
+        RerankerProvider::ZeroEntropy => Arc::new(ZeroEntropyClient::<ReqwestClient>::default()),
     }
 }
 
@@ -90,6 +91,16 @@ pub enum RerankProviderConfig {
 }
 
 impl RerankProviderConfig {
+    /// Return the provider (enum)
+    #[must_use]
+    pub fn provider(&self) -> RerankerProvider {
+        match self {
+            Self::Cohere(_) => RerankerProvider::Cohere,
+            Self::VoyageAI(_) => RerankerProvider::VoyageAI,
+            Self::ZeroEntropy(_) => RerankerProvider::ZeroEntropy,
+        }
+    }
+
     #[must_use]
     /// Return the name of the provider for this config.
     pub fn provider_name(&self) -> &str {

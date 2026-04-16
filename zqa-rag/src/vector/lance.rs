@@ -312,7 +312,7 @@ pub async fn get_zero_vector_records(
     })?;
 
     // Get all records with zero embeddings
-    let zero_batches = get_zero_vectors(&table, embedding_config.provider_name(), 10000).await?;
+    let zero_batches = get_zero_vectors(&table, &embedding_config.provider(), 10000).await?;
     Ok(zero_batches)
 }
 
