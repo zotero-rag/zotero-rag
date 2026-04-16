@@ -93,7 +93,7 @@ impl PricingCacheOptions {
     pub(crate) fn should_fetch(&self) -> bool {
         let extension = self.cache_path.extension();
 
-        if extension.is_none() || extension.is_some_and(|ext| !ext.eq_ignore_ascii_case("json")) {
+        if extension.is_none_or(|ext| !ext.eq_ignore_ascii_case("json")) {
             // The file extension is not a JSON, so we act like a coward and assume this
             // isn't our cache to maintain; i.e., we should *not* attempt to fetch and replace
             // this file.

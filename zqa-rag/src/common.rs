@@ -232,7 +232,7 @@ mod tests {
         let delay = calculate_backoff_delay(1, &response);
 
         // Should be between 2000ms and 4000ms (base 2000ms + jitter)
-        assert!(delay >= Duration::from_millis(2000));
-        assert!(delay <= Duration::from_millis(4000));
+        assert!(delay >= Duration::from_secs(2));
+        assert!(delay <= Duration::from_secs(4));
     }
 }

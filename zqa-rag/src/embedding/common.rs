@@ -303,7 +303,7 @@ where
             total_masked += mask.iter().filter(|mask| !**mask).count();
         } else {
             let error_message = error_message.unwrap_or_else(|| String::from("No error found."));
-            log::error!("Got a 4xx response from the {embedding_provider} API: {error_message}\n",);
+            log::error!("Got a 4xx response from the {embedding_provider} API: {error_message}\n");
             log::error!("We tried sending the request: {request:#?}\n");
 
             fail_count += batch.len();

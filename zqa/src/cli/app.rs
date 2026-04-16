@@ -457,7 +457,7 @@ async fn fix_zero_embeddings<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Res
     )
     .await?;
 
-    writeln!(ctx.out, "Successfully fixed zero embeddings!\n",)?;
+    writeln!(ctx.out, "Successfully fixed zero embeddings!\n")?;
 
     Ok(())
 }
@@ -924,7 +924,7 @@ fn resume<O: Write, E: Write, R: BufRead>(
             writeln!(&mut ctx.out, "No saved conversations found.")?;
         }
         Ok(Some(mut histories)) => {
-            histories.sort_by(|a, b| b.date.cmp(&a.date));
+            histories.sort_by_key(|b| std::cmp::Reverse(b.date));
 
             writeln!(&mut ctx.out)?;
             writeln!(&mut ctx.out, "Saved conversations:")?;

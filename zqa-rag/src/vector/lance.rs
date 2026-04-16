@@ -350,7 +350,7 @@ pub async fn dedup_rows(
             let by_values = get_column_from_batch(&batch, by_idx);
             let key_values = get_column_from_batch(&batch, key_idx);
 
-            for (by_val, key_val) in by_values.into_iter().zip(key_values.into_iter()) {
+            for (by_val, key_val) in by_values.into_iter().zip(key_values) {
                 if !seen_by_values.insert(by_val) {
                     duplicate_keys.push(key_val);
                 }
