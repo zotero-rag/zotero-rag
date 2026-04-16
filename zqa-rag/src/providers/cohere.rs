@@ -1,3 +1,4 @@
+//! Cohere provider implementation
 use std::sync::Arc;
 
 use lancedb::embeddings::EmbeddingFunction;
@@ -61,7 +62,9 @@ impl LanceEmbeddingRegistrar for CohereProvider {
         config: &EmbeddingProviderConfig,
     ) -> Result<(), LanceError> {
         let EmbeddingProviderConfig::Cohere(cfg) = config else {
-            return Err(LanceError::ParameterError("Expected Cohere embedding config".into()));
+            return Err(LanceError::ParameterError(
+                "Expected Cohere embedding config".into(),
+            ));
         };
 
         db.embedding_registry().register(

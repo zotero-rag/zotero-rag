@@ -280,21 +280,42 @@ impl RerankerProvider {
     }
 }
 
+/// Factory trait to create an [`LLMClient`] for a provider.
 pub trait LlmFactory: Send + Sync {
+    /// Return the canonical provider ID
     fn provider_id(&self) -> ProviderId;
+    /// Attempt to create an [`LLMClient`] with the provided config.
+    ///
+    /// # Errors
+    ///
+    /// [`LLMError`] variant if creating an LLM client fails.
     fn create_llm(&self, config: &LLMClientConfig) -> Result<LLMClient, LLMError>;
 }
 
+/// Factory trait to create an [`EmbeddingFunction`] object
 pub trait EmbeddingFactory: Send + Sync {
+    /// Return the canonical provider ID
     fn provider_id(&self) -> ProviderId;
+    /// Attempt to create a [`EmbeddingProvider`] object with the provided config.
+    ///
+    /// # Errors
+    ///
+    /// [`LLMError`] variant if creating a trait object fails.
     fn create_embedding(
         &self,
         config: &EmbeddingProviderConfig,
     ) -> Result<Arc<dyn EmbeddingFunction>, LLMError>;
 }
 
+/// Factory trait to create an [`Rerank`] object
 pub trait RerankFactory: Send + Sync {
+    /// Return the canonical provider ID
     fn provider_id(&self) -> ProviderId;
+    /// Attempt to create a [`Rerank`] object with the provided config.
+    ///
+    /// # Errors
+    ///
+    /// [`LLMError`] variant if creating a reranker fails.
     fn create_reranker(&self, config: &RerankProviderConfig) -> Result<Arc<dyn Rerank>, LLMError>;
 }
 

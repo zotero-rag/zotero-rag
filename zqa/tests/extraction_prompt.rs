@@ -101,7 +101,7 @@ async fn test_extraction_prompt_openai() {
         embedding_dims: None,
     };
 
-    let client = get_client_with_config(LLMClientConfig::OpenAI(config.into()))
+    let client = get_client_with_config(&LLMClientConfig::OpenAI(config.into()))
         .expect("Failed to create OpenAI client");
 
     run_extraction_test(client, "OpenAI").await;
@@ -129,7 +129,7 @@ async fn test_extraction_prompt_anthropic() {
         max_tokens: 8192,
     };
 
-    let client = get_client_with_config(LLMClientConfig::Anthropic(config.into()))
+    let client = get_client_with_config(&LLMClientConfig::Anthropic(config.into()))
         .expect("Failed to create Anthropic client");
 
     run_extraction_test(client, "Anthropic").await;
@@ -159,7 +159,7 @@ async fn test_extraction_prompt_gemini() {
         embedding_dims: None,
     };
 
-    let client = get_client_with_config(LLMClientConfig::Gemini(config.into()))
+    let client = get_client_with_config(&LLMClientConfig::Gemini(config.into()))
         .expect("Failed to create Gemini client");
 
     run_extraction_test(client, "Gemini").await;

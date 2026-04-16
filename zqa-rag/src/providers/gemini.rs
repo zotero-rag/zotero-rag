@@ -1,3 +1,4 @@
+//! Gemini provider implementation
 use std::sync::Arc;
 
 use lancedb::embeddings::EmbeddingFunction;
@@ -60,7 +61,9 @@ impl LanceEmbeddingRegistrar for GeminiProvider {
         config: &EmbeddingProviderConfig,
     ) -> Result<(), LanceError> {
         let EmbeddingProviderConfig::Gemini(cfg) = config else {
-            return Err(LanceError::ParameterError("Expected Gemini embedding config".into()));
+            return Err(LanceError::ParameterError(
+                "Expected Gemini embedding config".into(),
+            ));
         };
 
         db.embedding_registry().register(

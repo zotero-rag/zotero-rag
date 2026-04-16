@@ -173,7 +173,7 @@ mod tests {
     };
 
     fn make_tool() -> SummarizationTool {
-        let client = get_client_with_config(LLMClientConfig::Anthropic(AnthropicConfig {
+        let client = get_client_with_config(&LLMClientConfig::Anthropic(AnthropicConfig {
             api_key: env::var("ANTHROPIC_API_KEY").unwrap(),
             model: DEFAULT_ANTHROPIC_MODEL_SMALL.into(),
             max_tokens: 8192,

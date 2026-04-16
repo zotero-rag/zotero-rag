@@ -1,3 +1,4 @@
+//! Voyage AI provider implementation
 use std::sync::Arc;
 
 use lancedb::embeddings::EmbeddingFunction;
@@ -61,7 +62,9 @@ impl LanceEmbeddingRegistrar for VoyageAIProvider {
         config: &EmbeddingProviderConfig,
     ) -> Result<(), LanceError> {
         let EmbeddingProviderConfig::VoyageAI(cfg) = config else {
-            return Err(LanceError::ParameterError("Expected VoyageAI embedding config".into()));
+            return Err(LanceError::ParameterError(
+                "Expected VoyageAI embedding config".into(),
+            ));
         };
 
         db.embedding_registry().register(

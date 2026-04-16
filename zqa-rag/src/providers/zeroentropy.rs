@@ -1,3 +1,4 @@
+//! ZeroEntropy provider implementation
 use std::sync::Arc;
 
 use lancedb::embeddings::EmbeddingFunction;

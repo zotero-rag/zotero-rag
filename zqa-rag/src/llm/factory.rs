@@ -8,7 +8,7 @@ use crate::clients::openrouter::OpenRouterClient;
 use crate::config::LLMClientConfig;
 use crate::llm::base::{ApiClient, ChatRequest};
 use crate::llm::errors::LLMError;
-use crate::providers::registry::default_provider_registry;
+use crate::providers::registry::provider_registry;
 
 /// Enum representing different LLM client implementations
 #[derive(Debug, Clone)]
@@ -23,6 +23,20 @@ pub enum LLMClient {
     OpenRouter(OpenRouterClient),
     /// Gemini client
     Gemini(GeminiClient),
+}
+
+impl LLMClient {
+    /// Return the configured model
+    #[must_use]
+    pub fn get_model_name(&self) -> Option<String> {
+        match self {
+            LLMClient::Anthropic(client) => client.config.as_ref().map(|c| c.model.clone()),
+            LLMClient::Ollama(client) => client.config.as_ref().map(|c| c.model.clone()),
+            LLMClient::OpenAI(client) => client.config.as_ref().map(|c| c.model.clone()),
+            LLMClient::OpenRouter(client) => client.config.as_ref().map(|c| c.model.clone()),
+            LLMClient::Gemini(client) => client.config.as_ref().map(|c| c.model.clone()),
+        }
+    }
 }
 
 // Implement ApiClient for LLMClient to delegate to the inner implementations
@@ -46,6 +60,6 @@ impl ApiClient for LLMClient {
 /// # Errors
 ///
 /// * `LLMError::InvalidProviderError` if the provider is not supported
-pub fn get_client_with_config(config: LLMClientConfig) -> Result<LLMClient, LLMError> {
-    default_provider_registry().create_llm(&config)
+pub fn get_client_with_config(config: &LLMClientConfig) -> Result<LLMClient, LLMError> {
+    provider_registry().create_llm(config)
 }
