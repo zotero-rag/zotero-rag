@@ -17,7 +17,8 @@ use crate::constants::{
 };
 use crate::http_client::HttpClient;
 use crate::llm::errors::LLMError;
-use crate::providers::{ProviderId, registry::default_provider_registry};
+use crate::providers::ProviderId;
+use crate::providers::registry::provider_registry;
 
 /// A struct containing information about texts that failed to embed.
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
@@ -84,9 +85,9 @@ pub fn get_embedding_dims_by_provider(embedding_provider: EmbeddingProvider) -> 
 ///
 /// Returns an error if provider configuration is invalid or initialization fails.
 pub fn get_embedding_provider_with_config(
-    config: EmbeddingProviderConfig,
+    config: &EmbeddingProviderConfig,
 ) -> Result<Arc<dyn EmbeddingFunction>, LLMError> {
-    default_provider_registry().create_embedding(&config)
+    provider_registry().create_embedding(config)
 }
 
 /// Configuration enum for embedding providers
@@ -107,6 +108,8 @@ pub enum EmbeddingProviderConfig {
 }
 
 impl EmbeddingProviderConfig {
+    /// Return the canonical provider ID.
+    #[must_use]
     pub const fn provider_id(&self) -> ProviderId {
         match self {
             Self::Ollama(_) => ProviderId::Ollama,

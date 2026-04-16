@@ -142,6 +142,8 @@ pub enum LLMClientConfig {
 }
 
 impl LLMClientConfig {
+    /// Return the canonical provider ID
+    #[must_use]
     pub const fn provider_id(&self) -> ProviderId {
         match self {
             Self::Anthropic(_) => ProviderId::Anthropic,

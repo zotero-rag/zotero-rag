@@ -4,7 +4,7 @@
 
 use crate::embedding::common::EmbeddingProviderConfig;
 use crate::providers::provider_id::ProviderId;
-use crate::providers::registry::default_provider_registry;
+use crate::providers::registry::provider_registry;
 use crate::vector::backup::with_backup;
 use crate::vector::checkhealth::get_zero_vectors;
 
@@ -95,9 +95,16 @@ impl Display for TableStatistics {
     }
 }
 
+/// Registration methods for embedding providers to interface with LanceDB
 pub trait LanceEmbeddingRegistrar: Send + Sync {
+    /// Get the provider ID for this object
     fn provider_id(&self) -> ProviderId;
 
+    /// Register this provider with LanceDB
+    ///
+    /// # Errors
+    ///
+    /// Return a [`LanceError`] if registration fails.
     fn register_with_lancedb(
         &self,
         db: &lancedb::Connection,
@@ -210,7 +217,7 @@ async fn get_db_with_embeddings(
     embedding_config: &EmbeddingProviderConfig,
 ) -> Result<Connection, LanceError> {
     let db = connect(&get_db_uri()).execute().await?;
-    let registry = default_provider_registry();
+    let registry = provider_registry();
 
     registry.register_embedding_with_lancedb(&db, embedding_config)?;
     Ok(db)

@@ -1,3 +1,4 @@
+//! Anthropic provider implementation
 use crate::{
     capabilities::LlmFactory,
     clients::anthropic::AnthropicClient,
@@ -19,6 +20,8 @@ impl LlmFactory for AnthropicProvider {
             return Err(LLMError::InvalidProviderError("anthropic".into()));
         };
 
-        Ok(LLMClient::Anthropic(AnthropicClient::with_config(cfg.clone())))
+        Ok(LLMClient::Anthropic(AnthropicClient::with_config(
+            cfg.clone(),
+        )))
     }
 }

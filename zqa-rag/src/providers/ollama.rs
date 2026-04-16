@@ -1,3 +1,4 @@
+//! Ollama provider implementation
 use std::sync::Arc;
 
 use lancedb::embeddings::EmbeddingFunction;
@@ -60,7 +61,9 @@ impl LanceEmbeddingRegistrar for OllamaProvider {
         config: &EmbeddingProviderConfig,
     ) -> Result<(), LanceError> {
         let EmbeddingProviderConfig::Ollama(cfg) = config else {
-            return Err(LanceError::ParameterError("Expected Ollama embedding config".into()));
+            return Err(LanceError::ParameterError(
+                "Expected Ollama embedding config".into(),
+            ));
         };
 
         db.embedding_registry().register(

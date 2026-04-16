@@ -1,3 +1,4 @@
+//! OpenAI provider implementation
 use std::sync::Arc;
 
 use lancedb::embeddings::EmbeddingFunction;
@@ -60,7 +61,9 @@ impl LanceEmbeddingRegistrar for OpenAIProvider {
         config: &EmbeddingProviderConfig,
     ) -> Result<(), LanceError> {
         let EmbeddingProviderConfig::OpenAI(cfg) = config else {
-            return Err(LanceError::ParameterError("Expected OpenAI embedding config".into()));
+            return Err(LanceError::ParameterError(
+                "Expected OpenAI embedding config".into(),
+            ));
         };
 
         db.embedding_registry().register(

@@ -19,6 +19,7 @@ use zqa_rag::llm::base::{
 use zqa_rag::llm::factory::get_client_with_config;
 use zqa_rag::llm::tools::{CallbackFn, Tool};
 use zqa_rag::pricing::get_model_pricing;
+use zqa_rag::providers::registry::provider_registry;
 use zqa_rag::vector::checkhealth::lancedb_health_check;
 use zqa_rag::vector::doctor::doctor as rag_doctor;
 use zqa_rag::vector::lance::{
@@ -277,7 +278,7 @@ fn get_user_document_tools<O: Write, E: Write>(
     let client = ctx
         .config
         .get_generation_config()
-        .map(get_client_with_config)
+        .map(|c| provider_registry().create_llm(&c))
         .transpose()?;
 
     Ok(
@@ -687,14 +688,13 @@ async fn run_query<O: Write, E: Write>(
 ) -> Result<(), CLIError> {
     let model_provider = ctx.config.model_provider;
 
-    // Create LLM client with config
     let llm_client = ctx
         .config
         .get_generation_config()
-        .map(get_client_with_config)
+        .map(|c| provider_registry().create_llm(&c))
         .transpose()?
         .ok_or(CLIError::ConfigError(
-            "Could not get generation config".into(),
+            "Failed to get LLM generation config in `run_query`".into(),
         ))?;
 
     let generation_model_name = ctx.config.get_generation_model_name();
@@ -712,7 +712,7 @@ async fn run_query<O: Write, E: Write>(
     let title_slot = Arc::clone(&ctx.state.title);
     if title_slot.lock()?.is_none()
         && let Some(small_config) = ctx.config.get_small_model_config()
-        && let Ok(small_client) = get_client_with_config(small_config)
+        && let Ok(small_client) = get_client_with_config(&small_config)
     {
         let prompt = get_title_prompt(&query);
         tokio::spawn(async move {

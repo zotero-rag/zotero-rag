@@ -1,3 +1,4 @@
+//! OpenRouter provider implementation
 use crate::{
     capabilities::LlmFactory,
     clients::openrouter::OpenRouterClient,
@@ -19,6 +20,8 @@ impl LlmFactory for OpenRouterProvider {
             return Err(LLMError::InvalidProviderError("openrouter".into()));
         };
 
-        Ok(LLMClient::OpenRouter(OpenRouterClient::with_config(cfg.clone())))
+        Ok(LLMClient::OpenRouter(OpenRouterClient::with_config(
+            cfg.clone(),
+        )))
     }
 }

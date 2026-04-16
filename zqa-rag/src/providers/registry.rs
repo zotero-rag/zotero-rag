@@ -1,4 +1,8 @@
-use std::{collections::HashMap, sync::Arc};
+//! Registry for providers
+use std::{
+    collections::HashMap,
+    sync::{Arc, LazyLock},
+};
 
 use lancedb::embeddings::EmbeddingFunction;
 
@@ -18,9 +22,13 @@ use crate::{
 
 /// Registry for provider factories keyed by canonical provider ID.
 pub struct ProviderRegistry {
+    /// Mappings from LLM providers to corresponding factory methods
     llm: HashMap<ProviderId, Arc<dyn LlmFactory>>,
+    /// Mappings from embedding providers to corresponding factory methods
     embedding: HashMap<ProviderId, Arc<dyn EmbeddingFactory>>,
+    /// Mappings from reranking providers to corresponding factory methods
     rerank: HashMap<ProviderId, Arc<dyn RerankFactory>>,
+    /// Mappings from LanceDB embedding providers to corresponding factory methods
     lance_embedding: HashMap<ProviderId, Arc<dyn LanceEmbeddingRegistrar>>,
 }
 
@@ -165,9 +173,17 @@ pub fn default_provider_registry() -> ProviderRegistry {
     registry
 }
 
+static DEFAULT_REGISTRY: LazyLock<ProviderRegistry> = LazyLock::new(default_provider_registry);
+
+/// Get the default provider registry.
+#[must_use]
+pub fn provider_registry() -> &'static ProviderRegistry {
+    &DEFAULT_REGISTRY
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{ProviderRegistry, default_provider_registry};
+    use super::ProviderRegistry;
     use crate::{
         config::{
             AnthropicConfig, CohereConfig, GeminiConfig, OllamaConfig, OpenAIConfig,
@@ -175,6 +191,7 @@ mod tests {
         },
         embedding::common::EmbeddingProviderConfig,
         llm::factory::LLMClient,
+        providers::registry::provider_registry,
         reranking::common::RerankProviderConfig,
         vector::lance::LanceError,
     };
@@ -308,34 +325,77 @@ mod tests {
 
     #[test]
     fn default_registry_creates_all_llm_clients() {
-        let registry = default_provider_registry();
+        let registry = provider_registry();
 
-        assert!(matches!(registry.create_llm(&anthropic_llm_config()), Ok(LLMClient::Anthropic(_))));
-        assert!(matches!(registry.create_llm(&openai_llm_config()), Ok(LLMClient::OpenAI(_))));
-        assert!(matches!(registry.create_llm(&openrouter_llm_config()), Ok(LLMClient::OpenRouter(_))));
-        assert!(matches!(registry.create_llm(&gemini_llm_config()), Ok(LLMClient::Gemini(_))));
-        assert!(matches!(registry.create_llm(&ollama_llm_config()), Ok(LLMClient::Ollama(_))));
+        assert!(matches!(
+            registry.create_llm(&anthropic_llm_config()),
+            Ok(LLMClient::Anthropic(_))
+        ));
+        assert!(matches!(
+            registry.create_llm(&openai_llm_config()),
+            Ok(LLMClient::OpenAI(_))
+        ));
+        assert!(matches!(
+            registry.create_llm(&openrouter_llm_config()),
+            Ok(LLMClient::OpenRouter(_))
+        ));
+        assert!(matches!(
+            registry.create_llm(&gemini_llm_config()),
+            Ok(LLMClient::Gemini(_))
+        ));
+        assert!(matches!(
+            registry.create_llm(&ollama_llm_config()),
+            Ok(LLMClient::Ollama(_))
+        ));
     }
 
     #[test]
     fn default_registry_creates_all_embedding_clients() {
-        let registry = default_provider_registry();
+        let registry = provider_registry();
 
-        assert!(registry.create_embedding(&openai_embedding_config()).is_ok());
-        assert!(registry.create_embedding(&voyage_embedding_config()).is_ok());
-        assert!(registry.create_embedding(&cohere_embedding_config()).is_ok());
-        assert!(registry.create_embedding(&zeroentropy_embedding_config()).is_ok());
-        assert!(registry.create_embedding(&gemini_embedding_config()).is_ok());
-        assert!(registry.create_embedding(&ollama_embedding_config()).is_ok());
+        assert!(
+            registry
+                .create_embedding(&openai_embedding_config())
+                .is_ok()
+        );
+        assert!(
+            registry
+                .create_embedding(&voyage_embedding_config())
+                .is_ok()
+        );
+        assert!(
+            registry
+                .create_embedding(&cohere_embedding_config())
+                .is_ok()
+        );
+        assert!(
+            registry
+                .create_embedding(&zeroentropy_embedding_config())
+                .is_ok()
+        );
+        assert!(
+            registry
+                .create_embedding(&gemini_embedding_config())
+                .is_ok()
+        );
+        assert!(
+            registry
+                .create_embedding(&ollama_embedding_config())
+                .is_ok()
+        );
     }
 
     #[test]
     fn default_registry_creates_all_rerank_clients() {
-        let registry = default_provider_registry();
+        let registry = provider_registry();
 
         assert!(registry.create_reranker(&voyage_rerank_config()).is_ok());
         assert!(registry.create_reranker(&cohere_rerank_config()).is_ok());
-        assert!(registry.create_reranker(&zeroentropy_rerank_config()).is_ok());
+        assert!(
+            registry
+                .create_reranker(&zeroentropy_rerank_config())
+                .is_ok()
+        );
     }
 
     #[test]

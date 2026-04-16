@@ -368,7 +368,7 @@ async fn embedding_retrieval(
         .map(std::string::String::as_str)
         .collect();
 
-    let provider = get_embedding_provider_with_config(embedding_config.clone())?;
+    let provider = get_embedding_provider_with_config(embedding_config)?;
     let chunk_embeddings = get_embeddings(&chunk_text_refs, &provider)?;
 
     let query_embeddings = get_embeddings(&[query], &provider)?;
@@ -994,7 +994,7 @@ mod tests {
             .expect("VOYAGE_AI_API_KEY must be set for this test");
 
         let client =
-            get_client_with_config(LLMClientConfig::OpenAI(zqa_rag::config::OpenAIConfig {
+            get_client_with_config(&LLMClientConfig::OpenAI(zqa_rag::config::OpenAIConfig {
                 api_key: api_key.clone(),
                 model: DEFAULT_OPENAI_MODEL_SMALL.to_string(),
                 max_tokens: DEFAULT_OPENAI_MAX_TOKENS,

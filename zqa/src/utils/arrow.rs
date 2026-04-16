@@ -196,7 +196,7 @@ pub async fn library_to_arrow(
     ];
 
     if lancedb_exists().await {
-        let embedding_provider = get_embedding_provider_with_config(embedding_config)?;
+        let embedding_provider = get_embedding_provider_with_config(&embedding_config)?;
         let query_vec = embedding_provider.compute_source_embeddings(Arc::new(pdf_texts))?;
         let query_vec = query_vec.as_fixed_size_list();
 
