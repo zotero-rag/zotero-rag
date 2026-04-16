@@ -4,7 +4,8 @@ use schemars::{JsonSchema, schema_for};
 use serde::Deserialize;
 use serde_json::json;
 use zqa_rag::{
-    capabilities::RerankerProvider, embedding::common::EmbeddingProviderConfig, llm::tools::Tool,
+    embedding::common::EmbeddingProviderConfig, llm::tools::Tool,
+    reranking::common::RerankProviderConfig,
 };
 
 use crate::utils::{
@@ -22,7 +23,7 @@ pub(crate) struct RetrievalTool {
     /// used when initially creating the database.
     pub(crate) embedding_config: EmbeddingProviderConfig,
     /// The reranker provider to use.
-    pub(crate) reranker_provider: Option<RerankerProvider>,
+    pub(crate) reranker_config: Option<RerankProviderConfig>,
 }
 
 impl RetrievalTool {
@@ -30,11 +31,11 @@ impl RetrievalTool {
     /// reranker provider, and a schema key.
     pub(crate) fn new(
         embedding_config: EmbeddingProviderConfig,
-        reranker_provider: Option<RerankerProvider>,
+        reranker_provider: Option<RerankProviderConfig>,
     ) -> Self {
         Self {
             embedding_config,
-            reranker_provider,
+            reranker_config: reranker_provider,
         }
     }
 }
@@ -75,16 +76,21 @@ impl Tool for RetrievalTool {
     fn call(
         &self,
         args: serde_json::Value,
-    ) -> std::pin::Pin<Box<dyn Future<Output = Result<serde_json::Value, String>> + Send>> {
+    ) -> std::pin::Pin<Box<dyn Future<Output = Result<serde_json::Value, String>> + Send + '_>> {
         let start = Instant::now();
         let embedding_config = self.embedding_config.clone();
-        let reranker_provider = self.reranker_provider;
+        let reranker_config = self.reranker_config.clone();
+
         Box::pin(async move {
             let input: RetrievalToolInput =
                 serde_json::from_value(args).map_err(|e| format!("Invalid arguments: {e}"))?;
-            let mut results = vector_search(input.query, &embedding_config, reranker_provider)
-                .await
-                .map_err(|e| format!("Search failed: {e}"))?;
+            let mut results = vector_search(
+                input.query,
+                &embedding_config,
+                reranker_config.as_ref(),
+            )
+            .await
+            .map_err(|e| format!("Search failed: {e}"))?;
 
             get_authors(&mut results).map_err(|e| format!("Failed to get authors: {e}"))?;
             log::info!(
@@ -125,16 +131,18 @@ mod tests {
     use zqa_rag::embedding::common::EmbeddingProviderConfig;
 
     fn make_tool() -> RetrievalTool {
+        let config = zqa_rag::config::VoyageAIConfig {
+            api_key: String::new(),
+            embedding_model: DEFAULT_VOYAGE_EMBEDDING_MODEL.into(),
+            embedding_dims: DEFAULT_VOYAGE_EMBEDDING_DIM as usize,
+            reranker: DEFAULT_VOYAGE_RERANK_MODEL.into(),
+        };
+
         // Build a minimal tool; the embedding config is only used in `call`, not in the metadata
         // methods, so we use a dummy VoyageAI config here.
         RetrievalTool::new(
-            EmbeddingProviderConfig::VoyageAI(zqa_rag::config::VoyageAIConfig {
-                api_key: String::new(),
-                embedding_model: DEFAULT_VOYAGE_EMBEDDING_MODEL.into(),
-                embedding_dims: DEFAULT_VOYAGE_EMBEDDING_DIM as usize,
-                reranker: DEFAULT_VOYAGE_RERANK_MODEL.into(),
-            }),
-            Some(RerankerProvider::VoyageAI),
+            EmbeddingProviderConfig::VoyageAI(config.clone()),
+            Some(RerankProviderConfig::VoyageAI(config)),
         )
     }
 

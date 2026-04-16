@@ -652,7 +652,7 @@ async fn search_for_papers<O: Write, E: Write>(
             .ok_or(CLIError::ConfigError(
                 "Could not get embedding config".into(),
             ))?,
-        ctx.config.reranker_provider,
+        ctx.config.get_reranker_config().as_ref(),
     )
     .await?;
     let _ = get_authors(&mut search_results);
@@ -705,7 +705,7 @@ async fn run_query<O: Write, E: Write>(
         .ok_or(CLIError::ConfigError(
             "Could not get embedding config".into(),
         ))?;
-    let reranker_provider = ctx.config.reranker_provider;
+    let reranker_config = ctx.config.get_reranker_config();
 
     // Spawn a background title generation task from the query alone, in parallel with summarization.
     // Only generate a title if we don't already have one (i.e., first query in the conversation).
@@ -739,7 +739,7 @@ async fn run_query<O: Write, E: Write>(
     let mut total_input_tokens: u32 = 0;
     let mut total_output_tokens: u32 = 0;
 
-    let retrieval_tool = RetrievalTool::new(embedding_config, reranker_provider);
+    let retrieval_tool = RetrievalTool::new(embedding_config, reranker_config);
     let summarization_tool = SummarizationTool::new(llm_client.clone());
     let summarization_tool_clone = summarization_tool.clone();
     let mut tools: Vec<Box<dyn Tool>> =
@@ -1358,13 +1358,13 @@ pub(crate) mod tests {
     use temp_env;
     use zqa_macros::{test_contains, test_eq, test_ok};
     use zqa_macros_proc::retry;
-    use zqa_rag::capabilities::RerankerProvider;
     use zqa_rag::constants::{
         DEFAULT_VOYAGE_EMBEDDING_DIM, DEFAULT_VOYAGE_EMBEDDING_MODEL, DEFAULT_VOYAGE_RERANK_MODEL,
     };
     use zqa_rag::embedding::common::EmbeddingProviderConfig;
     use zqa_rag::llm::base::{ASSISTANT_ROLE, ChatHistoryContent, ChatHistoryItem, USER_ROLE};
     use zqa_rag::llm::tools::Tool;
+    use zqa_rag::reranking::common::RerankProviderConfig;
 
     use crate::common::Context;
 
@@ -1403,16 +1403,18 @@ pub(crate) mod tests {
     }
 
     fn make_retrieval_tool(_schema_key: &str) -> RetrievalTool {
+        let config = zqa_rag::config::VoyageAIConfig {
+            api_key: String::new(),
+            embedding_model: DEFAULT_VOYAGE_EMBEDDING_MODEL.into(),
+            embedding_dims: DEFAULT_VOYAGE_EMBEDDING_DIM as usize,
+            reranker: DEFAULT_VOYAGE_RERANK_MODEL.into(),
+        };
+
         // Build a minimal tool; the embedding config is only used in `call`, not in the metadata
         // methods, so we use a dummy VoyageAI config here.
         RetrievalTool::new(
-            EmbeddingProviderConfig::VoyageAI(zqa_rag::config::VoyageAIConfig {
-                api_key: String::new(),
-                embedding_model: DEFAULT_VOYAGE_EMBEDDING_MODEL.into(),
-                embedding_dims: DEFAULT_VOYAGE_EMBEDDING_DIM as usize,
-                reranker: DEFAULT_VOYAGE_RERANK_MODEL.into(),
-            }),
-            Some(RerankerProvider::VoyageAI),
+            EmbeddingProviderConfig::VoyageAI(config.clone()),
+            Some(RerankProviderConfig::VoyageAI(config)),
         )
     }
 

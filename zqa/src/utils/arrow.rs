@@ -7,12 +7,12 @@ use crate::{
     utils::library::{ZoteroItem, ZoteroItemSet},
 };
 use zqa_rag::{
-    capabilities::{EmbeddingProvider, RerankerProvider},
+    capabilities::EmbeddingProvider,
     embedding::common::{
         EmbeddingProviderConfig, get_embedding_dims_by_provider, get_embedding_provider_with_config,
     },
     llm::errors::LLMError,
-    reranking::common::get_reranking_provider,
+    reranking::common::{RerankProviderConfig, get_reranking_provider_with_config},
     vector::lance::{LanceError, lancedb_exists, vector_search as rag_vector_search},
 };
 
@@ -281,7 +281,7 @@ pub async fn full_library_to_arrow(
 /// * `query` - The query to search the `LanceDB` table for.
 /// * `embedding_config` - The embedding provider configuration. Note that this must be the same
 ///   embedding provider used when initially creating the database.
-/// * `reranker` - The reranker provider to use.
+/// * `reranker_config` - The reranker provider to use.
 ///
 /// # Returns
 ///
@@ -296,7 +296,7 @@ pub async fn full_library_to_arrow(
 pub async fn vector_search(
     query: String,
     embedding_config: &EmbeddingProviderConfig,
-    reranker: Option<RerankerProvider>,
+    reranker_config: Option<&RerankProviderConfig>,
 ) -> Result<Vec<ZoteroItem>, ArrowError> {
     let batches = rag_vector_search(query.clone(), embedding_config, 10).await?;
 
@@ -312,11 +312,11 @@ pub async fn vector_search(
         return Ok(Vec::new());
     }
 
-    let Some(reranker) = reranker else {
+    let Some(reranker) = reranker_config else {
         return Ok(filtered_items);
     };
 
-    let rerank_provider = get_reranking_provider(reranker);
+    let rerank_provider = get_reranking_provider_with_config(reranker)?;
     let item_strings = filtered_items
         .iter()
         .map(|f| f.text.as_str())

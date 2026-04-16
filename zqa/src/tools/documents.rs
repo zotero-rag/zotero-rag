@@ -22,7 +22,7 @@ use zqa_pdftools::{
 use zqa_rag::{
     embedding::common::EmbeddingProviderConfig,
     llm::{base::ApiClient, errors::LLMError, factory::LLMClient, tools::Tool},
-    reranking::common::{RerankProviderConfig, get_reranking_provider},
+    reranking::common::{RerankProviderConfig, get_reranking_provider_with_config},
 };
 
 use crate::common::UserDocument;
@@ -424,8 +424,8 @@ async fn embedding_retrieval(
             .collect());
     };
 
-    let reranker = get_reranking_provider(reranker_config.provider());
-    let reranked_idx = reranker.rerank(&kept_chunks, query).await?;
+    let reranker = get_reranking_provider_with_config(reranker_config)?;
+    let reranked_idx: Vec<usize> = reranker.rerank(&kept_chunks, query).await?;
 
     let reranked_chunks: Vec<String> = reranked_idx
         .into_iter()
