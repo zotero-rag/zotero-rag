@@ -96,7 +96,7 @@ fn check_api_keys_exist(config: &Config, log_level: log::LevelFilter) {
         }
     }
 
-    // Reranking is a bit more complex: we allow empty or "none" as provider names to opt out of
+    // Reranking is a bit more complex: we allow omitting provider names to opt out of
     // reranking; but if one is set, we need an API key
     if config.reranker_provider.is_some()
         && config.get_reranker_config().is_none_or(|c| {
@@ -108,7 +108,7 @@ fn check_api_keys_exist(config: &Config, log_level: log::LevelFilter) {
             .is_empty()
         })
     {
-        let err = "No API key is set for reranking. Most commands will not work. Set up a config at ~/.config/zqa/config.toml; if you want to opt out of reranking, set `reranker_provider` to an empty string or \"none\" instead.";
+        let err = "No API key is set for reranking. Most commands will not work. Set up a config at ~/.config/zqa/config.toml; if you want to opt out of reranking, omit `reranker_provider` instead.";
 
         if log_level != log::LevelFilter::Off && log_level <= log::LevelFilter::Error {
             log::error!("{err}");

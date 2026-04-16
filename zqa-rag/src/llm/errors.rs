@@ -4,8 +4,6 @@
 use http::header::InvalidHeaderValue;
 use thiserror::Error;
 
-use crate::embedding::common::FailedTexts;
-
 /// A wrapper for all kinds of errors to one enum that tells us what happened.
 /// Variant error messages are handled via thiserror.
 #[derive(Debug, Error)]
@@ -17,9 +15,6 @@ pub enum LLMError {
     /// invalid JSON.
     #[error("Failed to deserialize response: {0}")]
     DeserializationError(String),
-    /// Errors when embedding texts fails.
-    #[error("Embedding failed: {0}")]
-    EmbeddingFailedError(FailedTexts),
     /// Errors indicating a necessary environment variable is missing.
     #[error("Environment variable could not be fetched: {0}")]
     EnvError(#[from] std::env::VarError),

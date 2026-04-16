@@ -281,32 +281,31 @@ impl Config {
     /// Get the embedding configuration based on the `embedding_provider` value.
     #[must_use]
     pub fn get_embedding_config(&self) -> Option<EmbeddingProviderConfig> {
-        match self.embedding_provider.as_str() {
-            "openai" => self
+        match self.embedding_provider {
+            EmbeddingProvider::OpenAI => self
                 .openai
                 .as_ref()
                 .map(|cfg| EmbeddingProviderConfig::OpenAI(cfg.clone().into())),
-            "gemini" => self
+            EmbeddingProvider::Gemini => self
                 .gemini
                 .as_ref()
                 .map(|cfg| EmbeddingProviderConfig::Gemini(cfg.clone().into())),
-            "voyageai" => self
+            EmbeddingProvider::VoyageAI => self
                 .voyageai
                 .as_ref()
                 .map(|cfg| EmbeddingProviderConfig::VoyageAI(cfg.clone().into())),
-            "cohere" => self
+            EmbeddingProvider::Cohere => self
                 .cohere
                 .as_ref()
                 .map(|cfg| EmbeddingProviderConfig::Cohere(cfg.clone().into())),
-            "ollama" => self
+            EmbeddingProvider::Ollama => self
                 .ollama
                 .as_ref()
                 .map(|cfg| EmbeddingProviderConfig::Ollama(cfg.clone().into())),
-            "zeroentropy" => self
+            EmbeddingProvider::ZeroEntropy => self
                 .zeroentropy
                 .as_ref()
                 .map(|cfg| EmbeddingProviderConfig::ZeroEntropy(cfg.clone().into())),
-            _ => None,
         }
     }
 
@@ -335,16 +334,17 @@ impl Config {
     pub fn get_small_model_config(&self) -> Option<LLMClientConfig> {
         let mut client_config = self.get_generation_config()?;
 
-        let small_model_name = match self.model_provider.as_str() {
-            "anthropic" => self.anthropic.as_ref().and_then(|c| c.model_small.as_ref()),
-            "ollama" => self.ollama.as_ref().and_then(|c| c.model_small.as_ref()),
-            "openai" => self.openai.as_ref().and_then(|c| c.model_small.as_ref()),
-            "gemini" => self.gemini.as_ref().and_then(|c| c.model_small.as_ref()),
-            "openrouter" => self
+        let small_model_name = match self.model_provider {
+            ModelProvider::Anthropic => {
+                self.anthropic.as_ref().and_then(|c| c.model_small.as_ref())
+            }
+            ModelProvider::Ollama => self.ollama.as_ref().and_then(|c| c.model_small.as_ref()),
+            ModelProvider::OpenAI => self.openai.as_ref().and_then(|c| c.model_small.as_ref()),
+            ModelProvider::Gemini => self.gemini.as_ref().and_then(|c| c.model_small.as_ref()),
+            ModelProvider::OpenRouter => self
                 .openrouter
                 .as_ref()
                 .and_then(|c| c.model_small.as_ref()),
-            _ => None,
         };
 
         if let Some(small_model_name) = small_model_name {
@@ -421,28 +421,27 @@ impl Config {
 
     #[must_use]
     pub fn get_generation_config(&self) -> Option<LLMClientConfig> {
-        match self.model_provider.as_str() {
-            "anthropic" => self
+        match self.model_provider {
+            ModelProvider::Anthropic => self
                 .anthropic
                 .as_ref()
                 .map(|cfg| LLMClientConfig::Anthropic(cfg.clone().into())),
-            "ollama" => self
+            ModelProvider::Ollama => self
                 .ollama
                 .as_ref()
                 .map(|cfg| LLMClientConfig::Ollama(cfg.clone().into())),
-            "openai" => self
+            ModelProvider::OpenAI => self
                 .openai
                 .as_ref()
                 .map(|cfg| LLMClientConfig::OpenAI(cfg.clone().into())),
-            "gemini" => self
+            ModelProvider::Gemini => self
                 .gemini
                 .as_ref()
                 .map(|cfg| LLMClientConfig::Gemini(cfg.clone().into())),
-            "openrouter" => self
+            ModelProvider::OpenRouter => self
                 .openrouter
                 .as_ref()
                 .map(|cfg| LLMClientConfig::OpenRouter(cfg.clone().into())),
-            _ => None,
         }
     }
 }
