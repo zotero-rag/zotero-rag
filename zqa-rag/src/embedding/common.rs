@@ -11,18 +11,13 @@ use std::time::{Duration, Instant};
 use lancedb::embeddings::EmbeddingFunction;
 
 use crate::capabilities::EmbeddingProvider;
-use crate::clients::gemini::GeminiClient;
-use crate::clients::ollama::OllamaClient;
-use crate::clients::openai::OpenAIClient;
 use crate::constants::{
     DEFAULT_COHERE_EMBEDDING_DIM, DEFAULT_GEMINI_EMBEDDING_DIM, DEFAULT_OLLAMA_EMBEDDING_DIM,
     DEFAULT_OPENAI_EMBEDDING_DIM, DEFAULT_VOYAGE_EMBEDDING_DIM, DEFAULT_ZEROENTROPY_EMBEDDING_DIM,
 };
-use crate::embedding::cohere::CohereClient;
-use crate::embedding::voyage::VoyageAIClient;
-use crate::embedding::zeroentropy::ZeroEntropyClient;
-use crate::http_client::{HttpClient, ReqwestClient};
+use crate::http_client::HttpClient;
 use crate::llm::errors::LLMError;
+use crate::providers::{ProviderId, registry::default_provider_registry};
 
 /// A struct containing information about texts that failed to embed.
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
@@ -91,26 +86,7 @@ pub fn get_embedding_dims_by_provider(embedding_provider: EmbeddingProvider) -> 
 pub fn get_embedding_provider_with_config(
     config: EmbeddingProviderConfig,
 ) -> Result<Arc<dyn EmbeddingFunction>, LLMError> {
-    match config {
-        EmbeddingProviderConfig::OpenAI(cfg) => {
-            Ok(Arc::new(OpenAIClient::<ReqwestClient>::with_config(cfg)))
-        }
-        EmbeddingProviderConfig::VoyageAI(cfg) => {
-            Ok(Arc::new(VoyageAIClient::<ReqwestClient>::with_config(cfg)))
-        }
-        EmbeddingProviderConfig::Gemini(cfg) => {
-            Ok(Arc::new(GeminiClient::<ReqwestClient>::with_config(cfg)))
-        }
-        EmbeddingProviderConfig::Cohere(cfg) => {
-            Ok(Arc::new(CohereClient::<ReqwestClient>::with_config(cfg)))
-        }
-        EmbeddingProviderConfig::Ollama(cfg) => {
-            Ok(Arc::new(OllamaClient::<ReqwestClient>::with_config(cfg)))
-        }
-        EmbeddingProviderConfig::ZeroEntropy(cfg) => Ok(Arc::new(
-            ZeroEntropyClient::<ReqwestClient>::with_config(cfg),
-        )),
-    }
+    default_provider_registry().create_embedding(&config)
 }
 
 /// Configuration enum for embedding providers
@@ -131,6 +107,17 @@ pub enum EmbeddingProviderConfig {
 }
 
 impl EmbeddingProviderConfig {
+    pub const fn provider_id(&self) -> ProviderId {
+        match self {
+            Self::Ollama(_) => ProviderId::Ollama,
+            Self::OpenAI(_) => ProviderId::OpenAI,
+            Self::Gemini(_) => ProviderId::Gemini,
+            Self::VoyageAI(_) => ProviderId::VoyageAI,
+            Self::Cohere(_) => ProviderId::Cohere,
+            Self::ZeroEntropy(_) => ProviderId::ZeroEntropy,
+        }
+    }
+
     /// Returns the embedding provider enum
     #[must_use]
     pub fn provider(&self) -> EmbeddingProvider {

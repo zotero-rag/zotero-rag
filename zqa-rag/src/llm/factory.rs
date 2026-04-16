@@ -8,6 +8,7 @@ use crate::clients::openrouter::OpenRouterClient;
 use crate::config::LLMClientConfig;
 use crate::llm::base::{ApiClient, ChatRequest};
 use crate::llm::errors::LLMError;
+use crate::providers::registry::default_provider_registry;
 
 /// Enum representing different LLM client implementations
 #[derive(Debug, Clone)]
@@ -46,15 +47,5 @@ impl ApiClient for LLMClient {
 ///
 /// * `LLMError::InvalidProviderError` if the provider is not supported
 pub fn get_client_with_config(config: LLMClientConfig) -> Result<LLMClient, LLMError> {
-    match config {
-        LLMClientConfig::Anthropic(cfg) => {
-            Ok(LLMClient::Anthropic(AnthropicClient::with_config(cfg)))
-        }
-        LLMClientConfig::Ollama(cfg) => Ok(LLMClient::Ollama(OllamaClient::with_config(cfg))),
-        LLMClientConfig::OpenAI(cfg) => Ok(LLMClient::OpenAI(OpenAIClient::with_config(cfg))),
-        LLMClientConfig::OpenRouter(cfg) => {
-            Ok(LLMClient::OpenRouter(OpenRouterClient::with_config(cfg)))
-        }
-        LLMClientConfig::Gemini(cfg) => Ok(LLMClient::Gemini(GeminiClient::with_config(cfg))),
-    }
+    default_provider_registry().create_llm(&config)
 }

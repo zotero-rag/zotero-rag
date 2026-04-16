@@ -7,6 +7,7 @@ use crate::{
     embedding::{cohere::CohereClient, voyage::VoyageAIClient, zeroentropy::ZeroEntropyClient},
     http_client::ReqwestClient,
     llm::errors::LLMError,
+    providers::{ProviderId, registry::default_provider_registry},
 };
 
 /// A trait indicating reranking capabilities.
@@ -66,17 +67,7 @@ pub fn get_reranking_provider(provider: RerankerProvider) -> Arc<dyn Rerank> {
 pub fn get_reranking_provider_with_config(
     config: RerankProviderConfig,
 ) -> Result<Arc<dyn Rerank>, LLMError> {
-    match config {
-        RerankProviderConfig::VoyageAI(cfg) => {
-            Ok(Arc::new(VoyageAIClient::<ReqwestClient>::with_config(cfg)))
-        }
-        RerankProviderConfig::Cohere(cfg) => {
-            Ok(Arc::new(CohereClient::<ReqwestClient>::with_config(cfg)))
-        }
-        RerankProviderConfig::ZeroEntropy(cfg) => Ok(Arc::new(
-            ZeroEntropyClient::<ReqwestClient>::with_config(cfg),
-        )),
-    }
+    default_provider_registry().create_reranker(&config)
 }
 
 /// Configuration enum for reranking providers
@@ -91,6 +82,14 @@ pub enum RerankProviderConfig {
 }
 
 impl RerankProviderConfig {
+    pub const fn provider_id(&self) -> ProviderId {
+        match self {
+            Self::VoyageAI(_) => ProviderId::VoyageAI,
+            Self::Cohere(_) => ProviderId::Cohere,
+            Self::ZeroEntropy(_) => ProviderId::ZeroEntropy,
+        }
+    }
+
     /// Return the provider (enum)
     #[must_use]
     pub fn provider(&self) -> RerankerProvider {

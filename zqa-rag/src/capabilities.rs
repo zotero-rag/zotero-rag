@@ -2,11 +2,18 @@
 //! providers exposed through this crate have which capabilities. Note that it is possible for a
 //! provider to not have all the capabilities listed here, if that API endpoint is not (yet) supported.
 
+use lancedb::embeddings::EmbeddingFunction;
 use serde::{Deserialize, Serialize};
-use std::cmp::Ordering;
+use std::{cmp::Ordering, sync::Arc};
 use zqa_pdftools::chunk::ChunkingStrategy;
 
-use crate::llm::errors::LLMError;
+use crate::{
+    config::LLMClientConfig,
+    embedding::common::EmbeddingProviderConfig,
+    llm::{errors::LLMError, factory::LLMClient},
+    providers::provider_id::ProviderId,
+    reranking::common::{Rerank, RerankProviderConfig},
+};
 
 /// Providers of models that can generate text. Clients for these providers should implement
 /// the `ApiClient` trait. Generally speaking, for this reason, these structs and all their trait
@@ -271,6 +278,24 @@ impl RerankerProvider {
         ]
         .contains(&provider)
     }
+}
+
+pub trait LlmFactory: Send + Sync {
+    fn provider_id(&self) -> ProviderId;
+    fn create_llm(&self, config: &LLMClientConfig) -> Result<LLMClient, LLMError>;
+}
+
+pub trait EmbeddingFactory: Send + Sync {
+    fn provider_id(&self) -> ProviderId;
+    fn create_embedding(
+        &self,
+        config: &EmbeddingProviderConfig,
+    ) -> Result<Arc<dyn EmbeddingFunction>, LLMError>;
+}
+
+pub trait RerankFactory: Send + Sync {
+    fn provider_id(&self) -> ProviderId;
+    fn create_reranker(&self, config: &RerankProviderConfig) -> Result<Arc<dyn Rerank>, LLMError>;
 }
 
 #[cfg(test)]

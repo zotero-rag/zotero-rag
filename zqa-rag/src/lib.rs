@@ -42,5 +42,6 @@ pub mod embedding;
 pub(crate) mod http_client;
 pub mod llm;
 pub mod pricing;
+pub mod providers;
 pub mod reranking;
 pub mod vector;
