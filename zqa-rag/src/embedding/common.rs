@@ -123,28 +123,17 @@ impl EmbeddingProviderConfig {
 
     /// Returns the embedding provider enum
     #[must_use]
+    #[allow(clippy::missing_panics_doc)]
     pub fn provider(&self) -> EmbeddingProvider {
-        match self {
-            EmbeddingProviderConfig::OpenAI(_) => EmbeddingProvider::OpenAI,
-            EmbeddingProviderConfig::VoyageAI(_) => EmbeddingProvider::VoyageAI,
-            EmbeddingProviderConfig::Gemini(_) => EmbeddingProvider::Gemini,
-            EmbeddingProviderConfig::Ollama(_) => EmbeddingProvider::Ollama,
-            EmbeddingProviderConfig::Cohere(_) => EmbeddingProvider::Cohere,
-            EmbeddingProviderConfig::ZeroEntropy(_) => EmbeddingProvider::ZeroEntropy,
-        }
+        self.provider_id()
+            .try_into()
+            .expect("Embedding configs always map to embedding providers")
     }
 
     /// Returns the name of the embedding provider.
     #[must_use]
     pub fn provider_name(&self) -> &str {
-        match self {
-            EmbeddingProviderConfig::OpenAI(_) => "openai",
-            EmbeddingProviderConfig::VoyageAI(_) => "voyageai",
-            EmbeddingProviderConfig::Gemini(_) => "gemini",
-            EmbeddingProviderConfig::Ollama(_) => "ollama",
-            EmbeddingProviderConfig::Cohere(_) => "cohere",
-            EmbeddingProviderConfig::ZeroEntropy(_) => "zeroentropy",
-        }
+        self.provider_id().as_str()
     }
 }
 

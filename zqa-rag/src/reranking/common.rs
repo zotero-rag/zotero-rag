@@ -4,8 +4,6 @@ use std::{pin::Pin, sync::Arc};
 
 use crate::{
     capabilities::RerankerProvider,
-    embedding::{cohere::CohereClient, voyage::VoyageAIClient, zeroentropy::ZeroEntropyClient},
-    http_client::ReqwestClient,
     llm::errors::LLMError,
     providers::{ProviderId, registry::provider_registry},
 };
@@ -27,28 +25,6 @@ pub trait Rerank: Send + Sync {
         items: &'a [&str],
         query: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<Vec<usize>, LLMError>> + Send + 'a>>;
-}
-
-/// A factory method for getting a reranking provider.
-///
-/// # Arguments
-///
-/// * `provider` - The name of the provider to get.
-///
-/// # Returns
-///
-/// An `Arc<dyn Rerank>` object, or an `LLMError` if the provider is not supported.
-///
-/// # Errors
-///
-/// Returns an error if the provider name is not recognized.
-#[must_use]
-pub fn get_reranking_provider(provider: RerankerProvider) -> Arc<dyn Rerank> {
-    match provider {
-        RerankerProvider::VoyageAI => Arc::new(VoyageAIClient::<ReqwestClient>::default()),
-        RerankerProvider::Cohere => Arc::new(CohereClient::<ReqwestClient>::default()),
-        RerankerProvider::ZeroEntropy => Arc::new(ZeroEntropyClient::<ReqwestClient>::default()),
-    }
 }
 
 /// Gets a reranking provider with configuration
@@ -94,21 +70,16 @@ impl RerankProviderConfig {
 
     /// Return the provider (enum)
     #[must_use]
+    #[allow(clippy::missing_panics_doc)]
     pub fn provider(&self) -> RerankerProvider {
-        match self {
-            Self::Cohere(_) => RerankerProvider::Cohere,
-            Self::VoyageAI(_) => RerankerProvider::VoyageAI,
-            Self::ZeroEntropy(_) => RerankerProvider::ZeroEntropy,
-        }
+        self.provider_id()
+            .try_into()
+            .expect("Reranking configs always map to valid providers")
     }
 
     #[must_use]
     /// Return the name of the provider for this config.
     pub fn provider_name(&self) -> &str {
-        match self {
-            Self::Cohere(_) => "cohere",
-            Self::VoyageAI(_) => "voyageai",
-            Self::ZeroEntropy(_) => "zeroentropy",
-        }
+        self.provider_id().as_str()
     }
 }

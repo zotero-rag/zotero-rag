@@ -446,10 +446,10 @@ pub async fn vector_search(
     let start_time = Instant::now();
     let embedding = db
         .embedding_registry()
-        .get(embedding_config.provider_name())
+        .get(embedding_config.provider_id().as_str())
         .ok_or(LanceError::InvalidStateError(format!(
             "{} is not in the database embedding registry",
-            embedding_config.provider_name()
+            embedding_config.provider_id().as_str()
         )))?;
 
     let query_vec = embedding.compute_query_embeddings(Arc::new(StringArray::from(vec![query])))?;
