@@ -2,9 +2,11 @@
 //! this crate.
 
 use arrow_schema::{DataType, Field};
+use futures::{StreamExt, stream};
 use indicatif::ProgressBar;
 use reqwest::header::HeaderMap;
 use serde::{Deserialize, Serialize};
+use std::env;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -12,8 +14,9 @@ use lancedb::embeddings::EmbeddingFunction;
 
 use crate::capabilities::EmbeddingProvider;
 use crate::constants::{
-    DEFAULT_COHERE_EMBEDDING_DIM, DEFAULT_GEMINI_EMBEDDING_DIM, DEFAULT_OLLAMA_EMBEDDING_DIM,
-    DEFAULT_OPENAI_EMBEDDING_DIM, DEFAULT_VOYAGE_EMBEDDING_DIM, DEFAULT_ZEROENTROPY_EMBEDDING_DIM,
+    DEFAULT_COHERE_EMBEDDING_DIM, DEFAULT_GEMINI_EMBEDDING_DIM, DEFAULT_MAX_CONCURRENT_REQUESTS,
+    DEFAULT_OLLAMA_EMBEDDING_DIM, DEFAULT_OPENAI_EMBEDDING_DIM, DEFAULT_VOYAGE_EMBEDDING_DIM,
+    DEFAULT_ZEROENTROPY_EMBEDDING_DIM,
 };
 use crate::http_client::HttpClient;
 use crate::llm::errors::LLMError;
@@ -209,7 +212,7 @@ pub(crate) async fn compute_embeddings_async<T, U, F>(
     source: Arc<dyn arrow_array::Array>,
     api_url: &str,
     api_key: &str,
-    api_client: impl HttpClient,
+    api_client: impl HttpClient + Clone,
     make_request: F,
     embedding_provider: String,
     batch_size: usize,
@@ -219,7 +222,7 @@ pub(crate) async fn compute_embeddings_async<T, U, F>(
 where
     T: Serialize + Send + Sync + std::fmt::Debug,
     U: EmbeddingApiResponse + for<'de> Deserialize<'de> + std::fmt::Debug + Send,
-    F: Fn(Vec<String>) -> T + Send,
+    F: Fn(Vec<String>) -> T + Send + Clone,
 {
     let source_array = arrow_array::cast::as_string_array(&source);
     let texts: Vec<Option<String>> = source_array.iter().map(|s| s.map(str::to_owned)).collect();
@@ -227,97 +230,123 @@ where
     log::info!("Processing {} input texts.", texts.len());
     let bar = ProgressBar::new(texts.len() as u64);
 
-    let mut all_embeddings: Vec<Vec<f32>> = Vec::new();
+    let max_concurrent = env::var("MAX_CONCURRENT_REQUESTS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(DEFAULT_MAX_CONCURRENT_REQUESTS);
 
-    // Gather failed texts
+    let api_url = api_url.to_string();
+    let api_key = api_key.to_string();
+
+    let batches: Vec<Vec<Option<String>>> = texts.chunks(batch_size).map(<[_]>::to_vec).collect();
+    let num_batches = batches.len();
+
+    let futures = batches.into_iter().enumerate().map(|(i, batch)| {
+        let api_url = api_url.clone();
+        let api_key = api_key.clone();
+        let api_client = api_client.clone();
+        let make_request = make_request.clone();
+        let embedding_provider = embedding_provider.clone();
+        let bar = bar.clone();
+
+        async move {
+            // Build a mask of "real" vs "empty" slots to handle providers that reject empty strings.
+            let mask: Vec<bool> = batch
+                .iter()
+                .map(|opt| opt.as_ref().is_some_and(|s| !s.trim().is_empty()))
+                .collect();
+
+            let cur_texts: Vec<String> = batch
+                .iter()
+                .filter_map(|opt| opt.clone().filter(|s| !s.trim().is_empty()))
+                .collect();
+
+            bar.inc(batch.len() as u64);
+
+            // (embeddings_for_batch, fail_count, failed_texts, masked_count)
+            type BatchResult = (Vec<Vec<f32>>, usize, Vec<String>, usize);
+
+            if cur_texts.is_empty() {
+                let embeddings =
+                    std::iter::repeat_n(vec![0.0f32; embedding_dim], batch.len()).collect();
+                if wait_after_request_s > 0 && i < num_batches - 1 {
+                    tokio::time::sleep(Duration::from_secs(wait_after_request_s)).await;
+                }
+                return Ok::<BatchResult, LLMError>((embeddings, 0, vec![], mask.len()));
+            }
+
+            let mut headers = HeaderMap::new();
+            headers.insert("Authorization", format!("Bearer {api_key}").parse()?);
+            headers.insert("Content-Type", "application/json".parse()?);
+            headers.insert("Accept", "application/json".parse()?);
+
+            let start_time = Instant::now();
+            let request = make_request(cur_texts);
+            let response = api_client.post_json(&api_url, headers, &request).await?;
+
+            let body = response.text().await?;
+            log::debug!(
+                "{embedding_provider} embedding request took {:.1?}",
+                start_time.elapsed()
+            );
+
+            let api_response: U = serde_json::from_str(&body)?;
+
+            let (embeddings_opt, error_message) = if api_response.is_success() {
+                (api_response.get_embeddings(), None)
+            } else {
+                (None, api_response.get_error_message())
+            };
+
+            let result: BatchResult = if let Some(emb) = embeddings_opt {
+                let mut it = emb.into_iter();
+                let mut batch_embs = Vec::with_capacity(batch.len());
+                let masked_count = mask.iter().filter(|&&m| !m).count();
+                for &is_real in &mask {
+                    if is_real && let Some(embedding) = it.next() {
+                        batch_embs.push(embedding);
+                    } else {
+                        batch_embs.push(vec![0.0_f32; embedding_dim]);
+                    }
+                }
+                (batch_embs, 0, vec![], masked_count)
+            } else {
+                let error_msg = error_message.unwrap_or_else(|| String::from("No error found."));
+                log::error!("Got a 4xx response from the {embedding_provider} API: {error_msg}\n");
+                log::error!("We tried sending the request: {request:#?}\n");
+                let fail_texts: Vec<String> =
+                    batch.iter().filter_map(|t| t.as_ref()).cloned().collect();
+                let zeros = std::iter::repeat_n(vec![0.0f32; embedding_dim], batch.len()).collect();
+                (zeros, batch.len(), fail_texts, 0)
+            };
+
+            if wait_after_request_s > 0 && i < num_batches - 1 {
+                tokio::time::sleep(Duration::from_secs(wait_after_request_s)).await;
+            }
+
+            Ok::<BatchResult, LLMError>(result)
+        }
+    });
+
+    let results = stream::iter(futures)
+        .buffered(max_concurrent)
+        .collect::<Vec<_>>()
+        .await;
+
+    let mut all_embeddings: Vec<Vec<f32>> = Vec::new();
     let mut fail_count = 0;
     let mut total_masked = 0;
     let mut failed_texts: Vec<String> = Vec::new();
 
-    let chunks = texts.chunks(batch_size);
-    let num_chunks = chunks.len();
-
-    for (i, batch) in chunks.enumerate() {
-        // For every batch, we need to handle the case of empty/whitespace strings, since some
-        // providers (and by some I mean one and by one I mean Voyage) do not like handling them.
-        // 1. Build a mask of "real" vs "empty" slots
-        let mask: Vec<bool> = batch
-            .iter()
-            .map(|opt| opt.as_ref().is_some_and(|s| !s.trim().is_empty()))
-            .collect();
-
-        // 2. Extract only the non-empty strings to send
-        let cur_texts: Vec<String> = batch
-            .iter()
-            .filter_map(|opt| opt.clone().filter(|s| !s.trim().is_empty()))
-            .collect();
-
-        // 3. If none are real, just push zeros for whole batch
-        if cur_texts.is_empty() {
-            all_embeddings.extend(std::iter::repeat_n(vec![0.0; embedding_dim], batch.len()));
-            bar.inc(batch_size as u64);
-
-            if i < num_chunks - 1 {
-                tokio::time::sleep(Duration::from_secs(wait_after_request_s)).await;
+    for result in results {
+        match result {
+            Ok((batch_embs, batch_fail_count, batch_failed_texts, batch_masked)) => {
+                all_embeddings.extend(batch_embs);
+                fail_count += batch_fail_count;
+                total_masked += batch_masked;
+                failed_texts.extend(batch_failed_texts);
             }
-            continue;
-        }
-
-        let mut headers = HeaderMap::new();
-        headers.insert("Authorization", format!("Bearer {api_key}").parse()?);
-        headers.insert("Content-Type", "application/json".parse()?);
-        headers.insert("Accept", "application/json".parse()?);
-
-        let start_time = Instant::now();
-        let request = make_request(cur_texts);
-        let response = api_client.post_json(api_url, headers, &request).await?;
-
-        let body = response.text().await?;
-        log::debug!(
-            "{embedding_provider} embedding request took {:.1?}",
-            start_time.elapsed()
-        );
-
-        let api_response: U = serde_json::from_str(&body)?;
-
-        let (embeddings, error_message) = if api_response.is_success() {
-            (api_response.get_embeddings(), None)
-        } else {
-            (None, api_response.get_error_message())
-        };
-
-        if let Some(emb) = embeddings {
-            let mut it = emb.into_iter();
-
-            // 4. Weave the real embeddings back into the right spots, zero‐padding empties
-            let mut batch_embs = Vec::with_capacity(batch.len());
-            for &is_real in &mask {
-                if is_real && let Some(embedding) = it.next() {
-                    batch_embs.push(embedding);
-                } else {
-                    batch_embs.push(vec![0.0_f32; embedding_dim]);
-                }
-            }
-            all_embeddings.extend(batch_embs);
-
-            total_masked += mask.iter().filter(|mask| !**mask).count();
-        } else {
-            let error_message = error_message.unwrap_or_else(|| String::from("No error found."));
-            log::error!("Got a 4xx response from the {embedding_provider} API: {error_message}\n");
-            log::error!("We tried sending the request: {request:#?}\n");
-
-            fail_count += batch.len();
-            failed_texts.extend(batch.iter().filter_map(|text| text.as_ref()).cloned());
-
-            let zeros: Vec<Vec<f32>> =
-                std::iter::repeat_n(vec![0.0; embedding_dim], batch.len()).collect();
-            all_embeddings.extend(zeros);
-        }
-
-        bar.inc(batch_size as u64);
-
-        if i < num_chunks - 1 {
-            tokio::time::sleep(Duration::from_secs(wait_after_request_s)).await;
+            Err(e) => return Err(e),
         }
     }
 
