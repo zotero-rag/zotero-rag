@@ -15,21 +15,23 @@ use crate::{
 
 /// Resume a previous conversation selected by the user.
 ///
-/// Displays a numbered list of saved conversations, prompts for a selection, and loads the
-/// chosen conversation into the current session. If the current session is dirty, it is saved
-/// first.
+/// Displays a numbered list of saved conversations, prompts for a selection from standard input,
+/// and loads the chosen conversation into the current session. If the current session is dirty,
+/// it is saved first.
 ///
 /// # Arguments
 ///
-/// * `ctx` - A `Context` object that contains CLI args and objects that implement
+/// * `ctx` - A `Context` object that contains CLI state and objects that implement
 ///   [`std::io::Write`] for `stdout` and `stderr`.
-/// * `reader` - A buffered reader used to read the user's selection.
+///
+/// # Returns
+///
+/// `Ok(())` if the resume flow completed successfully.
 ///
 /// # Errors
 ///
-/// * `CLIError::IOError` - If `writeln!` or reading input fails.
-/// * `CLIError::LockPoisoningError` - If a lock on the context chat history could not be
-///   obtained.
+/// * `CLIError::IOError` - If writing prompts or reading user input fails.
+/// * `CLIError::LockPoisoningError` - If a lock on conversation state could not be obtained.
 pub(crate) fn handle_resume_cmd<O: Write, E: Write>(
     ctx: &mut Context<O, E>,
 ) -> Result<(), CLIError> {

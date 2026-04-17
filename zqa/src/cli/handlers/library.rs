@@ -1,11 +1,10 @@
 //! Command handlers for library-related tasks
 
+use std::io;
 use std::{fs::File, io::Write};
 
-use crate::utils::terminal::{DIM_TEXT, RESET};
 use arrow_array::RecordBatch;
 use arrow_ipc::{reader::FileReader, writer::FileWriter};
-use std::io;
 use zqa_rag::vector::doctor::doctor as rag_doctor;
 use zqa_rag::vector::lance::db_statistics;
 use zqa_rag::vector::{
@@ -16,6 +15,7 @@ use zqa_rag::vector::{
     },
 };
 
+use crate::utils::terminal::{DIM_TEXT, RESET};
 use crate::{
     cli::{app::BATCH_ITER_FILE, errors::CLIError},
     common::Context,
@@ -26,13 +26,20 @@ use crate::{
     },
 };
 
-/// Prints out table statistics from the created DB. Fails if the database does not exist, could
-/// not be read, or the statistics could not be computed.
+/// Print table statistics for the current LanceDB database.
 ///
 /// # Arguments
 ///
-/// * `ctx` - A `Context` object that contains CLI args and objects that implement
+/// * `ctx` - A `Context` object that contains CLI state and objects that implement
 ///   [`std::io::Write`] for `stdout` and `stderr`.
+///
+/// # Returns
+///
+/// `Ok(())` if the command output was written successfully.
+///
+/// # Errors
+///
+/// Returns a [`CLIError`] if writing to an output stream fails.
 pub(crate) async fn handle_stats_cmd<O, E>(ctx: &mut Context<O, E>) -> Result<(), CLIError>
 where
     O: Write,
@@ -46,15 +53,25 @@ where
     Ok(())
 }
 
-/// Process a user's Zotero library. This acts as one of the main functions provided by the CLI.
-/// This parses the library, extracts the text from each file, stores them in a `LanceDB`
-/// table, and adds their embeddings. If the last step fails, the parsed texts are stored
-/// in `BATCH_ITER_FILE`.
+/// Process the user's Zotero library into the LanceDB-backed retrieval store.
 ///
-/// # Arguments:
+/// This parses the library, extracts text from each file, stores the records in LanceDB,
+/// and generates embeddings. If the embedding step fails, parsed records are kept in
+/// [`BATCH_ITER_FILE`] so embedding can be retried later.
 ///
-/// * `ctx` - A `Context` object that contains CLI args and objects that implement
+/// # Arguments
+///
+/// * `ctx` - A `Context` object that contains CLI state and objects that implement
 ///   [`std::io::Write`] for `stdout` and `stderr`.
+///
+/// # Returns
+///
+/// `Ok(())` if processing completed or the user declined to continue.
+///
+/// # Errors
+///
+/// Returns a [`CLIError`] if input/output fails, configuration is invalid,
+/// or parsing / insertion setup fails.
 pub(crate) async fn handle_process_cmd<O, E>(ctx: &mut Context<O, E>) -> Result<(), CLIError>
 where
     O: Write,
@@ -139,16 +156,25 @@ where
     Ok(())
 }
 
-/// Embed text from PDFs parsed, in case this step previously failed. This function reads
-/// the `BATCH_ITER_FILE` and uses the data in there to compute embeddings and write out
-/// the `LanceDB` table.
+/// Retry embedding from saved batch data or repair zero-vector rows.
 ///
-/// # Arguments:
+/// When `fix` is `false`, this reads [`BATCH_ITER_FILE`] and inserts the saved batches into
+/// LanceDB. When `fix` is `true`, it repairs rows whose stored embeddings are all zero.
 ///
-/// * `ctx` - A `Context` object that contains CLI args and objects that implement
+/// # Arguments
+///
+/// * `fix` - Whether to repair zero-vector rows instead of replaying saved batch data.
+/// * `ctx` - A `Context` object that contains CLI state and objects that implement
 ///   [`std::io::Write`] for `stdout` and `stderr`.
-/// * `fix_zeros` - If `true`, fixes zero-embedding vectors, but does not handle PDFs
-///   parsed but not embedded.
+///
+/// # Returns
+///
+/// `Ok(())` if the command completed successfully.
+///
+/// # Errors
+///
+/// Returns a [`CLIError`] if reading batch data, accessing configuration,
+/// database operations, or writing output fails.
 pub(crate) async fn handle_embed_cmd<O, E>(
     fix: bool,
     ctx: &mut Context<O, E>,
@@ -212,6 +238,21 @@ where
     Ok(())
 }
 
+/// Remove duplicate rows from the LanceDB table.
+///
+/// # Arguments
+///
+/// * `ctx` - A `Context` object that contains CLI state and objects that implement
+///   [`std::io::Write`] for `stdout` and `stderr`.
+///
+/// # Returns
+///
+/// `Ok(())` if deduplication completed and the result was written successfully.
+///
+/// # Errors
+///
+/// Returns a [`CLIError`] if configuration is invalid, deduplication fails,
+/// or writing output fails.
 pub(crate) async fn handle_dedup_cmd<O, E>(ctx: &mut Context<O, E>) -> Result<(), CLIError>
 where
     O: Write,
@@ -241,6 +282,20 @@ where
     Ok(())
 }
 
+/// Create or update the LanceDB indices used by retrieval.
+///
+/// # Arguments
+///
+/// * `ctx` - A `Context` object that contains CLI state and objects that implement
+///   [`std::io::Write`] for `stdout` and `stderr`.
+///
+/// # Returns
+///
+/// `Ok(())` if index creation completed successfully.
+///
+/// # Errors
+///
+/// Returns a [`CLIError`] if index creation fails or writing output fails.
 pub(crate) async fn handle_index_cmd<O, E>(ctx: &mut Context<O, E>) -> Result<(), CLIError>
 where
     O: Write,
@@ -261,13 +316,20 @@ where
     Ok(())
 }
 
-/// Performs comprehensive health checks on the `LanceDB` database and reports status
-/// with colored output using ASCII escape codes.
+/// Run health checks against the LanceDB database and print the results.
 ///
-/// # Arguments:
+/// # Arguments
 ///
-/// * `ctx` - A `Context` object that contains CLI args and objects that implement
+/// * `ctx` - A `Context` object that contains CLI state and objects that implement
 ///   [`std::io::Write`] for `stdout` and `stderr`.
+///
+/// # Returns
+///
+/// `Ok(())` if the health-check output was written successfully.
+///
+/// # Errors
+///
+/// Returns a [`CLIError`] if writing output fails.
 pub(crate) async fn handle_checkhealth_cmd<O: Write, E: Write>(
     ctx: &mut Context<O, E>,
 ) -> Result<(), CLIError> {
@@ -279,15 +341,23 @@ pub(crate) async fn handle_checkhealth_cmd<O: Write, E: Write>(
     Ok(())
 }
 
-/// Runs health checks on the `LanceDB` database and provides helpful suggestions to the user on how
-/// to fix any issues, if that is possible. Automatically attempt to fix issues found. Currently,
-/// only zero-embedding vectors can be fixed, since a lot of the other issues are possibly just DB
-/// corruption. Maybe we can diagnose that in the future.
+/// Run database diagnostics and attempt automatic repairs where supported.
 ///
-/// # Arguments:
+/// Currently, only zero-vector embeddings are automatically repaired; other failures are
+/// reported to the user.
 ///
-/// * `ctx` - A `Context` object that contains CLI args and objects that implement
+/// # Arguments
+///
+/// * `ctx` - A `Context` object that contains CLI state and objects that implement
 ///   [`std::io::Write`] for `stdout` and `stderr`.
+///
+/// # Returns
+///
+/// `Ok(())` if diagnostics and any attempted repair completed successfully.
+///
+/// # Errors
+///
+/// Returns a [`CLIError`] if diagnostics, repair, or writing output fails.
 pub(crate) async fn handle_doctor_cmd<O, E>(ctx: &mut Context<O, E>) -> Result<(), CLIError>
 where
     O: Write,
@@ -301,15 +371,24 @@ where
     fix_zero_embeddings(ctx).await
 }
 
-/// Fix the zero-embedding problem. In some error cases, we store zero-vectors as embeddings in
-/// `LanceDB`. This function fixes those errors by replacing them with "real" embeddings. Note that
-/// there are cases where the embeddings are zeros not because there was an error, but because the
-/// extracted text was empty. This could be the result of a failed attempt to parse, or some other
-/// similar error. APIs like Voyage do accept empty strings, and simply return a zero vector.
+/// Repair rows in LanceDB whose stored embedding vectors are all zeros.
 ///
-/// # Arguments:
+/// Some zero vectors indicate failed embedding generation, while others correspond to rows with
+/// empty extracted text. Empty-text rows are deleted; non-empty rows are re-embedded.
 ///
-/// * `ctx` - A `Context` object that contains CLI args and objects that implement
+/// # Arguments
+///
+/// * `ctx` - A `Context` object that contains CLI state and objects that implement
+///   [`std::io::Write`] for `stdout` and `stderr`.
+///
+/// # Returns
+///
+/// `Ok(())` if zero-vector handling completed successfully.
+///
+/// # Errors
+///
+/// Returns a [`CLIError`] if configuration is invalid, database operations fail,
+/// embedding regeneration fails, or writing output fails.
 async fn fix_zero_embeddings<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Result<(), CLIError> {
     let healthcheck = lancedb_health_check(ctx.config.embedding_provider).await?;
 

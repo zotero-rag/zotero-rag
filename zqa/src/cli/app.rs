@@ -149,7 +149,6 @@ pub(crate) async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<()
 pub(crate) mod tests {
     use std::io::Cursor;
 
-    use super::dispatch_command;
     use serde_json::json;
     use serial_test::serial;
     use temp_env;
@@ -162,6 +161,7 @@ pub(crate) mod tests {
     use zqa_rag::llm::tools::Tool;
     use zqa_rag::reranking::common::RerankProviderConfig;
 
+    use super::dispatch_command;
     use crate::common::Context;
     use crate::common::State;
     use crate::config::{Config, VoyageAIConfig};

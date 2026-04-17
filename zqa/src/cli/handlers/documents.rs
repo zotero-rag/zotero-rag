@@ -171,6 +171,21 @@ pub(super) fn import_document<O: Write, E: Write>(
     Ok(key)
 }
 
+/// Execute a `/docs` subcommand against the current session's imported documents.
+///
+/// # Arguments
+///
+/// * `subcmd` - The parsed document subcommand to execute.
+/// * `ctx` - A `Context` object that contains CLI state and objects that implement
+///   [`std::io::Write`] for `stdout` and `stderr`.
+///
+/// # Returns
+///
+/// `Ok(())` if the subcommand completed successfully.
+///
+/// # Errors
+///
+/// Returns a [`CLIError`] if document state could not be accessed or output could not be written.
 pub(crate) fn handle_docs_cmd<O, E>(
     subcmd: DocsCommand,
     ctx: &mut Context<O, E>,
