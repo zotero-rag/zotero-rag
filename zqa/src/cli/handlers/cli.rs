@@ -4,58 +4,35 @@ use std::{
 };
 
 use crate::{
-    cli::{commands::Command, errors::CLIError, handlers::conversation::save_current_conversation},
+    cli::{errors::CLIError, handlers::conversation::save_current_conversation},
     common::Context,
 };
 
-pub(crate) async fn handle_quit_cmd<O, E>(
-    cmd: Command,
-    ctx: &mut Context<O, E>,
-) -> Result<(), CLIError>
+pub(crate) async fn handle_quit_cmd<O, E>(ctx: &mut Context<O, E>) -> Result<(), CLIError>
 where
     O: Write,
     E: Write,
 {
-    if !matches!(cmd, Command::Quit) {
-        return Err(CLIError::CommandError("quit command expected".to_string()));
-    }
-
     save_current_conversation(ctx)
 }
 
-pub(crate) async fn handle_config_cmd<O, E>(
-    cmd: Command,
-    ctx: &mut Context<O, E>,
-) -> Result<(), CLIError>
+pub(crate) async fn handle_config_cmd<O, E>(ctx: &mut Context<O, E>) -> Result<(), CLIError>
 where
     O: Write,
     E: Write,
 {
-    if !matches!(cmd, Command::Config) {
-        return Err(CLIError::CommandError(
-            "config command expected".to_string(),
-        ));
-    }
-
     writeln!(&mut ctx.out, "{}", ctx.config)?;
 
     Ok(())
 }
 
 pub(crate) async fn handle_new_conversation_cmd<O, E>(
-    cmd: Command,
     ctx: &mut Context<O, E>,
 ) -> Result<(), CLIError>
 where
     O: Write,
     E: Write,
 {
-    if !matches!(cmd, Command::NewConversation) {
-        return Err(CLIError::CommandError(
-            "new conversation command expected".to_string(),
-        ));
-    }
-
     save_current_conversation(ctx)?;
 
     ctx.state.dirty.store(false, atomic::Ordering::Relaxed);
@@ -65,18 +42,11 @@ where
     Ok(())
 }
 
-pub(crate) async fn handle_help_cmd<O, E>(
-    cmd: Command,
-    ctx: &mut Context<O, E>,
-) -> Result<(), CLIError>
+pub(crate) async fn handle_help_cmd<O, E>(ctx: &mut Context<O, E>) -> Result<(), CLIError>
 where
     O: Write,
     E: Write,
 {
-    if !matches!(cmd, Command::Help) {
-        return Err(CLIError::CommandError("help command expected".to_string()));
-    }
-
     writeln!(&mut ctx.out)?;
     writeln!(&mut ctx.out, "Available commands:\n")?;
     writeln!(&mut ctx.out, "/help\t\tShow this help message")?;

@@ -22,7 +22,6 @@ use zqa_rag::{
 
 use crate::{
     cli::{
-        commands::Command,
         errors::CLIError,
         handlers::documents::{get_document_mentions, get_user_document_tools, import_document},
         prompts::{get_summarize_prompt, get_title_prompt},
@@ -65,17 +64,13 @@ fn format_number(num: u32) -> String {
 /// * `ctx` - A `Context` object that contains CLI args and objects that implement
 ///   [`std::io::Write`] for `stdout` and `stderr`.
 pub(crate) async fn handle_search_cmd<O, E>(
-    cmd: Command,
+    search_term: String,
     ctx: &mut Context<O, E>,
 ) -> Result<(), CLIError>
 where
     O: Write,
     E: Write,
 {
-    let Command::Search { query: search_term } = cmd else {
-        return Ok(());
-    };
-
     if search_term.is_empty() {
         writeln!(&mut ctx.err, "Please provide a search term after /search.")?;
         return Ok(());
@@ -101,9 +96,7 @@ where
     )?;
 
     for item in &search_results {
-        writeln!(&mut ctx.out, "{}", item.metadata.title).unwrap_or_else(|_| {
-            eprintln!("Could not write out search results.");
-        });
+        writeln!(&mut ctx.out, "{}", item.metadata.title)?;
     }
     writeln!(&mut ctx.out)?;
 
@@ -120,17 +113,13 @@ where
 ///   [`std::io::Write`] for `stdout` and `stderr`.
 #[allow(clippy::too_many_lines)]
 pub(crate) async fn handle_query_cmd<O, E>(
-    cmd: Command,
+    query: String,
     ctx: &mut Context<O, E>,
 ) -> Result<(), CLIError>
 where
     O: Write,
     E: Write,
 {
-    let Command::Query { text: query } = cmd else {
-        return Ok(());
-    };
-
     writeln!(&mut ctx.out)?;
 
     for mention in get_document_mentions(&query) {
