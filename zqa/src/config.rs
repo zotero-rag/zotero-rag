@@ -997,7 +997,7 @@ mod tests {
         let config: Config = toml::from_str(toml_str).unwrap();
         test_eq!(config.model_provider, ModelProvider::OpenAI);
         test_eq!(config.embedding_provider, EmbeddingProvider::VoyageAI); // default
-        test_eq!(config.max_concurrent_requests, 5); // default
+        test_eq!(config.max_concurrent_requests, 1); // default
     }
 
     #[test]
