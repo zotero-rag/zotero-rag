@@ -3,22 +3,22 @@
 //! later. The parser also handles common math symbols and converts them to their corresponding
 //! LaTeX equivalents.
 
-use itertools::Itertools;
-use log;
-use ordered_float::OrderedFloat;
 use std::char::decode_utf16;
-use std::f32;
-use std::str::Utf8Error;
-use std::{error::Error, str};
-
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
+use std::f32;
+use std::str::Utf8Error;
 use std::sync::LazyLock;
+use std::{error::Error, str};
+
+use itertools::Itertools;
+use log;
+use lopdf::{Document, Object};
+use ordered_float::OrderedFloat;
 
 use crate::edits::{Edit, EditType, apply_edits};
 use crate::fonts::{FONT_TRANSFORMS, FontEncoding, FontSizeMarker, font_transform};
 use crate::tokenizer::{Token, tokenize};
-use lopdf::{Document, Object};
 
 const ASCII_PLUS: u8 = b'+';
 
@@ -1226,6 +1226,7 @@ pub fn extract_text(file_path: &str) -> Result<ExtractedContent, Box<dyn Error>>
 mod tests {
     use std::path::PathBuf;
     use std::{env, fs};
+
     use zqa_macros::{test_contains_all, test_eq, test_ok};
 
     use super::*;

@@ -1,9 +1,10 @@
 //! Common utility functions for the crate.
 
+use std::time::Duration;
+
 use http::{HeaderMap, StatusCode};
 use reqwest::Response;
 use serde::Serialize;
-use std::time::Duration;
 
 use crate::http_client::HttpClient;
 use crate::llm::errors::LLMError;
@@ -82,20 +83,22 @@ pub(crate) async fn request_with_backoff<T: HttpClient>(
 
 #[cfg(test)]
 mod tests {
-    use crate::{
-        common::{calculate_backoff_delay, request_with_backoff},
-        http_client::HttpClient,
-    };
-    use http::HeaderMap;
-    use reqwest::Response;
-    use serde::Serialize;
-    use serde_json::json;
     use std::{
         pin::Pin,
         sync::{Arc, Mutex},
         time::Duration,
     };
+
+    use http::HeaderMap;
+    use reqwest::Response;
+    use serde::Serialize;
+    use serde_json::json;
     use zqa_macros::{test_eq, test_ok};
+
+    use crate::{
+        common::{calculate_backoff_delay, request_with_backoff},
+        http_client::HttpClient,
+    };
 
     struct MockRateLimitClient {
         call_count: Arc<Mutex<usize>>,

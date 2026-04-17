@@ -1,9 +1,9 @@
-use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 use std::{borrow::Cow, fmt::Debug};
 
 use arrow_schema::{DataType, Field};
 use lancedb::embeddings::EmbeddingFunction;
-use std::sync::Arc;
+use serde::{Deserialize, Serialize};
 
 use crate::{
     capabilities::EmbeddingProvider,
@@ -174,6 +174,12 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use arrow_array::Array;
+    use lancedb::embeddings::EmbeddingFunction;
+    use zqa_macros::{test_eq, test_ok};
+
     use super::{
         OllamaClient, OllamaEmbeddingErrorResponse, OllamaEmbeddingResponse,
         OllamaEmbeddingSuccessResponse,
@@ -184,10 +190,6 @@ mod tests {
         embedding::common::EmbeddingApiResponse,
         http_client::{MockHttpClient, ReqwestClient},
     };
-    use arrow_array::Array;
-    use lancedb::embeddings::EmbeddingFunction;
-    use std::sync::Arc;
-    use zqa_macros::{test_eq, test_ok};
 
     #[test]
     fn test_success_response_deserializes() {

@@ -2,20 +2,22 @@
 //! Anthropic client, but that will likely be changed, at which point this module will move to
 //! `llm`.
 
-use crate::clients::openai::OpenAIClient;
-use crate::common::request_with_backoff;
-use crate::constants::{DEFAULT_MAX_CONCURRENT_REQUESTS, DEFAULT_OPENAI_EMBEDDING_DIM};
-use crate::constants::{DEFAULT_MAX_RETRIES, DEFAULT_OPENAI_EMBEDDING_MODEL};
-use crate::http_client::HttpClient;
-use crate::llm::errors::LLMError;
+use std::env;
+use std::sync::Arc;
+
 use arrow_array;
 use futures::StreamExt;
 use futures::stream;
 use http::HeaderMap;
 use lancedb::arrow::arrow_schema::{DataType, Field};
 use serde::{Deserialize, Serialize};
-use std::env;
-use std::sync::Arc;
+
+use crate::clients::openai::OpenAIClient;
+use crate::common::request_with_backoff;
+use crate::constants::{DEFAULT_MAX_CONCURRENT_REQUESTS, DEFAULT_OPENAI_EMBEDDING_DIM};
+use crate::constants::{DEFAULT_MAX_RETRIES, DEFAULT_OPENAI_EMBEDDING_MODEL};
+use crate::http_client::HttpClient;
+use crate::llm::errors::LLMError;
 
 impl<T> OpenAIClient<T>
 where

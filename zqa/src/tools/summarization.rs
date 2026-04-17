@@ -1,11 +1,12 @@
-use schemars::{JsonSchema, schema_for};
-use serde::Deserialize;
-use serde_json::json;
 use std::{
     future::Future,
     pin::Pin,
     sync::{Arc, Mutex},
 };
+
+use schemars::{JsonSchema, schema_for};
+use serde::Deserialize;
+use serde_json::json;
 use tokio::task::JoinSet;
 use zqa_rag::{
     llm::{
@@ -159,9 +160,6 @@ impl Tool for SummarizationTool {
 mod tests {
     use std::env;
 
-    use super::*;
-    use crate::cli::app::process;
-    use crate::cli::app::tests::create_test_context;
     use serde_json::json;
     use temp_env;
     use tempfile;
@@ -171,6 +169,10 @@ mod tests {
         constants::DEFAULT_ANTHROPIC_MODEL_SMALL,
         llm::factory::get_client_with_config,
     };
+
+    use super::*;
+    use crate::cli::app::process;
+    use crate::cli::app::tests::create_test_context;
 
     fn make_tool() -> SummarizationTool {
         let client = get_client_with_config(&LLMClientConfig::Anthropic(AnthropicConfig {

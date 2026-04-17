@@ -1,11 +1,8 @@
-use arrow_array::{ArrayRef, RecordBatch, StringArray, cast::AsArray};
-use arrow_schema;
 use std::sync::Arc;
 
-use crate::{
-    config::Config,
-    utils::library::{ZoteroItem, ZoteroItemSet},
-};
+use arrow_array::{ArrayRef, RecordBatch, StringArray, cast::AsArray};
+use arrow_schema;
+use thiserror::Error;
 use zqa_rag::{
     capabilities::EmbeddingProvider,
     embedding::common::{
@@ -17,8 +14,10 @@ use zqa_rag::{
 };
 
 use super::library::{LibraryParsingError, parse_library};
-
-use thiserror::Error;
+use crate::{
+    config::Config,
+    utils::library::{ZoteroItem, ZoteroItemSet},
+};
 
 /// An enum containing the fields stored by our application in `LanceDB`, in order. Implementations
 /// `as_ref()` and `into()` are provided to convert this to `&str` and `String` respectively.
@@ -334,14 +333,14 @@ pub async fn vector_search(
 
 #[cfg(test)]
 mod tests {
-    use crate::{common::setup_logger, config::VoyageAIConfig};
-
-    use super::*;
     use arrow_array::RecordBatchIterator;
     use dotenv::dotenv;
     use zqa_rag::constants::{
         DEFAULT_VOYAGE_EMBEDDING_DIM, DEFAULT_VOYAGE_EMBEDDING_MODEL, DEFAULT_VOYAGE_RERANK_MODEL,
     };
+
+    use super::*;
+    use crate::{common::setup_logger, config::VoyageAIConfig};
 
     fn get_config() -> Config {
         let mut config = Config {

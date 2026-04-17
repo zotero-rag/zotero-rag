@@ -14,6 +14,7 @@ use http::HeaderMap;
 use lancedb::arrow::arrow_schema::DataType;
 use lancedb::embeddings::EmbeddingFunction;
 use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
 
 use super::base::{ApiClient, ChatHistoryItem, ChatRequest, CompletionApiResponse};
 use super::errors::LLMError;
@@ -23,7 +24,6 @@ use crate::constants::{DEFAULT_MAX_RETRIES, DEFAULT_OPENAI_EMBEDDING_DIM, DEFAUL
 use crate::http_client::HttpClient;
 use crate::llm::base::{ChatHistoryContent, ContentType, ToolUseStats, USER_ROLE};
 use crate::llm::tools::{CallbackFn, OPENAI_SCHEMA_KEY, SerializedTool, get_owned_tools};
-use serde_json::{Map, Value};
 
 /// OpenAI-specific tool wrapper that adds the `type` and `strict` fields
 /// required by OpenAI's API.
@@ -624,6 +624,13 @@ impl<T: HttpClient + Default + Debug> EmbeddingFunction for OpenAIClient<T> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use arrow_array::Array;
+    use dotenv::dotenv;
+    use lancedb::embeddings::EmbeddingFunction;
+    use zqa_macros::{test_eq, test_ok};
+
     use super::{OpenAIClient, OpenAIContent, OpenAIOutput, OpenAIResponse, OpenAIUsage};
     use crate::constants::DEFAULT_OPENAI_EMBEDDING_DIM;
     use crate::http_client::{MockHttpClient, ReqwestClient};
@@ -632,11 +639,6 @@ mod tests {
     };
     use crate::llm::tools::OPENAI_SCHEMA_KEY;
     use crate::llm::tools::test_utils::MockTool;
-    use arrow_array::Array;
-    use dotenv::dotenv;
-    use lancedb::embeddings::EmbeddingFunction;
-    use std::sync::{Arc, Mutex};
-    use zqa_macros::{test_eq, test_ok};
 
     #[tokio::test]
     async fn test_request_works() {
@@ -780,14 +782,15 @@ mod tests {
         assert!(call_count.lock().unwrap().eq(&1_usize));
     }
 
+    use std::future::Future;
+    use std::pin::Pin;
+    use std::time::{Duration, Instant};
+
     use super::{OpenAIRequestInput, OpenAIRequestToolCallInputItem, process_openai_tool_calls};
     use crate::http_client::SequentialMockHttpClient;
     use crate::llm::tools::Tool;
     use crate::llm::tools::get_owned_tools;
     use crate::llm::tools::test_utils::MockToolInput;
-    use std::future::Future;
-    use std::pin::Pin;
-    use std::time::{Duration, Instant};
 
     #[derive(Debug)]
     struct SlowMockTool {

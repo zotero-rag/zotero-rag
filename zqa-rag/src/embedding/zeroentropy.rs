@@ -1,20 +1,20 @@
 //! Functions, structs, and trait implementations for interacting with the ZeroEntropy API. This
 //! module includes support for embedding and reranking.
 
+use std::{borrow::Cow, env, sync::Arc};
+
+use arrow_schema::{DataType, Field};
+use lancedb::embeddings::EmbeddingFunction;
+use serde::{Deserialize, Serialize};
+
 use super::common::EmbeddingApiResponse;
+use crate::http_client::{HttpClient, ReqwestClient};
+use crate::llm::errors::LLMError;
 use crate::{
     capabilities::EmbeddingProvider,
     constants::{DEFAULT_ZEROENTROPY_EMBEDDING_DIM, DEFAULT_ZEROENTROPY_EMBEDDING_MODEL},
     embedding::common::compute_embeddings_async,
 };
-use serde::{Deserialize, Serialize};
-use std::{borrow::Cow, env, sync::Arc};
-
-use arrow_schema::{DataType, Field};
-use lancedb::embeddings::EmbeddingFunction;
-
-use crate::http_client::{HttpClient, ReqwestClient};
-use crate::llm::errors::LLMError;
 
 /// A client for ZeroEntropy's embedding and reranking APIs.
 #[derive(Debug, Clone)]
@@ -268,12 +268,14 @@ impl<T: HttpClient + Default + Clone + std::fmt::Debug> EmbeddingFunction for Ze
 
 #[cfg(test)]
 mod tests {
-    use super::{DEFAULT_ZEROENTROPY_EMBEDDING_DIM, ZeroEntropyClient};
-    use crate::http_client::ReqwestClient;
+    use std::sync::Arc;
+
     use arrow_array::Array;
     use dotenv::dotenv;
-    use std::sync::Arc;
     use zqa_macros::{test_eq, test_ok};
+
+    use super::{DEFAULT_ZEROENTROPY_EMBEDDING_DIM, ZeroEntropyClient};
+    use crate::http_client::ReqwestClient;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
     async fn test_compute_embeddings() {

@@ -3,13 +3,14 @@
 //! implementation is provided as a default implementation, but it can be easily replaced with a
 //! `MockHttpClient` implementation for testing.
 
-use reqwest::{header::HeaderMap, multipart::Form};
 #[cfg(test)]
 use std::{
     collections::VecDeque,
     sync::{Arc, Mutex},
 };
 use std::{future::Future, pin::Pin};
+
+use reqwest::{header::HeaderMap, multipart::Form};
 
 /// A trait that represents an HTTP client for making requests to LLM providers.
 /// This abstraction enables real HTTP requests to API endpoints while also

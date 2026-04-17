@@ -114,11 +114,12 @@ impl<T: HttpClient> Rerank for ZeroEntropyClient<T> {
 
 #[cfg(test)]
 mod tests {
+    use dotenv::dotenv;
+    use zqa_macros::{test_eq, test_ok};
+
     use super::ZeroEntropyClient;
     use crate::http_client::ReqwestClient;
     use crate::reranking::common::Rerank;
-    use dotenv::dotenv;
-    use zqa_macros::{test_eq, test_ok};
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
     async fn test_rerank() {

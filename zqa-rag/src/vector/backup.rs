@@ -2,6 +2,7 @@
 //! versioning mechanism.
 
 use std::future::Future;
+
 use thiserror::Error;
 
 use crate::vector::lance::{LanceError, TABLE_NAME, get_db_uri};
@@ -160,14 +161,16 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::sync::Arc;
+
     use arrow_array::{RecordBatch, StringArray};
     use arrow_schema::{DataType, Field, Schema};
     use dotenv::dotenv;
     use lancedb::{connect, embeddings::EmbeddingDefinition};
     use serial_test::serial;
-    use std::sync::Arc;
     use zqa_macros::{test_contains, test_eq, test_ok};
+
+    use super::*;
 
     /// Helper function to set up a test database with some initial data
     async fn setup_test_db() -> Result<u64, LanceError> {

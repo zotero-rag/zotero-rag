@@ -121,12 +121,13 @@ impl Tool for RetrievalTool {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use serde_json::json;
     use zqa_rag::constants::{
         DEFAULT_VOYAGE_EMBEDDING_DIM, DEFAULT_VOYAGE_EMBEDDING_MODEL, DEFAULT_VOYAGE_RERANK_MODEL,
     };
     use zqa_rag::embedding::common::EmbeddingProviderConfig;
+
+    use super::*;
 
     fn make_tool() -> RetrievalTool {
         let config = zqa_rag::config::VoyageAIConfig {

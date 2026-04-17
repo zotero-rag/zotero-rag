@@ -301,11 +301,13 @@ impl Helper for PlaceholderText {}
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use serial_test::serial;
     use std::fs::File;
     use std::io::Write;
+
+    use serial_test::serial;
     use tempfile::TempDir;
+
+    use super::*;
 
     fn create_temp_pdf(dir: &TempDir, name: &str) -> std::path::PathBuf {
         let path = dir.path().join(name);

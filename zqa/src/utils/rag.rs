@@ -4,6 +4,7 @@ use std::{
     borrow::Cow,
     fmt::{self, Write},
 };
+
 use zqa_rag::llm::base::ContentType;
 
 /// ANSI escape code for dimming text

@@ -428,6 +428,10 @@ mod tests {
     use dotenv::dotenv;
     use zqa_macros::{test_eq, test_ok};
 
+    use super::{
+        AnthropicClient, AnthropicResponse, AnthropicResponseContent,
+        AnthropicToolUseResponseContent, AnthropicUsageStats,
+    };
     use crate::http_client::{MockHttpClient, ReqwestClient, SequentialMockHttpClient};
     use crate::llm::anthropic::{AnthropicTextResponseContent, DEFAULT_CLAUDE_MODEL};
     use crate::llm::base::{
@@ -435,11 +439,6 @@ mod tests {
         USER_ROLE,
     };
     use crate::llm::tools::test_utils::MockTool;
-
-    use super::{
-        AnthropicClient, AnthropicResponse, AnthropicResponseContent,
-        AnthropicToolUseResponseContent, AnthropicUsageStats,
-    };
 
     #[tokio::test]
     async fn test_request_works() {

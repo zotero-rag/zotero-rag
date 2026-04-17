@@ -1,16 +1,6 @@
 //! Functions, structs, and trait implementations for interacting with `ollama`. This
 //! module includes support for text generation only.
 
-use crate::common::request_with_backoff;
-use crate::constants::{
-    DEFAULT_MAX_RETRIES, DEFAULT_OLLAMA_BASE_URL, DEFAULT_OLLAMA_MAX_TOKENS, DEFAULT_OLLAMA_MODEL,
-};
-use crate::llm::anthropic::{
-    AnthropicChatHistoryItem, AnthropicRequest, AnthropicResponse, AnthropicResponseContent,
-    build_anthropic_messages_and_tools, map_response_to_chat_contents,
-};
-use crate::llm::base::ContentType;
-use crate::llm::tools::process_tool_calls;
 use std::env;
 
 use http::HeaderMap;
@@ -18,7 +8,17 @@ use http::HeaderMap;
 use super::base::{ApiClient, ChatRequest, CompletionApiResponse};
 use super::errors::LLMError;
 use crate::clients::ollama::OllamaClient;
+use crate::common::request_with_backoff;
+use crate::constants::{
+    DEFAULT_MAX_RETRIES, DEFAULT_OLLAMA_BASE_URL, DEFAULT_OLLAMA_MAX_TOKENS, DEFAULT_OLLAMA_MODEL,
+};
 use crate::http_client::HttpClient;
+use crate::llm::anthropic::{
+    AnthropicChatHistoryItem, AnthropicRequest, AnthropicResponse, AnthropicResponseContent,
+    build_anthropic_messages_and_tools, map_response_to_chat_contents,
+};
+use crate::llm::base::ContentType;
+use crate::llm::tools::process_tool_calls;
 
 /// Ollama supports the Anthropic Messages API, so we can reuse structs.
 type OllamaRequest<'a> = AnthropicRequest<'a>;
@@ -177,13 +177,13 @@ impl<T: HttpClient> ApiClient for OllamaClient<T> {
 
 #[cfg(test)]
 mod tests {
-    use crate::clients::ollama::OllamaClient;
     use std::sync::{Arc, Mutex};
 
     use dotenv::dotenv;
     use zqa_macros::{test_eq, test_ok};
 
     use super::*;
+    use crate::clients::ollama::OllamaClient;
     use crate::http_client::{ReqwestClient, SequentialMockHttpClient};
     use crate::llm::anthropic::{
         AnthropicTextResponseContent, AnthropicToolUseResponseContent, AnthropicUsageStats,

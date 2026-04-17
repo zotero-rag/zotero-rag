@@ -2,16 +2,12 @@
 //! LanceDB's features, including connecting, inserting, querying, and deleting. For certain
 //! operations, variants with backup support are provided.
 
-use crate::embedding::common::EmbeddingProviderConfig;
-use crate::providers::provider_id::ProviderId;
-use crate::providers::registry::provider_registry;
-use crate::vector::backup::with_backup;
-use crate::vector::checkhealth::get_zero_vectors;
+use std::collections::HashSet;
+use std::{fmt::Display, path::PathBuf, sync::Arc, time::Instant};
 
 use arrow_array::{
     RecordBatch, RecordBatchIterator, StringArray, cast::AsArray, types::Float32Type,
 };
-
 use futures::TryStreamExt;
 use lancedb::index::scalar::FtsIndexBuilder;
 use lancedb::{
@@ -19,9 +15,13 @@ use lancedb::{
     database::CreateTableMode, embeddings::EmbeddingDefinition, query::ExecutableQuery,
     query::QueryBase,
 };
-use std::collections::HashSet;
-use std::{fmt::Display, path::PathBuf, sync::Arc, time::Instant};
 use thiserror::Error;
+
+use crate::embedding::common::EmbeddingProviderConfig;
+use crate::providers::provider_id::ProviderId;
+use crate::providers::registry::provider_registry;
+use crate::vector::backup::with_backup;
+use crate::vector::checkhealth::get_zero_vectors;
 
 // NOTE: Maintainers: ensure that `DB_URI` begins with `TABLE_NAME`
 
@@ -721,6 +721,7 @@ mod tests {
     use zqa_macros::{test_eq, test_ok};
     use zqa_pdftools::chunk::Chunker;
 
+    use super::*;
     use crate::capabilities::EmbeddingProvider;
     use crate::clients::openai::OpenAIClient;
     use crate::config::{OpenAIConfig, VoyageAIConfig};
@@ -729,8 +730,6 @@ mod tests {
         DEFAULT_VOYAGE_EMBEDDING_DIM, DEFAULT_VOYAGE_EMBEDDING_MODEL, DEFAULT_VOYAGE_RERANK_MODEL,
     };
     use crate::http_client::ReqwestClient;
-
-    use super::*;
 
     fn get_test_openai_embedding_config() -> EmbeddingProviderConfig {
         EmbeddingProviderConfig::OpenAI(OpenAIConfig {

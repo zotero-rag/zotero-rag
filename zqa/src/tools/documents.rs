@@ -1,5 +1,8 @@
 //! Tools for interacting with documents that are not from the user's Zotero library.
 
+use std::sync::{Arc, RwLock};
+use std::{collections::HashMap, path::Path, pin::Pin};
+
 use arrow_array::StringArray;
 use arrow_array::cast::AsArray;
 use arrow_array::types::Float32Type;
@@ -9,16 +12,13 @@ use lancedb::embeddings::EmbeddingFunction;
 use schemars::{JsonSchema, schema_for};
 use serde::Deserialize;
 use serde_json::json;
-use std::sync::{Arc, RwLock};
-use std::{collections::HashMap, path::Path, pin::Pin};
 use thiserror::Error;
-use zqa_rag::embedding::common::get_embedding_provider_with_config;
-use zqa_rag::llm::base::ChatRequest;
-
 use zqa_pdftools::{
     chunk::{Chunker, ChunkingStrategy},
     parse::{ExtractedContent, extract_text},
 };
+use zqa_rag::embedding::common::get_embedding_provider_with_config;
+use zqa_rag::llm::base::ChatRequest;
 use zqa_rag::{
     embedding::common::EmbeddingProviderConfig,
     llm::{base::ApiClient, errors::LLMError, factory::LLMClient, tools::Tool},

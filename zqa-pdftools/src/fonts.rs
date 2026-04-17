@@ -1,10 +1,11 @@
 //! Functions and structs to handle fonts in PDFs.
 
+use std::collections::HashMap;
+use std::sync::LazyLock;
+
 use ordered_float::OrderedFloat;
 
 use crate::math::{from_cmex, from_cmmi, from_cmsy, from_msbm};
-use std::collections::HashMap;
-use std::sync::LazyLock;
 
 /// A struct to keep track of font size changes. This includes all the metadata you might need
 /// about font changes. The primary purpose of this is to track sections, subsections, etc., but

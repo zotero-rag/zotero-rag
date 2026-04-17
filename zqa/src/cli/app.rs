@@ -1,16 +1,15 @@
-use crate::cli::placeholder::PlaceholderText;
-use crate::cli::prompts::{get_summarize_prompt, get_title_prompt};
-use crate::cli::readline::get_readline_config;
-use crate::state::{SavedChatHistory, save_conversation};
-use crate::tools::documents::{DocumentsToolFactory, parse_user_document};
-use crate::tools::retrieval::RetrievalTool;
-use crate::tools::summarization::SummarizationTool;
-use crate::utils::arrow::{DbFields, get_schema, library_to_arrow, vector_search};
-use crate::utils::library::{ZoteroItem, ZoteroItemSet, get_authors, get_new_library_items};
-use crate::utils::rag::ModelResponse;
-use arrow_array::{self, RecordBatch};
-use chrono::Local;
+use std::path::Path;
+use std::sync::{Arc, Mutex, atomic};
+use std::{
+    fs::File,
+    io::{self, BufRead, Write},
+    time::Instant,
+};
 
+use arrow_array::{self, RecordBatch};
+use arrow_ipc::reader::FileReader;
+use arrow_ipc::writer::FileWriter;
+use chrono::Local;
 use rustyline::error::ReadlineError;
 use zqa_rag::llm::base::{
     ASSISTANT_ROLE, ApiClient, ChatHistoryContent, ChatHistoryItem, ChatRequest, ToolUseStats,
@@ -28,19 +27,20 @@ use zqa_rag::vector::lance::{
 };
 
 use crate::cli::errors::CLIError;
+use crate::cli::placeholder::PlaceholderText;
+use crate::cli::prompts::{get_summarize_prompt, get_title_prompt};
+use crate::cli::readline::get_readline_config;
 use crate::common::Context;
 use crate::state::get_conversation_history;
+use crate::state::{SavedChatHistory, save_conversation};
+use crate::tools::documents::{DocumentsToolFactory, parse_user_document};
+use crate::tools::retrieval::RetrievalTool;
+use crate::tools::summarization::SummarizationTool;
+use crate::utils::arrow::{DbFields, get_schema, library_to_arrow, vector_search};
+use crate::utils::library::{ZoteroItem, ZoteroItemSet, get_authors, get_new_library_items};
+use crate::utils::rag::ModelResponse;
 use crate::utils::terminal::{DIM_TEXT, RESET};
 use crate::{full_library_to_arrow, utils::library::parse_library_metadata};
-use arrow_ipc::reader::FileReader;
-use arrow_ipc::writer::FileWriter;
-use std::path::Path;
-use std::sync::{Arc, Mutex, atomic};
-use std::{
-    fs::File,
-    io::{self, BufRead, Write},
-    time::Instant,
-};
 
 /// Import a document specified by a user-specified path into the current context.
 ///
@@ -1338,13 +1338,10 @@ pub(crate) async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<()
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use crate::cli::app::{
-        BATCH_ITER_FILE, get_document_mentions, get_document_session_key, handle_command, resume,
-    };
-    use crate::common::State;
-    use crate::config::{Config, VoyageAIConfig};
-    use crate::state::{SavedChatHistory, save_conversation};
-    use crate::tools::retrieval::RetrievalTool;
+    use std::fs::{self, File};
+    use std::io::Cursor;
+    use std::sync::Arc;
+
     use arrow_array::{FixedSizeListArray, Float32Array, RecordBatchIterator};
     use arrow_array::{RecordBatch, StringArray};
     use arrow_ipc::writer::FileWriter;
@@ -1352,9 +1349,6 @@ pub(crate) mod tests {
     use lancedb::connect;
     use serde_json::json;
     use serial_test::serial;
-    use std::fs::{self, File};
-    use std::io::Cursor;
-    use std::sync::Arc;
     use temp_env;
     use zqa_macros::{test_contains, test_eq, test_ok};
     use zqa_macros_proc::retry;
@@ -1366,7 +1360,14 @@ pub(crate) mod tests {
     use zqa_rag::llm::tools::Tool;
     use zqa_rag::reranking::common::RerankProviderConfig;
 
+    use crate::cli::app::{
+        BATCH_ITER_FILE, get_document_mentions, get_document_session_key, handle_command, resume,
+    };
     use crate::common::Context;
+    use crate::common::State;
+    use crate::config::{Config, VoyageAIConfig};
+    use crate::state::{SavedChatHistory, save_conversation};
+    use crate::tools::retrieval::RetrievalTool;
 
     pub(crate) fn get_config() -> Config {
         let mut config = Config {

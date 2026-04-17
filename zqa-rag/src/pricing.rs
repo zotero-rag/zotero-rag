@@ -200,9 +200,11 @@ pub fn get_model_pricing(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::io::Write;
+
     use tempfile::NamedTempFile;
+
+    use super::*;
 
     #[test]
     fn test_estimate_cost_basic() {

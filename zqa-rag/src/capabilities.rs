@@ -2,9 +2,10 @@
 //! providers exposed through this crate have which capabilities. Note that it is possible for a
 //! provider to not have all the capabilities listed here, if that API endpoint is not (yet) supported.
 
+use std::{cmp::Ordering, sync::Arc};
+
 use lancedb::embeddings::EmbeddingFunction;
 use serde::{Deserialize, Serialize};
-use std::{cmp::Ordering, sync::Arc};
 use zqa_pdftools::chunk::ChunkingStrategy;
 
 use crate::{
@@ -306,6 +307,7 @@ pub trait RerankFactory: Send + Sync {
 mod tests {
     use lancedb::embeddings::EmbeddingFunction;
 
+    use super::BatchAPIProvider;
     use crate::clients::anthropic::AnthropicClient;
     use crate::clients::gemini::GeminiClient;
     use crate::clients::ollama::OllamaClient;
@@ -317,8 +319,6 @@ mod tests {
     use crate::http_client::ReqwestClient;
     use crate::llm::base::ApiClient;
     use crate::reranking::common::Rerank;
-
-    use super::BatchAPIProvider;
 
     fn assert_api_client<T: ApiClient>() {}
     fn assert_embedding_fn<T: EmbeddingFunction>() {}

@@ -143,9 +143,8 @@ impl TryFrom<ProviderId> for ModelProvider {
 mod tests {
     use std::str::FromStr;
 
-    use crate::capabilities::{EmbeddingProvider, ModelProvider, RerankerProvider};
-
     use super::ProviderId;
+    use crate::capabilities::{EmbeddingProvider, ModelProvider, RerankerProvider};
 
     #[test]
     fn provider_id_parses_all_supported_names() {

@@ -1,20 +1,21 @@
 //! Utilities for checking the health of the LanceDB database. This includes helpers to provide
 //! possible diagnostics for common issues.
 
-use crate::capabilities::EmbeddingProvider;
-use crate::embedding::common::get_embedding_dims_by_provider;
-use crate::providers::ProviderId;
-
-use super::lance::LanceError;
-use super::lance::{TABLE_NAME, get_db_uri};
-use arrow_array::RecordBatch;
-use futures::TryStreamExt;
-use lancedb::query::{ExecutableQuery, QueryBase};
-use lancedb::{Table, connect};
 use std::fmt;
 use std::fs;
 use std::io;
 use std::path::PathBuf;
+
+use arrow_array::RecordBatch;
+use futures::TryStreamExt;
+use lancedb::query::{ExecutableQuery, QueryBase};
+use lancedb::{Table, connect};
+
+use super::lance::LanceError;
+use super::lance::{TABLE_NAME, get_db_uri};
+use crate::capabilities::EmbeddingProvider;
+use crate::embedding::common::get_embedding_dims_by_provider;
+use crate::providers::ProviderId;
 
 /// ANSI color codes for console output
 const RED: &str = "\x1b[31m";
@@ -381,6 +382,14 @@ pub async fn lancedb_health_check(
 
 #[cfg(test)]
 mod tests {
+    use std::env;
+    use std::sync::Arc;
+
+    use arrow_array::{RecordBatch, StringArray};
+    use dotenv::dotenv;
+    use serial_test::serial;
+    use zqa_macros::test_ok;
+
     use super::lancedb_health_check;
     use crate::capabilities::EmbeddingProvider;
     use crate::config::VoyageAIConfig;
@@ -390,13 +399,6 @@ mod tests {
     use crate::embedding::common::EmbeddingProviderConfig;
     use crate::vector::lance::get_db_uri;
     use crate::vector::lance::insert_records;
-    use arrow_array::{RecordBatch, StringArray};
-    use dotenv::dotenv;
-
-    use serial_test::serial;
-    use std::env;
-    use std::sync::Arc;
-    use zqa_macros::test_ok;
 
     #[tokio::test]
     #[serial]

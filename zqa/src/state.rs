@@ -1,12 +1,13 @@
 //!  NOTE: This is not state management! The `state` module is actually a way to interact with `XDG_STATE_HOME`.
 
-use chrono::{DateTime, Local};
-use serde::{Deserialize, Serialize};
 use std::{
     fs,
     io::{self, BufRead},
     path::PathBuf,
 };
+
+use chrono::{DateTime, Local};
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use zqa_rag::{
     capabilities::{EmbeddingProvider, ModelProvider, RerankerProvider},
@@ -489,11 +490,12 @@ pub(crate) fn oobe<R: BufRead>(reader: &mut R, is_terminal: bool) -> Result<(), 
 
 #[cfg(test)]
 mod tests {
-    use chrono::Local;
-    use clap::builder::OsStr;
     use std::fs;
     use std::io::Cursor;
     use std::path::Component;
+
+    use chrono::Local;
+    use clap::builder::OsStr;
     use zqa_macros::test_ok;
     use zqa_rag::llm::base::{ChatHistoryContent, ChatHistoryItem, USER_ROLE};
 

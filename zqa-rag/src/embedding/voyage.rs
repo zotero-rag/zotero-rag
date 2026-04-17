@@ -1,11 +1,6 @@
 //! Functions, structs, and trait implementations for interacting with the VoyageAI API. This module
 //! includes support for both embedding only.
 
-use crate::{
-    capabilities::{BatchAPIProvider, BatchJobState, EmbeddingProvider},
-    constants::{DEFAULT_VOYAGE_EMBEDDING_DIM, DEFAULT_VOYAGE_EMBEDDING_MODEL},
-    embedding::common::{EmbeddingApiResponse, compute_embeddings_async},
-};
 use std::{borrow::Cow, env, sync::Arc};
 
 use arrow_schema::{DataType, Field};
@@ -17,6 +12,11 @@ use serde_jsonlines::{json_lines, write_json_lines};
 
 use crate::http_client::{HttpClient, ReqwestClient};
 use crate::llm::errors::LLMError;
+use crate::{
+    capabilities::{BatchAPIProvider, BatchJobState, EmbeddingProvider},
+    constants::{DEFAULT_VOYAGE_EMBEDDING_DIM, DEFAULT_VOYAGE_EMBEDDING_MODEL},
+    embedding::common::{EmbeddingApiResponse, compute_embeddings_async},
+};
 
 /// A client for Voyage AI's embedding API.
 #[derive(Debug, Clone)]
@@ -690,14 +690,16 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use arrow_array::Array;
+    use dotenv::dotenv;
+    use zqa_macros::{test_eq, test_ok};
+
     use super::*;
     use crate::capabilities::{BatchAPIProvider, BatchJobState};
     use crate::constants::{DEFAULT_VOYAGE_EMBEDDING_DIM, DEFAULT_VOYAGE_EMBEDDING_MODEL};
     use crate::http_client::{MockHttpClient, ReqwestClient};
-    use arrow_array::Array;
-    use dotenv::dotenv;
-    use std::sync::Arc;
-    use zqa_macros::{test_eq, test_ok};
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
     async fn test_compute_embeddings() {

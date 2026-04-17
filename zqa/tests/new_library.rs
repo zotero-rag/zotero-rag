@@ -1,7 +1,7 @@
-use dotenv::dotenv;
-
-use log::LevelFilter;
 use std::env;
+
+use dotenv::dotenv;
+use log::LevelFilter;
 use zqa::common::setup_logger;
 use zqa::config::{AnthropicConfig, Config, VoyageAIConfig};
 use zqa::full_library_to_arrow;

@@ -2,14 +2,15 @@
 //! tools that can be called by the LLM. Tools are used to perform tasks such as summarizing
 //! conversations, generating text, and performing calculations.
 
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::Arc;
+
 use futures::future::join_all;
 use schemars::Schema;
 use serde::Serialize;
 use serde::ser::SerializeMap;
 use serde_json::{Map, Value};
-use std::future::Future;
-use std::pin::Pin;
-use std::sync::Arc;
 
 use crate::llm::{
     base::{
@@ -294,11 +295,12 @@ where
 /// Test utilities for tool calling. This contains a `MockTool` that tests in this crate use to
 /// check that tool calling works correctly.
 pub(crate) mod test_utils {
+    use std::sync::{Arc, Mutex};
+
     use schemars::{JsonSchema, schema_for};
     use serde::Deserialize;
 
     use super::Tool;
-    use std::sync::{Arc, Mutex};
 
     /// A mock tool that returns static content. We will test that tool calling works and that we
     /// can deserialize the responses using this.
@@ -347,15 +349,17 @@ pub(crate) mod test_utils {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::llm::base::{ChatHistoryContent, ChatHistoryItem, ContentType, ToolCallRequest};
-    use schemars::{JsonSchema, schema_for};
-    use serde::Deserialize;
-    use serde_json::{Value, json};
     use std::future::Future;
     use std::pin::Pin;
     use std::time::Instant;
+
+    use schemars::{JsonSchema, schema_for};
+    use serde::Deserialize;
+    use serde_json::{Value, json};
     use zqa_macros::test_eq;
+
+    use super::*;
+    use crate::llm::base::{ChatHistoryContent, ChatHistoryItem, ContentType, ToolCallRequest};
 
     #[derive(Debug)]
     pub(crate) struct SlowTool {

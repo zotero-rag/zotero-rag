@@ -1,12 +1,11 @@
-use dotenv::dotenv;
-use log::LevelFilter;
-use zqa::common::setup_logger;
-use zqa::utils::library::ZoteroItemMetadata;
-
 use std::{env, fs};
 
+use dotenv::dotenv;
+use log::LevelFilter;
 use zqa::cli::prompts::get_extraction_prompt;
+use zqa::common::setup_logger;
 use zqa::config::{AnthropicConfig, GeminiConfig, OpenAIConfig};
+use zqa::utils::library::ZoteroItemMetadata;
 use zqa_rag::config::LLMClientConfig;
 use zqa_rag::llm::base::{ApiClient, ChatRequest, ContentType};
 use zqa_rag::llm::factory::get_client_with_config;

@@ -1,8 +1,8 @@
-use serde::{Deserialize, Serialize};
 use std::fmt::Display;
 use std::path::PathBuf;
 use std::{env, num::ParseIntError, path::Path};
-use thiserror;
+
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use zqa_rag::capabilities::{EmbeddingProvider, ModelProvider, RerankerProvider};
 use zqa_rag::config::LLMClientConfig;

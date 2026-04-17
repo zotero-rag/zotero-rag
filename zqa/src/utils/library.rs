@@ -1,8 +1,3 @@
-use arrow_array::RecordBatch;
-use directories::UserDirs;
-use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
-use rusqlite::Connection;
-use serde::Serialize;
 use std::collections::HashSet;
 use std::env;
 use std::fmt::Write;
@@ -14,15 +9,20 @@ use std::sync::atomic;
 use std::sync::atomic::AtomicUsize;
 use std::thread;
 use std::time::Instant;
-use thiserror::Error;
-use zqa_rag::embedding::common::EmbeddingProviderConfig;
-use zqa_rag::vector::lance::{LanceError, get_lancedb_items, lancedb_exists};
 
+use arrow_array::RecordBatch;
+use directories::UserDirs;
+use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
+use rusqlite::Connection;
+use serde::Serialize;
+use thiserror::Error;
 use zqa_pdftools::parse::extract_text;
+use zqa_rag::embedding::common::EmbeddingProviderConfig;
+use zqa_rag::vector::lance::get_column_from_batch;
+use zqa_rag::vector::lance::{LanceError, get_lancedb_items, lancedb_exists};
 
 use crate::izip;
 use crate::utils::arrow::DbFields;
-use zqa_rag::vector::lance::get_column_from_batch;
 
 /// Gets the Zotero library path. Works on Linux, macOS, and Windows systems.
 /// On CI environments, returns a location to a toy library in assets/ instead.
@@ -630,12 +630,8 @@ pub async fn parse_library(
 
 #[cfg(test)]
 mod tests {
-    use zqa_macros::{test_eq, test_ok};
-
-    use crate::common::setup_logger;
-
-    use super::*;
     use dotenv::dotenv;
+    use zqa_macros::{test_eq, test_ok};
     use zqa_rag::{
         config::VoyageAIConfig,
         constants::{
@@ -643,6 +639,9 @@ mod tests {
             DEFAULT_VOYAGE_RERANK_MODEL,
         },
     };
+
+    use super::*;
+    use crate::common::setup_logger;
 
     #[test]
     fn test_library_fetching_works() {

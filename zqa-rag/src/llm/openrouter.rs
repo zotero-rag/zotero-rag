@@ -1,11 +1,6 @@
 //! Functions, structs, and trait implementations for interacting with the OpenRouter API. This
 //! module includes support for text generation only.
 
-use crate::common::request_with_backoff;
-use crate::llm::base::{ChatHistoryContent, ContentType, ToolCallRequest, USER_ROLE};
-use crate::llm::tools::{
-    OPENROUTER_SCHEMA_KEY, SerializedTool, get_owned_tools, process_tool_calls,
-};
 use std::collections::HashMap;
 use std::env;
 
@@ -15,7 +10,12 @@ use serde::{Deserialize, Serialize};
 use super::base::{ApiClient, ChatHistoryItem, ChatRequest, CompletionApiResponse};
 use super::errors::LLMError;
 use crate::clients::openrouter::OpenRouterClient;
+use crate::common::request_with_backoff;
 use crate::http_client::HttpClient;
+use crate::llm::base::{ChatHistoryContent, ContentType, ToolCallRequest, USER_ROLE};
+use crate::llm::tools::{
+    OPENROUTER_SCHEMA_KEY, SerializedTool, get_owned_tools, process_tool_calls,
+};
 
 const DEFAULT_MODEL: &str = "anthropic/claude-sonnet-4.5";
 

@@ -15,12 +15,11 @@ pub mod tools;
 pub mod utils;
 
 // Re-export commonly used items
-pub use utils::arrow::full_library_to_arrow;
-
 use cli::app::cli;
 use common::{Args, Context, setup_logger};
 use config::Config;
 use state::{check_or_create_first_run_file, oobe};
+pub use utils::arrow::full_library_to_arrow;
 use zqa_rag::{
     config::LLMClientConfig, embedding::common::EmbeddingProviderConfig,
     reranking::common::RerankProviderConfig,

@@ -3,20 +3,19 @@
 
 use std::env;
 
-use crate::clients::gemini::{GeminiClient, get_gemini_api_key};
 use reqwest::header::HeaderMap;
 use serde::{Deserialize, Serialize};
 
+use super::base::{ApiClient, ChatRequest, CompletionApiResponse};
+use super::errors::LLMError;
+use crate::clients::gemini::{GeminiClient, get_gemini_api_key};
 use crate::common::request_with_backoff;
 use crate::constants::{DEFAULT_GEMINI_MODEL, DEFAULT_MAX_RETRIES};
+use crate::http_client::HttpClient;
 use crate::llm::base::{
     ChatHistoryContent, ChatHistoryItem, ContentType, ToolCallRequest, USER_ROLE,
 };
 use crate::llm::tools::{GEMINI_SCHEMA_KEY, SerializedTool, get_owned_tools, process_tool_calls};
-
-use super::base::{ApiClient, ChatRequest, CompletionApiResponse};
-use super::errors::LLMError;
-use crate::http_client::HttpClient;
 
 /// A function (tool) call request from the model.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -417,6 +416,11 @@ impl<T: HttpClient> ApiClient for GeminiClient<T> {
 #[cfg(test)]
 mod tests {
     use std::sync::{Arc, Mutex};
+
+    use arrow_array::Array;
+    use dotenv::dotenv;
+    use lancedb::embeddings::EmbeddingFunction;
+    use zqa_macros::test_eq;
     use zqa_macros::test_ok;
 
     use super::*;
@@ -426,10 +430,6 @@ mod tests {
     use crate::http_client::{MockHttpClient, SequentialMockHttpClient};
     use crate::llm::base::{ApiClient, ChatHistoryItem, ChatRequest};
     use crate::llm::tools::test_utils::MockTool;
-    use arrow_array::Array;
-    use dotenv::dotenv;
-    use lancedb::embeddings::EmbeddingFunction;
-    use zqa_macros::test_eq;
 
     #[tokio::test]
     async fn test_send_message_with_mock() {

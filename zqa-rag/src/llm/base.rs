@@ -1,11 +1,12 @@
 //! User-facing structs and traits for working with LLMs, including tool calling support. Most
 //! structs used by the clients can be converted to/from the structs here.
 
-use crate::llm::tools::{CallbackFn, Tool};
+use std::sync::Arc;
+
+use serde::{Deserialize, Serialize};
 
 use super::errors::LLMError;
-use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use crate::llm::tools::{CallbackFn, Tool};
 
 /// The user role.
 pub const USER_ROLE: &str = "user";

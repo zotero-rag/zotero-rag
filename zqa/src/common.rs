@@ -1,7 +1,3 @@
-use clap::Parser;
-use fern;
-use humantime;
-use log::LevelFilter;
 use std::{
     collections::HashMap,
     io::Write,
@@ -10,6 +6,11 @@ use std::{
         atomic::{AtomicBool, AtomicU64},
     },
 };
+
+use clap::Parser;
+use fern;
+use humantime;
+use log::LevelFilter;
 use zqa_pdftools::parse::ExtractedContent;
 use zqa_rag::llm::base::ChatHistoryItem;
 

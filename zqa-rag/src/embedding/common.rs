@@ -1,16 +1,16 @@
 //! Structs, functions, and traits shared by embedding clients and other embedding-related code in
 //! this crate.
 
-use arrow_schema::{DataType, Field};
-use futures::{StreamExt, stream};
-use indicatif::ProgressBar;
-use reqwest::header::HeaderMap;
-use serde::{Deserialize, Serialize};
 use std::env;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use arrow_schema::{DataType, Field};
+use futures::{StreamExt, stream};
+use indicatif::ProgressBar;
 use lancedb::embeddings::EmbeddingFunction;
+use reqwest::header::HeaderMap;
+use serde::{Deserialize, Serialize};
 
 use crate::capabilities::EmbeddingProvider;
 use crate::constants::{

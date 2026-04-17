@@ -1,5 +1,6 @@
-use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use std::{fs, hint::black_box, time::Duration};
+
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use zqa_pdftools::parse::extract_text;
 
 fn criterion_benchmark(c: &mut Criterion) {

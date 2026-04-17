@@ -1,6 +1,6 @@
 use std::{io, sync::PoisonError};
-use thiserror::Error;
 
+use thiserror::Error;
 use zqa_rag::{llm::errors::LLMError, vector::lance::LanceError};
 
 use crate::{config::ConfigError, utils};
