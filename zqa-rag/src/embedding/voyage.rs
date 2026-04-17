@@ -223,9 +223,15 @@ impl<T: HttpClient + Default + Clone + std::fmt::Debug> EmbeddingFunction for Vo
     }
 
     fn dest_type(&self) -> Result<Cow<'_, DataType>, lancedb::Error> {
+        let dim = self
+            .config
+            .as_ref()
+            .map_or(DEFAULT_VOYAGE_EMBEDDING_DIM as i32, |c| {
+                c.embedding_dims as i32
+            });
         Ok(Cow::Owned(DataType::FixedSizeList(
             Arc::new(Field::new("item", DataType::Float32, true)),
-            DEFAULT_VOYAGE_EMBEDDING_DIM as i32,
+            dim,
         )))
     }
 
@@ -362,14 +368,12 @@ impl VoyageAIBatchRequest<'_> {
     #[must_use]
     pub(crate) fn from_config(config: &crate::config::VoyageAIConfig) -> Self {
         Self {
-            endpoint: "/v1/embeddings",
-            completion_window: "12h",
             request_params: VoyageAIBatchRequestParams {
                 model: config.embedding_model.clone(),
-                input_type: "document",
                 output_dimension: config.embedding_dims,
+                ..VoyageAIBatchRequestParams::default()
             },
-            input_file_id: String::new(),
+            ..Default::default()
         }
     }
 }
