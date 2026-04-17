@@ -8,6 +8,20 @@ use crate::{
     common::Context,
 };
 
+/// Save the current conversation, if needed, and prepare to exit the CLI.
+///
+/// # Arguments
+///
+/// * `ctx` - A `Context` object that contains CLI state and objects that implement
+///   [`std::io::Write`] for `stdout` and `stderr`.
+///
+/// # Returns
+///
+/// `Ok(())` if the conversation was saved successfully or no save was needed.
+///
+/// # Errors
+///
+/// Returns a [`CLIError`] if conversation state could not be persisted.
 pub(crate) fn handle_quit_cmd<O, E>(ctx: &mut Context<O, E>) -> Result<(), CLIError>
 where
     O: Write,
@@ -16,6 +30,20 @@ where
     save_current_conversation(ctx)
 }
 
+/// Print the active CLI configuration.
+///
+/// # Arguments
+///
+/// * `ctx` - A `Context` object that contains CLI state and objects that implement
+///   [`std::io::Write`] for `stdout` and `stderr`.
+///
+/// # Returns
+///
+/// `Ok(())` if the configuration was written successfully.
+///
+/// # Errors
+///
+/// Returns a [`CLIError`] if writing to the output stream fails.
 pub(crate) fn handle_config_cmd<O, E>(ctx: &mut Context<O, E>) -> Result<(), CLIError>
 where
     O: Write,
@@ -26,6 +54,20 @@ where
     Ok(())
 }
 
+/// Save the current conversation and reset in-memory conversation state.
+///
+/// # Arguments
+///
+/// * `ctx` - A `Context` object that contains CLI state and objects that implement
+///   [`std::io::Write`] for `stdout` and `stderr`.
+///
+/// # Returns
+///
+/// `Ok(())` if the current conversation was saved and state was reset.
+///
+/// # Errors
+///
+/// Returns a [`CLIError`] if conversation state could not be persisted.
 pub(crate) fn handle_new_conversation_cmd<O, E>(ctx: &mut Context<O, E>) -> Result<(), CLIError>
 where
     O: Write,
@@ -40,6 +82,20 @@ where
     Ok(())
 }
 
+/// Print the CLI help text.
+///
+/// # Arguments
+///
+/// * `ctx` - A `Context` object that contains CLI state and objects that implement
+///   [`std::io::Write`] for `stdout` and `stderr`.
+///
+/// # Returns
+///
+/// `Ok(())` if the help text was written successfully.
+///
+/// # Errors
+///
+/// Returns a [`CLIError`] if writing to the output stream fails.
 pub(crate) fn handle_help_cmd<O, E>(ctx: &mut Context<O, E>) -> Result<(), CLIError>
 where
     O: Write,

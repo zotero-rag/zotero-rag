@@ -56,13 +56,22 @@ fn format_number(num: u32) -> String {
         .join(",")
 }
 
-/// Given a user query and the runtime context (CLI args + a `io::Write` implementation), perform a
-/// vector search.
+/// Perform a vector search for a user-provided search term.
 ///
 /// # Arguments
 ///
-/// * `ctx` - A `Context` object that contains CLI args and objects that implement
+/// * `search_term` - The search string to run against the vector database.
+/// * `ctx` - A `Context` object that contains CLI state and objects that implement
 ///   [`std::io::Write`] for `stdout` and `stderr`.
+///
+/// # Returns
+///
+/// `Ok(())` if the search completed and results were written successfully.
+///
+/// # Errors
+///
+/// Returns a [`CLIError`] if provider configuration is invalid, vector search fails,
+/// or writing to an output stream fails.
 pub(crate) async fn handle_search_cmd<O, E>(
     search_term: String,
     ctx: &mut Context<O, E>,
@@ -103,14 +112,22 @@ where
     Ok(())
 }
 
-/// Given a user query and the runtime context (CLI args + a `io::Write` implementation), perform a
-/// vector search and generate an answer based on the user's Zotero library.
+/// Answer a user query using retrieval and generation over the user's Zotero library.
 ///
 /// # Arguments
 ///
 /// * `query` - The user query.
-/// * `ctx` - A `Context` object that contains CLI args and objects that implement
+/// * `ctx` - A `Context` object that contains CLI state and objects that implement
 ///   [`std::io::Write`] for `stdout` and `stderr`.
+///
+/// # Returns
+///
+/// `Ok(())` if the query was processed and response metadata was written successfully.
+///
+/// # Errors
+///
+/// Returns a [`CLIError`] if configuration is invalid, document import fails,
+/// provider calls fail before final response handling, or writing to output streams fails.
 #[allow(clippy::too_many_lines)]
 pub(crate) async fn handle_query_cmd<O, E>(
     query: String,
