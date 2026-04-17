@@ -52,6 +52,7 @@ jobs:
           OPENROUTER_MODEL: google/gemini-2.5-flash
           ZEROENTROPY_API_KEY: ${{ secrets.ZEROENTROPY_API_KEY }}
           ANTHROPIC_MODEL: claude-haiku-4-5-20251001
+          VOYAGE_AI_MODEL: voyage-4-lite
           OPENAI_MODEL: gpt-5.4-mini
           OPENAI_EMBEDDING_MODEL: text-embedding-3-small
           MAX_CONCURRENT_REQUESTS: 5
