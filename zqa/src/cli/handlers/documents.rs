@@ -21,7 +21,7 @@ use crate::{
 /// # Errors
 ///
 /// * `CLIError::IOError` if the path could not be canonicalized.
-fn get_document_session_key(path: &Path) -> Result<String, CLIError> {
+pub(crate) fn get_document_session_key(path: &Path) -> Result<String, CLIError> {
     if path.is_relative() {
         return Ok(path.to_string_lossy().into_owned());
     }
@@ -91,7 +91,7 @@ pub(super) fn get_user_document_tools<O: Write, E: Write>(
 /// # Returns
 ///
 /// A list of file paths from the user's query.
-pub(super) fn get_document_mentions(query: &str) -> Vec<String> {
+pub(crate) fn get_document_mentions(query: &str) -> Vec<String> {
     let mut mentions = Vec::new();
     let mut cursor = 0;
 
@@ -208,4 +208,40 @@ where
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use zqa_macros::{test_eq, test_ok};
+
+    use super::{get_document_mentions, get_document_session_key};
+
+    #[test]
+    fn test_get_document_mentions_unquoted() {
+        let mentions = get_document_mentions("Compare @symbols.pdf with @subtables.pdf");
+        test_eq!(mentions, vec!["symbols.pdf", "subtables.pdf"]);
+    }
+
+    #[test]
+    fn test_get_document_mentions_quoted_spaces() {
+        let mentions = get_document_mentions("Summarize @\"image 1.pdf\" for me");
+        test_eq!(mentions, vec!["image 1.pdf"]);
+    }
+
+    #[test]
+    fn test_get_document_mentions_ignores_email_like_text() {
+        let mentions = get_document_mentions("email me at test@example.com about @symbols.pdf");
+        test_eq!(mentions, vec!["symbols.pdf"]);
+    }
+
+    #[test]
+    fn test_get_document_session_key_preserves_relative_input() {
+        let original = std::path::Path::new("papers/image 1.pdf");
+        let key = get_document_session_key(original);
+
+        test_ok!(key);
+        let key = key.unwrap();
+
+        test_eq!(key, "papers/image 1.pdf");
+    }
 }

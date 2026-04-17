@@ -171,8 +171,8 @@ mod tests {
     };
 
     use super::*;
-    use crate::cli::app::process;
     use crate::cli::app::tests::create_test_context;
+    use crate::cli::handlers::library::handle_process_cmd;
 
     fn make_tool() -> SummarizationTool {
         let client = get_client_with_config(&LLMClientConfig::Anthropic(AnthropicConfig {
@@ -309,7 +309,7 @@ mod tests {
         // Create test database with assets data
         let setup_result = temp_env::async_with_vars(
             [("CI", Some("true")), ("LANCEDB_URI", Some(&db_uri))],
-            process(&mut setup_ctx),
+            handle_process_cmd(&mut setup_ctx),
         )
         .await;
 
