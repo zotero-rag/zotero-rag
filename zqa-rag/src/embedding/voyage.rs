@@ -87,6 +87,17 @@ where
             |config| Ok(config.api_key.clone()),
         )?;
 
+        let model = self
+            .config
+            .as_ref()
+            .map_or(DEFAULT_VOYAGE_EMBEDDING_MODEL.to_string(), |c| {
+                c.embedding_model.clone()
+            });
+        let output_dimension = self
+            .config
+            .as_ref()
+            .map_or(DEFAULT_VOYAGE_EMBEDDING_DIM, |c| c.embedding_dims as u32);
+
         tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(compute_embeddings_async::<
                 VoyageAIRequest,
@@ -99,16 +110,16 @@ where
                 self.client.clone(),
                 |texts| VoyageAIRequest {
                     input: texts,
-                    model: DEFAULT_VOYAGE_EMBEDDING_MODEL.to_string(),
+                    model: model.clone(),
                     input_type: None, // Directly convert to vector
                     truncation: true,
-                    output_dimension: DEFAULT_VOYAGE_EMBEDDING_DIM, // Matryoshka embeddings
+                    output_dimension, // Matryoshka embeddings
                     output_dtype: "float".to_string(),
                 },
                 EmbeddingProvider::VoyageAI.as_str().to_string(),
                 BATCH_SIZE,
                 WAIT_AFTER_REQUEST_S,
-                DEFAULT_VOYAGE_EMBEDDING_DIM as usize,
+                output_dimension as usize,
             ))
         })
     }
@@ -289,7 +300,7 @@ pub(crate) struct VoyageAIFilesResponse {
 #[derive(Serialize)]
 pub(crate) struct VoyageAIBatchRequestParams<'a> {
     /// The model used. Defaults to [`crate::constants::DEFAULT_VOYAGE_EMBEDDING_MODEL`].
-    model: &'a str,
+    model: String,
     /// The input type. This is set to "document".
     input_type: &'a str,
     /// The embedding dimension. Defaults to [`crate::constants::DEFAULT_VOYAGE_EMBEDDING_DIM`].
@@ -299,7 +310,7 @@ pub(crate) struct VoyageAIBatchRequestParams<'a> {
 impl Default for VoyageAIBatchRequestParams<'_> {
     fn default() -> Self {
         Self {
-            model: DEFAULT_VOYAGE_EMBEDDING_MODEL,
+            model: DEFAULT_VOYAGE_EMBEDDING_MODEL.to_string(),
             input_type: "document",
             output_dimension: DEFAULT_VOYAGE_EMBEDDING_DIM as usize,
         }
@@ -345,6 +356,21 @@ impl VoyageAIBatchRequest<'_> {
         self.input_file_id = file_id.into();
 
         self
+    }
+
+    /// Build a batch request using values from the provided config.
+    #[must_use]
+    pub(crate) fn from_config(config: &crate::config::VoyageAIConfig) -> Self {
+        Self {
+            endpoint: "/v1/embeddings",
+            completion_window: "12h",
+            request_params: VoyageAIBatchRequestParams {
+                model: config.embedding_model.clone(),
+                input_type: "document",
+                output_dimension: config.embedding_dims,
+            },
+            input_file_id: String::new(),
+        }
     }
 }
 
@@ -593,7 +619,11 @@ where
         const BATCH_API_URL: &str = "https://api.voyageai.com/v1/batches";
 
         let file_id = &response.id;
-        let batch_request = VoyageAIBatchRequest::default().with_file_id(file_id);
+        let batch_request = if let Some(ref config) = self.config {
+            VoyageAIBatchRequest::from_config(config).with_file_id(file_id)
+        } else {
+            VoyageAIBatchRequest::default().with_file_id(file_id)
+        };
 
         let res = self
             .client
