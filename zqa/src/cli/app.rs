@@ -1403,8 +1403,9 @@ pub(crate) mod tests {
     }
 
     fn make_retrieval_tool(_schema_key: &str) -> RetrievalTool {
+        let api_key = std::env::var("VOYAGE_AI_API_KEY").unwrap_or_default();
         let config = zqa_rag::config::VoyageAIConfig {
-            api_key: String::new(),
+            api_key,
             embedding_model: DEFAULT_VOYAGE_EMBEDDING_MODEL.into(),
             embedding_dims: DEFAULT_VOYAGE_EMBEDDING_DIM as usize,
             reranker: DEFAULT_VOYAGE_RERANK_MODEL.into(),

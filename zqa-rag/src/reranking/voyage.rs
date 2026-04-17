@@ -67,7 +67,9 @@ impl<T: HttpClient> Rerank for VoyageAIClient<T> {
 
             let voyage_response: VoyageAIRerankResponse =
                 serde_json::from_str(&body).map_err(|e| {
-                    log::warn!("Error deserializing Voyage AI reranker response: {e}");
+                    log::warn!(
+                        "Error deserializing Voyage AI reranker response: {e}. Response: {body}"
+                    );
                     LLMError::DeserializationError(e.to_string())
                 })?;
 
