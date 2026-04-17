@@ -400,3 +400,310 @@ async fn fix_zero_embeddings<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Res
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        fs::{self, File},
+        sync::Arc,
+    };
+
+    use arrow_array::{
+        FixedSizeListArray, Float32Array, RecordBatch, RecordBatchIterator, StringArray,
+    };
+    use arrow_ipc::writer::FileWriter;
+    use lancedb::connect;
+    use serial_test::serial;
+    use temp_env;
+    use zqa_macros::{test_contains, test_ok};
+    use zqa_macros_proc::retry;
+    use zqa_rag::constants::DEFAULT_VOYAGE_EMBEDDING_DIM;
+
+    use super::{handle_checkhealth_cmd, handle_embed_cmd, handle_process_cmd, handle_stats_cmd};
+    use crate::cli::app::{BATCH_ITER_FILE, tests::create_test_context};
+
+    #[retry(3)]
+    #[tokio::test(flavor = "multi_thread")]
+    #[serial]
+    async fn test_embed() {
+        dotenv::dotenv().ok();
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_uri = temp_dir
+            .path()
+            .join("lancedb-table")
+            .to_str()
+            .unwrap()
+            .to_string();
+
+        let mut ctx = create_test_context();
+        let schema = arrow_schema::Schema::new(vec![arrow_schema::Field::new(
+            "pdf_text",
+            arrow_schema::DataType::Utf8,
+            false,
+        )]);
+        let data = StringArray::from(vec!["Hello", "World"]);
+        let record_batch =
+            RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(data)]).unwrap();
+
+        let file = File::create(BATCH_ITER_FILE).unwrap();
+        let mut writer = FileWriter::try_new(file, &schema).unwrap();
+        writer.write(&record_batch).unwrap();
+        writer.finish().unwrap();
+
+        let result = temp_env::async_with_vars(
+            [("LANCEDB_URI", Some(&db_uri))],
+            handle_embed_cmd(false, &mut ctx),
+        )
+        .await;
+        test_ok!(result);
+        assert!(result.is_ok());
+
+        let output = String::from_utf8(ctx.out.into_inner()).unwrap();
+        assert!(output.contains("Successfully parsed library!"));
+
+        let err = String::from_utf8(ctx.err.into_inner()).unwrap();
+        assert!(err.is_empty());
+
+        if fs::metadata(BATCH_ITER_FILE).is_ok() {
+            fs::remove_file(BATCH_ITER_FILE).expect("Failed to clean up BATCH_ITER_FILE");
+        }
+    }
+
+    #[retry(3)]
+    #[tokio::test(flavor = "multi_thread")]
+    #[serial]
+    async fn test_process_and_stats() {
+        dotenv::dotenv().ok();
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_uri = temp_dir
+            .path()
+            .join("lancedb-table")
+            .to_str()
+            .unwrap()
+            .to_string();
+
+        let mut ctx = create_test_context();
+        let result = temp_env::async_with_vars(
+            [("CI", Some("true")), ("LANCEDB_URI", Some(&db_uri))],
+            handle_process_cmd(&mut ctx),
+        )
+        .await;
+        test_ok!(result);
+        assert!(result.is_ok());
+
+        let output = String::from_utf8(ctx.out.clone().into_inner()).unwrap();
+        assert!(output.contains("Successfully parsed library!"));
+
+        let stats =
+            temp_env::async_with_vars([("LANCEDB_URI", Some(&db_uri))], handle_stats_cmd(&mut ctx))
+                .await;
+        let output = String::from_utf8(ctx.out.into_inner()).unwrap();
+        test_ok!(stats);
+        assert!(stats.is_ok());
+        assert!(output.contains("Table statistics:"));
+        assert!(output.contains("Number of rows: 8"));
+
+        if fs::metadata(BATCH_ITER_FILE).is_ok() {
+            fs::remove_file(BATCH_ITER_FILE).expect("Failed to clean up BATCH_ITER_FILE");
+        }
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_checkhealth_no_database() {
+        dotenv::dotenv().ok();
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_uri = temp_dir
+            .path()
+            .join("lancedb-table")
+            .to_str()
+            .unwrap()
+            .to_string();
+
+        let mut ctx = create_test_context();
+        let output = temp_env::async_with_vars([("LANCEDB_URI", Some(&db_uri))], async move {
+            handle_checkhealth_cmd(&mut ctx).await.unwrap();
+            String::from_utf8(ctx.out.into_inner()).unwrap()
+        })
+        .await;
+
+        assert!(output.contains("directory does not exist"));
+    }
+
+    #[retry(3)]
+    #[tokio::test]
+    #[serial]
+    async fn test_checkhealth_with_database() {
+        dotenv::dotenv().ok();
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_uri = temp_dir
+            .path()
+            .join("lancedb-table")
+            .to_str()
+            .unwrap()
+            .to_string();
+
+        let mut setup_ctx = create_test_context();
+        let result = temp_env::async_with_vars(
+            [("CI", Some("true")), ("LANCEDB_URI", Some(&db_uri))],
+            handle_process_cmd(&mut setup_ctx),
+        )
+        .await;
+        test_ok!(result);
+
+        let mut ctx = create_test_context();
+        let output = temp_env::async_with_vars([("LANCEDB_URI", Some(&db_uri))], async move {
+            handle_checkhealth_cmd(&mut ctx).await.unwrap();
+            String::from_utf8(ctx.out.into_inner()).unwrap()
+        })
+        .await;
+
+        test_contains!(output, "LanceDB Health Check Results");
+        test_contains!(output, "directory exists");
+        test_contains!(output, "Table is accessible");
+        test_contains!(output, "Table has");
+    }
+
+    async fn insert_zero_embedding_row(db_uri: &str) {
+        let dims = DEFAULT_VOYAGE_EMBEDDING_DIM as i32;
+        let schema = Arc::new(arrow_schema::Schema::new(vec![
+            arrow_schema::Field::new("library_key", arrow_schema::DataType::Utf8, false),
+            arrow_schema::Field::new("title", arrow_schema::DataType::Utf8, false),
+            arrow_schema::Field::new("file_path", arrow_schema::DataType::Utf8, false),
+            arrow_schema::Field::new("pdf_text", arrow_schema::DataType::Utf8, false),
+            arrow_schema::Field::new(
+                "embeddings",
+                arrow_schema::DataType::FixedSizeList(
+                    Arc::new(arrow_schema::Field::new(
+                        "item",
+                        arrow_schema::DataType::Float32,
+                        true,
+                    )),
+                    dims,
+                ),
+                false,
+            ),
+        ]));
+
+        #[allow(clippy::cast_sign_loss)]
+        let zeros = Float32Array::from(vec![0.0f32; dims as usize]);
+        let embedding_col = FixedSizeListArray::try_new(
+            Arc::new(arrow_schema::Field::new(
+                "item",
+                arrow_schema::DataType::Float32,
+                true,
+            )),
+            dims,
+            Arc::new(zeros),
+            None,
+        )
+        .unwrap();
+
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(StringArray::from(vec!["ZEROTEST001"])),
+                Arc::new(StringArray::from(vec!["Zero Test Item"])),
+                Arc::new(StringArray::from(vec!["/dev/null"])),
+                Arc::new(StringArray::from(vec![""])),
+                Arc::new(embedding_col),
+            ],
+        )
+        .unwrap();
+
+        let db = connect(db_uri).execute().await.unwrap();
+        let tbl = db.open_table("data").execute().await.unwrap();
+        let reader = RecordBatchIterator::new(vec![Ok(batch)].into_iter(), schema);
+        tbl.merge_insert(&["library_key"])
+            .when_not_matched_insert_all()
+            .clone()
+            .execute(Box::new(reader))
+            .await
+            .unwrap();
+    }
+
+    #[retry(3)]
+    #[tokio::test(flavor = "multi_thread")]
+    #[serial]
+    async fn test_fix_zero_embeddings_no_zeros() {
+        dotenv::dotenv().ok();
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_uri = temp_dir
+            .path()
+            .join("lancedb-table")
+            .to_str()
+            .unwrap()
+            .to_string();
+
+        let mut setup_ctx = create_test_context();
+        let setup_result = temp_env::async_with_vars(
+            [("CI", Some("true")), ("LANCEDB_URI", Some(&db_uri))],
+            handle_process_cmd(&mut setup_ctx),
+        )
+        .await;
+        test_ok!(setup_result);
+
+        let mut first_ctx = create_test_context();
+        let first_result = temp_env::async_with_vars(
+            [("LANCEDB_URI", Some(&db_uri))],
+            handle_embed_cmd(true, &mut first_ctx),
+        )
+        .await;
+        test_ok!(first_result);
+        assert!(first_result.is_ok());
+
+        let mut ctx = create_test_context();
+        let result = temp_env::async_with_vars(
+            [("LANCEDB_URI", Some(&db_uri))],
+            handle_embed_cmd(true, &mut ctx),
+        )
+        .await;
+        test_ok!(result);
+        assert!(result.is_ok());
+
+        let output = String::from_utf8(ctx.out.into_inner()).unwrap();
+        test_contains!(output, "Done!");
+    }
+
+    #[retry(3)]
+    #[tokio::test(flavor = "multi_thread")]
+    #[serial]
+    async fn test_fix_zero_embeddings_with_zero_rows() {
+        dotenv::dotenv().ok();
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_uri = temp_dir
+            .path()
+            .join("lancedb-table")
+            .to_str()
+            .unwrap()
+            .to_string();
+
+        let mut setup_ctx = create_test_context();
+        let setup_result = temp_env::async_with_vars(
+            [("CI", Some("true")), ("LANCEDB_URI", Some(&db_uri))],
+            handle_process_cmd(&mut setup_ctx),
+        )
+        .await;
+        test_ok!(setup_result);
+
+        insert_zero_embedding_row(&db_uri).await;
+
+        let mut ctx = create_test_context();
+        let result = temp_env::async_with_vars(
+            [("LANCEDB_URI", Some(&db_uri))],
+            handle_embed_cmd(true, &mut ctx),
+        )
+        .await;
+        test_ok!(result);
+        assert!(result.is_ok());
+
+        let output = String::from_utf8(ctx.out.into_inner()).unwrap();
+        test_contains!(output, "items had empty texts, and will be deleted.");
+    }
+}

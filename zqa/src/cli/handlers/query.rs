@@ -315,3 +315,88 @@ where
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use serial_test::serial;
+    use temp_env;
+    use zqa_macros::test_ok;
+    use zqa_macros_proc::retry;
+
+    use super::{handle_query_cmd, handle_search_cmd};
+    use crate::cli::{app::tests::create_test_context, handlers::library::handle_process_cmd};
+
+    #[retry(3)]
+    #[tokio::test(flavor = "multi_thread")]
+    #[serial]
+    async fn test_search_only() {
+        dotenv::dotenv().ok();
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_uri = temp_dir
+            .path()
+            .join("lancedb-table")
+            .to_str()
+            .unwrap()
+            .to_string();
+
+        let mut setup_ctx = create_test_context();
+        let result = temp_env::async_with_vars(
+            [("CI", Some("true")), ("LANCEDB_URI", Some(&db_uri))],
+            handle_process_cmd(&mut setup_ctx),
+        )
+        .await;
+        test_ok!(result);
+
+        let mut ctx = create_test_context();
+        let result = temp_env::async_with_vars(
+            [("CI", Some("true")), ("LANCEDB_URI", Some(&db_uri))],
+            handle_search_cmd(
+                "How should I oversample in defect prediction?".to_string(),
+                &mut ctx,
+            ),
+        )
+        .await;
+        test_ok!(result);
+        assert!(result.is_ok());
+
+        let output = String::from_utf8(ctx.out.into_inner()).unwrap();
+        assert!(output.len() > 20);
+    }
+
+    #[retry(3)]
+    #[tokio::test(flavor = "multi_thread")]
+    #[serial]
+    async fn test_run_query() {
+        dotenv::dotenv().ok();
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_uri = temp_dir
+            .path()
+            .join("lancedb-table")
+            .to_str()
+            .unwrap()
+            .to_string();
+
+        let mut setup_ctx = create_test_context();
+        let _ = temp_env::async_with_vars(
+            [("CI", Some("true")), ("LANCEDB_URI", Some(&db_uri))],
+            handle_process_cmd(&mut setup_ctx),
+        )
+        .await;
+
+        let mut ctx = create_test_context();
+        let result = temp_env::async_with_vars(
+            [("CI", Some("true")), ("LANCEDB_URI", Some(&db_uri))],
+            handle_query_cmd(
+                "How should I oversample in defect prediction?".to_string(),
+                &mut ctx,
+            ),
+        )
+        .await;
+
+        test_ok!(result);
+        assert!(result.is_ok());
+
+        let output = String::from_utf8(ctx.out.into_inner()).unwrap();
+        assert!(output.contains("Total token usage:"));
+    }
+}
