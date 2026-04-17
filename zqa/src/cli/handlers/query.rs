@@ -52,7 +52,7 @@ fn format_number(num: u32) -> String {
         .rev()
         .map(std::str::from_utf8)
         .collect::<Result<Vec<&str>, _>>()
-        .unwrap()
+        .unwrap_or_default()
         .join(",")
 }
 

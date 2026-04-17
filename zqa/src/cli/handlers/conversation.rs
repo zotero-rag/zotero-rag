@@ -117,7 +117,7 @@ where
     Ok(())
 }
 
-pub(super) fn save_current_conversation<O, E>(ctx: &mut Context<O, E>) -> Result<(), CLIError>
+pub(crate) fn save_current_conversation<O, E>(ctx: &mut Context<O, E>) -> Result<(), CLIError>
 where
     O: Write,
     E: Write,
