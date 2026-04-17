@@ -1,3 +1,5 @@
+//! Command handlers for CLI-related operations.
+
 use std::{
     io::Write,
     sync::{Arc, Mutex, atomic},

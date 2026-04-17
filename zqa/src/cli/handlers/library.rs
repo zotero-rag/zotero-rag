@@ -406,11 +406,13 @@ async fn fix_zero_embeddings<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Res
         }
     }
 
-    let zero_batches: Vec<RecordBatch> =
-        get_zero_vector_records(&ctx.config.get_embedding_config().ok_or(
-            CLIError::ConfigError("Could not get embedding config".into()),
-        )?)
-        .await?;
+    let embedding_config = ctx
+        .config
+        .get_embedding_config()
+        .ok_or(CLIError::ConfigError(
+            "Could not get embedding config".into(),
+        ))?;
+    let zero_batches: Vec<RecordBatch> = get_zero_vector_records(&embedding_config).await?;
 
     if zero_batches.is_empty() {
         writeln!(ctx.out, "{DIM_TEXT}Done!{RESET}")?;
@@ -434,11 +436,7 @@ async fn fix_zero_embeddings<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Res
     delete_rows(
         DbFields::LibraryKey.as_ref(),
         &zero_subset_keys,
-        &ctx.config
-            .get_embedding_config()
-            .ok_or(CLIError::ConfigError(
-                "Could not get embedding config".into(),
-            ))?,
+        &embedding_config,
     )
     .await?;
 
@@ -451,15 +449,8 @@ async fn fix_zero_embeddings<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Res
         return Ok(());
     }
 
-    let nonempty_zero_subset_batch = library_to_arrow(
-        nonempty_zero_subset,
-        ctx.config
-            .get_embedding_config()
-            .ok_or(CLIError::ConfigError(
-                "Could not get embedding config".into(),
-            ))?,
-    )
-    .await?;
+    let nonempty_zero_subset_batch =
+        library_to_arrow(nonempty_zero_subset, embedding_config).await?;
 
     let batches = vec![nonempty_zero_subset_batch.clone()];
 

@@ -8,7 +8,7 @@ use crate::cli::errors::CLIError;
 use crate::cli::handlers::cli::{
     handle_config_cmd, handle_help_cmd, handle_new_conversation_cmd, handle_quit_cmd,
 };
-use crate::cli::handlers::conversation::handle_resume_cmd;
+use crate::cli::handlers::conversation::{handle_resume_cmd, save_current_conversation};
 use crate::cli::handlers::documents::handle_docs_cmd;
 use crate::cli::handlers::library::{
     handle_checkhealth_cmd, handle_dedup_cmd, handle_doctor_cmd, handle_embed_cmd,
@@ -36,7 +36,6 @@ pub(crate) const BATCH_ITER_FILE: &str = "batch_iter.bin";
 /// # Returns
 ///
 /// `Ok(true)` if the CLI should continue running, `Ok(false)` if it should exit.
-#[allow(clippy::too_many_lines)]
 pub(crate) async fn dispatch_command<O: Write, E: Write>(
     command: &str,
     ctx: &mut Context<O, E>,
@@ -132,7 +131,7 @@ pub(crate) async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<()
             }
             Err(ReadlineError::Interrupted) => {
                 // Handle SIGINT by saving the conversation if needed
-                // save_current_conversation(&mut ctx)?;
+                save_current_conversation(&mut ctx)?;
                 break;
             }
             _ => break,
