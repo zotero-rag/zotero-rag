@@ -113,3 +113,43 @@ pub(crate) fn parse_command(command: &str) -> Result<Command, CommandParseError>
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{Command, CommandParseError, DocsCommand, parse_command};
+
+    #[test]
+    fn test_parse_search_command() {
+        match parse_command("/search a") {
+            Ok(Command::Search { query }) => assert_eq!(query, "a"),
+            Ok(_) => panic!("unexpected command variant"),
+            Err(err) => panic!("unexpected parse error: {err}"),
+        }
+    }
+
+    #[test]
+    fn test_parse_docs_remove_requires_key() {
+        assert!(matches!(
+            parse_command("/docs remove"),
+            Err(CommandParseError::InvalidCommand(message))
+                if message == "Please provide a key after /docs remove."
+        ));
+    }
+
+    #[test]
+    fn test_parse_docs_remove_command() {
+        match parse_command("/docs remove paper.pdf") {
+            Ok(Command::Docs(DocsCommand::Remove { key })) => assert_eq!(key, "paper.pdf"),
+            Ok(_) => panic!("unexpected command variant"),
+            Err(err) => panic!("unexpected parse error: {err}"),
+        }
+    }
+
+    #[test]
+    fn test_parse_short_query_is_invalid() {
+        assert!(matches!(
+            parse_command("short"),
+            Err(CommandParseError::InvalidCommand(message)) if message == "short"
+        ));
+    }
+}

@@ -96,3 +96,31 @@ where
     writeln!(&mut ctx.out)?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use zqa_macros::test_contains;
+
+    use super::handle_help_cmd;
+    use crate::cli::app::tests::create_test_context;
+
+    #[test]
+    fn test_handle_help_cmd() {
+        let mut ctx = create_test_context();
+        handle_help_cmd(&mut ctx).unwrap();
+        let output = String::from_utf8(ctx.out.into_inner()).unwrap();
+        test_contains!(output, "Available commands:");
+        test_contains!(output, "/help");
+        test_contains!(output, "/checkhealth");
+        test_contains!(output, "/doctor");
+        test_contains!(output, "/embed");
+        test_contains!(output, "/process");
+        test_contains!(output, "/index");
+        test_contains!(output, "/stats");
+        test_contains!(output, "/dedup");
+        test_contains!(output, "/resume");
+        test_contains!(output, "/config");
+        test_contains!(output, "/new");
+        test_contains!(output, "/quit");
+    }
+}
