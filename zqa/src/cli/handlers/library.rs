@@ -91,7 +91,7 @@ where
 
     if let Err(parse_err) = item_metadata {
         writeln!(
-            &mut ctx.out,
+            &mut ctx.err,
             "Could not parse library metadata: {parse_err}"
         )?;
         return Ok(());
@@ -275,7 +275,8 @@ where
             writeln!(ctx.out, "Deduped {count} rows")?;
         }
         Err(e) => {
-            return Err(CLIError::LanceError(e.to_string()));
+            // Avoid terminating CLI
+            writeln!(&mut ctx.err, "Deduplication failed: {e}")?;
         }
     }
 
@@ -306,7 +307,11 @@ where
         "Updating indices. This may take a while depending on how many items need to be added."
     )?;
 
-    create_or_update_indexes(DbFields::PdfText.as_ref(), DbFields::Embeddings.as_ref()).await?;
+    if let Err(e) =
+        create_or_update_indexes(DbFields::PdfText.as_ref(), DbFields::Embeddings.as_ref()).await
+    {
+        writeln!(&mut ctx.err, "Failed to update indexes: {e}")?;
+    }
 
     writeln!(
         &mut ctx.out,

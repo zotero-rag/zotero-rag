@@ -140,7 +140,16 @@ where
     writeln!(&mut ctx.out)?;
 
     for mention in get_document_mentions(&query) {
-        let path = import_document(ctx, Path::new(&mention))?;
+        let path = match import_document(ctx, Path::new(&mention)) {
+            Ok(p) => p,
+            Err(e) => {
+                writeln!(
+                    &mut ctx.err,
+                    "{DIM_TEXT}Failed to import {mention}: {e}{RESET}"
+                )?;
+                continue;
+            }
+        };
         writeln!(&mut ctx.err, "{DIM_TEXT}Imported document: {path}{RESET}")?;
     }
     let model_provider = ctx.config.model_provider;
@@ -206,6 +215,7 @@ where
 
     let chat_history = Arc::clone(&ctx.state.chat_history);
 
+    // TODO: avoid bypassing context I/O
     let on_tool_call: Arc<CallbackFn<ToolUseStats>> = Arc::new(move |stats: &ToolUseStats| {
         let _ = writeln!(io::stderr(), "{}🗸 {}{}", DIM_TEXT, stats.tool_name, RESET);
     });
