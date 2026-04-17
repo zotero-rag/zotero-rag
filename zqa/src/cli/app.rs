@@ -37,7 +37,7 @@ pub(crate) const BATCH_ITER_FILE: &str = "batch_iter.bin";
 ///
 /// `Ok(true)` if the CLI should continue running, `Ok(false)` if it should exit.
 #[allow(clippy::too_many_lines)]
-pub(crate) async fn handle_command<O: Write, E: Write>(
+pub(crate) async fn dispatch_command<O: Write, E: Write>(
     command: &str,
     ctx: &mut Context<O, E>,
 ) -> Result<bool, CLIError> {
@@ -122,7 +122,7 @@ pub(crate) async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<()
                     log::debug!("Failed to write history entry: {e}");
                 }
 
-                if !handle_command(&command, &mut ctx).await? {
+                if !dispatch_command(&command, &mut ctx).await? {
                     break;
                 }
             }
@@ -259,10 +259,10 @@ pub(crate) mod tests {
         writer.write(&record_batch).unwrap();
         writer.finish().unwrap();
 
-        // Actually call `handle_command`
+        // Actually call `dispatch_command`
         let result = temp_env::async_with_vars(
             [("LANCEDB_URI", Some(&db_uri))],
-            handle_command("/embed", &mut ctx),
+            dispatch_command("/embed", &mut ctx),
         )
         .await;
         test_ok!(result);
@@ -298,7 +298,7 @@ pub(crate) mod tests {
 
         let result = temp_env::async_with_vars(
             [("CI", Some("true")), ("LANCEDB_URI", Some(&db_uri))],
-            handle_command("/process", &mut ctx),
+            dispatch_command("/process", &mut ctx),
         )
         .await;
 
@@ -310,7 +310,7 @@ pub(crate) mod tests {
 
         let stats = temp_env::async_with_vars(
             [("LANCEDB_URI", Some(&db_uri))],
-            handle_command("/stats", &mut ctx),
+            dispatch_command("/stats", &mut ctx),
         )
         .await;
         let output = String::from_utf8(ctx.out.into_inner()).unwrap();
@@ -343,7 +343,7 @@ pub(crate) mod tests {
         // `process` needs to be run before `search_for_papers`
         let result = temp_env::async_with_vars(
             [("CI", Some("true")), ("LANCEDB_URI", Some(&db_uri))],
-            handle_command("/process", &mut setup_ctx),
+            dispatch_command("/process", &mut setup_ctx),
         )
         .await;
         test_ok!(result);
@@ -351,7 +351,7 @@ pub(crate) mod tests {
         let mut ctx = create_test_context();
         let result = temp_env::async_with_vars(
             [("CI", Some("true")), ("LANCEDB_URI", Some(&db_uri))],
-            handle_command(
+            dispatch_command(
                 "/search How should I oversample in defect prediction?",
                 &mut ctx,
             ),
@@ -387,14 +387,14 @@ pub(crate) mod tests {
         // `process` needs to be run before `run_query`
         let _ = temp_env::async_with_vars(
             [("CI", Some("true")), ("LANCEDB_URI", Some(&db_uri))],
-            handle_command("/process", &mut setup_ctx),
+            dispatch_command("/process", &mut setup_ctx),
         )
         .await;
 
         let mut ctx = create_test_context();
         let result = temp_env::async_with_vars(
             [("CI", Some("true")), ("LANCEDB_URI", Some(&db_uri))],
-            handle_command("How should I oversample in defect prediction?", &mut ctx),
+            dispatch_command("How should I oversample in defect prediction?", &mut ctx),
         )
         .await;
 
@@ -420,7 +420,7 @@ pub(crate) mod tests {
 
         let mut ctx = create_test_context();
         let output = temp_env::async_with_vars([("LANCEDB_URI", Some(&db_uri))], async move {
-            handle_command("/checkhealth", &mut ctx).await.unwrap();
+            dispatch_command("/checkhealth", &mut ctx).await.unwrap();
             String::from_utf8(ctx.out.into_inner()).unwrap()
         })
         .await;
@@ -446,7 +446,7 @@ pub(crate) mod tests {
         let mut setup_ctx = create_test_context();
         let result = temp_env::async_with_vars(
             [("CI", Some("true")), ("LANCEDB_URI", Some(&db_uri))],
-            handle_command("/process", &mut setup_ctx),
+            dispatch_command("/process", &mut setup_ctx),
         )
         .await;
         test_ok!(result);
@@ -454,7 +454,7 @@ pub(crate) mod tests {
         // Now run health check
         let mut ctx = create_test_context();
         let output = temp_env::async_with_vars([("LANCEDB_URI", Some(&db_uri))], async move {
-            handle_command("/checkhealth", &mut ctx).await.unwrap();
+            dispatch_command("/checkhealth", &mut ctx).await.unwrap();
             String::from_utf8(ctx.out.into_inner()).unwrap()
         })
         .await;
@@ -583,9 +583,9 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn test_handle_command_help() {
+    async fn test_dispatch_command_help() {
         let mut ctx = create_test_context();
-        let result = handle_command("/help", &mut ctx).await.unwrap();
+        let result = dispatch_command("/help", &mut ctx).await.unwrap();
         assert!(result);
         let output = String::from_utf8(ctx.out.into_inner()).unwrap();
         test_contains!(output, "Available commands:");
@@ -687,7 +687,7 @@ pub(crate) mod tests {
         let mut setup_ctx = create_test_context();
         let setup_result = temp_env::async_with_vars(
             [("CI", Some("true")), ("LANCEDB_URI", Some(&db_uri))],
-            handle_command("/process", &mut setup_ctx),
+            dispatch_command("/process", &mut setup_ctx),
         )
         .await;
         test_ok!(setup_result);
@@ -696,7 +696,7 @@ pub(crate) mod tests {
         let mut first_ctx = create_test_context();
         let first_result = temp_env::async_with_vars(
             [("LANCEDB_URI", Some(&db_uri))],
-            handle_command("/embed fix", &mut first_ctx),
+            dispatch_command("/embed fix", &mut first_ctx),
         )
         .await;
         test_ok!(first_result);
@@ -706,7 +706,7 @@ pub(crate) mod tests {
         let mut ctx = create_test_context();
         let result = temp_env::async_with_vars(
             [("LANCEDB_URI", Some(&db_uri))],
-            handle_command("/embed fix", &mut ctx),
+            dispatch_command("/embed fix", &mut ctx),
         )
         .await;
         test_ok!(result);
@@ -735,7 +735,7 @@ pub(crate) mod tests {
         let mut setup_ctx = create_test_context();
         let setup_result = temp_env::async_with_vars(
             [("CI", Some("true")), ("LANCEDB_URI", Some(&db_uri))],
-            handle_command("/process", &mut setup_ctx),
+            dispatch_command("/process", &mut setup_ctx),
         )
         .await;
         test_ok!(setup_result);
@@ -746,7 +746,7 @@ pub(crate) mod tests {
         let mut ctx = create_test_context();
         let result = temp_env::async_with_vars(
             [("LANCEDB_URI", Some(&db_uri))],
-            handle_command("/embed fix", &mut ctx),
+            dispatch_command("/embed fix", &mut ctx),
         )
         .await;
         test_ok!(result);
@@ -776,7 +776,7 @@ pub(crate) mod tests {
         // Create test database with assets data
         let setup_result = temp_env::async_with_vars(
             [("CI", Some("true")), ("LANCEDB_URI", Some(&db_uri))],
-            handle_command("/process", &mut setup_ctx),
+            dispatch_command("/process", &mut setup_ctx),
         )
         .await;
         test_ok!(setup_result);
