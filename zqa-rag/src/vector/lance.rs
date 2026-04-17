@@ -29,14 +29,14 @@ use thiserror::Error;
 /// be changed.
 pub const DB_URI: &str = "data/lancedb-table";
 
+/// The name of the table. This is the default table name, and for now cannot be changed.
+pub const TABLE_NAME: &str = "data";
+
 /// Returns the database URI, allowing override via `LANCEDB_URI` environment variable.
 #[must_use]
 pub fn get_db_uri() -> String {
     std::env::var("LANCEDB_URI").unwrap_or_else(|_| DB_URI.to_string())
 }
-
-/// The name of the table. This is the default table name, and for now cannot be changed.
-pub const TABLE_NAME: &str = "data";
 
 /// Errors that can occur when working with LanceDB
 #[derive(Debug, Error)]

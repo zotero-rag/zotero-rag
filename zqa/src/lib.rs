@@ -131,6 +131,16 @@ fn check_api_keys_exist(config: &Config, log_level: log::LevelFilter) {
 /// * If the logger could not be set up
 /// * If the input could not be read from `stdin`.
 pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
+    // Set LANCEDB_URI to the XDG state dir if the caller hasn't already overridden it.
+    if std::env::var("LANCEDB_URI").is_err()
+        && let Ok(state_dir) = state::get_state_dir()
+    {
+        let db_path = state_dir.join(zqa_rag::vector::lance::DB_URI);
+
+        // Safety: single-threaded at this point (before any async tasks spawn).
+        unsafe { std::env::set_var("LANCEDB_URI", db_path) };
+    }
+
     let mut config = load_config()?;
     let args = Args::parse();
 
