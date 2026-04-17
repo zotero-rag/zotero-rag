@@ -34,6 +34,7 @@ pub(crate) enum CommandParseError {
 pub(crate) fn parse_command(command: &str) -> Result<Command, CommandParseError> {
     match command {
         "" => Ok(Command::DoNothing),
+        "/new" => Ok(Command::NewConversation),
         "/help" | "help" | "?" => Ok(Command::Help),
         "/checkhealth" => Ok(Command::CheckHealth),
         "/doctor" => Ok(Command::Doctor),
@@ -44,7 +45,7 @@ pub(crate) fn parse_command(command: &str) -> Result<Command, CommandParseError>
         "/dedup" => Ok(Command::Dedup),
         "/resume" => Ok(Command::Resume),
         "/config" => Ok(Command::Config),
-        "/quit" | "/exit" | "quit" | "exit" | "/new" => Ok(Command::Quit),
+        "/quit" | "/exit" | "quit" | "exit" => Ok(Command::Quit),
         query => {
             // Check for a threshold to ensure this isn't an accidental Enter-hit.
             #[allow(clippy::items_after_statements)]
