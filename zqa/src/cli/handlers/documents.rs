@@ -35,10 +35,7 @@ pub(crate) fn get_document_session_key(path: &Path) -> Result<String, CLIError> 
         return Ok(relative_path.to_string_lossy().into_owned());
     }
 
-    Ok(canonical_path.file_name().map_or_else(
-        || canonical_path.to_string_lossy().into_owned(),
-        |name| name.to_string_lossy().into_owned(),
-    ))
+    Ok(canonical_path.to_string_lossy().into_owned())
 }
 
 /// Get tools to work with user-imported documents.
