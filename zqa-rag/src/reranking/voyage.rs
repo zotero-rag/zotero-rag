@@ -103,11 +103,6 @@ mod tests {
         let client = VoyageAIClient::<ReqwestClient>::default();
         let reranked = client.rerank(&array, query).await;
 
-        // Debug the error if there is one
-        if reranked.is_err() {
-            println!("Voyage AI reranker error: {:?}", reranked.as_ref().err());
-        }
-
         test_ok!(reranked);
 
         let reranked = reranked.unwrap();

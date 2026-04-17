@@ -717,11 +717,6 @@ mod tests {
         let client = VoyageAIClient::<ReqwestClient>::default();
         let embeddings = client.compute_embeddings_internal(Arc::new(array));
 
-        // Debug the error if there is one
-        if embeddings.is_err() {
-            println!("Voyage AI embedding error: {:?}", embeddings.as_ref().err());
-        }
-
         test_ok!(embeddings);
 
         let embeddings = embeddings.unwrap();

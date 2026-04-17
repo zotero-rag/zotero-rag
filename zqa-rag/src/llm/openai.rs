@@ -655,11 +655,6 @@ mod tests {
         };
         let res = client.send_message(&request).await;
 
-        // Debug the error if there is one
-        if res.is_err() {
-            println!("OpenAI test error: {:?}", res.as_ref().err());
-        }
-
         test_ok!(res);
     }
 
@@ -706,11 +701,6 @@ mod tests {
         };
         let res = mock_client.send_message(&request).await;
 
-        // Debug the error if there is one
-        if res.is_err() {
-            println!("OpenAI test error: {:?}", res.as_ref().err());
-        }
-
         test_ok!(res);
         let res = res.unwrap();
         test_eq!(res.content.len(), 1);
@@ -738,11 +728,6 @@ mod tests {
 
         let client = OpenAIClient::<ReqwestClient>::default();
         let embeddings = client.compute_source_embeddings(Arc::new(array));
-
-        // Debug the error if there is one
-        if embeddings.is_err() {
-            println!("OpenAI embedding error: {:?}", embeddings.as_ref().err());
-        }
 
         test_ok!(embeddings);
 
@@ -772,11 +757,6 @@ mod tests {
         };
 
         let res = client.send_message(&request).await;
-
-        // Debug the error if there is one
-        if res.is_err() {
-            println!("OpenAI test error: {:?}", res.as_ref().err());
-        }
 
         test_ok!(res);
         assert!(call_count.lock().unwrap().eq(&1_usize));
@@ -854,8 +834,6 @@ mod tests {
         .await
         .expect("Failed to process tool calls");
         let duration = start.elapsed();
-
-        println!("Duration: {duration:?}");
 
         // Expect concurrent execution: approx 100ms.
         // It should be definitely less than 500ms.

@@ -375,10 +375,6 @@ mod tests {
         let client = OllamaClient::<ReqwestClient>::default();
         let embeddings = client.compute_embeddings_internal(Arc::new(array));
 
-        if embeddings.is_err() {
-            println!("Ollama embedding error: {:?}", embeddings.as_ref().err());
-        }
-
         test_ok!(embeddings);
 
         let embeddings = embeddings.unwrap();

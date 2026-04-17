@@ -258,7 +258,7 @@ async fn send_openrouter_request(
     let body = res.text().await?;
     let json: serde_json::Value = serde_json::from_str(&body)?;
     let response: OpenRouterResponse = serde_json::from_value(json.clone()).map_err(|err| {
-        eprintln!("Failed to deserialize OpenRouter response: we got the response {json}");
+        log::error!("Failed to deserialize OpenRouter response: we got the response {json}");
 
         LLMError::DeserializationError(err.to_string())
     })?;
@@ -451,11 +451,6 @@ mod tests {
 
         let res = client.send_message(&request).await;
 
-        // Debug the error if there is one
-        if res.is_err() {
-            println!("OpenRouter test error: {:?}", res.as_ref().err());
-        }
-
         test_ok!(res);
     }
 
@@ -506,11 +501,6 @@ mod tests {
 
         let res = mock_client.send_message(&request).await;
 
-        // Debug the error if there is one
-        if res.is_err() {
-            println!("OpenRouter test error: {:?}", res.as_ref().err());
-        }
-
         test_ok!(res);
 
         let res = res.unwrap();
@@ -545,11 +535,6 @@ mod tests {
         };
 
         let res = client.send_message(&request).await;
-
-        // Debug the error if there is one
-        if res.is_err() {
-            println!("OpenRouter test error: {:?}", res.as_ref().err());
-        }
 
         test_ok!(res);
         assert!(call_count.lock().unwrap().eq(&1_usize));

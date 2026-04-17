@@ -226,11 +226,6 @@ mod tests {
         let client = CohereClient::<ReqwestClient>::default();
         let embeddings = client.compute_embeddings_internal(Arc::new(array));
 
-        // Debug the error if there is one
-        if embeddings.is_err() {
-            println!("Cohere embedding error: {:?}", embeddings.as_ref().err());
-        }
-
         test_ok!(embeddings);
 
         let embeddings = embeddings.unwrap();

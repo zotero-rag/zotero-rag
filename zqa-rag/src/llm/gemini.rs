@@ -538,11 +538,6 @@ mod tests {
         let client = GeminiClient::<ReqwestClient>::default();
         let embeddings = client.compute_embeddings_async(Arc::new(array)).await;
 
-        // Debug the error if there is one
-        if embeddings.is_err() {
-            println!("Gemini embedding error: {:?}", embeddings.as_ref().err());
-        }
-
         test_ok!(embeddings);
 
         let embeddings = embeddings.unwrap();
@@ -567,11 +562,6 @@ mod tests {
         };
         let res = client.send_message(&request).await;
 
-        // Debug the error if there is one
-        if res.is_err() {
-            println!("Gemini test error: {:?}", res.as_ref().err());
-        }
-
         test_ok!(res);
     }
 
@@ -594,11 +584,6 @@ mod tests {
         };
 
         let res = client.send_message(&request).await;
-
-        // Debug the error if there is one
-        if res.is_err() {
-            println!("Gemini test error: {:?}", res.as_ref().err());
-        }
 
         test_ok!(res);
     }

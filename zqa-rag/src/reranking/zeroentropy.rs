@@ -131,10 +131,6 @@ mod tests {
         let client = ZeroEntropyClient::<ReqwestClient>::default();
         let reranked = client.rerank(&items, query).await;
 
-        if reranked.is_err() {
-            println!("ZeroEntropy reranker error: {:?}", reranked.as_ref().err());
-        }
-
         test_ok!(reranked);
 
         let reranked = reranked.unwrap();

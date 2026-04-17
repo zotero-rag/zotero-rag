@@ -165,11 +165,11 @@ pub fn get_model_pricing(
         {
             Ok(bytes) => {
                 if let Err(e) = std::fs::write(&path, &bytes) {
-                    eprintln!("[WARN] Failed to write pricing cache file: {e}");
+                    log::warn!("Failed to write pricing cache file: {e}");
                 }
             }
             Err(e) => {
-                eprintln!("[WARN] Failed to fetch pricing file, using cache if available: {e}");
+                log::warn!("Failed to fetch pricing file, using cache if available: {e}");
             }
         }
     }

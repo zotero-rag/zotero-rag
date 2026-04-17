@@ -290,13 +290,6 @@ mod tests {
         let client = ZeroEntropyClient::<ReqwestClient>::default();
         let embeddings = client.compute_embeddings_internal(Arc::new(array), "document");
 
-        if embeddings.is_err() {
-            println!(
-                "ZeroEntropy embedding error: {:?}",
-                embeddings.as_ref().err()
-            );
-        }
-
         test_ok!(embeddings);
 
         let embeddings = embeddings.unwrap();

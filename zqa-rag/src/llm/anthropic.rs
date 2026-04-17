@@ -263,7 +263,7 @@ async fn send_anthropic_request(
     let body = res.text().await?;
     let json: serde_json::Value = serde_json::from_str(&body)?;
     let response: AnthropicResponse = serde_json::from_value(json.clone()).map_err(|err| {
-        eprintln!("Failed to deserialize Anthropic response: we got the response {json}");
+        log::error!("Failed to deserialize Anthropic response: we got the response {json}");
 
         LLMError::DeserializationError(err.to_string())
     })?;
@@ -456,11 +456,6 @@ mod tests {
 
         let res = client.send_message(&request).await;
 
-        // Debug the error if there is one
-        if res.is_err() {
-            println!("Anthropic test error: {:?}", res.as_ref().err());
-        }
-
         test_ok!(res);
     }
 
@@ -506,11 +501,6 @@ mod tests {
 
         let res = mock_client.send_message(&request).await;
 
-        // Debug the error if there is one
-        if res.is_err() {
-            println!("Anthropic test error: {:?}", res.as_ref().err());
-        }
-
         test_ok!(res);
 
         let res = res.unwrap();
@@ -543,11 +533,6 @@ mod tests {
             on_text: None,
         };
         let res = client.send_message(&request).await;
-
-        // Debug the error if there is one
-        if res.is_err() {
-            println!("Anthropic test error: {:?}", res.as_ref().err());
-        }
 
         test_ok!(res);
         assert!(call_count.lock().unwrap().eq(&1_usize));
