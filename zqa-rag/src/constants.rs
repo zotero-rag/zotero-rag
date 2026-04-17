@@ -1,7 +1,7 @@
 //! Constants used throughout the RAG system
 
 /// Default maximum concurrent requests for embedding processing
-pub const DEFAULT_MAX_CONCURRENT_REQUESTS: usize = 5;
+pub const DEFAULT_MAX_CONCURRENT_REQUESTS: usize = 1;
 
 /// Maximum number of retries for API requests with backoff
 pub const DEFAULT_MAX_RETRIES: usize = 3;

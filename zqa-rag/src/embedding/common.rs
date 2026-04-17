@@ -233,7 +233,8 @@ where
     let max_concurrent = env::var("MAX_CONCURRENT_REQUESTS")
         .ok()
         .and_then(|s| s.parse().ok())
-        .unwrap_or(DEFAULT_MAX_CONCURRENT_REQUESTS);
+        .unwrap_or(DEFAULT_MAX_CONCURRENT_REQUESTS)
+        .max(1);
 
     let api_url = api_url.to_string();
     let api_key = api_key.to_string();
@@ -260,8 +261,6 @@ where
                 .iter()
                 .filter_map(|opt| opt.clone().filter(|s| !s.trim().is_empty()))
                 .collect();
-
-            bar.inc(batch.len() as u64);
 
             // (embeddings_for_batch, fail_count, failed_texts, masked_count)
             type BatchResult = (Vec<Vec<f32>>, usize, Vec<String>, usize);
@@ -323,6 +322,8 @@ where
             if wait_after_request_s > 0 && i < num_batches - 1 {
                 tokio::time::sleep(Duration::from_secs(wait_after_request_s)).await;
             }
+
+            bar.inc(batch.len() as u64);
 
             Ok::<BatchResult, LLMError>(result)
         }
