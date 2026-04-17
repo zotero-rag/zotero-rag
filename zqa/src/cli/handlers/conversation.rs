@@ -30,7 +30,7 @@ use crate::{
 /// * `CLIError::IOError` - If `writeln!` or reading input fails.
 /// * `CLIError::LockPoisoningError` - If a lock on the context chat history could not be
 ///   obtained.
-pub(crate) async fn handle_resume_cmd<O: Write, E: Write>(
+pub(crate) fn handle_resume_cmd<O: Write, E: Write>(
     ctx: &mut Context<O, E>,
 ) -> Result<(), CLIError> {
     let stdin = io::stdin();

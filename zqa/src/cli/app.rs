@@ -52,19 +52,19 @@ pub(crate) async fn dispatch_command<O: Write, E: Write>(
         Command::Embed { fix } => handle_embed_cmd(fix, ctx).await,
         Command::Dedup => handle_dedup_cmd(ctx).await,
         Command::Index => handle_index_cmd(ctx).await,
-        Command::Resume => handle_resume_cmd(ctx).await,
-        Command::Help => handle_help_cmd(ctx).await,
+        Command::Resume => handle_resume_cmd(ctx),
+        Command::Help => handle_help_cmd(ctx),
         Command::Quit => {
-            return handle_quit_cmd(ctx).await.and(Ok(false));
+            return handle_quit_cmd(ctx).and(Ok(false));
         }
         Command::CheckHealth => handle_checkhealth_cmd(ctx).await,
         Command::Query { text } => handle_query_cmd(text, ctx).await,
         Command::Doctor => handle_doctor_cmd(ctx).await,
-        Command::NewConversation => handle_new_conversation_cmd(ctx).await,
-        Command::Config => handle_config_cmd(ctx).await,
+        Command::NewConversation => handle_new_conversation_cmd(ctx),
+        Command::Config => handle_config_cmd(ctx),
         Command::Stats => handle_stats_cmd(ctx).await,
         Command::Search { query } => handle_search_cmd(query, ctx).await,
-        Command::Docs(subcmd) => handle_docs_cmd(subcmd, ctx).await,
+        Command::Docs(subcmd) => handle_docs_cmd(subcmd, ctx),
     }
     .and(Ok(true))
 }

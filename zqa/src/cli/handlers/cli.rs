@@ -8,7 +8,7 @@ use crate::{
     common::Context,
 };
 
-pub(crate) async fn handle_quit_cmd<O, E>(ctx: &mut Context<O, E>) -> Result<(), CLIError>
+pub(crate) fn handle_quit_cmd<O, E>(ctx: &mut Context<O, E>) -> Result<(), CLIError>
 where
     O: Write,
     E: Write,
@@ -16,7 +16,7 @@ where
     save_current_conversation(ctx)
 }
 
-pub(crate) async fn handle_config_cmd<O, E>(ctx: &mut Context<O, E>) -> Result<(), CLIError>
+pub(crate) fn handle_config_cmd<O, E>(ctx: &mut Context<O, E>) -> Result<(), CLIError>
 where
     O: Write,
     E: Write,
@@ -26,9 +26,7 @@ where
     Ok(())
 }
 
-pub(crate) async fn handle_new_conversation_cmd<O, E>(
-    ctx: &mut Context<O, E>,
-) -> Result<(), CLIError>
+pub(crate) fn handle_new_conversation_cmd<O, E>(ctx: &mut Context<O, E>) -> Result<(), CLIError>
 where
     O: Write,
     E: Write,
@@ -42,7 +40,7 @@ where
     Ok(())
 }
 
-pub(crate) async fn handle_help_cmd<O, E>(ctx: &mut Context<O, E>) -> Result<(), CLIError>
+pub(crate) fn handle_help_cmd<O, E>(ctx: &mut Context<O, E>) -> Result<(), CLIError>
 where
     O: Write,
     E: Write,

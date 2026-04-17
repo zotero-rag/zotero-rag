@@ -171,7 +171,7 @@ pub(super) fn import_document<O: Write, E: Write>(
     Ok(key)
 }
 
-pub(crate) async fn handle_docs_cmd<O, E>(
+pub(crate) fn handle_docs_cmd<O, E>(
     subcmd: DocsCommand,
     ctx: &mut Context<O, E>,
 ) -> Result<(), CLIError>
