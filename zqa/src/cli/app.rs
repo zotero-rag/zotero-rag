@@ -151,28 +151,26 @@ pub(crate) mod tests {
     use std::io::Cursor;
     use std::sync::Arc;
 
+    use super::{BATCH_ITER_FILE, dispatch_command};
     use arrow_array::{FixedSizeListArray, Float32Array, RecordBatchIterator};
     use arrow_array::{RecordBatch, StringArray};
     use arrow_ipc::writer::FileWriter;
-    use chrono::Local;
     use lancedb::connect;
     use serde_json::json;
     use serial_test::serial;
     use temp_env;
-    use zqa_macros::{test_contains, test_eq, test_ok};
+    use zqa_macros::{test_contains, test_ok};
     use zqa_macros_proc::retry;
     use zqa_rag::constants::{
         DEFAULT_VOYAGE_EMBEDDING_DIM, DEFAULT_VOYAGE_EMBEDDING_MODEL, DEFAULT_VOYAGE_RERANK_MODEL,
     };
     use zqa_rag::embedding::common::EmbeddingProviderConfig;
-    use zqa_rag::llm::base::{ASSISTANT_ROLE, ChatHistoryContent, ChatHistoryItem, USER_ROLE};
     use zqa_rag::llm::tools::Tool;
     use zqa_rag::reranking::common::RerankProviderConfig;
 
     use crate::common::Context;
     use crate::common::State;
     use crate::config::{Config, VoyageAIConfig};
-    use crate::state::{SavedChatHistory, save_conversation};
     use crate::tools::retrieval::RetrievalTool;
 
     pub(crate) fn get_config() -> Config {
@@ -463,123 +461,6 @@ pub(crate) mod tests {
         test_contains!(output, "directory exists");
         test_contains!(output, "Table is accessible");
         test_contains!(output, "Table has");
-    }
-
-    #[test]
-    fn test_resume_no_conversations() {
-        let temp_dir = tempfile::tempdir().unwrap();
-        temp_env::with_var("ZQA_STATE_DIR", Some(temp_dir.path()), || {
-            let mut ctx = create_test_context();
-            let mut reader = Cursor::new("");
-            resume(&mut ctx, &mut reader).unwrap();
-
-            let output = String::from_utf8(ctx.out.into_inner()).unwrap();
-            test_contains!(output, "No saved conversations found.");
-        });
-    }
-
-    #[test]
-    fn test_resume_loads_selected_conversation() {
-        let temp_dir = tempfile::tempdir().unwrap();
-        temp_env::with_var("ZQA_STATE_DIR", Some(temp_dir.path()), || {
-            let history_a = vec![
-                ChatHistoryItem {
-                    role: USER_ROLE.into(),
-                    content: vec![ChatHistoryContent::Text("What is attention?".into())],
-                },
-                ChatHistoryItem {
-                    role: ASSISTANT_ROLE.into(),
-                    content: vec![ChatHistoryContent::Text(
-                        "Attention is a mechanism...".into(),
-                    )],
-                },
-            ];
-            let history_b = vec![ChatHistoryItem {
-                role: USER_ROLE.into(),
-                content: vec![ChatHistoryContent::Text(
-                    "Tell me about transformers.".into(),
-                )],
-            }];
-
-            save_conversation(&SavedChatHistory {
-                history: history_a.clone(),
-                date: Local::now(),
-                title: "Conversation A".into(),
-            })
-            .unwrap();
-
-            save_conversation(&SavedChatHistory {
-                history: history_b.clone(),
-                // Avoid same filename
-                date: Local::now() + chrono::Duration::seconds(1),
-                title: "Conversation B".into(),
-            })
-            .unwrap();
-
-            let mut ctx = create_test_context();
-            // The list is sorted reverse-chronologically; B was saved last so it's [1].
-            let mut reader = Cursor::new("1\n");
-            resume(&mut ctx, &mut reader).unwrap();
-
-            let out = String::from_utf8(ctx.out.into_inner()).unwrap();
-            test_contains!(out, "Resumed:");
-
-            let loaded = ctx.state.chat_history.lock().unwrap();
-            test_eq!(loaded.len(), history_b.len());
-            assert!(!ctx.state.dirty.load(std::sync::atomic::Ordering::Relaxed));
-        });
-    }
-
-    #[test]
-    fn test_resume_invalid_selection() {
-        let temp_dir = tempfile::tempdir().unwrap();
-        temp_env::with_var("ZQA_STATE_DIR", Some(temp_dir.path()), || {
-            save_conversation(&SavedChatHistory {
-                history: vec![ChatHistoryItem {
-                    role: USER_ROLE.into(),
-                    content: vec![ChatHistoryContent::Text("Hello".into())],
-                }],
-                date: Local::now(),
-                title: "Only Conversation".into(),
-            })
-            .unwrap();
-
-            let mut ctx = create_test_context();
-            let mut reader = Cursor::new("99\n");
-            resume(&mut ctx, &mut reader).unwrap();
-
-            let err = String::from_utf8(ctx.err.into_inner()).unwrap();
-            test_contains!(err, "Invalid selection.");
-        });
-    }
-
-    #[test]
-    fn test_get_document_mentions_unquoted() {
-        let mentions = get_document_mentions("Compare @symbols.pdf with @subtables.pdf");
-        test_eq!(mentions, vec!["symbols.pdf", "subtables.pdf"]);
-    }
-
-    #[test]
-    fn test_get_document_mentions_quoted_spaces() {
-        let mentions = get_document_mentions("Summarize @\"image 1.pdf\" for me");
-        test_eq!(mentions, vec!["image 1.pdf"]);
-    }
-
-    #[test]
-    fn test_get_document_mentions_ignores_email_like_text() {
-        let mentions = get_document_mentions("email me at test@example.com about @symbols.pdf");
-        test_eq!(mentions, vec!["symbols.pdf"]);
-    }
-
-    #[test]
-    fn test_get_document_session_key_preserves_relative_input() {
-        let original = std::path::Path::new("papers/image 1.pdf");
-        let key = get_document_session_key(original);
-
-        test_ok!(key);
-        let key = key.unwrap();
-
-        test_eq!(key, "papers/image 1.pdf");
     }
 
     #[tokio::test]

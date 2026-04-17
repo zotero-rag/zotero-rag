@@ -35,7 +35,15 @@ pub(crate) fn handle_resume_cmd<O: Write, E: Write>(
 ) -> Result<(), CLIError> {
     let stdin = io::stdin();
     let mut reader = stdin.lock();
+    resume_with_reader(ctx, &mut reader)
+}
 
+fn resume_with_reader<O, E, R>(ctx: &mut Context<O, E>, reader: &mut R) -> Result<(), CLIError>
+where
+    O: Write,
+    E: Write,
+    R: BufRead,
+{
     match get_conversation_history() {
         Err(e) => {
             writeln!(&mut ctx.err, "Failed to load conversations: {e}")?;
@@ -131,4 +139,106 @@ where
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::Cursor;
+
+    use chrono::Local;
+    use temp_env;
+    use zqa_macros::{test_contains, test_eq};
+    use zqa_rag::llm::base::{ASSISTANT_ROLE, ChatHistoryContent, ChatHistoryItem, USER_ROLE};
+
+    use super::resume_with_reader;
+    use crate::{
+        cli::app::tests::create_test_context,
+        state::{SavedChatHistory, save_conversation},
+    };
+
+    #[test]
+    fn test_resume_no_conversations() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        temp_env::with_var("ZQA_STATE_DIR", Some(temp_dir.path()), || {
+            let mut ctx = create_test_context();
+            let mut reader = Cursor::new("");
+            resume_with_reader(&mut ctx, &mut reader).unwrap();
+
+            let output = String::from_utf8(ctx.out.into_inner()).unwrap();
+            test_contains!(output, "No saved conversations found.");
+        });
+    }
+
+    #[test]
+    fn test_resume_loads_selected_conversation() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        temp_env::with_var("ZQA_STATE_DIR", Some(temp_dir.path()), || {
+            let history_a = vec![
+                ChatHistoryItem {
+                    role: USER_ROLE.into(),
+                    content: vec![ChatHistoryContent::Text("What is attention?".into())],
+                },
+                ChatHistoryItem {
+                    role: ASSISTANT_ROLE.into(),
+                    content: vec![ChatHistoryContent::Text(
+                        "Attention is a mechanism...".into(),
+                    )],
+                },
+            ];
+            let history_b = vec![ChatHistoryItem {
+                role: USER_ROLE.into(),
+                content: vec![ChatHistoryContent::Text(
+                    "Tell me about transformers.".into(),
+                )],
+            }];
+
+            save_conversation(&SavedChatHistory {
+                history: history_a.clone(),
+                date: Local::now(),
+                title: "Conversation A".into(),
+            })
+            .unwrap();
+
+            save_conversation(&SavedChatHistory {
+                history: history_b.clone(),
+                date: Local::now() + chrono::Duration::seconds(1),
+                title: "Conversation B".into(),
+            })
+            .unwrap();
+
+            let mut ctx = create_test_context();
+            let mut reader = Cursor::new("1\n");
+            resume_with_reader(&mut ctx, &mut reader).unwrap();
+
+            let out = String::from_utf8(ctx.out.into_inner()).unwrap();
+            test_contains!(out, "Resumed:");
+
+            let loaded = ctx.state.chat_history.lock().unwrap();
+            test_eq!(loaded.len(), history_b.len());
+            assert!(!ctx.state.dirty.load(std::sync::atomic::Ordering::Relaxed));
+        });
+    }
+
+    #[test]
+    fn test_resume_invalid_selection() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        temp_env::with_var("ZQA_STATE_DIR", Some(temp_dir.path()), || {
+            save_conversation(&SavedChatHistory {
+                history: vec![ChatHistoryItem {
+                    role: USER_ROLE.into(),
+                    content: vec![ChatHistoryContent::Text("Hello".into())],
+                }],
+                date: Local::now(),
+                title: "Only Conversation".into(),
+            })
+            .unwrap();
+
+            let mut ctx = create_test_context();
+            let mut reader = Cursor::new("99\n");
+            resume_with_reader(&mut ctx, &mut reader).unwrap();
+
+            let err = String::from_utf8(ctx.err.into_inner()).unwrap();
+            test_contains!(err, "Invalid selection.");
+        });
+    }
 }
