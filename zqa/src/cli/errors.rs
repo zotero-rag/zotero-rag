@@ -9,6 +9,8 @@ use crate::{config::ConfigError, utils};
 pub enum CLIError {
     #[error("Error parsing library: {0}")]
     ArrowError(String),
+    #[error("Command error: {0}")]
+    CommandError(String),
     #[error("IO Error: {0}")]
     IOError(#[from] io::Error),
     #[error("Error communicating with the LLM: {0}")]
