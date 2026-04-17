@@ -17,7 +17,7 @@ use zqa_rag::vector::{
 };
 
 use crate::{
-    cli::{app::BATCH_ITER_FILE, commands::Command, errors::CLIError},
+    cli::{app::BATCH_ITER_FILE, errors::CLIError},
     common::Context,
     full_library_to_arrow,
     utils::{
@@ -33,10 +33,7 @@ use crate::{
 ///
 /// * `ctx` - A `Context` object that contains CLI args and objects that implement
 ///   [`std::io::Write`] for `stdout` and `stderr`.
-pub(crate) async fn handle_stats_cmd<O, E>(
-    _cmd: Command,
-    ctx: &mut Context<O, E>,
-) -> Result<(), CLIError>
+pub(crate) async fn handle_stats_cmd<O, E>(ctx: &mut Context<O, E>) -> Result<(), CLIError>
 where
     O: Write,
     E: Write,
@@ -58,19 +55,12 @@ where
 ///
 /// * `ctx` - A `Context` object that contains CLI args and objects that implement
 ///   [`std::io::Write`] for `stdout` and `stderr`.
-pub(crate) async fn handle_process_cmd<O, E>(
-    cmd: Command,
-    ctx: &mut Context<O, E>,
-) -> Result<(), CLIError>
+pub(crate) async fn handle_process_cmd<O, E>(ctx: &mut Context<O, E>) -> Result<(), CLIError>
 where
     O: Write,
     E: Write,
 {
     const WARNING_THRESHOLD: usize = 100;
-
-    if !matches!(cmd, Command::Process) {
-        return Err(CLIError::CommandError("Expected process command".into()));
-    }
 
     let item_metadata =
         if lancedb_exists().await {
@@ -160,19 +150,13 @@ where
 /// * `fix_zeros` - If `true`, fixes zero-embedding vectors, but does not handle PDFs
 ///   parsed but not embedded.
 pub(crate) async fn handle_embed_cmd<O, E>(
-    cmd: Command,
+    fix: bool,
     ctx: &mut Context<O, E>,
 ) -> Result<(), CLIError>
 where
     O: Write,
     E: Write,
 {
-    let Command::Embed { fix } = cmd else {
-        return Err(CLIError::CommandError(
-            "Expected /embed command".to_string(),
-        ));
-    };
-
     if fix {
         return fix_zero_embeddings(ctx).await;
     }
@@ -228,18 +212,11 @@ where
     Ok(())
 }
 
-pub(crate) async fn handle_dedup_cmd<O, E>(
-    cmd: Command,
-    ctx: &mut Context<O, E>,
-) -> Result<(), CLIError>
+pub(crate) async fn handle_dedup_cmd<O, E>(ctx: &mut Context<O, E>) -> Result<(), CLIError>
 where
     O: Write,
     E: Write,
 {
-    if !matches!(cmd, Command::Dedup) {
-        return Err(CLIError::CommandError("Expected dedup command".into()));
-    }
-
     let result = dedup_rows(
         &ctx.config
             .get_embedding_config()
@@ -264,18 +241,11 @@ where
     Ok(())
 }
 
-pub(crate) async fn handle_index_cmd<O, E>(
-    cmd: Command,
-    ctx: &mut Context<O, E>,
-) -> Result<(), CLIError>
+pub(crate) async fn handle_index_cmd<O, E>(ctx: &mut Context<O, E>) -> Result<(), CLIError>
 where
     O: Write,
     E: Write,
 {
-    if !matches!(cmd, Command::Index) {
-        return Err(CLIError::CommandError("Expected /index command".into()));
-    }
-
     writeln!(
         &mut ctx.out,
         "Updating indices. This may take a while depending on how many items need to be added."
@@ -299,15 +269,8 @@ where
 /// * `ctx` - A `Context` object that contains CLI args and objects that implement
 ///   [`std::io::Write`] for `stdout` and `stderr`.
 pub(crate) async fn handle_checkhealth_cmd<O: Write, E: Write>(
-    command: Command,
     ctx: &mut Context<O, E>,
 ) -> Result<(), CLIError> {
-    if !matches!(command, Command::CheckHealth) {
-        return Err(CLIError::CommandError(
-            "Expected /checkhealth command".into(),
-        ));
-    }
-
     let _ = match lancedb_health_check(ctx.config.embedding_provider).await {
         Ok(result) => writeln!(ctx.out, "{result}"),
         Err(e) => writeln!(ctx.err, "{e}"),
@@ -325,10 +288,7 @@ pub(crate) async fn handle_checkhealth_cmd<O: Write, E: Write>(
 ///
 /// * `ctx` - A `Context` object that contains CLI args and objects that implement
 ///   [`std::io::Write`] for `stdout` and `stderr`.
-pub(crate) async fn handle_doctor_cmd<O, E>(
-    _command: Command,
-    ctx: &mut Context<O, E>,
-) -> Result<(), CLIError>
+pub(crate) async fn handle_doctor_cmd<O, E>(ctx: &mut Context<O, E>) -> Result<(), CLIError>
 where
     O: Write,
     E: Write,

@@ -5,10 +5,7 @@ use std::{io::Write, path::Path, sync::Arc};
 use zqa_rag::{llm::tools::Tool, providers::registry::provider_registry};
 
 use crate::{
-    cli::{
-        commands::{Command, DocsCommand},
-        errors::CLIError,
-    },
+    cli::{commands::DocsCommand, errors::CLIError},
     common::Context,
     tools::documents::{DocumentsToolFactory, parse_user_document},
 };
@@ -175,17 +172,13 @@ pub(super) fn import_document<O: Write, E: Write>(
 }
 
 pub(crate) async fn handle_docs_cmd<O, E>(
-    cmd: Command,
+    subcmd: DocsCommand,
     ctx: &mut Context<O, E>,
 ) -> Result<(), CLIError>
 where
     O: Write,
     E: Write,
 {
-    let Command::Docs(subcmd) = cmd else {
-        return Err(CLIError::CommandError("Invalid command".to_string()));
-    };
-
     match subcmd {
         DocsCommand::Clear => {
             let mut imports = ctx.state.imports.write()?;

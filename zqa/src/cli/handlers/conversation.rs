@@ -8,7 +8,7 @@ use std::{
 use chrono::Local;
 
 use crate::{
-    cli::{commands::Command, errors::CLIError},
+    cli::errors::CLIError,
     common::Context,
     state::{SavedChatHistory, get_conversation_history, save_conversation},
 };
@@ -31,15 +31,8 @@ use crate::{
 /// * `CLIError::LockPoisoningError` - If a lock on the context chat history could not be
 ///   obtained.
 pub(crate) async fn handle_resume_cmd<O: Write, E: Write>(
-    cmd: Command,
     ctx: &mut Context<O, E>,
 ) -> Result<(), CLIError> {
-    if !matches!(cmd, Command::Resume) {
-        return Err(CLIError::CommandError(
-            "resume command expected".to_string(),
-        ));
-    }
-
     let stdin = io::stdin();
     let mut reader = stdin.lock();
 
