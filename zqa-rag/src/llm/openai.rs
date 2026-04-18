@@ -163,8 +163,11 @@ impl From<&ChatHistoryItem> for Vec<OpenAIRequestInput> {
 pub(crate) struct OpenAIReasoning {
     /// Thinking effort. Currently supported values are 'none', 'minimal', 'low', 'medium',
     /// 'high', and 'xhigh'. Only supported by gpt-5 and o-series models. gpt-5.1 does not
-    /// support 'xhigh'. gpt-5 (presumably; the OpenAI docs state "all models before gpt-5.1").
-    /// gpt-5-pro only supports 'high'. 'xhigh' is supported for all models after gpt-5.1-codex-max.
+    /// support 'xhigh'. gpt-5 (the OpenAI docs state "all models before gpt-5.1") does not
+    /// support "none". gpt-5-pro only supports 'high'. 'xhigh' is supported for all models
+    /// after gpt-5.1-codex-max. See [docs].
+    ///
+    /// [docs]: https://developers.openai.com/api/reference/resources/responses/methods/create
     effort: String,
     /// One of "auto", "concise", "detailed".
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -250,6 +253,14 @@ struct OpenAIContent {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+struct OpenAIOutputReasoningSummary {
+    /// Always "summary_text"
+    r#type: String,
+    /// Reasoning summary
+    text: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(tag = "type", rename_all = "lowercase")]
 enum OpenAIOutput {
     /// A reasoning block with an optional summary.
@@ -257,7 +268,7 @@ enum OpenAIOutput {
     Reasoning {
         id: String,
         #[serde(default)]
-        summary: Vec<String>,
+        summary: Vec<OpenAIOutputReasoningSummary>,
     },
     /// A standard assistant message with text content.
     #[serde(rename = "message")]

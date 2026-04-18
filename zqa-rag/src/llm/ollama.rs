@@ -91,7 +91,7 @@ impl<T: HttpClient> ApiClient for OllamaClient<T> {
             model: &model,
             max_tokens: max_tokens_to_use,
             messages: &chat_history,
-            thinking: None,
+            thinking: request.reasoning.clone().map(Into::into),
             tools: tools.as_deref(),
         };
 
