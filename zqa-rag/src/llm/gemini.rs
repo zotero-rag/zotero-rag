@@ -377,6 +377,13 @@ impl<T: HttpClient> ApiClient for GeminiClient<T> {
             )
             .await?;
 
+            let generation_config = generation_config.as_ref().map(|c| {
+                let mut new_config = c.clone();
+                new_config.thinking_config = None;
+
+                new_config
+            });
+
             // Create a new request borrowing the updated chat history
             let updated_req_body = GeminiRequestBody {
                 generation_config: generation_config.clone(),
