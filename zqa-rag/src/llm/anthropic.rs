@@ -64,6 +64,14 @@ impl From<&ChatHistoryItem> for AnthropicChatHistoryItem {
     }
 }
 
+#[derive(Serialize)]
+pub(crate) struct AnthropicThinkingConfig {
+    /// Token budget for thinking
+    budget_tokens: u32,
+    /// Always "enabled"
+    r#type: String,
+}
+
 /// Represents a request to the Anthropic API
 #[derive(Serialize)]
 pub(crate) struct AnthropicRequest<'a> {
@@ -73,6 +81,8 @@ pub(crate) struct AnthropicRequest<'a> {
     pub(crate) max_tokens: u32,
     /// The conversation history and current message
     pub(crate) messages: &'a [AnthropicChatHistoryItem],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) thinking: Option<AnthropicThinkingConfig>,
     /// The tools passed in
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) tools: Option<&'a [SerializedTool<'a>]>,
@@ -337,6 +347,7 @@ impl<T: HttpClient> ApiClient for AnthropicClient<T> {
             model: &model,
             max_tokens: max_tokens_to_use,
             messages: &chat_history,
+            thinking: None,
             tools: tools.as_deref(),
         };
 
@@ -376,6 +387,7 @@ impl<T: HttpClient> ApiClient for AnthropicClient<T> {
                 model: &model,
                 max_tokens: max_tokens_to_use,
                 messages: &chat_history,
+                thinking: None,
                 tools: tools.as_deref(),
             };
 
@@ -449,6 +461,7 @@ mod tests {
             chat_history: Vec::new(),
             max_tokens: Some(1024),
             message: "Hello!".to_owned(),
+            reasoning: None,
             tools: None,
             on_tool_call: None,
             on_text: None,
@@ -494,6 +507,7 @@ mod tests {
             chat_history: Vec::new(),
             max_tokens: Some(1024),
             message: "Hello!".to_owned(),
+            reasoning: None,
             tools: None,
             on_tool_call: None,
             on_text: None,
@@ -528,6 +542,7 @@ mod tests {
             chat_history: Vec::new(),
             max_tokens: Some(1024),
             message: "This is a test. Call the `mock_tool`, passing in a `name`, and ensure it returns a greeting".into(),
+            reasoning: None,
             tools: Some(&[Box::new(tool)]),
             on_tool_call: None,
             on_text: None,
@@ -598,6 +613,7 @@ mod tests {
             chat_history: Vec::new(),
             max_tokens: Some(1024),
             message: "Test".into(),
+            reasoning: None,
             tools: Some(&[Box::new(tool)]),
             on_tool_call: Some(Arc::new(move |_| {
                 *tool_call_count_cb.lock().unwrap() += 1;

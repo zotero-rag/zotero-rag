@@ -738,6 +738,7 @@ mod tests {
             max_tokens: 8192,
             embedding_model: DEFAULT_OPENAI_EMBEDDING_MODEL.into(),
             embedding_dims: DEFAULT_OPENAI_EMBEDDING_DIM as usize,
+            reasoning_effort: None,
         })
     }
 

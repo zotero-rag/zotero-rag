@@ -880,6 +880,7 @@ mod tests {
                 max_tokens: 0,
                 embedding_model: DEFAULT_OPENAI_EMBEDDING_MODEL.to_string(),
                 embedding_dims: DEFAULT_OPENAI_EMBEDDING_DIM as usize,
+                reasoning_effort: None,
             }),
             reranker_config: Some(RerankProviderConfig::VoyageAI(VoyageAIConfig {
                 api_key: voyage_api_key,
@@ -970,6 +971,7 @@ mod tests {
                 model: String::new(),
                 embedding_model: DEFAULT_GEMINI_EMBEDDING_MODEL.to_string(),
                 embedding_dims: DEFAULT_GEMINI_EMBEDDING_DIM as usize,
+                reasoning_budget: None,
             }),
             reranker_config: Some(RerankProviderConfig::VoyageAI(VoyageAIConfig {
                 api_key: voyage_api_key,
@@ -1000,6 +1002,7 @@ mod tests {
                 max_tokens: DEFAULT_OPENAI_MAX_TOKENS,
                 embedding_model: DEFAULT_OPENAI_EMBEDDING_MODEL.to_string(),
                 embedding_dims: DEFAULT_OPENAI_EMBEDDING_DIM as usize,
+                reasoning_effort: None,
             }))
             .expect("Failed to create OpenAI client");
 
@@ -1015,6 +1018,7 @@ mod tests {
                 max_tokens: 0,
                 embedding_model: DEFAULT_OPENAI_EMBEDDING_MODEL.to_string(),
                 embedding_dims: DEFAULT_OPENAI_EMBEDDING_DIM as usize,
+                reasoning_effort: None,
             }),
             reranker_config: Some(RerankProviderConfig::VoyageAI(VoyageAIConfig {
                 api_key: voyage_api_key,

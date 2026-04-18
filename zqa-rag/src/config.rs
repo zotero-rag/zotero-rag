@@ -21,6 +21,8 @@ pub struct AnthropicConfig {
     pub model: String,
     /// Maximum tokens for generation
     pub max_tokens: u32,
+    /// Token budget for extended thinking. `None` disables thinking.
+    pub reasoning_budget: Option<u32>,
 }
 
 /// Configuration for OpenAI LLM and embedding provider
@@ -36,6 +38,8 @@ pub struct OpenAIConfig {
     pub embedding_model: String,
     /// Embedding dimensions
     pub embedding_dims: usize,
+    /// Reasoning effort level (e.g., "high"). `None` disables reasoning.
+    pub reasoning_effort: Option<String>,
 }
 
 /// Configuration for `ollama` LLM and embedding provider
@@ -51,6 +55,8 @@ pub struct OllamaConfig {
     pub embedding_dims: usize,
     /// Base URL for the ollama API (e.g., "http://localhost:11434")
     pub base_url: String,
+    /// Token budget for extended thinking. `None` disables thinking.
+    pub reasoning_budget: Option<u32>,
 }
 
 impl Default for OllamaConfig {
@@ -61,6 +67,7 @@ impl Default for OllamaConfig {
             embedding_model: DEFAULT_OLLAMA_EMBEDDING_MODEL.into(),
             embedding_dims: DEFAULT_OLLAMA_EMBEDDING_DIM,
             base_url: DEFAULT_OLLAMA_BASE_URL.into(),
+            reasoning_budget: None,
         }
     }
 }
@@ -76,6 +83,8 @@ pub struct GeminiConfig {
     pub embedding_model: String,
     /// Embedding dimensions
     pub embedding_dims: usize,
+    /// Token budget for extended thinking. `None` disables thinking.
+    pub reasoning_budget: Option<u32>,
 }
 
 /// Configuration for Voyage AI embedding and reranking provider
@@ -124,6 +133,10 @@ pub struct OpenRouterConfig {
     pub api_key: String,
     /// Model name (e.g., "anthropic/claude-sonnet-4.5")
     pub model: String,
+    /// Reasoning effort level (e.g., "high"). `None` disables reasoning.
+    pub reasoning_effort: Option<String>,
+    /// Token budget for extended thinking. `None` disables thinking.
+    pub reasoning_budget: Option<u32>,
 }
 
 /// Configuration for LLM clients

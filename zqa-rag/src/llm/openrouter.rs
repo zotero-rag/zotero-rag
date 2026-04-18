@@ -53,6 +53,19 @@ struct OpenRouterTool<'a> {
     function: &'a SerializedTool<'a>,
 }
 
+#[derive(Serialize)]
+struct OpenRouterReasoning {
+    /// One of 'xhigh', 'high', 'medium', 'low', 'minimal', 'none'.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    effort: Option<String>,
+    /// Token budget for thinking.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    /// One of 'auto', 'concise', 'detailed'.
+    summary: Option<String>,
+}
+
 /// Represents a request to the OpenRouter API
 #[derive(Serialize)]
 struct OpenRouterRequest<'a> {
@@ -60,6 +73,8 @@ struct OpenRouterRequest<'a> {
     model: &'a str,
     /// The conversation history and current message
     messages: &'a [OpenRouterMessage],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reasoning: Option<OpenRouterReasoning>,
     /// The tools passed in
     #[serde(skip_serializing_if = "Option::is_none")]
     tools: Option<Vec<OpenRouterTool<'a>>>,
@@ -333,6 +348,7 @@ impl<T: HttpClient> ApiClient for OpenRouterClient<T> {
         let req_body = OpenRouterRequest {
             model: &model,
             messages: &chat_history,
+            reasoning: None,
             tools: make_wrapped_tools(),
         };
 
@@ -378,6 +394,7 @@ impl<T: HttpClient> ApiClient for OpenRouterClient<T> {
             let updated_req_body = OpenRouterRequest {
                 model: &model,
                 messages: &chat_history,
+                reasoning: None,
                 tools: make_wrapped_tools(),
             };
 
@@ -444,6 +461,7 @@ mod tests {
             chat_history: Vec::new(),
             max_tokens: Some(1024),
             message: "Hello!".to_owned(),
+            reasoning: None,
             tools: None,
             on_tool_call: None,
             on_text: None,
@@ -494,6 +512,7 @@ mod tests {
             chat_history: Vec::new(),
             max_tokens: Some(1024),
             message: "Hello!".to_owned(),
+            reasoning: None,
             tools: None,
             on_tool_call: None,
             on_text: None,
@@ -529,6 +548,7 @@ mod tests {
             max_tokens: Some(1024),
             message: "Call the mock_tool function with the name parameter set to 'Alice'"
                 .to_owned(),
+            reasoning: None,
             tools: Some(&[Box::new(tool)]),
             on_tool_call: None,
             on_text: None,
@@ -612,6 +632,7 @@ mod tests {
             chat_history: Vec::new(),
             max_tokens: Some(1024),
             message: "Test".into(),
+            reasoning: None,
             tools: Some(&[Box::new(tool)]),
             on_tool_call: Some(Arc::new(move |_| {
                 *tool_call_count_cb.lock().unwrap() += 1;

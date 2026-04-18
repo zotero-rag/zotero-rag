@@ -91,6 +91,7 @@ impl<T: HttpClient> ApiClient for OllamaClient<T> {
             model: &model,
             max_tokens: max_tokens_to_use,
             messages: &chat_history,
+            thinking: None,
             tools: tools.as_deref(),
         };
 
@@ -131,6 +132,7 @@ impl<T: HttpClient> ApiClient for OllamaClient<T> {
                 model: &model,
                 max_tokens: max_tokens_to_use,
                 messages: &chat_history,
+                thinking: None,
                 tools: tools.as_deref(),
             };
 
@@ -207,6 +209,7 @@ mod tests {
             chat_history: Vec::new(),
             max_tokens: Some(1024),
             message: "Hello!".to_owned(),
+            reasoning: None,
             tools: None,
             on_tool_call: None,
             on_text: None,
@@ -237,6 +240,7 @@ mod tests {
             max_tokens: Some(1024),
             message: "Call the mock_tool function with the name parameter set to 'Alice'"
                 .to_owned(),
+            reasoning: None,
             tools: Some(&[Box::new(tool)]),
             on_tool_call: None,
             on_text: None,
@@ -308,6 +312,7 @@ mod tests {
             chat_history: Vec::new(),
             max_tokens: Some(1024),
             message: "Test".into(),
+            reasoning: None,
             tools: Some(&[Box::new(tool)]),
             on_tool_call: Some(Arc::new(move |_| {
                 *tool_call_count_cb.lock().unwrap() += 1;

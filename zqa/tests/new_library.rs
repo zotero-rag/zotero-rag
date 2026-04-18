@@ -39,6 +39,7 @@ async fn test_integration_works() {
             model_small: Some("claude-haiku-4-5".into()),
             api_key: env::var("ANTHROPIC_API_KEY").unwrap().into(),
             max_tokens: 8192,
+            reasoning_budget: None,
         }),
         voyageai: Some(VoyageAIConfig {
             reranker: Some("rerank-2.5".into()),
