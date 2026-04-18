@@ -31,6 +31,7 @@ use zqa_rag::reranking::common::RerankProviderConfig;
 /// model_small = "claude-haiku-4-5"
 /// api_key = "sk-ant-..."
 /// max_tokens = 64000
+/// reasoning_budget = 2048
 ///
 /// [ollama]
 /// model = "qwen3.5"  # Defaults to the 9B version
@@ -38,6 +39,7 @@ use zqa_rag::reranking::common::RerankProviderConfig;
 /// max_tokens = 8192
 /// embedding_model = "qwen3-embedding"
 /// embedding_dims = 4096
+/// reasoning_budget = 2048
 /// base_url = "http://localhost:11434"  # Defaults to local ollama instance
 ///
 /// [openai]
@@ -47,6 +49,7 @@ use zqa_rag::reranking::common::RerankProviderConfig;
 /// max_tokens = 8192
 /// embedding_model = "text-embedding-3-small"
 /// embedding_dims = 1536
+/// reasoning_effort = "high"  # Supported by the most models
 ///
 /// [gemini]
 /// model = "gemini-3.1-pro-preview"
@@ -54,6 +57,7 @@ use zqa_rag::reranking::common::RerankProviderConfig;
 /// api_key = "AI..."
 /// embedding_model = "gemini-embedding-001"
 /// embedding_dims = 3072
+/// reasoning_budget = 2048
 ///
 /// [voyageai]
 /// reranker = "rerank-2.5"
@@ -77,6 +81,8 @@ use zqa_rag::reranking::common::RerankProviderConfig;
 /// api_key = "..."
 /// model = "anthropic/claude-sonnet-4.5"
 /// model_small = "anthropic/claude-haiku-4.5"
+/// reasoning_effort = "high"
+/// reasoning_budget = 2048
 /// ```
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Config {
@@ -474,6 +480,9 @@ pub struct AnthropicConfig {
     /// Maximum tokens for generation
     #[serde(default = "default_anthropic_max_tokens")]
     pub max_tokens: u32,
+
+    /// Token budget for extended thinking. Omit to disable thinking.
+    pub reasoning_budget: Option<u32>,
 }
 
 impl Default for AnthropicConfig {
@@ -483,6 +492,7 @@ impl Default for AnthropicConfig {
             model_small: Some(DEFAULT_ANTHROPIC_MODEL_SMALL.into()),
             max_tokens: DEFAULT_ANTHROPIC_MAX_TOKENS,
             api_key: None,
+            reasoning_budget: None,
         }
     }
 }
@@ -502,6 +512,8 @@ pub struct OllamaConfig {
     pub embedding_dims: Option<usize>,
     /// Base URL for the ollama API (e.g., "http://localhost:11434")
     pub base_url: Option<String>,
+    /// Token budget for extended thinking. Omit to disable thinking.
+    pub reasoning_budget: Option<u32>,
 }
 
 impl Default for OllamaConfig {
@@ -513,6 +525,7 @@ impl Default for OllamaConfig {
             embedding_model: Some(DEFAULT_OLLAMA_EMBEDDING_MODEL.into()),
             embedding_dims: Some(DEFAULT_OLLAMA_EMBEDDING_DIM),
             base_url: Some(DEFAULT_OLLAMA_BASE_URL.into()),
+            reasoning_budget: None,
         }
     }
 }
@@ -538,6 +551,9 @@ pub struct OpenAIConfig {
 
     /// Embedding dimensions
     pub embedding_dims: Option<usize>,
+
+    /// Reasoning effort level (e.g., "high"). Omit to disable reasoning.
+    pub reasoning_effort: Option<String>,
 }
 
 impl Default for OpenAIConfig {
@@ -549,6 +565,7 @@ impl Default for OpenAIConfig {
             embedding_model: Some(DEFAULT_OPENAI_EMBEDDING_MODEL.into()),
             embedding_dims: Some(DEFAULT_OPENAI_EMBEDDING_DIM as usize),
             api_key: None,
+            reasoning_effort: None,
         }
     }
 }
@@ -570,6 +587,9 @@ pub struct GeminiConfig {
 
     /// Embedding dimensions
     pub embedding_dims: Option<usize>,
+
+    /// Token budget for extended thinking. Omit to disable thinking.
+    pub reasoning_budget: Option<u32>,
 }
 
 impl Default for GeminiConfig {
@@ -580,6 +600,7 @@ impl Default for GeminiConfig {
             embedding_model: Some(DEFAULT_GEMINI_EMBEDDING_MODEL.into()),
             embedding_dims: Some(DEFAULT_GEMINI_EMBEDDING_DIM as usize),
             api_key: None,
+            reasoning_budget: None,
         }
     }
 }
@@ -676,6 +697,12 @@ pub struct OpenRouterConfig {
 
     /// API key
     pub api_key: Option<String>,
+
+    /// Reasoning effort level (e.g., "high"). Omit to disable reasoning.
+    pub reasoning_effort: Option<String>,
+
+    /// Token budget for extended thinking. Omit to disable thinking.
+    pub reasoning_budget: Option<u32>,
 }
 
 impl Default for OpenRouterConfig {
@@ -684,6 +711,8 @@ impl Default for OpenRouterConfig {
             model: Some(DEFAULT_OPENROUTER_MODEL.into()),
             model_small: Some(DEFAULT_OPENROUTER_MODEL_SMALL.into()),
             api_key: None,
+            reasoning_effort: None,
+            reasoning_budget: None,
         }
     }
 }
@@ -785,6 +814,7 @@ impl From<AnthropicConfig> for zqa_rag::config::AnthropicConfig {
                 .expect("Anthropic API key not found. Please set it in your config file or as ANTHROPIC_API_KEY."),
             model: config.model.unwrap_or(DEFAULT_ANTHROPIC_MODEL.into()),
             max_tokens: config.max_tokens,
+            reasoning_budget: config.reasoning_budget,
         }
     }
 }
@@ -801,6 +831,7 @@ impl From<OllamaConfig> for zqa_rag::config::OllamaConfig {
                 .embedding_dims
                 .unwrap_or(DEFAULT_OLLAMA_EMBEDDING_DIM),
             base_url: config.base_url.unwrap_or(DEFAULT_OLLAMA_BASE_URL.into()),
+            reasoning_budget: config.reasoning_budget,
         }
     }
 }
@@ -822,6 +853,7 @@ impl From<OpenAIConfig> for zqa_rag::config::OpenAIConfig {
             embedding_dims: config
                 .embedding_dims
                 .unwrap_or(DEFAULT_OPENAI_EMBEDDING_DIM as usize),
+            reasoning_effort: config.reasoning_effort,
         }
     }
 }
@@ -841,6 +873,7 @@ impl From<GeminiConfig> for zqa_rag::config::GeminiConfig {
             embedding_dims: config
                 .embedding_dims
                 .unwrap_or(DEFAULT_GEMINI_EMBEDDING_DIM as usize),
+            reasoning_budget: config.reasoning_budget,
         }
     }
 }
@@ -931,9 +964,9 @@ impl From<OpenRouterConfig> for zqa_rag::config::OpenRouterConfig {
                 .api_key
                 .or_else(|| env::var("OPENROUTER_API_KEY").ok())
                 .expect("OpenRouter API key not found. Please set it in your config file or as OPENROUTER_API_KEY."),
-            model: config
-                .model
-                .unwrap_or(DEFAULT_OPENROUTER_MODEL.into())
+            model: config.model.unwrap_or(DEFAULT_OPENROUTER_MODEL.into()),
+            reasoning_effort: config.reasoning_effort,
+            reasoning_budget: config.reasoning_budget,
         }
     }
 }

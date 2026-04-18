@@ -203,6 +203,7 @@ mod tests {
             max_tokens: 1024,
             embedding_model: "text-embedding-test".into(),
             embedding_dims: 1536,
+            reasoning_effort: None,
         })
     }
 
@@ -211,6 +212,7 @@ mod tests {
             api_key: "test-key".into(),
             model: "claude-test".into(),
             max_tokens: 1024,
+            reasoning_budget: None,
         })
     }
 
@@ -220,6 +222,7 @@ mod tests {
             model: "gemini-test".into(),
             embedding_model: "gemini-embedding-test".into(),
             embedding_dims: 3072,
+            reasoning_budget: None,
         })
     }
 
@@ -230,6 +233,7 @@ mod tests {
             embedding_model: "qwen-embedding-test".into(),
             embedding_dims: 768,
             base_url: "http://127.0.0.1:11434".into(),
+            reasoning_budget: None,
         })
     }
 
@@ -237,6 +241,8 @@ mod tests {
         crate::config::LLMClientConfig::OpenRouter(OpenRouterConfig {
             api_key: "test-key".into(),
             model: "anthropic/test-model".into(),
+            reasoning_effort: None,
+            reasoning_budget: None,
         })
     }
 
@@ -247,6 +253,7 @@ mod tests {
             max_tokens: 1024,
             embedding_model: "text-embedding-test".into(),
             embedding_dims: 1536,
+            reasoning_effort: None,
         })
     }
 
@@ -256,6 +263,7 @@ mod tests {
             model: "gemini-test".into(),
             embedding_model: "gemini-embedding-test".into(),
             embedding_dims: 3072,
+            reasoning_budget: None,
         })
     }
 
@@ -266,6 +274,7 @@ mod tests {
             embedding_model: "qwen-embedding-test".into(),
             embedding_dims: 768,
             base_url: "http://127.0.0.1:11434".into(),
+            reasoning_budget: None,
         })
     }
 

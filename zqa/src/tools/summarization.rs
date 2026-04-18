@@ -112,6 +112,7 @@ impl Tool for SummarizationTool {
                         chat_history: Vec::new(),
                         max_tokens: None,
                         message: get_extraction_prompt(&query_cloned, &text, &metadata),
+                        reasoning: None,
                         tools: None, // We ARE the tool :3
                         on_tool_call: None,
                         on_text: None,
@@ -179,6 +180,7 @@ mod tests {
             api_key: env::var("ANTHROPIC_API_KEY").unwrap(),
             model: DEFAULT_ANTHROPIC_MODEL_SMALL.into(),
             max_tokens: 8192,
+            reasoning_budget: None,
         }))
         .unwrap();
 

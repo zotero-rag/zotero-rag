@@ -33,6 +33,7 @@ async fn run_extraction_test(client: zqa_rag::llm::factory::LLMClient, provider_
         chat_history: Vec::new(),
         max_tokens: None,
         message: prompt,
+        reasoning: None,
         tools: None,
         on_tool_call: None,
         on_text: None,
@@ -98,6 +99,7 @@ async fn test_extraction_prompt_openai() {
         max_tokens: 8192,
         embedding_model: None,
         embedding_dims: None,
+        reasoning_effort: None,
     };
 
     let client = get_client_with_config(&LLMClientConfig::OpenAI(config.into()))
@@ -126,6 +128,7 @@ async fn test_extraction_prompt_anthropic() {
         model_small: Some("claude-haiku-4-5".to_string()),
         api_key: Some(api_key),
         max_tokens: 8192,
+        reasoning_budget: None,
     };
 
     let client = get_client_with_config(&LLMClientConfig::Anthropic(config.into()))
@@ -156,6 +159,7 @@ async fn test_extraction_prompt_gemini() {
         api_key: Some(api_key),
         embedding_model: None,
         embedding_dims: None,
+        reasoning_budget: None,
     };
 
     let client = get_client_with_config(&LLMClientConfig::Gemini(config.into()))

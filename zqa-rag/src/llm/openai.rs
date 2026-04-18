@@ -157,12 +157,29 @@ impl From<&ChatHistoryItem> for Vec<OpenAIRequestInput> {
 }
 
 #[derive(Serialize)]
+pub(crate) struct OpenAIReasoning {
+    /// Thinking effort. Currently supported values are 'none', 'minimal', 'low', 'medium',
+    /// 'high', and 'xhigh'. Only supported by gpt-5 and o-series models. gpt-5.1 does not
+    /// support 'xhigh'. gpt-5 (presumably; the OpenAI docs state "all models before gpt-5.1" but
+    /// there were no models in gpt-5 series but before 5.1??). gpt-5-pro only supports 'high'.
+    /// 'xhigh' is supported for all models after gpt-5.1-codex-max. Which models are these? Don't
+    /// ask me, I don't know the answers to these stupid riddles.
+    effort: String,
+    /// One of "auto", "concise", "detailed".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    summary: Option<String>,
+}
+
+#[derive(Serialize)]
 pub(crate) struct OpenAIRequest<'a> {
     /// The model to use for the request (e.g., "gpt-5.2").
     model: &'a str,
 
     /// The flattened chat history and current message.
     input: &'a [OpenAIRequestInput],
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reasoning: Option<OpenAIReasoning>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     /// Maximum tokens to generate in the response.
@@ -485,6 +502,7 @@ impl<T: HttpClient> ApiClient for OpenAIClient<T> {
         let req_body = OpenAIRequest {
             model: &model,
             input: &chat_history,
+            reasoning: None,
             max_output_tokens,
             tools: tools.as_deref(),
         };
@@ -524,6 +542,7 @@ impl<T: HttpClient> ApiClient for OpenAIClient<T> {
             let updated_req_body = OpenAIRequest {
                 model: &model,
                 input: &chat_history,
+                reasoning: None,
                 max_output_tokens,
                 tools: tools.as_deref(),
             };
@@ -649,6 +668,7 @@ mod tests {
             chat_history: Vec::new(),
             max_tokens: Some(1024),
             message: "Hello!".to_owned(),
+            reasoning: None,
             tools: None,
             on_tool_call: None,
             on_text: None,
@@ -695,6 +715,7 @@ mod tests {
             chat_history: Vec::new(),
             max_tokens: Some(1024),
             message: "Hello!".to_owned(),
+            reasoning: None,
             tools: None,
             on_tool_call: None,
             on_text: None,
@@ -751,6 +772,7 @@ mod tests {
             chat_history: Vec::new(),
             max_tokens: Some(1024),
             message: "This is a test. Call the `mock_tool`, passing in a `name`, and ensure it returns a greeting".into(),
+            reasoning: None,
             tools: Some(&[Box::new(tool)]),
             on_tool_call: None,
             on_text: None,
@@ -897,6 +919,7 @@ mod tests {
             chat_history: Vec::new(),
             max_tokens: Some(1024),
             message: "Test".into(),
+            reasoning: None,
             tools: Some(&[Box::new(tool)]),
             on_tool_call: Some(Arc::new(move |_| {
                 *tool_call_count_cb.lock().unwrap() += 1;

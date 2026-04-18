@@ -92,3 +92,21 @@ pub const DEFAULT_ZEROENTROPY_EMBEDDING_DIM: u32 = 2560;
 
 /// Default ZeroEntropy rerank model
 pub const DEFAULT_ZEROENTROPY_RERANK_MODEL: &str = "zerank-2";
+
+/// Default reasoning token budget for Anthropic
+pub const DEFAULT_ANTHROPIC_REASONING_BUDGET: u32 = 2048;
+
+/// Default reasoning token budget for Ollama
+pub const DEFAULT_OLLAMA_REASONING_BUDGET: u32 = 2048;
+
+/// Default reasoning token budget for Gemini
+pub const DEFAULT_GEMINI_REASONING_BUDGET: u32 = 2048;
+
+/// Default reasoning effort for OpenAI
+pub const DEFAULT_OPENAI_REASONING_EFFORT: &str = "high";
+
+/// Default reasoning effort for OpenRouter
+pub const DEFAULT_OPENROUTER_REASONING_EFFORT: &str = "high";
+
+/// Default reasoning token budget for OpenRouter
+pub const DEFAULT_OPENROUTER_REASONING_BUDGET: u32 = 2048;

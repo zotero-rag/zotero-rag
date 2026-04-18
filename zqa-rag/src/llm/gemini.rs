@@ -468,6 +468,7 @@ mod tests {
                 content: vec![ChatHistoryContent::Text("Prior".into())],
             }],
             max_tokens: Some(256),
+            reasoning: None,
             tools: None,
             on_tool_call: None,
             on_text: None,
@@ -556,6 +557,7 @@ mod tests {
             chat_history: Vec::new(),
             max_tokens: Some(1024),
             message: "Hello!".to_owned(),
+            reasoning: None,
             tools: None,
             on_tool_call: None,
             on_text: None,
@@ -578,6 +580,7 @@ mod tests {
             chat_history: Vec::new(),
             max_tokens: Some(1024),
             message: "This is a test. Call the `mock_tool`, passing in a `name`, and ensure it returns a greeting".into(),
+            reasoning: None,
             tools: Some(&[Box::new(tool)]),
             on_tool_call: None,
             on_text: None,
@@ -649,6 +652,7 @@ mod tests {
             chat_history: Vec::new(),
             max_tokens: Some(1024),
             message: "Test".into(),
+            reasoning: None,
             tools: Some(&[Box::new(tool)]),
             on_tool_call: Some(Arc::new(move |_| {
                 *tool_call_count_cb.lock().unwrap() += 1;

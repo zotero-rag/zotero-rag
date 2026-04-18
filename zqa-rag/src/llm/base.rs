@@ -97,6 +97,16 @@ impl From<Vec<ContentType>> for ChatHistoryItem {
     }
 }
 
+/// Provider-agnostic reasoning configuration
+pub struct ReasoningConfig {
+    /// Token budget for thinking.
+    pub max_tokens: Option<u32>,
+    /// Reasoning effort for providers that support it.
+    pub effort: Option<String>,
+    /// Thinking summary length, for providers that support it.
+    pub summary: Option<String>,
+}
+
 /// Represents a request to the chat API with optional tools.
 #[derive(Default)]
 pub struct ChatRequest<'a> {
@@ -106,6 +116,8 @@ pub struct ChatRequest<'a> {
     pub max_tokens: Option<u32>,
     /// The message to send
     pub message: String,
+    /// Reasoning config. Optional.
+    pub reasoning: Option<ReasoningConfig>,
     /// The tools to use
     pub tools: Option<&'a [Box<dyn Tool>]>,
     /// Optional callback invoked each time a tool call completes.
