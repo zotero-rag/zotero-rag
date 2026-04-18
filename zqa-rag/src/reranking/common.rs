@@ -82,4 +82,14 @@ impl RerankProviderConfig {
     pub fn provider_name(&self) -> &str {
         self.provider_id().as_str()
     }
+
+    /// Returns the reranker model name.
+    #[must_use]
+    pub fn model_name(&self) -> &str {
+        match self {
+            Self::VoyageAI(c) => &c.reranker,
+            Self::Cohere(c) => &c.reranker,
+            Self::ZeroEntropy(c) => &c.reranker,
+        }
+    }
 }

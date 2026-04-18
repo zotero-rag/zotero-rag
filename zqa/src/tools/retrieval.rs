@@ -1,4 +1,10 @@
-use std::time::Instant;
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::Instant,
+};
 
 use schemars::{JsonSchema, schema_for};
 use serde::Deserialize;
@@ -24,11 +30,14 @@ pub(crate) struct RetrievalTool {
     pub(crate) embedding_config: EmbeddingProviderConfig,
     /// The reranker provider to use.
     pub(crate) reranker_config: Option<RerankProviderConfig>,
+    /// Accumulated character count of text sent to the embedding API across all calls.
+    pub(crate) embedding_chars: Arc<AtomicU64>,
+    /// Accumulated character count of text sent to the reranker API across all calls.
+    pub(crate) rerank_chars: Arc<AtomicU64>,
 }
 
 impl RetrievalTool {
-    /// Create a new instance of the [`RetrievalTool`] given an embedding config, the name of a
-    /// reranker provider, and a schema key.
+    /// Create a new instance of the [`RetrievalTool`] given an embedding config and reranker config.
     pub(crate) fn new(
         embedding_config: EmbeddingProviderConfig,
         reranker_provider: Option<RerankProviderConfig>,
@@ -36,6 +45,8 @@ impl RetrievalTool {
         Self {
             embedding_config,
             reranker_config: reranker_provider,
+            embedding_chars: Arc::new(AtomicU64::new(0)),
+            rerank_chars: Arc::new(AtomicU64::new(0)),
         }
     }
 }
@@ -81,14 +92,18 @@ impl Tool for RetrievalTool {
         let start = Instant::now();
         let embedding_config = self.embedding_config.clone();
         let reranker_config = self.reranker_config.clone();
+        let embedding_chars = Arc::clone(&self.embedding_chars);
+        let rerank_chars = Arc::clone(&self.rerank_chars);
 
         Box::pin(async move {
             let input: RetrievalToolInput =
                 serde_json::from_value(args).map_err(|e| format!("Invalid arguments: {e}"))?;
-            let mut results =
+            let (mut results, stats) =
                 vector_search(input.query, &embedding_config, reranker_config.as_ref())
                     .await
                     .map_err(|e| format!("Search failed: {e}"))?;
+            embedding_chars.fetch_add(stats.embedding_chars as u64, Ordering::Relaxed);
+            rerank_chars.fetch_add(stats.rerank_chars as u64, Ordering::Relaxed);
 
             get_authors(&mut results).map_err(|e| format!("Failed to get authors: {e}"))?;
             log::info!(

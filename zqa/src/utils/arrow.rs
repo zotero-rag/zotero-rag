@@ -260,6 +260,14 @@ pub async fn full_library_to_arrow(
     .await
 }
 
+/// Statistics about the characters processed in a vector search call, used for cost estimation.
+pub struct VectorSearchStats {
+    /// Number of characters in the query string that was embedded.
+    pub embedding_chars: usize,
+    /// Total characters of documents + query sent to the reranker (0 if no reranker was used).
+    pub rerank_chars: usize,
+}
+
 /// Perform vector search using a query and a specified embedding method.
 ///
 /// This function is a Zotero-specific wrapper for the `vector_search` function in the `rag` crate.
@@ -284,9 +292,9 @@ pub async fn full_library_to_arrow(
 ///
 /// # Returns
 ///
-/// A `Vec<ZoteroItem>` containing the resulting items from the Zotero library. Returns an
-/// `ArrowError` that wraps the underlying `LanceError` if the `rag` crate's `vector_search` is
-/// unsuccessful for any reason.
+/// A tuple of the matching `ZoteroItem`s and [`VectorSearchStats`] with character counts used for
+/// cost estimation. Returns an `ArrowError` that wraps the underlying `LanceError` if the `rag`
+/// crate's `vector_search` is unsuccessful for any reason.
 ///
 /// # Errors
 ///
@@ -296,7 +304,8 @@ pub async fn vector_search(
     query: String,
     embedding_config: &EmbeddingProviderConfig,
     reranker_config: Option<&RerankProviderConfig>,
-) -> Result<Vec<ZoteroItem>, ArrowError> {
+) -> Result<(Vec<ZoteroItem>, VectorSearchStats), ArrowError> {
+    let embedding_chars = query.len();
     let batches = rag_vector_search(query.clone(), embedding_config, 10).await?;
 
     let items: ZoteroItemSet = batches.into();
@@ -308,11 +317,23 @@ pub async fn vector_search(
         .collect();
 
     if filtered_items.is_empty() {
-        return Ok(Vec::new());
+        return Ok((
+            Vec::new(),
+            VectorSearchStats {
+                embedding_chars,
+                rerank_chars: 0,
+            },
+        ));
     }
 
     let Some(reranker) = reranker_config else {
-        return Ok(filtered_items);
+        return Ok((
+            filtered_items,
+            VectorSearchStats {
+                embedding_chars,
+                rerank_chars: 0,
+            },
+        ));
     };
 
     let rerank_provider = get_reranking_provider_with_config(reranker)?;
@@ -321,6 +342,8 @@ pub async fn vector_search(
         .map(|f| f.text.as_str())
         .collect::<Vec<_>>();
 
+    let rerank_chars = item_strings.iter().map(|s| s.len()).sum::<usize>() + query.len();
+
     let indices = rerank_provider.rerank(&item_strings, &query).await?;
 
     let reranked_items = indices
@@ -328,7 +351,13 @@ pub async fn vector_search(
         .filter_map(|idx| filtered_items.get(idx).cloned())
         .collect();
 
-    Ok(reranked_items)
+    Ok((
+        reranked_items,
+        VectorSearchStats {
+            embedding_chars,
+            rerank_chars,
+        },
+    ))
 }
 
 #[cfg(test)]
