@@ -84,7 +84,6 @@ pub(crate) async fn dispatch_command<O: Write, E: Write>(
 /// # Panics
 ///
 /// Cannot happen; `unwrap()` is called on `strip_prefix` result after checking that the prefix exists.
-#[allow(clippy::too_many_lines)]
 #[allow(clippy::needless_continue)]
 pub(crate) async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<(), CLIError> {
     // First, get the path to the history file used by the `readline` implementation.

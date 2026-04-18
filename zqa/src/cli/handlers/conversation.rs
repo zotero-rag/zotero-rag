@@ -218,6 +218,10 @@ mod tests {
 
             let loaded = ctx.state.chat_history.lock().unwrap();
             test_eq!(loaded.len(), history_b.len());
+            test_eq!(
+                *ctx.state.title.lock().unwrap(),
+                Some("Conversation B".to_string())
+            );
             assert!(!ctx.state.dirty.load(std::sync::atomic::Ordering::Relaxed));
         });
     }

@@ -228,9 +228,9 @@ where
         writeln!(ctx.out, "Successfully parsed library!")?;
         std::fs::remove_file(BATCH_ITER_FILE)?;
     } else if let Err(e) = db {
-        writeln!(ctx.out, "Parsing library failed: {e}")?;
+        writeln!(ctx.err, "Parsing library failed: {e}")?;
         writeln!(
-            ctx.out,
+            ctx.err,
             "Your {BATCH_ITER_FILE} file has been left untouched."
         )?;
     }
