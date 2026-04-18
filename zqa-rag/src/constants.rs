@@ -105,6 +105,9 @@ pub const DEFAULT_GEMINI_REASONING_BUDGET: u32 = 2048;
 /// Default reasoning effort for OpenAI
 pub const DEFAULT_OPENAI_REASONING_EFFORT: &str = "high";
 
+/// Default reasoning summary level for OpenAI
+pub const DEFAULT_OPENAI_REASONING_SUMMARY: &str = "auto";
+
 /// Default reasoning effort for OpenRouter
 pub const DEFAULT_OPENROUTER_REASONING_EFFORT: &str = "high";
 

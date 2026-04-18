@@ -20,9 +20,12 @@ use super::base::{ApiClient, ChatHistoryItem, ChatRequest, CompletionApiResponse
 use super::errors::LLMError;
 use crate::clients::openai::OpenAIClient;
 use crate::common::request_with_backoff;
-use crate::constants::{DEFAULT_MAX_RETRIES, DEFAULT_OPENAI_EMBEDDING_DIM, DEFAULT_OPENAI_MODEL};
+use crate::constants::{
+    DEFAULT_MAX_RETRIES, DEFAULT_OPENAI_EMBEDDING_DIM, DEFAULT_OPENAI_MODEL,
+    DEFAULT_OPENAI_REASONING_EFFORT, DEFAULT_OPENAI_REASONING_SUMMARY,
+};
 use crate::http_client::HttpClient;
-use crate::llm::base::{ChatHistoryContent, ContentType, ToolUseStats, USER_ROLE};
+use crate::llm::base::{ChatHistoryContent, ContentType, ReasoningConfig, ToolUseStats, USER_ROLE};
 use crate::llm::tools::{CallbackFn, OPENAI_SCHEMA_KEY, SerializedTool, get_owned_tools};
 
 /// OpenAI-specific tool wrapper that adds the `type` and `strict` fields
@@ -160,14 +163,27 @@ impl From<&ChatHistoryItem> for Vec<OpenAIRequestInput> {
 pub(crate) struct OpenAIReasoning {
     /// Thinking effort. Currently supported values are 'none', 'minimal', 'low', 'medium',
     /// 'high', and 'xhigh'. Only supported by gpt-5 and o-series models. gpt-5.1 does not
-    /// support 'xhigh'. gpt-5 (presumably; the OpenAI docs state "all models before gpt-5.1" but
-    /// there were no models in gpt-5 series but before 5.1??). gpt-5-pro only supports 'high'.
-    /// 'xhigh' is supported for all models after gpt-5.1-codex-max. Which models are these? Don't
-    /// ask me, I don't know the answers to these stupid riddles.
+    /// support 'xhigh'. gpt-5 (presumably; the OpenAI docs state "all models before gpt-5.1").
+    /// gpt-5-pro only supports 'high'. 'xhigh' is supported for all models after gpt-5.1-codex-max.
     effort: String,
     /// One of "auto", "concise", "detailed".
     #[serde(skip_serializing_if = "Option::is_none")]
     summary: Option<String>,
+}
+
+impl From<ReasoningConfig> for OpenAIReasoning {
+    fn from(value: ReasoningConfig) -> Self {
+        Self {
+            effort: value
+                .effort
+                .unwrap_or(DEFAULT_OPENAI_REASONING_EFFORT.into()),
+            summary: Some(
+                value
+                    .summary
+                    .unwrap_or(DEFAULT_OPENAI_REASONING_SUMMARY.into()),
+            ),
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -502,7 +518,7 @@ impl<T: HttpClient> ApiClient for OpenAIClient<T> {
         let req_body = OpenAIRequest {
             model: &model,
             input: &chat_history,
-            reasoning: None,
+            reasoning: request.reasoning.clone().map(Into::into),
             max_output_tokens,
             tools: tools.as_deref(),
         };
