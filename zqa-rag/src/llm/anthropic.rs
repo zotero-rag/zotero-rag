@@ -10,11 +10,12 @@ use super::errors::LLMError;
 use crate::clients::anthropic::AnthropicClient;
 use crate::common::request_with_backoff;
 use crate::constants::{
-    DEFAULT_ANTHROPIC_MAX_TOKENS, DEFAULT_ANTHROPIC_MODEL, DEFAULT_MAX_RETRIES,
+    DEFAULT_ANTHROPIC_MAX_TOKENS, DEFAULT_ANTHROPIC_MODEL, DEFAULT_ANTHROPIC_REASONING_BUDGET,
+    DEFAULT_MAX_RETRIES,
 };
 use crate::http_client::HttpClient;
 use crate::llm::base::{
-    ChatHistoryContent, ContentType, ToolCallRequest, ToolCallResponse, USER_ROLE,
+    ChatHistoryContent, ContentType, ReasoningConfig, ToolCallRequest, ToolCallResponse, USER_ROLE,
 };
 use crate::llm::tools::{
     ANTHROPIC_SCHEMA_KEY, SerializedTool, get_owned_tools, process_tool_calls,
@@ -70,6 +71,17 @@ pub(crate) struct AnthropicThinkingConfig {
     budget_tokens: u32,
     /// Always "enabled"
     r#type: String,
+}
+
+impl From<ReasoningConfig> for AnthropicThinkingConfig {
+    fn from(value: ReasoningConfig) -> Self {
+        Self {
+            budget_tokens: value
+                .max_tokens
+                .unwrap_or(DEFAULT_ANTHROPIC_REASONING_BUDGET),
+            r#type: "enabled".into(),
+        }
+    }
 }
 
 /// Represents a request to the Anthropic API
@@ -341,13 +353,14 @@ impl<T: HttpClient> ApiClient for AnthropicClient<T> {
         // Build the initial messages and tools (owned)
         let (mut chat_history, tools) = build_anthropic_messages_and_tools(request);
         let max_tokens_to_use = request.max_tokens.unwrap_or(max_tokens);
+        let reasoning_config = request.reasoning.clone().map(Into::into);
 
         // Create the initial request
         let req_body = AnthropicRequest {
             model: &model,
             max_tokens: max_tokens_to_use,
             messages: &chat_history,
-            thinking: None,
+            thinking: reasoning_config,
             tools: tools.as_deref(),
         };
 

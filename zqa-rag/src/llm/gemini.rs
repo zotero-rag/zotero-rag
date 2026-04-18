@@ -10,10 +10,12 @@ use super::base::{ApiClient, ChatRequest, CompletionApiResponse};
 use super::errors::LLMError;
 use crate::clients::gemini::{GeminiClient, get_gemini_api_key};
 use crate::common::request_with_backoff;
-use crate::constants::{DEFAULT_GEMINI_MODEL, DEFAULT_MAX_RETRIES};
+use crate::constants::{
+    DEFAULT_GEMINI_MODEL, DEFAULT_GEMINI_REASONING_BUDGET, DEFAULT_MAX_RETRIES,
+};
 use crate::http_client::HttpClient;
 use crate::llm::base::{
-    ChatHistoryContent, ChatHistoryItem, ContentType, ToolCallRequest, USER_ROLE,
+    ChatHistoryContent, ChatHistoryItem, ContentType, ReasoningConfig, ToolCallRequest, USER_ROLE,
 };
 use crate::llm::tools::{GEMINI_SCHEMA_KEY, SerializedTool, get_owned_tools, process_tool_calls};
 
@@ -121,6 +123,15 @@ struct GeminiThinkingConfig {
     thinking_budget: Option<u32>,
 }
 
+impl From<ReasoningConfig> for GeminiThinkingConfig {
+    fn from(value: ReasoningConfig) -> Self {
+        Self {
+            include_thoughts: Some(value.summary.is_some()),
+            thinking_budget: Some(value.max_tokens.unwrap_or(DEFAULT_GEMINI_REASONING_BUDGET)),
+        }
+    }
+}
+
 /// Optional text generation configuration
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -184,14 +195,10 @@ fn build_gemini_request_data<'a>(
 
     let generation_config = Some(GeminiGenerationConfig {
         max_output_tokens: model_max,
-        // TODO: Make these configurable
         temperature: Some(1.0),
         top_k: Some(1),
         top_p: Some(1.0),
-        thinking_config: Some(GeminiThinkingConfig {
-            include_thoughts: Some(false),
-            thinking_budget: Some(1024),
-        }),
+        thinking_config: req.reasoning.clone().map(Into::into),
     });
 
     let tools = owned_tools.map(|tools| GeminiToolDeclaration {

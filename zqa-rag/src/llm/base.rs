@@ -98,6 +98,7 @@ impl From<Vec<ContentType>> for ChatHistoryItem {
 }
 
 /// Provider-agnostic reasoning configuration
+#[derive(Debug, Clone)]
 pub struct ReasoningConfig {
     /// Token budget for thinking.
     pub max_tokens: Option<u32>,

@@ -12,7 +12,9 @@ use super::errors::LLMError;
 use crate::clients::openrouter::OpenRouterClient;
 use crate::common::request_with_backoff;
 use crate::http_client::HttpClient;
-use crate::llm::base::{ChatHistoryContent, ContentType, ToolCallRequest, USER_ROLE};
+use crate::llm::base::{
+    ChatHistoryContent, ContentType, ReasoningConfig, ToolCallRequest, USER_ROLE,
+};
 use crate::llm::tools::{
     OPENROUTER_SCHEMA_KEY, SerializedTool, get_owned_tools, process_tool_calls,
 };
@@ -64,6 +66,16 @@ struct OpenRouterReasoning {
     #[serde(skip_serializing_if = "Option::is_none")]
     /// One of 'auto', 'concise', 'detailed'.
     summary: Option<String>,
+}
+
+impl From<ReasoningConfig> for OpenRouterReasoning {
+    fn from(value: ReasoningConfig) -> Self {
+        Self {
+            effort: value.effort,
+            max_tokens: value.max_tokens,
+            summary: value.summary,
+        }
+    }
 }
 
 /// Represents a request to the OpenRouter API
@@ -348,7 +360,7 @@ impl<T: HttpClient> ApiClient for OpenRouterClient<T> {
         let req_body = OpenRouterRequest {
             model: &model,
             messages: &chat_history,
-            reasoning: None,
+            reasoning: request.reasoning.clone().map(Into::into),
             tools: make_wrapped_tools(),
         };
 
