@@ -22,7 +22,7 @@ use crate::clients::openai::OpenAIClient;
 use crate::common::request_with_backoff;
 use crate::constants::{
     DEFAULT_MAX_RETRIES, DEFAULT_OPENAI_EMBEDDING_DIM, DEFAULT_OPENAI_MODEL,
-    DEFAULT_OPENAI_REASONING_EFFORT, DEFAULT_OPENAI_REASONING_SUMMARY,
+    DEFAULT_OPENAI_REASONING_EFFORT,
 };
 use crate::http_client::HttpClient;
 use crate::llm::base::{ChatHistoryContent, ContentType, ReasoningConfig, ToolUseStats, USER_ROLE};
@@ -180,11 +180,7 @@ impl From<ReasoningConfig> for OpenAIReasoning {
             effort: value
                 .effort
                 .unwrap_or(DEFAULT_OPENAI_REASONING_EFFORT.into()),
-            summary: Some(
-                value
-                    .summary
-                    .unwrap_or(DEFAULT_OPENAI_REASONING_SUMMARY.into()),
-            ),
+            summary: value.summary,
         }
     }
 }

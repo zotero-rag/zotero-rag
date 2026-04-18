@@ -317,6 +317,7 @@ impl Config {
         }
     }
 
+    // NOTE: Maintainers: if you change this, you should also update zqa-rag/src/llm/factory.rs
     #[must_use]
     pub fn get_reasoning_config(&self) -> Option<ReasoningConfig> {
         match self.model_provider {
