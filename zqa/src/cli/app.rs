@@ -121,8 +121,15 @@ pub(crate) async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<()
                     log::debug!("Failed to write history entry: {e}");
                 }
 
-                if !dispatch_command(&command, &mut ctx).await? {
-                    break;
+                match dispatch_command(&command, &mut ctx).await {
+                    Ok(true) => {}
+                    Ok(false) => break,
+                    Err(CLIError::CommandError(ref e)) => {
+                        if let Err(write_err) = writeln!(&mut ctx.err, "Error: {e}") {
+                            log::error!("Failed to write to stderr: {write_err}");
+                        }
+                    }
+                    Err(e) => return Err(e),
                 }
             }
             Err(ReadlineError::Signal(rustyline::error::Signal::Resize)) => {
