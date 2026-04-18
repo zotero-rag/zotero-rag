@@ -86,7 +86,7 @@ where
     }
 
     let vector_search_start = Instant::now();
-    let mut search_results = vector_search(
+    let (mut search_results, _) = vector_search(
         search_term.clone(),
         &ctx.config
             .get_embedding_config()
@@ -206,7 +206,16 @@ where
     let mut total_input_tokens: u32 = 0;
     let mut total_output_tokens: u32 = 0;
 
+    let embedding_provider_name = embedding_config.provider_name().to_string();
+    let embedding_model_name = embedding_config.model_name().to_string();
+    let reranker_provider_and_model = reranker_config
+        .as_ref()
+        .map(|c| (c.provider_name().to_string(), c.model_name().to_string()));
+
     let retrieval_tool = RetrievalTool::new(embedding_config, reranker_config);
+    let retrieval_embedding_chars = std::sync::Arc::clone(&retrieval_tool.embedding_chars);
+    let retrieval_rerank_chars = std::sync::Arc::clone(&retrieval_tool.rerank_chars);
+
     let summarization_tool = SummarizationTool::new(llm_client.clone());
     let summarization_tool_clone = summarization_tool.clone();
     let mut tools: Vec<Box<dyn Tool>> =
@@ -281,6 +290,55 @@ where
                 ctx.state
                     .session_cost
                     .fetch_add(call_cost, atomic::Ordering::Relaxed);
+            }
+
+            // Add embedding cost to session cost
+            let emb_chars = retrieval_embedding_chars.load(atomic::Ordering::Relaxed);
+            if emb_chars > 0 {
+                let emb_provider = embedding_provider_name.clone();
+                let emb_model = embedding_model_name.clone();
+                let emb_pricing = tokio::task::spawn_blocking(move || {
+                    get_model_pricing(&emb_provider, &emb_model, None)
+                })
+                .await
+                .ok()
+                .flatten();
+
+                if let Some(ref p) = emb_pricing {
+                    #[allow(clippy::cast_possible_truncation)]
+                    let emb_tokens = (emb_chars / 4) as u32;
+
+                    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                    let emb_cost = (p.estimate_cost(emb_tokens, 0) * 100.0) as u64;
+                    ctx.state
+                        .session_cost
+                        .fetch_add(emb_cost, atomic::Ordering::Relaxed);
+                }
+            }
+
+            // Add reranker cost to session cost
+            let rerank_chars_val = retrieval_rerank_chars.load(atomic::Ordering::Relaxed);
+            if rerank_chars_val > 0
+                && let Some((rerank_provider, rerank_model)) = reranker_provider_and_model.clone()
+            {
+                let rerank_pricing = tokio::task::spawn_blocking(move || {
+                    get_model_pricing(&rerank_provider, &rerank_model, None)
+                })
+                .await
+                .ok()
+                .flatten();
+
+                if let Some(ref p) = rerank_pricing {
+                    #[allow(clippy::cast_possible_truncation)]
+                    let rerank_tokens = (rerank_chars_val / 4) as u32;
+
+                    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                    let rerank_cost = (p.estimate_cost(rerank_tokens, 0) * 100.0) as u64;
+
+                    ctx.state
+                        .session_cost
+                        .fetch_add(rerank_cost, atomic::Ordering::Relaxed);
+                }
             }
 
             // Update state - re-acquire lock

@@ -138,6 +138,19 @@ impl EmbeddingProviderConfig {
     pub fn provider_name(&self) -> &str {
         self.provider_id().as_str()
     }
+
+    /// Returns the embedding model name.
+    #[must_use]
+    pub fn model_name(&self) -> &str {
+        match self {
+            Self::OpenAI(c) => &c.embedding_model,
+            Self::VoyageAI(c) => &c.embedding_model,
+            Self::Gemini(c) => &c.embedding_model,
+            Self::Cohere(c) => &c.embedding_model,
+            Self::Ollama(c) => &c.embedding_model,
+            Self::ZeroEntropy(c) => &c.embedding_model,
+        }
+    }
 }
 
 /// A trait intended to be used for responses from embedding provider APIs. Typically, these APIs
