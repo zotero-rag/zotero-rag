@@ -10,6 +10,7 @@ use zqa_rag::config::LLMClientConfig;
 use zqa_rag::constants::*;
 use zqa_rag::constants::{DEFAULT_OPENAI_EMBEDDING_DIM, DEFAULT_OPENAI_EMBEDDING_MODEL};
 use zqa_rag::embedding::common::EmbeddingProviderConfig;
+use zqa_rag::llm::base::ReasoningConfig;
 use zqa_rag::reranking::common::RerankProviderConfig;
 
 /// TOML config. Below is an example config with all the defaults. The TOML config is
@@ -312,6 +313,51 @@ impl Config {
                 .zeroentropy
                 .as_ref()
                 .map(|cfg| EmbeddingProviderConfig::ZeroEntropy(cfg.clone().into())),
+        }
+    }
+
+    #[must_use]
+    pub fn get_reasoning_config(&self) -> Option<ReasoningConfig> {
+        match self.model_provider {
+            ModelProvider::Anthropic => self.anthropic.as_ref().and_then(|c| {
+                c.reasoning_budget.map(|budget| ReasoningConfig {
+                    max_tokens: Some(budget),
+                    effort: None,
+                    summary: None,
+                })
+            }),
+            ModelProvider::Ollama => self.ollama.as_ref().and_then(|c| {
+                c.reasoning_budget.map(|budget| ReasoningConfig {
+                    max_tokens: Some(budget),
+                    effort: None,
+                    summary: None,
+                })
+            }),
+            ModelProvider::OpenAI => self.openai.as_ref().and_then(|c| {
+                c.reasoning_effort.as_ref().map(|effort| ReasoningConfig {
+                    max_tokens: None,
+                    effort: Some(effort.clone()),
+                    summary: None,
+                })
+            }),
+            ModelProvider::Gemini => self.gemini.as_ref().and_then(|c| {
+                c.reasoning_budget.map(|budget| ReasoningConfig {
+                    max_tokens: Some(budget),
+                    effort: None,
+                    summary: None,
+                })
+            }),
+            ModelProvider::OpenRouter => self.openrouter.as_ref().and_then(|c| {
+                if c.reasoning_effort.is_none() && c.reasoning_budget.is_none() {
+                    return None;
+                }
+
+                Some(ReasoningConfig {
+                    max_tokens: c.reasoning_budget,
+                    effort: c.reasoning_effort.clone(),
+                    summary: None,
+                })
+            }),
         }
     }
 

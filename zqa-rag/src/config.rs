@@ -6,8 +6,12 @@
 
 use crate::{
     constants::{
-        DEFAULT_OLLAMA_BASE_URL, DEFAULT_OLLAMA_EMBEDDING_DIM, DEFAULT_OLLAMA_EMBEDDING_MODEL,
-        DEFAULT_OLLAMA_MAX_TOKENS, DEFAULT_OLLAMA_MODEL,
+        DEFAULT_ANTHROPIC_MAX_TOKENS, DEFAULT_ANTHROPIC_MODEL, DEFAULT_GEMINI_EMBEDDING_MODEL,
+        DEFAULT_GEMINI_MODEL, DEFAULT_GEMINI_REASONING_BUDGET, DEFAULT_OLLAMA_BASE_URL,
+        DEFAULT_OLLAMA_EMBEDDING_DIM, DEFAULT_OLLAMA_EMBEDDING_MODEL, DEFAULT_OLLAMA_MAX_TOKENS,
+        DEFAULT_OLLAMA_MODEL, DEFAULT_OPENAI_EMBEDDING_DIM, DEFAULT_OPENAI_EMBEDDING_MODEL,
+        DEFAULT_OPENAI_MAX_TOKENS, DEFAULT_OPENAI_MODEL, DEFAULT_OPENROUTER_MODEL,
+        DEFAULT_OPENROUTER_REASONING_BUDGET, DEFAULT_OPENROUTER_REASONING_EFFORT,
     },
     providers::ProviderId,
 };
@@ -25,6 +29,17 @@ pub struct AnthropicConfig {
     pub reasoning_budget: Option<u32>,
 }
 
+impl Default for AnthropicConfig {
+    fn default() -> Self {
+        Self {
+            api_key: String::new(),
+            model: DEFAULT_ANTHROPIC_MODEL.into(),
+            max_tokens: DEFAULT_ANTHROPIC_MAX_TOKENS,
+            reasoning_budget: None,
+        }
+    }
+}
+
 /// Configuration for OpenAI LLM and embedding provider
 #[derive(Debug, Clone)]
 pub struct OpenAIConfig {
@@ -40,6 +55,19 @@ pub struct OpenAIConfig {
     pub embedding_dims: usize,
     /// Reasoning effort level (e.g., "high"). `None` disables reasoning.
     pub reasoning_effort: Option<String>,
+}
+
+impl Default for OpenAIConfig {
+    fn default() -> Self {
+        Self {
+            api_key: String::new(),
+            model: DEFAULT_OPENAI_MODEL.into(),
+            max_tokens: DEFAULT_OPENAI_MAX_TOKENS,
+            embedding_model: DEFAULT_OPENAI_EMBEDDING_MODEL.into(),
+            embedding_dims: DEFAULT_OPENAI_EMBEDDING_DIM as usize,
+            reasoning_effort: None,
+        }
+    }
 }
 
 /// Configuration for `ollama` LLM and embedding provider
@@ -85,6 +113,18 @@ pub struct GeminiConfig {
     pub embedding_dims: usize,
     /// Token budget for extended thinking. `None` disables thinking.
     pub reasoning_budget: Option<u32>,
+}
+
+impl Default for GeminiConfig {
+    fn default() -> Self {
+        Self {
+            api_key: String::new(),
+            model: DEFAULT_GEMINI_MODEL.into(),
+            embedding_model: DEFAULT_GEMINI_EMBEDDING_MODEL.into(),
+            embedding_dims: DEFAULT_OLLAMA_EMBEDDING_DIM,
+            reasoning_budget: Some(DEFAULT_GEMINI_REASONING_BUDGET),
+        }
+    }
 }
 
 /// Configuration for Voyage AI embedding and reranking provider
@@ -137,6 +177,17 @@ pub struct OpenRouterConfig {
     pub reasoning_effort: Option<String>,
     /// Token budget for extended thinking. `None` disables thinking.
     pub reasoning_budget: Option<u32>,
+}
+
+impl Default for OpenRouterConfig {
+    fn default() -> Self {
+        Self {
+            api_key: String::new(),
+            model: DEFAULT_OPENROUTER_MODEL.into(),
+            reasoning_effort: Some(DEFAULT_OPENROUTER_REASONING_EFFORT.into()),
+            reasoning_budget: Some(DEFAULT_OPENROUTER_REASONING_BUDGET),
+        }
+    }
 }
 
 /// Configuration for LLM clients
