@@ -70,7 +70,7 @@ pub(crate) struct AnthropicThinkingConfig {
     /// Token budget for thinking
     budget_tokens: u32,
     /// Always "enabled"
-    r#type: String,
+    r#type: &'static str,
 }
 
 impl From<ReasoningConfig> for AnthropicThinkingConfig {
@@ -79,7 +79,7 @@ impl From<ReasoningConfig> for AnthropicThinkingConfig {
             budget_tokens: value
                 .max_tokens
                 .unwrap_or(DEFAULT_ANTHROPIC_REASONING_BUDGET),
-            r#type: "enabled".into(),
+            r#type: "enabled",
         }
     }
 }
