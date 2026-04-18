@@ -126,7 +126,7 @@ struct GeminiThinkingConfig {
 impl From<ReasoningConfig> for GeminiThinkingConfig {
     fn from(value: ReasoningConfig) -> Self {
         Self {
-            include_thoughts: Some(value.summary.is_some()),
+            include_thoughts: Some(true),
             thinking_budget: Some(value.max_tokens.unwrap_or(DEFAULT_GEMINI_REASONING_BUDGET)),
         }
     }

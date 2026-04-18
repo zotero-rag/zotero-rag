@@ -13,8 +13,9 @@ use zqa_rag::embedding::common::EmbeddingProviderConfig;
 use zqa_rag::llm::base::ReasoningConfig;
 use zqa_rag::reranking::common::RerankProviderConfig;
 
-/// TOML config. Below is an example config with all the defaults. The TOML config is
-/// overridden by environment variables.
+/// TOML config. Below is an example config with most of the defaults. The TOML config is
+/// overridden by environment variables. Note that reasoning defaults to off for all
+/// providers; the example below shows you how you can set reasoning parameters.
 ///
 /// ```toml
 /// model_provider = "anthropic"  # Generation model provider
@@ -64,7 +65,7 @@ use zqa_rag::reranking::common::RerankProviderConfig;
 /// reranker = "rerank-2.5"
 /// embedding_model = "voyage-3-large"
 /// embedding_dims = 2048
-///api_key = "..."
+/// api_key = "..."
 ///
 /// [cohere]
 /// reranker = "rerank-v3.5"
