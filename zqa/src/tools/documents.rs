@@ -318,6 +318,7 @@ async fn call_subagent(
 ) -> Result<String, DocumentError> {
     let request = ChatRequest {
         message: get_prompt(query, retrieved_chunks, summary),
+        reasoning: client.get_reasoning_config(),
         ..ChatRequest::default()
     };
 

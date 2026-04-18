@@ -112,7 +112,7 @@ impl Tool for SummarizationTool {
                         chat_history: Vec::new(),
                         max_tokens: None,
                         message: get_extraction_prompt(&query_cloned, &text, &metadata),
-                        reasoning: None,
+                        reasoning: client.get_reasoning_config(),
                         tools: None, // We ARE the tool :3
                         on_tool_call: None,
                         on_text: None,

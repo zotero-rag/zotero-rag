@@ -496,6 +496,7 @@ fn map_response_to_chat_history(response: &OpenAIResponse) -> Vec<OpenAIRequestI
 impl<T: HttpClient> ApiClient for OpenAIClient<T> {
     /// Send a request to the OpenAI Responses API, processing tool calls as necessary.
     /// Returns a final response after all tool calls are processed and sent back.
+    #[allow(clippy::too_many_lines)]
     async fn send_message<'a>(
         &self,
         request: &'a ChatRequest<'a>,
@@ -599,7 +600,14 @@ impl<T: HttpClient> ApiClient for OpenAIClient<T> {
                     }
                 }
                 OpenAIOutput::Reasoning { summary, .. } => {
-                    let text = format!("<reasoning>{}</reasoning>", summary.join("\n"));
+                    let text = format!(
+                        "<reasoning>{}</reasoning>",
+                        summary
+                            .iter()
+                            .map(|s| s.text.clone())
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    );
                     if let Some(cb) = request.on_text.as_ref() {
                         cb(&text);
                     }

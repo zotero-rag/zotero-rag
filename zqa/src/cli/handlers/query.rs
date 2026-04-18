@@ -181,12 +181,13 @@ where
         && let Ok(small_client) = get_client_with_config(&small_config)
     {
         let prompt = get_title_prompt(&query);
+        let reasoning_config = ctx.config.get_reasoning_config();
         tokio::spawn(async move {
             let request = ChatRequest {
                 chat_history: Vec::new(),
                 max_tokens: Some(20),
                 message: prompt,
-                reasoning: None,
+                reasoning: reasoning_config,
                 tools: None,
                 on_tool_call: None,
                 on_text: None,
@@ -232,7 +233,7 @@ where
             chat_history: history.clone(),
             max_tokens: None,
             message: get_summarize_prompt(&query),
-            reasoning: None,
+            reasoning: ctx.config.get_reasoning_config(),
             tools: Some(&tools),
             on_tool_call: Some(on_tool_call),
             on_text: Some(on_text),
