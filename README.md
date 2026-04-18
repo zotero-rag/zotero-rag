@@ -113,6 +113,7 @@ model = "claude-sonnet-4-5"
 model_small = "claude-haiku-4-5"
 api_key = "sk-ant-..."
 max_tokens = 64000
+reasoning_budget = 2048
 
 [ollama]
 model = "qwen3.5"
@@ -120,6 +121,8 @@ model_small = "qwen3.5:0.8b"
 max_tokens = 8192
 embedding_model = "qwen3-embedding"
 embedding_dims = 4096
+reasoning_budget = 2048
+base_url = "http://localhost:11434"  # Defaults to local ollama instance
 
 [openai]
 model = "gpt-5.2"
@@ -128,6 +131,7 @@ api_key = "sk-proj-..."
 max_tokens = 8192
 embedding_model = "text-embedding-3-small"
 embedding_dims = 1536
+reasoning_effort = "high"  # Supported by the most models
 
 [gemini]
 model = "gemini-3.1-pro-preview"
@@ -135,6 +139,7 @@ model_small = "gemini-3-flash-preview"
 api_key = "AI..."
 embedding_model = "gemini-embedding-001"
 embedding_dims = 3072
+reasoning_budget = 2048
 
 [voyageai]
 reranker = "rerank-2.5"
@@ -152,6 +157,8 @@ api_key = "..."
 api_key = "..."
 model = "anthropic/claude-sonnet-4.5"
 model_small = "anthropic/claude-haiku-4.5"
+reasoning_effort = "high"
+reasoning_budget = 2048
 ```
 
 ### Set up environment variables
