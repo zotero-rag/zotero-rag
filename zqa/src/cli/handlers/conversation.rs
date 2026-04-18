@@ -104,6 +104,7 @@ where
                     let selected = histories.swap_remove(n - 1);
                     let title = selected.title.clone();
                     ctx.state.chat_history = Arc::new(Mutex::new(selected.history));
+                    *ctx.state.title.lock()? = Some(title.clone());
                     ctx.state.dirty.store(false, atomic::Ordering::Relaxed);
                     writeln!(&mut ctx.out, "Resumed: {title}")?;
                 }

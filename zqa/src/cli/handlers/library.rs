@@ -145,9 +145,9 @@ where
             std::fs::remove_file(BATCH_ITER_FILE)?;
         }
         Err(e) => {
-            writeln!(&mut ctx.out, "Parsing library failed: {e}")?;
+            writeln!(&mut ctx.err, "Parsing library failed: {e}")?;
             writeln!(
-                &mut ctx.out,
+                &mut ctx.err,
                 "The parsed PDFs have been saved in 'batch_iter.bin'. Run '/embed' to retry embedding."
             )?;
         }
@@ -455,18 +455,14 @@ async fn fix_zero_embeddings<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Res
     }
 
     let nonempty_zero_subset_batch =
-        library_to_arrow(nonempty_zero_subset, embedding_config).await?;
+        library_to_arrow(nonempty_zero_subset, embedding_config.clone()).await?;
 
     let batches = vec![nonempty_zero_subset_batch.clone()];
 
     insert_records(
         batches,
         Some(&[DbFields::LibraryKey.as_ref()]),
-        &ctx.config
-            .get_embedding_config()
-            .ok_or(CLIError::ConfigError(
-                "Could not get embedding config".into(),
-            ))?,
+        &embedding_config,
         DbFields::PdfText.as_ref(),
     )
     .await?;
