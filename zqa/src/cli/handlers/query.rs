@@ -319,7 +319,7 @@ where
             // Add reranker cost to session cost
             let rerank_chars_val = retrieval_rerank_chars.load(atomic::Ordering::Relaxed);
             if rerank_chars_val > 0
-                && let Some((rerank_provider, rerank_model)) = reranker_provider_and_model.clone()
+                && let Some((rerank_provider, rerank_model)) = reranker_provider_and_model
             {
                 let rerank_pricing = tokio::task::spawn_blocking(move || {
                     get_model_pricing(&rerank_provider, &rerank_model, None)
