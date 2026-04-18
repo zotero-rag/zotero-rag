@@ -96,9 +96,6 @@ pub const DEFAULT_ZEROENTROPY_RERANK_MODEL: &str = "zerank-2";
 /// Default reasoning token budget for Anthropic
 pub const DEFAULT_ANTHROPIC_REASONING_BUDGET: u32 = 2048;
 
-/// Default reasoning token budget for Ollama
-pub const DEFAULT_OLLAMA_REASONING_BUDGET: u32 = 2048;
-
 /// Default reasoning token budget for Gemini
 pub const DEFAULT_GEMINI_REASONING_BUDGET: u32 = 2048;
 
