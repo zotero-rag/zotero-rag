@@ -23,7 +23,7 @@ pub trait VectorBackend: Send + Sync {
     /// The record type for the backend.
     type Record: Send;
     /// The error type for the backend.
-    type Error: Send;
+    type Error: std::error::Error + Send;
     /// The configuration type for the backend. A backend may not have a config at all, in which
     /// case the [`Config`] type should be `()`.
     type Config: Send + Sync;
