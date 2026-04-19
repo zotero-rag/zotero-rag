@@ -14,16 +14,13 @@ pub trait VectorBackendRegistrar: VectorBackend + Send + Sync {
     /// # Errors
     ///
     /// Returns an error if the registration fails.
-    fn register(&self, db: &lancedb::Connection, config: &Self::Config) -> Result<(), Self::Error>;
+    fn register(&self, db: &Self::Connection, config: &Self::Config) -> Result<(), Self::Error>;
 }
 
 /// A vector database backend.
 pub trait VectorBackend {
     /// The record type for the backend.
     type Record;
-    /// The backend's "native" type for multiple embeddings. This is the return type when embeddings
-    /// are generated.
-    type EmbeddingColumn;
     /// The error type for the backend.
     type Error;
     /// The configuration type for the backend. A backend may not have a config at all, in which
@@ -35,7 +32,7 @@ pub trait VectorBackend {
     /// Returns the *base* path for the DB. This can be path on the local disk for LanceDB's
     /// database, a connection URL, etc.
     #[must_use]
-    fn get_db_path() -> String;
+    fn get_db_path(&self) -> String;
 
     /// Whether the path specified by [`get_db_path`] exists.
     #[must_use]
@@ -49,6 +46,7 @@ pub trait VectorBackend {
     /// * `text_col` - The name of the text column to index.
     /// * `embedding_col` - The name of the embedding column to index.
     fn create_or_update_indices<'a>(
+        &'a self,
         text_col: &'a str,
         embedding_col: &'a str,
     ) -> impl Future<Output = Result<(), Self::Error>> + Send + 'a;
@@ -134,7 +132,7 @@ pub trait VectorBackend {
         &'a self,
         key_col: &'a str,
         key: &'a str,
-    ) -> impl Future<Output = Result<Self::Record, Self::Error>> + Send + 'a;
+    ) -> impl Future<Output = Result<Option<Self::Record>, Self::Error>> + Send + 'a;
 
     /// Search for items in the database by a column value.
     ///
