@@ -28,6 +28,7 @@ tempfile = "3.0"
 thiserror = "1.0"
 tokio = "1.41.0"
 zqa-pdftools = { workspace = true }
+async-trait = "0.1.89"
 
 [dev-dependencies]
 serial_test = "3.2.0"
