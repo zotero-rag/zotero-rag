@@ -1,7 +1,6 @@
 //! LanceDB vector backend implementation.
 
 use std::collections::HashSet;
-use std::fmt::Display;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
@@ -10,6 +9,7 @@ use arrow_array::cast::AsArray;
 use arrow_array::types::Float32Type;
 use arrow_array::{RecordBatch, RecordBatchIterator, StringArray};
 use arrow_schema::{ArrowError, Schema};
+use async_trait::async_trait;
 use futures::TryStreamExt;
 use lancedb::database::CreateTableMode;
 use lancedb::embeddings::EmbeddingDefinition;
@@ -66,13 +66,20 @@ pub struct LanceBackend {
     config: EmbeddingProviderConfig,
     /// Arrow schema for the LanceDB table.
     schema: Arc<Schema>,
+    /// Column name containing the source text used to generate embeddings.
+    source_col: String,
 }
 
 impl LanceBackend {
-    /// Creates a new `LanceBackend` with the given embedding provider config and Arrow schema.
+    /// Creates a new `LanceBackend` with the given embedding provider config, Arrow schema, and
+    /// source column name.
     #[must_use]
-    pub fn new(config: EmbeddingProviderConfig, schema: Arc<Schema>) -> Self {
-        Self { config, schema }
+    pub fn new(config: EmbeddingProviderConfig, schema: Arc<Schema>, source_col: String) -> Self {
+        Self {
+            config,
+            schema,
+            source_col,
+        }
     }
 
     /// From a `RecordBatch`, return all values from a specified column as a `Vec<String>`.
@@ -96,6 +103,7 @@ impl LanceBackend {
     }
 }
 
+#[async_trait]
 impl VectorBackend for LanceBackend {
     type Record = RecordBatch;
     type Error = LanceError;
@@ -135,16 +143,12 @@ impl VectorBackend for LanceBackend {
     /// # Errors
     ///
     /// Returns an error if the database connection fails, table operations fail, or index creation fails.
-    async fn create_or_update_indices<'a>(
-        &'a self,
-        text_col: &'a str,
-        embedding_col: &'a str,
+    async fn create_or_update_indices(
+        &self,
+        text_col: &str,
+        embedding_col: &str,
     ) -> Result<(), Self::Error> {
-        let db = connect(&self.get_db_path())
-            .execute()
-            .await
-            .map_err(|e| LanceError::ConnectionError(e.to_string()))?;
-
+        let db = self.connect().await?;
         let tbl = db.open_table(LANCE_TABLE_NAME).execute().await?;
 
         let indices = tbl.list_indices().await?;
@@ -203,14 +207,14 @@ impl VectorBackend for LanceBackend {
     /// * `LanceError::ConnectionError` - If the database connection fails
     /// * `LanceError::InvalidStateError` - If the table doesn't exist
     /// * `LanceError::Other` - If the delete query fails
-    async fn delete_rows<'a>(
-        &'a self,
-        col: &str,
-        keys: &'a [impl AsRef<str> + Send + Sync],
-    ) -> Result<(), Self::Error> {
+    async fn delete_rows(&self, col: &str, keys: &[String]) -> Result<(), Self::Error> {
         if keys.is_empty() {
             return Ok(());
         }
+
+        let col = self.schema.field_with_name(col).map_err(|_| {
+            LanceError::ParameterError(format!("Column {col} does not exist in the schema"))
+        })?;
 
         let db = self.connect().await?;
         let table = db
@@ -226,7 +230,7 @@ impl VectorBackend for LanceBackend {
         for key_chunk in keys.chunks(100) {
             let delete_pred = key_chunk
                 .iter()
-                .map(|k| format!("{col} = '{}'", k.as_ref().replace('\'', "''")))
+                .map(|k| format!("{col} = '{}'", k.replace('\'', "''")))
                 .collect::<Vec<_>>()
                 .join(" OR ");
 
@@ -255,7 +259,7 @@ impl VectorBackend for LanceBackend {
     /// * `LanceError::InvalidStateError` if the table doesn't exist
     /// * `LanceError::ParameterError` if the key column is not found in the rows
     /// * `LanceError::Other` for other LanceDB errors
-    async fn dedup_rows<'a>(&'a self, by: &'a str, key: &'a str) -> Result<usize, Self::Error> {
+    async fn dedup_rows(&self, by: &str, key: &str) -> Result<usize, Self::Error> {
         let db = self.connect().await?;
         let table = db
             .open_table(LANCE_TABLE_NAME)
@@ -318,10 +322,7 @@ impl VectorBackend for LanceBackend {
     /// * `LanceError::ConnectionError` - If the database connection fails
     /// * `LanceError::InvalidStateError` - If the table doesn't exist
     /// * `LanceError::Other` - If the query execution fails
-    async fn get_items<'a>(
-        &'a self,
-        columns: &'a [impl AsRef<str> + Send + Sync + Display],
-    ) -> Result<Vec<Self::Record>, Self::Error> {
+    async fn get_items(&self, columns: &[String]) -> Result<Vec<Self::Record>, Self::Error> {
         let db = self.connect().await?;
 
         let tbl = db
@@ -334,7 +335,7 @@ impl VectorBackend for LanceBackend {
                 ))
             })?;
 
-        let string_cols: Vec<String> = columns.iter().map(|c| c.as_ref().to_string()).collect();
+        let string_cols = columns.to_vec();
 
         // The installed version of LanceDB has a bug where without the `.limit` call here, it only
         // returns 10 rows; see https://github.com/lancedb/lancedb/issues/1852#issuecomment-2489837804
@@ -444,10 +445,10 @@ impl VectorBackend for LanceBackend {
     ///
     /// Returns a [`LanceError`] if the database connection fails, the table cannot be opened,
     /// the query cannot be executed, or the result stream cannot be collected.
-    async fn search_by_key<'a>(
-        &'a self,
-        key_col: &'a str,
-        key: &'a str,
+    async fn search_by_key(
+        &self,
+        key_col: &str,
+        key: &str,
     ) -> Result<Option<Self::Record>, Self::Error> {
         let db = self.connect().await?;
 
@@ -493,10 +494,10 @@ impl VectorBackend for LanceBackend {
     /// * `LanceError::ConnectionError` - If the DB connection failed.
     /// * `LanceError::InvalidStateError` - If opening the table failed.
     /// * `LanceError::Other` - If query execution failed.
-    async fn search_by_column<'a>(
-        &'a self,
-        col: &'a str,
-        values: &'a [impl AsRef<str> + Send + Sync + Display],
+    async fn search_by_column(
+        &self,
+        col: &str,
+        values: &[String],
     ) -> Result<Vec<Self::Record>, Self::Error> {
         if values.is_empty() {
             return Ok(Vec::new());
@@ -515,7 +516,7 @@ impl VectorBackend for LanceBackend {
 
         let queries = values
             .iter()
-            .map(|key| format!("{col} = '{}'", key.as_ref().replace('\'', "''")))
+            .map(|key| format!("{col} = '{}'", key.replace('\'', "''")))
             .collect::<Vec<_>>()
             .join(" OR ");
 
@@ -535,18 +536,18 @@ impl VectorBackend for LanceBackend {
     /// * `items` - A vector of `Record` items to insert into the database.
     /// * `merge_on` - `None` if you want to create or overwrite the current database; otherwise, a
     ///   reference to an array of keys to merge on.
-    /// * `source_col` - The name of the column in `items` that contains the source document text.
     ///
     /// # Returns
+    ///
     /// `Ok(())` if the items were inserted successfully
     ///
     /// # Errors
+    ///
     /// Returns a `LanceError` if connection, table creation, or registering embedding functions fails
-    async fn insert_items<'a>(
-        &'a self,
+    async fn insert_items(
+        &self,
         items: Vec<Self::Record>,
-        merge_on: Option<&'a [&str]>,
-        source_col: &'a str,
+        merge_on: Option<&[&str]>,
     ) -> Result<(), Self::Error> {
         if items.is_empty() {
             return Ok(());
@@ -579,7 +580,7 @@ impl VectorBackend for LanceBackend {
                 .map_err(|e| LanceError::TableUpdateError(e.to_string()))?;
         } else {
             let embedding_params = EmbeddingDefinition::new(
-                source_col,
+                self.source_col.as_str(),
                 self.config.provider_id().as_str(),
                 Some("embeddings"),
             );
