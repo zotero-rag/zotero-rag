@@ -212,7 +212,7 @@ impl VectorBackend for LanceBackend {
             return Ok(());
         }
 
-        let col = self.schema.field_with_name(col).map_err(|_| {
+        self.schema.field_with_name(col).map_err(|_| {
             LanceError::ParameterError(format!("Column {col} does not exist in the schema"))
         })?;
 
@@ -450,8 +450,11 @@ impl VectorBackend for LanceBackend {
         key_col: &str,
         key: &str,
     ) -> Result<Option<Self::Record>, Self::Error> {
-        let db = self.connect().await?;
+        self.schema.field_with_name(key_col).map_err(|_| {
+            LanceError::ParameterError(format!("Column {key_col} does not exist in the schema"))
+        })?;
 
+        let db = self.connect().await?;
         let tbl = db
             .open_table(LANCE_TABLE_NAME)
             .execute()
@@ -502,6 +505,10 @@ impl VectorBackend for LanceBackend {
         if values.is_empty() {
             return Ok(Vec::new());
         }
+
+        self.schema.field_with_name(col).map_err(|_| {
+            LanceError::ParameterError(format!("Column {col} does not exist in the schema"))
+        })?;
 
         let db = self.connect().await?;
         let tbl = db
