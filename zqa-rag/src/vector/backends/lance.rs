@@ -70,6 +70,17 @@ pub struct LanceBackend {
     source_col: String,
 }
 
+/// Metadata about the LanceDB database.
+#[derive(Debug, PartialEq)]
+pub struct LanceMetadata {
+    /// The names of the tables in the database.
+    table_names: Vec<String>,
+    /// The embedding table version. Each update to a table creates a new version.
+    embedding_table_version: u64,
+    /// Number of rows in the table
+    num_rows: usize,
+}
+
 impl LanceBackend {
     /// Creates a new `LanceBackend` with the given embedding provider config, Arrow schema, and
     /// source column name.
@@ -109,10 +120,46 @@ impl VectorBackend for LanceBackend {
     type Error = LanceError;
     type Config = EmbeddingProviderConfig;
     type Connection = Connection;
+    type Metadata = LanceMetadata;
 
     /// Returns the database URI, allowing override via `LANCEDB_URI` environment variable.
     fn get_db_path(&self) -> String {
         std::env::var("LANCEDB_URI").unwrap_or_else(|_| LANCEDB_URI.to_string())
+    }
+
+    async fn get_metadata(&self) -> Result<Self::Metadata, Self::Error> {
+        let db = connect(&self.get_db_path())
+            .execute()
+            .await
+            .map_err(|e| LanceError::ConnectionError(e.to_string()))?;
+
+        let tbl = db
+            .open_table(LANCE_TABLE_NAME)
+            .execute()
+            .await
+            .map_err(|_| {
+                LanceError::InvalidStateError(format!(
+                    "The table {LANCE_TABLE_NAME} does not exist"
+                ))
+            })?;
+
+        let table_version = tbl.version().await.map_err(|_| {
+            LanceError::InvalidStateError(format!("The table {LANCE_TABLE_NAME} does not exist"))
+        })?;
+
+        let table_names = db.table_names().execute().await.map_err(|_| {
+            LanceError::InvalidStateError(format!("The table {LANCE_TABLE_NAME} does not exist"))
+        })?;
+
+        let num_rows = tbl.count_rows(None).await.map_err(|_| {
+            LanceError::InvalidStateError(format!("The table {LANCE_TABLE_NAME} does not exist"))
+        })?;
+
+        Ok(LanceMetadata {
+            table_names,
+            num_rows,
+            embedding_table_version: table_version,
+        })
     }
 
     /// Checks if an existing LanceDB exists and has a valid table
@@ -602,5 +649,563 @@ impl VectorBackend for LanceBackend {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::env;
+    use std::sync::Arc;
+
+    use arrow_array::Array;
+    use arrow_array::StringArray;
+    use arrow_array::cast::as_fixed_size_list_array;
+    use arrow_array::cast::as_string_array;
+    use arrow_array::types::Float32Type;
+    use dotenv::dotenv;
+    use futures::StreamExt;
+    use lancedb::embeddings::EmbeddingFunction;
+    use lancedb::query::ExecutableQuery;
+    use serial_test::serial;
+    use zqa_macros::{test_eq, test_ok};
+    use zqa_pdftools::chunk::Chunker;
+
+    use super::*;
+    use crate::capabilities::EmbeddingProvider;
+    use crate::clients::openai::OpenAIClient;
+    use crate::config::{OpenAIConfig, VoyageAIConfig};
+    use crate::constants::{
+        DEFAULT_OPENAI_EMBEDDING_DIM, DEFAULT_OPENAI_EMBEDDING_MODEL, DEFAULT_OPENAI_MODEL,
+        DEFAULT_VOYAGE_EMBEDDING_DIM, DEFAULT_VOYAGE_EMBEDDING_MODEL, DEFAULT_VOYAGE_RERANK_MODEL,
+    };
+    use crate::http_client::ReqwestClient;
+
+    fn get_test_openai_embedding_config() -> EmbeddingProviderConfig {
+        EmbeddingProviderConfig::OpenAI(OpenAIConfig {
+            api_key: env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY not set"),
+            model: DEFAULT_OPENAI_MODEL.into(),
+            max_tokens: 8192,
+            embedding_model: DEFAULT_OPENAI_EMBEDDING_MODEL.into(),
+            embedding_dims: DEFAULT_OPENAI_EMBEDDING_DIM as usize,
+            reasoning_effort: None,
+        })
+    }
+
+    fn get_schema(source_col: &str) -> Schema {
+        arrow_schema::Schema::new(vec![arrow_schema::Field::new(
+            source_col,
+            arrow_schema::DataType::Utf8,
+            false,
+        )])
+    }
+
+    fn get_backend(source_col: &str, config: EmbeddingProviderConfig) -> LanceBackend {
+        let schema = get_schema(source_col);
+
+        LanceBackend::new(config, Arc::new(schema), source_col.into())
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_create_initial_table_with_openai() {
+        dotenv().ok();
+
+        let backend = get_backend("data_openai", get_test_openai_embedding_config());
+        let data = StringArray::from(vec!["Hello", "World"]);
+
+        let record_batch =
+            RecordBatch::try_new(Arc::new(get_schema("data_openai")), vec![Arc::new(data)])
+                .unwrap();
+        let batches = vec![record_batch];
+        let res = backend.insert_items(batches, None).await;
+
+        test_ok!(res);
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_create_initial_table_with_voyage() {
+        dotenv().ok();
+
+        let schema = get_schema("data_voyage");
+        let backend = get_backend(
+            "data_voyage",
+            EmbeddingProviderConfig::VoyageAI(VoyageAIConfig {
+                embedding_model: DEFAULT_VOYAGE_EMBEDDING_MODEL.into(),
+                embedding_dims: DEFAULT_VOYAGE_EMBEDDING_DIM as usize,
+                api_key: env::var("VOYAGE_AI_API_KEY").unwrap(),
+                reranker: DEFAULT_VOYAGE_RERANK_MODEL.into(),
+            }),
+        );
+        let data = StringArray::from(vec!["Hello", "World"]);
+        let record_batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(data)]).unwrap();
+        let batches = vec![record_batch];
+
+        let res = backend.insert_items(batches, None).await;
+        test_ok!(res);
+
+        let conn = backend.connect().await;
+        test_ok!(conn);
+        let conn = conn.unwrap();
+
+        let tbl_names = conn.table_names().execute().await;
+        test_ok!(tbl_names);
+        test_eq!(tbl_names.unwrap(), vec![LANCE_TABLE_NAME]);
+
+        let tbl = conn.open_table(LANCE_TABLE_NAME).execute().await;
+        test_ok!(tbl);
+
+        let tbl = tbl.unwrap();
+        let tbl_values = tbl.query().execute().await;
+
+        test_ok!(tbl_values);
+
+        let mut tbl_values = tbl_values.unwrap();
+        let row = tbl_values.next().await;
+
+        assert!(row.is_some());
+        let row = row.unwrap();
+
+        test_ok!(row);
+        let row = row.unwrap();
+
+        for column in ["data_voyage", "embeddings"] {
+            assert!(row.column_by_name(column).is_some());
+        }
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_search_by_key() {
+        dotenv().ok();
+
+        // First create a table with test data
+        let schema = Arc::new(arrow_schema::Schema::new(vec![
+            arrow_schema::Field::new("id", arrow_schema::DataType::Utf8, false),
+            arrow_schema::Field::new("content", arrow_schema::DataType::Utf8, false),
+        ]));
+        let id_data = StringArray::from(vec!["key1", "key2", "key3"]);
+        let content_data = StringArray::from(vec!["Content 1", "Content 2", "Content 3"]);
+        let record_batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(id_data), Arc::new(content_data)],
+        )
+        .unwrap();
+        let batches = vec![record_batch];
+
+        let embedding_config = get_test_openai_embedding_config();
+        let backend = LanceBackend::new(embedding_config, schema, "content".into());
+
+        backend.insert_items(batches, None).await.unwrap();
+
+        // Test finding an existing key
+        let result = backend.search_by_key("id", "key2").await;
+        test_ok!(result);
+        let result = result.unwrap();
+        assert!(result.is_some());
+
+        let batch = result.unwrap();
+        let id_column = batch.column_by_name("id").unwrap();
+        let id_array = as_string_array(id_column);
+        test_eq!(id_array.value(0), "key2");
+
+        // Test finding a non-existent key
+        let result = backend.search_by_key("id", "nonexistent").await;
+        test_ok!(result);
+        assert!(result.unwrap().is_none());
+
+        // Test with SQL injection attempt (should be escaped)
+        let result = backend.search_by_key("id", "'; DROP TABLE data; --").await;
+        test_ok!(result);
+        assert!(result.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_search_by_column() {
+        dotenv().ok();
+
+        // First create a table with test data
+        let schema = Arc::new(arrow_schema::Schema::new(vec![
+            arrow_schema::Field::new("category", arrow_schema::DataType::Utf8, false),
+            arrow_schema::Field::new("item", arrow_schema::DataType::Utf8, false),
+        ]));
+        let category_data = StringArray::from(vec!["fruit", "vegetable", "fruit", "grain"]);
+        let item_data = StringArray::from(vec!["apple", "carrot", "banana", "rice"]);
+        let record_batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(category_data), Arc::new(item_data)],
+        )
+        .unwrap();
+
+        let embedding_config = get_test_openai_embedding_config();
+        let backend = LanceBackend::new(embedding_config, schema, "item".into());
+        backend
+            .insert_items(vec![record_batch], None)
+            .await
+            .unwrap();
+
+        // Test finding multiple matching values
+        let values = vec!["fruit".to_string(), "grain".to_string()];
+        let result = backend.search_by_column("category", &values).await;
+        test_ok!(result);
+        let batches = result.unwrap();
+
+        // Should find 3 records: 2 fruits and 1 grain
+        let total_rows: usize = batches.iter().map(arrow_array::RecordBatch::num_rows).sum();
+        test_eq!(total_rows, 3);
+
+        // Test finding single value
+        let values = vec!["vegetable".to_string()];
+        let result = backend.search_by_column("category", &values).await;
+        test_ok!(result);
+        let batches = result.unwrap();
+        let total_rows: usize = batches.iter().map(arrow_array::RecordBatch::num_rows).sum();
+        test_eq!(total_rows, 1);
+
+        // Test with empty values array
+        let result = backend.search_by_column("category", &[]).await;
+        test_ok!(result);
+        let batches = result.unwrap();
+        assert!(batches.is_empty());
+
+        // Test with non-existent values
+        let values = vec!["nonexistent".to_string()];
+        let result = backend.search_by_column("category", &values).await;
+        test_ok!(result);
+        let batches = result.unwrap();
+        let total_rows: usize = batches.iter().map(arrow_array::RecordBatch::num_rows).sum();
+        test_eq!(total_rows, 0);
+
+        // Test with SQL injection attempt (should be escaped)
+        let values = vec!["'; DROP TABLE data; --".to_string()];
+        let result = backend.search_by_column("category", &values).await;
+        test_ok!(result);
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_create_or_update_indexes() {
+        dotenv().ok();
+
+        // IVF-PQ index creation requires at least 256 rows
+        let row_count = 256;
+        let schema = Arc::new(arrow_schema::Schema::new(vec![
+            arrow_schema::Field::new("id", arrow_schema::DataType::Utf8, false),
+            arrow_schema::Field::new("text", arrow_schema::DataType::Utf8, false),
+        ]));
+        let id_data: StringArray = (0..row_count).map(|i| Some(i.to_string())).collect();
+        let text_data: StringArray = (0..row_count)
+            .map(|i| Some(format!("Sample text for row {i}")))
+            .collect();
+        let record_batch =
+            RecordBatch::try_new(schema.clone(), vec![Arc::new(id_data), Arc::new(text_data)])
+                .unwrap();
+
+        let embedding_config = get_test_openai_embedding_config();
+        let backend = LanceBackend::new(embedding_config, schema, "text".into());
+        backend
+            .insert_items(vec![record_batch], None)
+            .await
+            .unwrap();
+
+        // First call — should create both indices
+        let result = backend.create_or_update_indices("text", "embeddings").await;
+        test_ok!(result);
+
+        // Second call — should be idempotent when indices already exist
+        let result = backend.create_or_update_indices("text", "embeddings").await;
+        test_ok!(result);
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_dedup_rows_removes_duplicates() {
+        dotenv().ok();
+
+        let schema = Arc::new(arrow_schema::Schema::new(vec![
+            arrow_schema::Field::new("id", arrow_schema::DataType::Utf8, false),
+            arrow_schema::Field::new("title", arrow_schema::DataType::Utf8, false),
+        ]));
+        // "dup_title" appears twice — one duplicate should be removed
+        let id_data = StringArray::from(vec!["id1", "id2", "id3", "id4"]);
+        let title_data = StringArray::from(vec!["unique_a", "dup_title", "unique_b", "dup_title"]);
+        let record_batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(id_data), Arc::new(title_data)],
+        )
+        .unwrap();
+
+        let embedding_config = get_test_openai_embedding_config();
+        let backend = LanceBackend::new(embedding_config, schema, "title".into());
+        backend
+            .insert_items(vec![record_batch], None)
+            .await
+            .unwrap();
+
+        let deleted = backend.dedup_rows("title", "id").await;
+        test_ok!(deleted);
+        test_eq!(deleted.unwrap(), 1);
+
+        // Verify 3 rows remain after dedup
+        let remaining = backend.get_items(&["id".to_string()]).await.unwrap();
+        let total_rows: usize = remaining.iter().map(RecordBatch::num_rows).sum();
+        test_eq!(total_rows, 3);
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_dedup_rows_no_duplicates() {
+        dotenv().ok();
+
+        let schema = Arc::new(arrow_schema::Schema::new(vec![
+            arrow_schema::Field::new("id", arrow_schema::DataType::Utf8, false),
+            arrow_schema::Field::new("title", arrow_schema::DataType::Utf8, false),
+        ]));
+        let id_data = StringArray::from(vec!["id1", "id2", "id3"]);
+        let title_data = StringArray::from(vec!["unique_x", "unique_y", "unique_z"]);
+        let record_batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(id_data), Arc::new(title_data)],
+        )
+        .unwrap();
+
+        let embedding_config = get_test_openai_embedding_config();
+        let backend = LanceBackend::new(embedding_config, schema, "title".into());
+        backend
+            .insert_items(vec![record_batch], None)
+            .await
+            .unwrap();
+
+        let deleted = backend.dedup_rows("title", "id").await;
+        test_ok!(deleted);
+        test_eq!(deleted.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_dedup_rows_missing_columns_returns_zero() {
+        dotenv().ok();
+
+        let schema = Arc::new(arrow_schema::Schema::new(vec![
+            arrow_schema::Field::new("id", arrow_schema::DataType::Utf8, false),
+            arrow_schema::Field::new("title", arrow_schema::DataType::Utf8, false),
+        ]));
+        let id_data = StringArray::from(vec!["id1", "id2"]);
+        let title_data = StringArray::from(vec!["a", "b"]);
+        let record_batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(id_data), Arc::new(title_data)],
+        )
+        .unwrap();
+
+        let embedding_config = get_test_openai_embedding_config();
+        let insert_backend = LanceBackend::new(embedding_config.clone(), schema, "title".into());
+        insert_backend
+            .insert_items(vec![record_batch], None)
+            .await
+            .unwrap();
+
+        // Backend with non-existent columns in schema — should return Ok(0) rather than an error
+        // because all by-column values appear unique when mapped against the actual DB columns
+        let missing_schema = Arc::new(arrow_schema::Schema::new(vec![
+            arrow_schema::Field::new("nonexistent_by", arrow_schema::DataType::Utf8, false),
+            arrow_schema::Field::new("nonexistent_key", arrow_schema::DataType::Utf8, false),
+        ]));
+        let backend = LanceBackend::new(embedding_config, missing_schema, "nonexistent_by".into());
+        let deleted = backend
+            .dedup_rows("nonexistent_by", "nonexistent_key")
+            .await;
+        test_ok!(deleted);
+        test_eq!(deleted.unwrap(), 0);
+    }
+
+    fn pdf_asset_path() -> String {
+        format!("{}/assets/deeply.pdf", env!("CARGO_MANIFEST_DIR"))
+    }
+
+    /// Verify that a real PDF is chunked into non-empty, well-formed chunks using the
+    /// OpenAI-recommended strategy.
+    #[tokio::test]
+    #[serial]
+    async fn test_pdf_chunking_with_openai_strategy() {
+        let extracted =
+            zqa_pdftools::parse::extract_text(&pdf_asset_path()).expect("Failed to parse PDF");
+
+        let strategy = EmbeddingProvider::OpenAI.recommended_chunking_strategy();
+        let chunks = Chunker::new(extracted, strategy).chunk();
+
+        assert!(!chunks.is_empty(), "Expected at least one chunk from PDF");
+
+        for chunk in &chunks {
+            assert!(
+                !chunk.content.trim().is_empty(),
+                "Chunk {} content must not be empty",
+                chunk.chunk_id
+            );
+        }
+
+        // Chunk IDs must be sequential starting from 1
+        for (i, chunk) in chunks.iter().enumerate() {
+            assert_eq!(chunk.chunk_id, i + 1, "Chunk ID should equal position + 1");
+        }
+
+        // chunk_count must agree with the actual number of chunks produced
+        let expected_count = chunks.len();
+        for chunk in &chunks {
+            assert_eq!(
+                chunk.chunk_count, expected_count,
+                "chunk.chunk_count disagrees with actual chunk count"
+            );
+        }
+
+        let total_chars: usize = chunks.iter().map(|c| c.content.len()).sum();
+        assert!(
+            total_chars > 1000,
+            "Expected at least 1000 characters of text, got {total_chars}"
+        );
+    }
+
+    /// Verify that chunks from a real PDF can be embedded with OpenAI and that the resulting
+    /// vectors are non-zero.
+    #[tokio::test(flavor = "multi_thread")]
+    #[serial]
+    async fn test_pdf_chunk_embeddings_are_non_zero() {
+        dotenv().ok();
+
+        let extracted =
+            zqa_pdftools::parse::extract_text(&pdf_asset_path()).expect("Failed to parse PDF");
+
+        let strategy = EmbeddingProvider::OpenAI.recommended_chunking_strategy();
+        let chunks = Chunker::new(extracted, strategy).chunk();
+
+        // Embed only the first 3 chunks to keep API usage low
+        let sample_texts: Vec<&str> = chunks.iter().take(3).map(|c| c.content.as_str()).collect();
+        assert!(!sample_texts.is_empty(), "Need at least one chunk to embed");
+
+        let client = OpenAIClient::<ReqwestClient>::default();
+        let source: Arc<dyn arrow_array::Array> = Arc::new(StringArray::from(sample_texts.clone()));
+        let embeddings = client.compute_source_embeddings(source);
+
+        assert!(
+            embeddings.is_ok(),
+            "compute_source_embeddings failed: {:?}",
+            embeddings.err()
+        );
+        let embeddings = embeddings.unwrap();
+        let list_array = as_fixed_size_list_array(&embeddings);
+
+        assert_eq!(
+            list_array.len(),
+            sample_texts.len(),
+            "Expected one embedding per chunk"
+        );
+        assert_eq!(
+            list_array.value_length(),
+            DEFAULT_OPENAI_EMBEDDING_DIM as i32,
+            "Embedding dimension mismatch — expected text-embedding-3-small size"
+        );
+
+        for i in 0..list_array.len() {
+            let all_zero = list_array
+                .value(i)
+                .as_primitive::<Float32Type>()
+                .iter()
+                .all(|v| v.is_none_or(|f| f == 0.0));
+            assert!(
+                !all_zero,
+                "Embedding for chunk {i} is all zeros — likely a failed API call"
+            );
+        }
+    }
+
+    /// End-to-end test: chunk a PDF, embed and store the chunks, add an unrelated sentinel
+    /// document, then verify that a query matching the sentinel retrieves it as the top result
+    /// rather than a PDF chunk.
+    #[tokio::test(flavor = "multi_thread")]
+    #[serial]
+    async fn test_retrieval_ranks_relevant_content_higher() {
+        dotenv().ok();
+
+        let extracted =
+            zqa_pdftools::parse::extract_text(&pdf_asset_path()).expect("Failed to parse PDF");
+
+        let strategy = EmbeddingProvider::OpenAI.recommended_chunking_strategy();
+        let chunks = Chunker::new(extracted, strategy).chunk();
+
+        // Build corpus: first 5 PDF chunks + one clearly off-topic sentinel
+        let sentinel_id = "cooking_sentinel";
+        let sentinel_text = "How to bake chocolate chip cookies: cream together butter and \
+            sugar, beat in eggs and vanilla extract, stir in flour, baking soda, and salt, \
+            then fold in chocolate chips. Drop rounded tablespoons onto an ungreased baking \
+            sheet and bake at 375°F for 9 to 11 minutes until golden brown.";
+
+        let pdf_chunk_ids: Vec<String> = (0..chunks.len().min(5))
+            .map(|i| format!("pdf_chunk_{i}"))
+            .collect();
+
+        let mut ids: Vec<&str> = pdf_chunk_ids.iter().map(String::as_str).collect();
+        ids.push(sentinel_id);
+
+        let mut texts: Vec<&str> = chunks.iter().take(5).map(|c| c.content.as_str()).collect();
+        texts.push(sentinel_text);
+
+        let schema = arrow_schema::Schema::new(vec![
+            arrow_schema::Field::new("id", arrow_schema::DataType::Utf8, false),
+            arrow_schema::Field::new("text", arrow_schema::DataType::Utf8, false),
+        ]);
+        let record_batch = RecordBatch::try_new(
+            Arc::new(schema),
+            vec![
+                Arc::new(StringArray::from(ids)),
+                Arc::new(StringArray::from(texts)),
+            ],
+        )
+        .unwrap();
+
+        let embedding_config = get_test_openai_embedding_config();
+        let backend = LanceBackend::new(
+            embedding_config,
+            Arc::new(arrow_schema::Schema::new(vec![
+                arrow_schema::Field::new("id", arrow_schema::DataType::Utf8, false),
+                arrow_schema::Field::new("text", arrow_schema::DataType::Utf8, false),
+            ])),
+            "text".into(),
+        );
+        backend
+            .insert_items(vec![record_batch], None)
+            .await
+            .unwrap();
+
+        let results = backend
+            .vector_search(
+                "chocolate chip cookie baking recipe ingredients".to_string(),
+                10,
+            )
+            .await;
+        test_ok!(results);
+
+        let results = results.unwrap();
+        assert!(!results.is_empty(), "Expected at least one search result");
+
+        let returned_ids: Vec<String> = results
+            .iter()
+            .flat_map(|batch| {
+                as_string_array(batch.column_by_name("id").unwrap())
+                    .iter()
+                    .filter_map(|v| v.map(str::to_owned))
+            })
+            .collect();
+
+        assert!(
+            !returned_ids.is_empty(),
+            "No id values found in search results"
+        );
+        assert_eq!(
+            returned_ids[0], sentinel_id,
+            "Expected the cooking sentinel to be ranked #1 for a cookie query, \
+             but top result was '{}'. Full ranking: {:?}",
+            returned_ids[0], returned_ids
+        );
     }
 }
