@@ -65,7 +65,6 @@ pub trait VectorBackend {
     /// * `col` - The name of the column to delete rows from.
     /// * `keys` - The keys of the rows to delete. The values must correspond to values in the
     ///   `col` column.
-    /// * `config` - The configuration to use for connecting to the database.
     fn delete_rows<'a>(
         &'a self,
         col: &'a str,
