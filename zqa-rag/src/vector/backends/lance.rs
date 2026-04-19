@@ -69,6 +69,12 @@ pub struct LanceBackend {
 }
 
 impl LanceBackend {
+    /// Creates a new `LanceBackend` with the given embedding provider config and Arrow schema.
+    #[must_use]
+    pub fn new(config: EmbeddingProviderConfig, schema: Arc<Schema>) -> Self {
+        Self { config, schema }
+    }
+
     /// From a `RecordBatch`, return all values from a specified column as a `Vec<String>`.
     ///
     /// # Arguments
@@ -468,9 +474,7 @@ impl VectorBackend for LanceBackend {
             .await
             .map_err(|e| LanceError::QueryError(e.to_string()))?;
 
-        Ok(Some(batches.first().cloned().unwrap_or(
-            RecordBatch::new_empty(Arc::clone(&self.schema)),
-        )))
+        Ok(batches.into_iter().next())
     }
 
     /// Given the name of a column and some values, return the rows with any matching values.
@@ -534,7 +538,7 @@ impl VectorBackend for LanceBackend {
     /// * `source_col` - The name of the column in `items` that contains the source document text.
     ///
     /// # Returns
-    /// A Connection to the LanceDB database if successful
+    /// `Ok(())` if the items were inserted successfully
     ///
     /// # Errors
     /// Returns a `LanceError` if connection, table creation, or registering embedding functions fails
