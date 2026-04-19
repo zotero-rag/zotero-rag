@@ -1,19 +1,18 @@
 //! LanceDB vector backend implementation.
 
-use arrow_array::cast::AsArray;
-use arrow_array::types::Float32Type;
-use futures::TryStreamExt;
-use lancedb::database::CreateTableMode;
-use lancedb::embeddings::EmbeddingDefinition;
 use std::collections::HashSet;
 use std::fmt::Display;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
+use arrow_array::cast::AsArray;
+use arrow_array::types::Float32Type;
 use arrow_array::{RecordBatch, RecordBatchIterator, StringArray};
-
 use arrow_schema::{ArrowError, Schema};
+use futures::TryStreamExt;
+use lancedb::database::CreateTableMode;
+use lancedb::embeddings::EmbeddingDefinition;
 use lancedb::query::{ExecutableQuery, QueryBase};
 use lancedb::{Connection, Error as LanceDbError, connect, index::scalar::FtsIndexBuilder};
 use thiserror::Error;
@@ -23,7 +22,7 @@ use crate::{
     vector::backends::backend::VectorBackend,
 };
 
-// NOTE: Maintainers: ensure that `DB_URI` begins with `TABLE_NAME`
+// NOTE: Maintainers: ensure that `LANCEDB_URI` begins with `LANCE_TABLE_NAME`
 
 /// The URI for the LanceDB table. This is the default location for the table, and for now cannot
 /// be changed.
@@ -65,7 +64,7 @@ pub enum LanceError {
 pub struct LanceBackend {
     /// Configuration for the LanceDB embedding provider.
     config: EmbeddingProviderConfig,
-    /// Arrow schema for the LanceDB table.:w
+    /// Arrow schema for the LanceDB table.
     schema: Arc<Schema>,
 }
 
@@ -93,19 +92,18 @@ impl LanceBackend {
 
 impl VectorBackend for LanceBackend {
     type Record = RecordBatch;
-    type EmbeddingColumn = Vec<RecordBatch>;
     type Error = LanceError;
     type Config = EmbeddingProviderConfig;
     type Connection = Connection;
 
     /// Returns the database URI, allowing override via `LANCEDB_URI` environment variable.
-    fn get_db_path() -> String {
+    fn get_db_path(&self) -> String {
         std::env::var("LANCEDB_URI").unwrap_or_else(|_| LANCEDB_URI.to_string())
     }
 
     /// Checks if an existing LanceDB exists and has a valid table
     async fn db_exists(&self) -> bool {
-        let uri = LanceBackend::get_db_path();
+        let uri = self.get_db_path();
         if !PathBuf::from(&uri).exists() {
             return false;
         }
@@ -132,10 +130,11 @@ impl VectorBackend for LanceBackend {
     ///
     /// Returns an error if the database connection fails, table operations fail, or index creation fails.
     async fn create_or_update_indices<'a>(
+        &'a self,
         text_col: &'a str,
         embedding_col: &'a str,
     ) -> Result<(), Self::Error> {
-        let db = connect(&LanceBackend::get_db_path())
+        let db = connect(&self.get_db_path())
             .execute()
             .await
             .map_err(|e| LanceError::ConnectionError(e.to_string()))?;
@@ -174,7 +173,7 @@ impl VectorBackend for LanceBackend {
     /// the same one here. Since that isn't stored (at least, not that I know of), this onus is on the
     /// user.
     async fn connect(&self) -> Result<Self::Connection, Self::Error> {
-        let db = connect(&LanceBackend::get_db_path())
+        let db = connect(&self.get_db_path())
             .execute()
             .await
             .map_err(|e| LanceError::ConnectionError(e.to_string()))?;
@@ -286,10 +285,12 @@ impl VectorBackend for LanceBackend {
                 self.delete_rows(key, &duplicate_keys).await?;
             }
 
-            return Ok(deleted_count);
+            Ok(deleted_count)
+        } else {
+            Err(LanceError::ParameterError(format!(
+                "column '{by}' or '{key}' not found in schema"
+            )))
         }
-
-        Ok(0)
     }
 
     /// Return all the rows in the LanceDB table, selecting only the columns specified. This is useful
@@ -313,7 +314,7 @@ impl VectorBackend for LanceBackend {
     /// * `LanceError::Other` - If the query execution fails
     async fn get_items<'a>(
         &'a self,
-        columns: &'a [impl AsRef<str> + Send + Sync],
+        columns: &'a [impl AsRef<str> + Send + Sync + Display],
     ) -> Result<Vec<Self::Record>, Self::Error> {
         let db = self.connect().await?;
 
@@ -441,7 +442,7 @@ impl VectorBackend for LanceBackend {
         &'a self,
         key_col: &'a str,
         key: &'a str,
-    ) -> Result<Self::Record, Self::Error> {
+    ) -> Result<Option<Self::Record>, Self::Error> {
         let db = self.connect().await?;
 
         let tbl = db
@@ -467,10 +468,9 @@ impl VectorBackend for LanceBackend {
             .await
             .map_err(|e| LanceError::QueryError(e.to_string()))?;
 
-        Ok(batches
-            .first()
-            .cloned()
-            .unwrap_or(RecordBatch::new_empty(Arc::clone(&self.schema))))
+        Ok(Some(batches.first().cloned().unwrap_or(
+            RecordBatch::new_empty(Arc::clone(&self.schema)),
+        )))
     }
 
     /// Given the name of a column and some values, return the rows with any matching values.
@@ -544,6 +544,10 @@ impl VectorBackend for LanceBackend {
         merge_on: Option<&'a [&str]>,
         source_col: &'a str,
     ) -> Result<(), Self::Error> {
+        if items.is_empty() {
+            return Ok(());
+        }
+
         let db = self.connect().await?;
 
         if self.db_exists().await

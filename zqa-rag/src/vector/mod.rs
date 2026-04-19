@@ -1,4 +1,4 @@
-//! Utilities for working with LanceDB.
+//! Vector database utilities and backend abstractions.
 
 pub mod backends;
 pub mod backup;
