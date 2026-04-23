@@ -5,7 +5,7 @@ use std::io::Write;
 
 use crate::{
     capabilities::EmbeddingProvider,
-    vector::{checkhealth::lancedb_health_check, lance::LanceError},
+    vector::{backends::lance::LanceError, checkhealth::lancedb_health_check},
 };
 
 const HELP: &str = "\x1b[32;1m";

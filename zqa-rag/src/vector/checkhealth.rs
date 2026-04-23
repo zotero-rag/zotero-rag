@@ -11,8 +11,8 @@ use futures::TryStreamExt;
 use lancedb::query::{ExecutableQuery, QueryBase};
 use lancedb::{Table, connect};
 
-use super::lance::LanceError;
-use super::lance::{TABLE_NAME, get_db_uri};
+use super::backends::lance::LanceError;
+use super::backends::lance::{LANCE_TABLE_NAME as TABLE_NAME, get_db_uri};
 use crate::capabilities::EmbeddingProvider;
 use crate::embedding::common::get_embedding_dims_by_provider;
 use crate::providers::ProviderId;
