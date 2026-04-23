@@ -10,7 +10,10 @@ use crate::{
     llm::errors::LLMError,
     providers::provider_id::ProviderId,
     reranking::common::{Rerank, RerankProviderConfig},
-    vector::lance::{LanceEmbeddingRegistrar, LanceError},
+    vector::backends::{
+        backend::VectorBackendRegistrar,
+        lance::{LanceBackend, LanceError},
+    },
 };
 
 /// Provider descriptor for Cohere capabilities.
@@ -51,22 +54,19 @@ impl RerankFactory for CohereProvider {
     }
 }
 
-impl LanceEmbeddingRegistrar for CohereProvider {
+impl VectorBackendRegistrar<LanceBackend> for CohereProvider {
     fn provider_id(&self) -> ProviderId {
         ProviderId::Cohere
     }
 
-    fn register_with_lancedb(
+    fn register(
         &self,
         db: &lancedb::Connection,
         config: &EmbeddingProviderConfig,
     ) -> Result<(), LanceError> {
         let EmbeddingProviderConfig::Cohere(cfg) = config else {
-            return Err(LanceError::ParameterError(
-                "Expected Cohere embedding config".into(),
-            ));
+            return Err(LanceError::ParameterError("expected cohere config".into()));
         };
-
         db.embedding_registry().register(
             ProviderId::Cohere.as_str(),
             Arc::new(CohereClient::<ReqwestClient>::with_config(cfg.clone())),

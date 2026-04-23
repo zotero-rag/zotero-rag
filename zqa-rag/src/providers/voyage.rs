@@ -10,7 +10,7 @@ use crate::{
     llm::errors::LLMError,
     providers::provider_id::ProviderId,
     reranking::common::{Rerank, RerankProviderConfig},
-    vector::lance::{LanceEmbeddingRegistrar, LanceError},
+    vector::backends::{backend::VectorBackendRegistrar, lance::{LanceBackend, LanceError}},
 };
 
 /// Provider descriptor for Voyage AI capabilities.
@@ -51,12 +51,12 @@ impl RerankFactory for VoyageAIProvider {
     }
 }
 
-impl LanceEmbeddingRegistrar for VoyageAIProvider {
+impl VectorBackendRegistrar<LanceBackend> for VoyageAIProvider {
     fn provider_id(&self) -> ProviderId {
         ProviderId::VoyageAI
     }
 
-    fn register_with_lancedb(
+    fn register(
         &self,
         db: &lancedb::Connection,
         config: &EmbeddingProviderConfig,

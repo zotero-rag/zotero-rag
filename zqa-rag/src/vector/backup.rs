@@ -5,7 +5,7 @@ use std::future::Future;
 
 use thiserror::Error;
 
-use crate::vector::lance::{LanceError, TABLE_NAME, get_db_uri};
+use crate::vector::backends::lance::{LANCE_TABLE_NAME as TABLE_NAME, get_db_uri};
 
 /// Errors that can occur during backup operations
 #[derive(Debug, Error)]
@@ -39,18 +39,11 @@ pub(crate) struct BackupMetadata {
 /// Warning: This function is currently not safe for concurrent use. Specifically, it is possible for
 /// another process/thread to modify the table between the time the backup is created and the time
 /// the operation is executed, resulting in data loss.
-pub(crate) async fn create_backup() -> Result<BackupMetadata, LanceError> {
+pub(crate) async fn create_backup() -> Result<BackupMetadata, BackupError> {
     // Connect to the database to get current version
-    let db = lancedb::connect(&get_db_uri())
-        .execute()
-        .await
-        .map_err(|e| LanceError::ConnectionError(e.to_string()))?;
+    let db = lancedb::connect(&get_db_uri()).execute().await?;
 
-    let table = db
-        .open_table(TABLE_NAME)
-        .execute()
-        .await
-        .map_err(|e| LanceError::ConnectionError(e.to_string()))?;
+    let table = db.open_table(TABLE_NAME).execute().await?;
 
     let current_version = table.version().await?;
 
@@ -109,15 +102,14 @@ pub(crate) async fn restore_backup(backup_metadata: &BackupMetadata) -> Result<(
 ///
 /// # Errors
 ///
-/// * `LanceError::ConnectionError` - If creating a backup fails due to database connection issues
-/// * `LanceError::InvalidStateError` - If both the operation and backup restoration fail
-/// * `LanceError::Other` - If the operation fails (wrapping the operation's error)
+/// * `BackupError::LanceDbError` - If creating a backup fails due to database connection issues
+/// * `BackupError::ValidationError` - If both the operation and backup restoration fail
+/// * `BackupError::OperationFailed` - If the operation fails (wrapping the operation's error)
 ///
 /// # Examples
 ///
 /// ```no_run
-/// use zqa_rag::vector::backup::{with_backup };
-/// use zqa_rag::vector::lance::LanceError;
+/// use zqa_rag::vector::backup::{with_backup, BackupError};
 /// use std::io;
 ///
 /// async fn my_database_operation() -> Result<(), io::Error> {
@@ -128,13 +120,13 @@ pub(crate) async fn restore_backup(backup_metadata: &BackupMetadata) -> Result<(
 /// }
 ///
 /// #[tokio::main]
-/// async fn main() -> Result<(), LanceError> {
+/// async fn main() -> Result<(), BackupError> {
 ///     with_backup(my_database_operation()).await?;
 ///     println!("Operation completed with backup and cleanup.");
 ///     Ok(())
 /// }
 /// ```
-pub async fn with_backup<F, R, E>(operation: F) -> Result<R, LanceError>
+pub async fn with_backup<F, R, E>(operation: F) -> Result<R, BackupError>
 where
     F: Future<Output = Result<R, E>>,
     E: std::error::Error + Send + Sync + 'static,
@@ -149,12 +141,12 @@ where
             if let Err(restore_error) = restore_backup(&backup_metadata).await {
                 log::error!("Failed to restore backup: {restore_error}");
 
-                return Err(LanceError::InvalidStateError(format!(
+                return Err(BackupError::ValidationError(format!(
                     "Operation failed AND restore failed. Database may be in inconsistent state.\nOperation error: {e}.\nRestore error: {restore_error}"
                 )));
             }
 
-            Err(LanceError::Other(Box::new(e)))
+            Err(BackupError::OperationFailed(Box::new(e)))
         }
     }
 }
@@ -173,7 +165,7 @@ mod tests {
     use super::*;
 
     /// Helper function to set up a test database with some initial data
-    async fn setup_test_db() -> Result<u64, LanceError> {
+    async fn setup_test_db() -> Result<u64, BackupError> {
         dotenv().ok();
 
         // Create a simple schema
@@ -208,7 +200,7 @@ mod tests {
     }
 
     /// Helper function to add more data to the database (creating a new version)
-    async fn add_data_to_db() -> Result<u64, LanceError> {
+    async fn add_data_to_db() -> Result<u64, BackupError> {
         let db = connect(&get_db_uri()).execute().await?;
 
         // Register embedding function

@@ -11,7 +11,7 @@ use crate::{
     http_client::ReqwestClient,
     llm::{errors::LLMError, factory::LLMClient},
     providers::provider_id::ProviderId,
-    vector::lance::{LanceEmbeddingRegistrar, LanceError},
+    vector::backends::{backend::VectorBackendRegistrar, lance::{LanceBackend, LanceError}},
 };
 
 /// Provider descriptor for OpenAI capabilities.
@@ -50,12 +50,12 @@ impl EmbeddingFactory for OpenAIProvider {
     }
 }
 
-impl LanceEmbeddingRegistrar for OpenAIProvider {
+impl VectorBackendRegistrar<LanceBackend> for OpenAIProvider {
     fn provider_id(&self) -> ProviderId {
         ProviderId::OpenAI
     }
 
-    fn register_with_lancedb(
+    fn register(
         &self,
         db: &lancedb::Connection,
         config: &EmbeddingProviderConfig,
