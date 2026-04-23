@@ -14,7 +14,7 @@ use futures::TryStreamExt;
 use lancedb::database::CreateTableMode;
 use lancedb::embeddings::EmbeddingDefinition;
 use lancedb::query::{ExecutableQuery, QueryBase};
-use lancedb::{Connection, Error as LanceDbError, connect, index::scalar::FtsIndexBuilder};
+use lancedb::{Error as LanceDbError, connect, index::scalar::FtsIndexBuilder};
 use thiserror::Error;
 
 use crate::{
@@ -58,6 +58,12 @@ pub enum LanceError {
     /// Other LanceDB-related errors
     #[error(transparent)]
     Other(#[from] LanceDbError),
+}
+
+/// Returns the database URI, allowing override via `LANCEDB_URI` environment variable.
+#[must_use]
+pub fn get_db_uri() -> String {
+    std::env::var("LANCEDB_URI").unwrap_or_else(|_| LANCEDB_URI.to_string())
 }
 
 /// Backend for LanceDB vector store.
@@ -118,8 +124,10 @@ impl LanceBackend {
 impl VectorBackend for LanceBackend {
     type Record = RecordBatch;
     type Error = LanceError;
-    type Config = EmbeddingProviderConfig;
-    type Connection = Connection;
+    // We read the URI from the environment variable, so no config is needed.
+    type ConnectionConfig = ();
+    type ProviderConfig = EmbeddingProviderConfig;
+    type Connection = lancedb::Connection;
     type Metadata = LanceMetadata;
 
     /// Returns the database URI, allowing override via `LANCEDB_URI` environment variable.
@@ -230,15 +238,9 @@ impl VectorBackend for LanceBackend {
     /// the same one here. Since that isn't stored (at least, not that I know of), this onus is on the
     /// user.
     async fn connect(&self) -> Result<Self::Connection, Self::Error> {
-        let db = connect(&self.get_db_path())
-            .execute()
-            .await
-            .map_err(|e| LanceError::ConnectionError(e.to_string()))?;
-        let registry = provider_registry();
+        let db = connect(&self.get_db_path()).execute().await?;
+        provider_registry().register_embedding_with_lancedb(&db, &self.config)?;
 
-        registry
-            .register_embedding_with_lancedb(&db, &self.config)
-            .map_err(|e| LanceError::ConnectionError(e.to_string()))?;
         Ok(db)
     }
 

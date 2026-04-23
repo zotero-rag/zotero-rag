@@ -17,7 +17,10 @@ use crate::{
         provider_id::ProviderId, voyage::VoyageAIProvider, zeroentropy::ZeroEntropyProvider,
     },
     reranking::common::{Rerank, RerankProviderConfig},
-    vector::lance::{LanceEmbeddingRegistrar, LanceError},
+    vector::backends::{
+        backend::VectorBackendRegistrar,
+        lance::{LanceBackend, LanceError},
+    },
 };
 
 /// Registry for provider factories keyed by canonical provider ID.
@@ -29,7 +32,7 @@ pub struct ProviderRegistry {
     /// Mappings from reranking providers to corresponding factory methods
     rerank: HashMap<ProviderId, Arc<dyn RerankFactory>>,
     /// Mappings from LanceDB embedding providers to corresponding factory methods
-    lance_embedding: HashMap<ProviderId, Arc<dyn LanceEmbeddingRegistrar>>,
+    lance_embedding: HashMap<ProviderId, Arc<dyn VectorBackendRegistrar<LanceBackend>>>,
 }
 
 impl ProviderRegistry {
@@ -60,9 +63,11 @@ impl ProviderRegistry {
     }
 
     /// Register a LanceDB embedding registrar.
-    pub fn register_lance_embedding(&mut self, registrar: Arc<dyn LanceEmbeddingRegistrar>) {
-        self.lance_embedding
-            .insert(registrar.provider_id(), registrar);
+    pub fn register_lance_embedding(
+        &mut self,
+        registrar: Arc<dyn VectorBackendRegistrar<LanceBackend>>,
+    ) {
+        self.lance_embedding.insert(registrar.provider_id(), registrar);
     }
 
     /// Create an LLM client from provider-specific config.
@@ -131,7 +136,7 @@ impl ProviderRegistry {
             ))
         })?;
 
-        registrar.register_with_lancedb(db, config)
+        registrar.register(db, config)
     }
 }
 
@@ -193,7 +198,7 @@ mod tests {
         llm::factory::LLMClient,
         providers::registry::provider_registry,
         reranking::common::RerankProviderConfig,
-        vector::lance::LanceError,
+        vector::backends::lance::LanceError,
     };
 
     fn openai_llm_config() -> crate::config::LLMClientConfig {

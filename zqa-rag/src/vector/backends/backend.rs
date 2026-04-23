@@ -4,8 +4,8 @@ use async_trait::async_trait;
 
 use crate::providers::ProviderId;
 
-/// Registration methods for embedding providers to interface with the backend.
-pub trait VectorBackendRegistrar: VectorBackend + Send + Sync {
+/// Registration methods for embedding providers to interface with a backend.
+pub trait VectorBackendRegistrar<T: VectorBackend>: Send + Sync {
     /// Get the provider ID for this object
     fn provider_id(&self) -> ProviderId;
 
@@ -14,7 +14,7 @@ pub trait VectorBackendRegistrar: VectorBackend + Send + Sync {
     /// # Errors
     ///
     /// Returns an error if the registration fails.
-    fn register(&self, db: &Self::Connection, config: &Self::Config) -> Result<(), Self::Error>;
+    fn register(&self, db: &T::Connection, config: &T::ProviderConfig) -> Result<(), T::Error>;
 }
 
 /// A vector database backend.
@@ -24,9 +24,12 @@ pub trait VectorBackend: Send + Sync {
     type Record: Send;
     /// The error type for the backend.
     type Error: std::error::Error + Send;
-    /// The configuration type for the backend. A backend may not have a config at all, in which
-    /// case the [`Config`] type should be `()`.
-    type Config: Send + Sync;
+    /// The connection config type for the backend. A backend may not need such a config at all, in which
+    /// case the [`ConnectionConfig`] type should be `()`.
+    type ConnectionConfig: Send + Sync;
+    /// The embedding provider config type for the backend. A backend may not need such a config at all,
+    /// in which case the [`EmbeddingProviderConfig`] type should be `()`.
+    type ProviderConfig: Send + Sync;
     /// The connection type for the backend.
     type Connection: Send + Sync;
     /// Metadata about the stored items.

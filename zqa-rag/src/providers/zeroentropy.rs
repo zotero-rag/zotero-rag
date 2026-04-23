@@ -10,7 +10,7 @@ use crate::{
     llm::errors::LLMError,
     providers::provider_id::ProviderId,
     reranking::common::{Rerank, RerankProviderConfig},
-    vector::lance::{LanceEmbeddingRegistrar, LanceError},
+    vector::backends::{backend::VectorBackendRegistrar, lance::{LanceBackend, LanceError}},
 };
 
 /// Provider descriptor for ZeroEntropy capabilities.
@@ -51,12 +51,12 @@ impl RerankFactory for ZeroEntropyProvider {
     }
 }
 
-impl LanceEmbeddingRegistrar for ZeroEntropyProvider {
+impl VectorBackendRegistrar<LanceBackend> for ZeroEntropyProvider {
     fn provider_id(&self) -> ProviderId {
         ProviderId::ZeroEntropy
     }
 
-    fn register_with_lancedb(
+    fn register(
         &self,
         db: &lancedb::Connection,
         config: &EmbeddingProviderConfig,
