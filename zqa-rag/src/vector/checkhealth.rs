@@ -452,7 +452,7 @@ mod tests {
             Arc::new(schema),
             "pdf_text".into(),
         );
-        let _db = backend.insert_items(batches, None).await.unwrap();
+        backend.insert_items(batches, None).await.unwrap();
 
         // Now test health check
         let result = lancedb_health_check(EmbeddingProvider::VoyageAI).await;
