@@ -153,6 +153,7 @@ pub(crate) async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<()
 #[cfg(test)]
 pub(crate) mod tests {
     use std::io::Cursor;
+    use std::sync::Arc;
 
     use serde_json::json;
     use serial_test::serial;
@@ -165,6 +166,7 @@ pub(crate) mod tests {
     use zqa_rag::embedding::common::EmbeddingProviderConfig;
     use zqa_rag::llm::tools::Tool;
     use zqa_rag::reranking::common::RerankProviderConfig;
+    use zqa_rag::vector::backends::lance::LanceBackend;
 
     use super::dispatch_command;
     use crate::common::Context;
@@ -196,10 +198,22 @@ pub(crate) mod tests {
         let err_buf: Vec<u8> = Vec::new();
         let err = Cursor::new(err_buf);
 
+        let schema = arrow_schema::Schema::new(vec![
+            arrow_schema::Field::new("library_key", arrow_schema::DataType::Utf8, false),
+            arrow_schema::Field::new("title", arrow_schema::DataType::Utf8, false),
+            arrow_schema::Field::new("file_path", arrow_schema::DataType::Utf8, false),
+            arrow_schema::Field::new("pdf_text", arrow_schema::DataType::Utf8, false),
+        ]);
+
         let config = get_config();
 
         Context {
             state: State::default(),
+            backend: LanceBackend::new(
+                config.get_embedding_config().unwrap(),
+                Arc::new(schema),
+                "pdf_text".into(),
+            ),
             config,
             out,
             err,

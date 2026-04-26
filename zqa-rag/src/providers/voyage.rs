@@ -10,7 +10,10 @@ use crate::{
     llm::errors::LLMError,
     providers::provider_id::ProviderId,
     reranking::common::{Rerank, RerankProviderConfig},
-    vector::backends::{backend::VectorBackendRegistrar, lance::{LanceBackend, LanceError}},
+    vector::backends::{
+        backend::VectorBackendRegistrar,
+        lance::{LanceBackend, LanceError},
+    },
 };
 
 /// Provider descriptor for Voyage AI capabilities.

@@ -9,19 +9,20 @@ use serde::Deserialize;
 use serde_json::json;
 use tokio::task::JoinSet;
 use zqa_rag::{
+    embedding::common::EmbeddingProviderConfig,
     llm::{
         base::{ApiClient, ChatRequest, CompletionApiResponse},
         errors::LLMError,
         factory::LLMClient,
         tools::Tool,
     },
-    vector::lance::search_by_column,
+    vector::backends::backend::VectorBackend,
 };
 
 use crate::{
     cli::prompts::get_extraction_prompt,
     utils::{
-        arrow::DbFields,
+        arrow::{DbFields, lance_backend},
         library::{ZoteroItem, ZoteroItemSet},
         rag::ModelResponse,
     },
@@ -33,6 +34,8 @@ pub(crate) const SUMMARIZATION_TOOL_NAME: &str = "summarization_tool";
 #[derive(Debug, Clone)]
 pub(crate) struct SummarizationTool {
     pub(crate) llm_client: LLMClient,
+    /// Embedding configuration for searching stored Zotero papers.
+    pub(crate) embedding_config: EmbeddingProviderConfig,
     /// The input tokens used
     pub(crate) input_tokens: Arc<Mutex<u32>>,
     /// The output tokens used
@@ -40,10 +43,11 @@ pub(crate) struct SummarizationTool {
 }
 
 impl SummarizationTool {
-    /// Create a new [`SummarizationTool`] instance, given an LLM client and a schema key.
-    pub fn new(llm_client: LLMClient) -> Self {
+    /// Create a new [`SummarizationTool`] instance, given an LLM client and embedding config.
+    pub fn new(llm_client: LLMClient, embedding_config: EmbeddingProviderConfig) -> Self {
         Self {
             llm_client,
+            embedding_config,
             input_tokens: Arc::new(Mutex::new(0)),
             output_tokens: Arc::new(Mutex::new(0)),
         }
@@ -93,7 +97,9 @@ impl Tool for SummarizationTool {
             let input: SummarizationToolInput =
                 serde_json::from_value(args).map_err(|e| format!("Invalid arguments: {e}"))?;
 
-            let results = search_by_column(DbFields::LibraryKey.as_ref(), &input.ids)
+            let backend = lance_backend(self.embedding_config.clone()).await;
+            let results = backend
+                .search_by_column(DbFields::LibraryKey.as_ref(), &input.ids)
                 .await
                 .map_err(|e| format!("Search failed: {e}"))?;
 
@@ -172,7 +178,7 @@ mod tests {
     };
 
     use super::*;
-    use crate::cli::app::tests::create_test_context;
+    use crate::cli::app::tests::{create_test_context, get_config};
     use crate::cli::handlers::library::handle_process_cmd;
 
     fn make_tool() -> SummarizationTool {
@@ -184,7 +190,8 @@ mod tests {
         }))
         .unwrap();
 
-        SummarizationTool::new(client)
+        let config = get_config();
+        SummarizationTool::new(client, config.get_embedding_config().unwrap())
     }
 
     #[test]

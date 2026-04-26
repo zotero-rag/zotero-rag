@@ -67,7 +67,8 @@ impl ProviderRegistry {
         &mut self,
         registrar: Arc<dyn VectorBackendRegistrar<LanceBackend>>,
     ) {
-        self.lance_embedding.insert(registrar.provider_id(), registrar);
+        self.lance_embedding
+            .insert(registrar.provider_id(), registrar);
     }
 
     /// Create an LLM client from provider-specific config.

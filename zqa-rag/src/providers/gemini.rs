@@ -11,7 +11,10 @@ use crate::{
     http_client::ReqwestClient,
     llm::{errors::LLMError, factory::LLMClient},
     providers::provider_id::ProviderId,
-    vector::backends::{backend::VectorBackendRegistrar, lance::{LanceBackend, LanceError}},
+    vector::backends::{
+        backend::VectorBackendRegistrar,
+        lance::{LanceBackend, LanceError},
+    },
 };
 
 /// Provider descriptor for Gemini capabilities.

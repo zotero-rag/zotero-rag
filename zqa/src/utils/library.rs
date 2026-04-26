@@ -18,11 +18,13 @@ use serde::Serialize;
 use thiserror::Error;
 use zqa_pdftools::parse::extract_text;
 use zqa_rag::embedding::common::EmbeddingProviderConfig;
-use zqa_rag::vector::lance::get_column_from_batch;
-use zqa_rag::vector::lance::{LanceError, get_lancedb_items, lancedb_exists};
+use zqa_rag::vector::backends::{
+    backend::VectorBackend,
+    lance::{LanceBackend, LanceError},
+};
 
 use crate::izip;
-use crate::utils::arrow::DbFields;
+use crate::utils::arrow::{DbFields, lance_backend, lancedb_exists};
 
 /// Gets the Zotero library path. Works on Linux, macOS, and Windows systems.
 /// On CI environments, returns a location to a toy library in assets/ instead.
@@ -110,10 +112,10 @@ impl From<Vec<RecordBatch>> for ZoteroItemSet {
                 let file_path_idx = schema.index_of(DbFields::FilePath.as_ref()).unwrap();
                 let text_idx = schema.index_of(DbFields::PdfText.as_ref()).unwrap();
 
-                let lib_keys = get_column_from_batch(batch, key_idx);
-                let titles = get_column_from_batch(batch, title_idx);
-                let file_paths = get_column_from_batch(batch, file_path_idx);
-                let texts = get_column_from_batch(batch, text_idx);
+                let lib_keys = LanceBackend::get_column_from_batch(batch, key_idx);
+                let titles = LanceBackend::get_column_from_batch(batch, title_idx);
+                let file_paths = LanceBackend::get_column_from_batch(batch, file_path_idx);
+                let texts = LanceBackend::get_column_from_batch(batch, text_idx);
 
                 let zipped = izip!(lib_keys, titles, file_paths, texts);
                 let items_batch: Vec<ZoteroItem> = zipped
@@ -184,22 +186,21 @@ impl From<Box<dyn std::error::Error>> for LibraryParsingError {
 pub async fn get_new_library_items(
     embedding_config: &EmbeddingProviderConfig,
 ) -> Result<Vec<ZoteroItemMetadata>, LibraryParsingError> {
-    let db_items = get_lancedb_items(
-        embedding_config,
-        vec![
+    let backend = lance_backend(embedding_config.clone()).await;
+    let db_items = backend
+        .get_items(&[
             DbFields::LibraryKey.into(),
             DbFields::Title.into(),
             DbFields::FilePath.into(),
-        ],
-    )
-    .await?;
+        ])
+        .await?;
 
     let metadata_vecs = db_items
         .iter()
         .flat_map(|batch| {
-            let library_keys = get_column_from_batch(batch, 0);
-            let titles = get_column_from_batch(batch, 1);
-            let file_paths = get_column_from_batch(batch, 2);
+            let library_keys = LanceBackend::get_column_from_batch(batch, 0);
+            let titles = LanceBackend::get_column_from_batch(batch, 1);
+            let file_paths = LanceBackend::get_column_from_batch(batch, 2);
 
             let zipped = izip!(library_keys, titles, file_paths).collect::<Vec<_>>();
             zipped

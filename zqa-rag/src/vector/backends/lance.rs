@@ -1,5 +1,6 @@
 //! LanceDB vector backend implementation.
 
+use core::fmt;
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -85,6 +86,18 @@ pub struct LanceMetadata {
     embedding_table_version: u64,
     /// Number of rows in the table
     num_rows: usize,
+}
+
+impl fmt::Display for LanceMetadata {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "LanceDB Statistics:\n\tNumber of tables: {}\n\tNumber of rows: {}\n\tEmbedding table version: {}",
+            self.table_names.len(),
+            self.num_rows,
+            self.embedding_table_version
+        )
+    }
 }
 
 impl LanceBackend {

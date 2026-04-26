@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{path::PathBuf, sync::Arc};
 
 use arrow_array::{ArrayRef, RecordBatch, StringArray, cast::AsArray};
 use arrow_schema;
@@ -10,7 +10,10 @@ use zqa_rag::{
     },
     llm::errors::LLMError,
     reranking::common::{RerankProviderConfig, get_reranking_provider_with_config},
-    vector::lance::{LanceError, lancedb_exists, vector_search as rag_vector_search},
+    vector::backends::{
+        backend::VectorBackend,
+        lance::{LANCE_TABLE_NAME, LanceBackend, LanceError, get_db_uri},
+    },
 };
 
 use super::library::{LibraryParsingError, parse_library};
@@ -90,6 +93,30 @@ impl From<LanceError> for ArrowError {
     fn from(value: LanceError) -> Self {
         Self::LanceError(value.to_string())
     }
+}
+
+/// Checks whether the configured LanceDB database exists and contains the expected table.
+pub(crate) async fn lancedb_exists() -> bool {
+    let uri = get_db_uri();
+    if !PathBuf::from(&uri).exists() {
+        return false;
+    }
+
+    if let Ok(db) = lancedb::connect(&uri).execute().await {
+        db.open_table(LANCE_TABLE_NAME).execute().await.is_ok()
+    } else {
+        false
+    }
+}
+
+/// Build the LanceDB backend used by the CLI for the supplied embedding configuration.
+pub(crate) async fn lance_backend(embedding_config: EmbeddingProviderConfig) -> LanceBackend {
+    let schema = Arc::new(get_schema(embedding_config.provider()).await);
+    LanceBackend::new(
+        embedding_config,
+        schema,
+        DbFields::PdfText.as_ref().to_string(),
+    )
 }
 
 /// Get the schema for our `LanceDB` table. This is required for both getting library items and
@@ -306,7 +333,8 @@ pub async fn vector_search(
     reranker_config: Option<&RerankProviderConfig>,
 ) -> Result<(Vec<ZoteroItem>, VectorSearchStats), ArrowError> {
     let embedding_chars = query.len();
-    let batches = rag_vector_search(query.clone(), embedding_config, 10).await?;
+    let backend = lance_backend(embedding_config.clone()).await;
+    let batches = backend.vector_search(query.clone(), 10).await?;
 
     let items: ZoteroItemSet = batches.into();
     let items: Vec<ZoteroItem> = items.into();

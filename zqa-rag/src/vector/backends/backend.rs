@@ -1,7 +1,5 @@
 //! Traits for vector database backends.
 
-use std::fmt;
-
 use async_trait::async_trait;
 
 use crate::providers::ProviderId;
