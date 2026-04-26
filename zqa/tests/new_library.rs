@@ -10,7 +10,7 @@ use zqa_rag::capabilities::{EmbeddingProvider, ModelProvider, RerankerProvider};
 use zqa_rag::constants::{
     DEFAULT_MAX_CONCURRENT_REQUESTS, DEFAULT_MAX_RETRIES, DEFAULT_VOYAGE_EMBEDDING_DIM,
 };
-use zqa_rag::vector::lance::insert_records;
+use zqa_rag::vector::backends::{backend::VectorBackend, lance::LanceBackend};
 
 #[tokio::test]
 async fn test_integration_works() {
@@ -56,13 +56,12 @@ async fn test_integration_works() {
     let _schema = record_batch.schema();
     let batches = vec![record_batch.clone()];
 
-    let db = insert_records(
-        batches,
-        None,
-        &config.get_embedding_config().unwrap(),
-        "pdf_text",
-    )
-    .await;
+    let backend = LanceBackend::new(
+        config.get_embedding_config().unwrap(),
+        record_batch.schema(),
+        "pdf_text".into(),
+    );
+    let db = backend.insert_items(batches, None).await;
 
     test_ok!(db);
 }

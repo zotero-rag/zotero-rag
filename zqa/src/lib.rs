@@ -3,7 +3,10 @@
 #![allow(clippy::cast_precision_loss)]
 #![allow(clippy::cast_possible_wrap)]
 
-use std::io::{self, IsTerminal, stderr, stdout};
+use std::{
+    io::{self, IsTerminal, stderr, stdout},
+    sync::Arc,
+};
 
 use clap::Parser;
 
@@ -22,13 +25,16 @@ use state::{check_or_create_first_run_file, oobe};
 pub use utils::arrow::full_library_to_arrow;
 use zqa_rag::{
     config::LLMClientConfig, embedding::common::EmbeddingProviderConfig,
-    reranking::common::RerankProviderConfig,
+    reranking::common::RerankProviderConfig, vector::backends::lance::LanceBackend,
 };
 
 use crate::{
     cli::errors::CLIError,
     common::State,
-    utils::terminal::{RED, RED_BOLD, RESET, YELLOW, YELLOW_BOLD},
+    utils::{
+        arrow::get_schema,
+        terminal::{RED, RED_BOLD, RESET, YELLOW, YELLOW_BOLD},
+    },
 };
 
 fn load_config() -> Result<Config, CLIError> {
@@ -134,7 +140,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     if std::env::var("LANCEDB_URI").is_err()
         && let Ok(state_dir) = state::get_state_dir()
     {
-        let db_path = state_dir.join(zqa_rag::vector::lance::DB_URI);
+        let db_path = state_dir.join(zqa_rag::vector::backends::lance::LANCEDB_URI);
 
         // Safety: single-threaded at this point (before any async tasks spawn).
         unsafe { std::env::set_var("LANCEDB_URI", db_path) };
@@ -205,9 +211,16 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    let schema = get_schema(config.embedding_provider).await;
+
     let context = Context {
         state: State::default(),
-        config,
+        config: config.clone(),
+        backend: LanceBackend::new(
+            config.get_embedding_config().unwrap(),
+            Arc::new(schema),
+            "pdf_text".into(),
+        ),
         out: stdout(),
         err: stderr(),
     };

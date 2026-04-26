@@ -5,15 +5,9 @@ use std::{fs::File, io::Write};
 
 use arrow_array::RecordBatch;
 use arrow_ipc::{reader::FileReader, writer::FileWriter};
+use zqa_rag::vector::backends::backend::VectorBackend;
+use zqa_rag::vector::checkhealth::lancedb_health_check;
 use zqa_rag::vector::doctor::doctor as rag_doctor;
-use zqa_rag::vector::lance::db_statistics;
-use zqa_rag::vector::{
-    checkhealth::lancedb_health_check,
-    lance::{
-        create_or_update_indexes, dedup_rows, delete_rows, get_zero_vector_records, insert_records,
-        lancedb_exists,
-    },
-};
 
 use crate::utils::terminal::{DIM_TEXT, RESET};
 use crate::{
@@ -21,7 +15,7 @@ use crate::{
     common::Context,
     full_library_to_arrow,
     utils::{
-        arrow::{DbFields, get_schema, library_to_arrow},
+        arrow::{DbFields, library_to_arrow},
         library::{ZoteroItem, ZoteroItemSet, get_new_library_items, parse_library_metadata},
     },
 };
@@ -45,7 +39,7 @@ where
     O: Write,
     E: Write,
 {
-    match db_statistics().await {
+    match ctx.backend.get_metadata().await {
         Ok(stats) => writeln!(&mut ctx.out, "{stats}")?,
         Err(e) => writeln!(&mut ctx.err, "Could not get database statistics: {e}")?,
     }
@@ -80,7 +74,7 @@ where
     const WARNING_THRESHOLD: usize = 100;
 
     let item_metadata =
-        if lancedb_exists().await {
+        if ctx.backend.db_exists().await {
             get_new_library_items(&ctx.config.get_embedding_config().ok_or(
                 CLIError::ConfigError("Could not get embedding config".into()),
             )?)
@@ -127,17 +121,10 @@ where
     writer.write(&record_batch)?;
     writer.finish()?;
 
-    let result = insert_records(
-        batches,
-        Some(&[DbFields::LibraryKey.as_ref()]),
-        &ctx.config
-            .get_embedding_config()
-            .ok_or(CLIError::ConfigError(
-                "Could not get embedding config".into(),
-            ))?,
-        DbFields::PdfText.as_ref(),
-    )
-    .await;
+    let result = ctx
+        .backend
+        .insert_items(batches, Some(&[DbFields::LibraryKey.as_ref()]))
+        .await;
 
     match result {
         Ok(_) => {
@@ -212,17 +199,10 @@ where
     }
     writeln!(ctx.out, ".")?;
 
-    let db = insert_records(
-        batches,
-        Some(&[DbFields::LibraryKey.as_ref()]),
-        &ctx.config
-            .get_embedding_config()
-            .ok_or(CLIError::ConfigError(
-                "Could not get embedding config".into(),
-            ))?,
-        DbFields::PdfText.as_ref(),
-    )
-    .await;
+    let db = ctx
+        .backend
+        .insert_items(batches, Some(&[DbFields::LibraryKey.as_ref()]))
+        .await;
 
     if db.is_ok() {
         writeln!(ctx.out, "Successfully parsed library!")?;
@@ -258,17 +238,10 @@ where
     O: Write,
     E: Write,
 {
-    let result = dedup_rows(
-        &ctx.config
-            .get_embedding_config()
-            .ok_or(CLIError::ConfigError(
-                "Could not get embedding config".into(),
-            ))?,
-        get_schema(ctx.config.embedding_provider).await,
-        DbFields::Title.as_ref(),
-        DbFields::LibraryKey.as_ref(),
-    )
-    .await;
+    let result = ctx
+        .backend
+        .dedup_rows(DbFields::Title.as_ref(), DbFields::LibraryKey.as_ref())
+        .await;
 
     match result {
         Ok(count) => {
@@ -307,8 +280,10 @@ where
         "Updating indices. This may take a while depending on how many items need to be added."
     )?;
 
-    if let Err(e) =
-        create_or_update_indexes(DbFields::PdfText.as_ref(), DbFields::Embeddings.as_ref()).await
+    if let Err(e) = ctx
+        .backend
+        .create_or_update_indices(DbFields::PdfText.as_ref(), DbFields::Embeddings.as_ref())
+        .await
     {
         writeln!(&mut ctx.err, "Failed to update indexes: {e}")?;
     }
@@ -397,19 +372,25 @@ where
 async fn fix_zero_embeddings<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Result<(), CLIError> {
     let healthcheck = lancedb_health_check(ctx.config.embedding_provider).await?;
 
-    if let Some(Ok(zero_items)) = healthcheck.zero_embedding_items {
-        let num_zeros: usize = zero_items
-            .iter()
-            .map(arrow_array::RecordBatch::num_rows)
-            .sum();
+    let zero_batches = match healthcheck.zero_embedding_items {
+        Some(Ok(zero_items)) => {
+            let num_zeros: usize = zero_items
+                .iter()
+                .map(arrow_array::RecordBatch::num_rows)
+                .sum();
 
-        if num_zeros > 0 {
-            writeln!(
-                ctx.out,
-                "{DIM_TEXT}Fixing {num_zeros} zero-embedding items.{RESET}"
-            )?;
+            if num_zeros > 0 {
+                writeln!(
+                    ctx.out,
+                    "{DIM_TEXT}Fixing {num_zeros} zero-embedding items.{RESET}"
+                )?;
+            }
+
+            zero_items
         }
-    }
+        Some(Err(e)) => return Err(e.into()),
+        None => Vec::new(),
+    };
 
     let embedding_config = ctx
         .config
@@ -417,7 +398,6 @@ async fn fix_zero_embeddings<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Res
         .ok_or(CLIError::ConfigError(
             "Could not get embedding config".into(),
         ))?;
-    let zero_batches: Vec<RecordBatch> = get_zero_vector_records(&embedding_config).await?;
 
     if zero_batches.is_empty() {
         writeln!(ctx.out, "{DIM_TEXT}Done!{RESET}")?;
@@ -435,15 +415,12 @@ async fn fix_zero_embeddings<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Res
 
     let zero_subset_keys: Vec<_> = zero_subset
         .iter()
-        .map(|item| item.metadata.library_key.as_str())
+        .map(|item| item.metadata.library_key.clone())
         .collect();
 
-    delete_rows(
-        DbFields::LibraryKey.as_ref(),
-        &zero_subset_keys,
-        &embedding_config,
-    )
-    .await?;
+    ctx.backend
+        .delete_rows(DbFields::LibraryKey.as_ref(), &zero_subset_keys)
+        .await?;
 
     writeln!(
         ctx.out,
@@ -459,13 +436,9 @@ async fn fix_zero_embeddings<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Res
 
     let batches = vec![nonempty_zero_subset_batch.clone()];
 
-    insert_records(
-        batches,
-        Some(&[DbFields::LibraryKey.as_ref()]),
-        &embedding_config,
-        DbFields::PdfText.as_ref(),
-    )
-    .await?;
+    ctx.backend
+        .insert_items(batches, Some(&[DbFields::LibraryKey.as_ref()]))
+        .await?;
 
     writeln!(ctx.out, "Successfully fixed zero embeddings!\n")?;
 
