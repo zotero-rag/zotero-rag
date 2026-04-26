@@ -397,8 +397,9 @@ mod tests {
     use crate::constants::DEFAULT_VOYAGE_EMBEDDING_MODEL;
     use crate::constants::DEFAULT_VOYAGE_RERANK_MODEL;
     use crate::embedding::common::EmbeddingProviderConfig;
-    use crate::vector::lance::get_db_uri;
-    use crate::vector::lance::insert_records;
+    use crate::vector::backends::backend::VectorBackend;
+    use crate::vector::backends::lance::LanceBackend;
+    use crate::vector::backends::lance::get_db_uri;
 
     #[tokio::test]
     #[serial]
@@ -441,19 +442,17 @@ mod tests {
         .unwrap();
         let batches = vec![record_batch.clone()];
 
-        let _db = insert_records(
-            batches,
-            None,
-            &EmbeddingProviderConfig::VoyageAI(VoyageAIConfig {
+        let backend = LanceBackend::new(
+            EmbeddingProviderConfig::VoyageAI(VoyageAIConfig {
                 embedding_model: DEFAULT_VOYAGE_EMBEDDING_MODEL.into(),
                 embedding_dims: DEFAULT_VOYAGE_EMBEDDING_DIM as usize,
                 api_key: env::var("VOYAGE_AI_API_KEY").unwrap_or_default(),
                 reranker: DEFAULT_VOYAGE_RERANK_MODEL.into(),
             }),
-            "pdf_text",
-        )
-        .await
-        .unwrap();
+            Arc::new(schema),
+            "pdf_text".into(),
+        );
+        let _db = backend.insert_items(batches, None).await.unwrap();
 
         // Now test health check
         let result = lancedb_health_check(EmbeddingProvider::VoyageAI).await;
