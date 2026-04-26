@@ -5,7 +5,6 @@ use std::{fs::File, io::Write};
 
 use arrow_array::RecordBatch;
 use arrow_ipc::{reader::FileReader, writer::FileWriter};
-use zqa_rag::vector::backends::backend::VectorBackend;
 use zqa_rag::vector::checkhealth::lancedb_health_check;
 use zqa_rag::vector::doctor::doctor as rag_doctor;
 
@@ -14,8 +13,9 @@ use crate::{
     cli::{app::BATCH_ITER_FILE, errors::CLIError},
     common::Context,
     full_library_to_arrow,
+    store::common::ZoteroStore,
     utils::{
-        arrow::{DbFields, library_to_arrow},
+        arrow::library_to_arrow,
         library::{ZoteroItem, ZoteroItemSet, get_new_library_items, parse_library_metadata},
     },
 };
@@ -39,7 +39,7 @@ where
     O: Write,
     E: Write,
 {
-    match ctx.backend.get_metadata().await {
+    match ctx.store.metadata().await {
         Ok(stats) => writeln!(&mut ctx.out, "{stats}")?,
         Err(e) => writeln!(&mut ctx.err, "Could not get database statistics: {e}")?,
     }
@@ -74,7 +74,7 @@ where
     const WARNING_THRESHOLD: usize = 100;
 
     let item_metadata =
-        if ctx.backend.db_exists().await {
+        if ctx.store.exists().await {
             get_new_library_items(&ctx.config.get_embedding_config().ok_or(
                 CLIError::ConfigError("Could not get embedding config".into()),
             )?)
@@ -121,10 +121,7 @@ where
     writer.write(&record_batch)?;
     writer.finish()?;
 
-    let result = ctx
-        .backend
-        .insert_items(batches, Some(&[DbFields::LibraryKey.as_ref()]))
-        .await;
+    let result = ctx.store.upsert_batches(batches).await;
 
     match result {
         Ok(()) => {
@@ -199,10 +196,7 @@ where
     }
     writeln!(ctx.out, ".")?;
 
-    let db = ctx
-        .backend
-        .insert_items(batches, Some(&[DbFields::LibraryKey.as_ref()]))
-        .await;
+    let db = ctx.store.upsert_batches(batches).await;
 
     if db.is_ok() {
         writeln!(ctx.out, "Successfully parsed library!")?;
@@ -238,10 +232,7 @@ where
     O: Write,
     E: Write,
 {
-    let result = ctx
-        .backend
-        .dedup_rows(DbFields::Title.as_ref(), DbFields::LibraryKey.as_ref())
-        .await;
+    let result = ctx.store.dedup_by_title().await;
 
     match result {
         Ok(count) => {
@@ -280,11 +271,7 @@ where
         "Updating indices. This may take a while depending on how many items need to be added."
     )?;
 
-    if let Err(e) = ctx
-        .backend
-        .create_or_update_indices(DbFields::PdfText.as_ref(), DbFields::Embeddings.as_ref())
-        .await
-    {
+    if let Err(e) = ctx.store.create_or_update_indices().await {
         writeln!(&mut ctx.err, "Failed to update indexes: {e}")?;
     }
 
@@ -418,9 +405,7 @@ async fn fix_zero_embeddings<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Res
         .map(|item| item.metadata.library_key.clone())
         .collect();
 
-    ctx.backend
-        .delete_rows(DbFields::LibraryKey.as_ref(), &zero_subset_keys)
-        .await?;
+    ctx.store.delete_by_library_keys(&zero_subset_keys).await?;
 
     writeln!(
         ctx.out,
@@ -436,9 +421,7 @@ async fn fix_zero_embeddings<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Res
 
     let batches = vec![nonempty_zero_subset_batch.clone()];
 
-    ctx.backend
-        .insert_items(batches, Some(&[DbFields::LibraryKey.as_ref()]))
-        .await?;
+    ctx.store.upsert_batches(batches).await?;
 
     writeln!(ctx.out, "Successfully fixed zero embeddings!\n")?;
 
@@ -545,9 +528,8 @@ mod tests {
                 .await;
         let output = String::from_utf8(ctx.out.into_inner()).unwrap();
         test_ok!(stats);
-        assert!(stats.is_ok());
-        assert!(output.contains("LanceDB Statistics:"));
-        assert!(output.contains("Number of rows: 8"));
+        test_contains!(output, "LanceDB Statistics:");
+        test_contains!(output, "Number of rows: 8");
 
         if fs::metadata(BATCH_ITER_FILE).is_ok() {
             fs::remove_file(BATCH_ITER_FILE).expect("Failed to clean up BATCH_ITER_FILE");

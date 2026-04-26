@@ -12,9 +12,9 @@ use fern;
 use humantime;
 use log::LevelFilter;
 use zqa_pdftools::parse::ExtractedContent;
-use zqa_rag::{llm::base::ChatHistoryItem, vector::backends::lance::LanceBackend};
+use zqa_rag::llm::base::ChatHistoryItem;
 
-use crate::config::Config;
+use crate::{config::Config, store::lance::LanceZoteroStore};
 
 #[derive(Parser, Clone, Debug)]
 #[command(version, about, long_about = None)]
@@ -70,8 +70,8 @@ pub(crate) struct Context<OutStream: Write, ErrStream: Write> {
     pub(crate) state: State,
     /// Config from TOML and env
     pub(crate) config: Config,
-    /// The backend to use for storage and retrieval
-    pub(crate) backend: LanceBackend,
+    /// The store to use for storage and retrieval
+    pub(crate) store: LanceZoteroStore,
     /// Abstraction for `stdout()`
     pub(crate) out: OutStream,
     /// Abstraction for `stderr()`

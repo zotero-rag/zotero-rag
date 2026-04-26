@@ -3,10 +3,7 @@
 #![allow(clippy::cast_precision_loss)]
 #![allow(clippy::cast_possible_wrap)]
 
-use std::{
-    io::{self, IsTerminal, stderr, stdout},
-    sync::Arc,
-};
+use std::io::{self, IsTerminal, stderr, stdout};
 
 use clap::Parser;
 
@@ -14,6 +11,7 @@ pub mod cli;
 pub mod common;
 pub mod config;
 pub mod state;
+pub mod store;
 pub mod tools;
 pub mod utils;
 
@@ -25,16 +23,14 @@ use state::{check_or_create_first_run_file, oobe};
 pub use utils::arrow::full_library_to_arrow;
 use zqa_rag::{
     config::LLMClientConfig, embedding::common::EmbeddingProviderConfig,
-    reranking::common::RerankProviderConfig, vector::backends::lance::LanceBackend,
+    reranking::common::RerankProviderConfig,
 };
 
 use crate::{
     cli::errors::CLIError,
     common::State,
-    utils::{
-        arrow::get_schema,
-        terminal::{RED, RED_BOLD, RESET, YELLOW, YELLOW_BOLD},
-    },
+    store::lance::LanceZoteroStore,
+    utils::terminal::{RED, RED_BOLD, RESET, YELLOW, YELLOW_BOLD},
 };
 
 fn load_config() -> Result<Config, CLIError> {
@@ -211,18 +207,11 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    let schema = get_schema(config.embedding_provider).await;
-
+    let store = LanceZoteroStore::from_config(&config).await?;
     let context = Context {
         state: State::default(),
-        config: config.clone(),
-        backend: LanceBackend::new(
-            config.get_embedding_config().ok_or_else(|| {
-                CLIError::ConfigError("No embedding provider configured".to_string())
-            })?,
-            Arc::new(schema),
-            "pdf_text".into(),
-        ),
+        config,
+        store,
         out: stdout(),
         err: stderr(),
     };

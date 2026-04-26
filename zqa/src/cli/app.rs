@@ -153,7 +153,6 @@ pub(crate) async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<()
 #[cfg(test)]
 pub(crate) mod tests {
     use std::io::Cursor;
-    use std::sync::Arc;
 
     use serde_json::json;
     use serial_test::serial;
@@ -172,6 +171,7 @@ pub(crate) mod tests {
     use crate::common::Context;
     use crate::common::State;
     use crate::config::{Config, VoyageAIConfig};
+    use crate::store::lance::LanceZoteroStore;
     use crate::tools::retrieval::RetrievalTool;
 
     pub(crate) fn get_config() -> Config {
@@ -207,13 +207,12 @@ pub(crate) mod tests {
 
         let config = get_config();
 
+        let embedding_config = config.get_embedding_config().unwrap();
+        let backend = LanceBackend::new(embedding_config.clone(), schema.into(), "pdf_text".into());
+
         Context {
             state: State::default(),
-            backend: LanceBackend::new(
-                config.get_embedding_config().unwrap(),
-                Arc::new(schema),
-                "pdf_text".into(),
-            ),
+            store: LanceZoteroStore::new(backend, embedding_config),
             config,
             out,
             err,
