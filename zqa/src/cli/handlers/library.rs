@@ -127,7 +127,7 @@ where
         .await;
 
     match result {
-        Ok(_) => {
+        Ok(()) => {
             writeln!(&mut ctx.out, "Successfully parsed library!")?;
             std::fs::remove_file(BATCH_ITER_FILE)?;
         }
