@@ -29,7 +29,7 @@ pub(crate) struct LanceZoteroStore {
 }
 
 /// Statistics about the characters processed in a vector search call, used for cost estimation.
-pub(crate) struct VectorSearchStats {
+pub struct VectorSearchStats {
     /// Number of characters in the query string that was embedded.
     pub(crate) embedding_chars: usize,
     /// Total characters of documents + query sent to the reranker (0 if no reranker was used).
@@ -80,15 +80,6 @@ impl LanceZoteroStore {
         Ok(Self::from_embedding_config(embedding_config).await)
     }
 
-    /// Return metadata for the underlying LanceDB table.
-    ///
-    /// # Errors
-    ///
-    /// Returns a [`CLIError`] if LanceDB metadata could not be read.
-    pub(crate) async fn get_metadata(&self) -> Result<LanceMetadata, CLIError> {
-        self.backend.get_metadata().await.map_err(Into::into)
-    }
-
     /// Upsert Arrow record batches into the LanceDB table by Zotero library key.
     ///
     /// # Errors
@@ -112,43 +103,15 @@ impl LanceZoteroStore {
             .await
             .map_err(Into::into)
     }
+}
 
-    /// Return metadata for Zotero items that already exist in the store.
-    ///
-    /// # Errors
-    ///
-    /// Returns a [`CLIError`] if the existing rows cannot be fetched.
-    pub(crate) async fn existing_item_metadata(
-        &self,
-    ) -> Result<Vec<crate::utils::library::ZoteroItemMetadata>, CLIError> {
-        let db_items = self
-            .backend
-            .get_items(&[
-                DbFields::LibraryKey.into(),
-                DbFields::Title.into(),
-                DbFields::FilePath.into(),
-            ])
-            .await?;
+#[async_trait]
+impl ZoteroStore for LanceZoteroStore {
+    type StoreError = CLIError;
+    type Metadata = LanceMetadata;
 
-        Ok(db_items
-            .iter()
-            .flat_map(|batch| {
-                let library_keys = crate::utils::library::get_column_from_batch(batch, 0);
-                let titles = crate::utils::library::get_column_from_batch(batch, 1);
-                let file_paths = crate::utils::library::get_column_from_batch(batch, 2);
-
-                crate::izip!(library_keys, titles, file_paths)
-                    .map(
-                        |(key, title, path)| crate::utils::library::ZoteroItemMetadata {
-                            library_key: key,
-                            title,
-                            file_path: std::path::PathBuf::from(path),
-                            authors: None,
-                        },
-                    )
-                    .collect::<Vec<_>>()
-            })
-            .collect())
+    async fn exists(&self) -> bool {
+        self.backend.db_exists().await
     }
 
     /// Perform vector search and optional reranking.
@@ -156,7 +119,7 @@ impl LanceZoteroStore {
     /// # Errors
     ///
     /// Returns a [`CLIError`] if search or reranking fails.
-    pub(crate) async fn vector_search(
+    async fn vector_search(
         &self,
         query: String,
         limit: usize,
@@ -212,14 +175,52 @@ impl LanceZoteroStore {
             },
         ))
     }
-}
 
-#[async_trait]
-impl ZoteroStore for LanceZoteroStore {
-    type StoreError = CLIError;
+    /// Return metadata for Zotero items that already exist in the store.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`CLIError`] if the existing rows cannot be fetched.
+    async fn existing_item_metadata(
+        &self,
+    ) -> Result<Vec<crate::utils::library::ZoteroItemMetadata>, CLIError> {
+        let db_items = self
+            .backend
+            .get_items(&[
+                DbFields::LibraryKey.into(),
+                DbFields::Title.into(),
+                DbFields::FilePath.into(),
+            ])
+            .await?;
 
-    async fn exists(&self) -> bool {
-        self.backend.db_exists().await
+        Ok(db_items
+            .iter()
+            .flat_map(|batch| {
+                let library_keys = crate::utils::library::get_column_from_batch(batch, 0);
+                let titles = crate::utils::library::get_column_from_batch(batch, 1);
+                let file_paths = crate::utils::library::get_column_from_batch(batch, 2);
+
+                crate::izip!(library_keys, titles, file_paths)
+                    .map(
+                        |(key, title, path)| crate::utils::library::ZoteroItemMetadata {
+                            library_key: key,
+                            title,
+                            file_path: std::path::PathBuf::from(path),
+                            authors: None,
+                        },
+                    )
+                    .collect::<Vec<_>>()
+            })
+            .collect())
+    }
+
+    /// Return metadata for the underlying LanceDB table.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`CLIError`] if LanceDB metadata could not be read.
+    async fn get_metadata(&self) -> Result<LanceMetadata, CLIError> {
+        self.backend.get_metadata().await.map_err(Into::into)
     }
 
     async fn upsert_items(&self, items: Vec<ZoteroItem>) -> Result<(), Self::StoreError> {

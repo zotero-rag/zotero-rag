@@ -23,6 +23,7 @@ use zqa_rag::vector::backends::{
     lance::{LanceError, db_exists as lancedb_exists, get_column_from_batch},
 };
 
+use crate::store::common::ZoteroStore;
 use crate::{
     izip,
     store::lance::LanceZoteroStore,

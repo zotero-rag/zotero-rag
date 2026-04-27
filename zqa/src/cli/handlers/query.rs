@@ -20,6 +20,7 @@ use zqa_rag::{
     providers::registry::provider_registry,
 };
 
+use crate::store::common::ZoteroStore;
 use crate::{
     cli::{
         errors::CLIError,

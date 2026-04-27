@@ -14,6 +14,7 @@ use zqa_rag::{
     reranking::common::RerankProviderConfig,
 };
 
+use crate::store::common::ZoteroStore;
 use crate::{
     store::lance::LanceZoteroStore,
     utils::{
