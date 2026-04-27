@@ -73,15 +73,11 @@ where
 {
     const WARNING_THRESHOLD: usize = 100;
 
-    let item_metadata =
-        if ctx.backend.db_exists().await {
-            get_new_library_items(&ctx.config.get_embedding_config().ok_or(
-                CLIError::ConfigError("Could not get embedding config".into()),
-            )?)
-            .await
-        } else {
-            parse_library_metadata(None, None)
-        };
+    let item_metadata = if ctx.backend.db_exists().await {
+        get_new_library_items(&ctx.backend).await
+    } else {
+        parse_library_metadata(None, None)
+    };
 
     if let Err(parse_err) = item_metadata {
         writeln!(
@@ -110,7 +106,7 @@ where
         }
     }
 
-    let record_batch = full_library_to_arrow(&ctx.config, None, None).await?;
+    let record_batch = full_library_to_arrow(&ctx.backend, None, None).await?;
     let schema = record_batch.schema();
     let batches = vec![record_batch.clone()];
 

@@ -124,6 +124,12 @@ impl LanceBackend {
             source_col,
         }
     }
+
+    /// Returns a reference to the embedding provider configuration.
+    #[must_use]
+    pub fn embedding_config(&self) -> &EmbeddingProviderConfig {
+        &self.config
+    }
 }
 
 /// From a `RecordBatch`, return all values from a specified column as a `Vec<String>`.
