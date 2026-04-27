@@ -108,11 +108,15 @@ pub(crate) async fn lancedb_exists() -> bool {
 /// # Arguments
 ///
 /// * `embedding_provider` - The embedding used by the current DB.
+/// * `include_embeddings` - Whether to include the embeddings field in the schema.
 ///
 /// # Returns
 ///
 /// The schema in Arrow format.
-pub async fn get_schema(embedding_provider: EmbeddingProvider) -> arrow_schema::Schema {
+pub async fn get_schema(
+    embedding_provider: EmbeddingProvider,
+    include_embeddings: bool,
+) -> arrow_schema::Schema {
     // Convert ZoteroItemMetadata to something that can be converted to Arrow
     // Need to extract fields and create appropriate Arrow arrays
     let mut schema_fields = vec![
@@ -122,7 +126,7 @@ pub async fn get_schema(embedding_provider: EmbeddingProvider) -> arrow_schema::
         arrow_schema::Field::new(DbFields::PdfText, arrow_schema::DataType::Utf8, false),
     ];
 
-    if lancedb_exists().await {
+    if include_embeddings {
         schema_fields.push(arrow_schema::Field::new(
             DbFields::Embeddings,
             arrow_schema::DataType::FixedSizeList(
@@ -147,6 +151,7 @@ pub async fn get_schema(embedding_provider: EmbeddingProvider) -> arrow_schema::
 ///
 /// * `items` - The items to convert to a `RecordBatch`
 /// * `embedding_config` - Configuration for the embedding provider to use when computing embeddings.
+/// * `include_embeddings` - Whether to include the embeddings field in the schema.
 ///
 /// # Errors
 ///
@@ -160,8 +165,9 @@ pub async fn get_schema(embedding_provider: EmbeddingProvider) -> arrow_schema::
 pub async fn library_to_arrow(
     items: Vec<ZoteroItem>,
     embedding_config: EmbeddingProviderConfig,
+    include_embeddings: bool,
 ) -> Result<RecordBatch, ArrowError> {
-    let schema = Arc::new(get_schema(embedding_config.provider()).await);
+    let schema = Arc::new(get_schema(embedding_config.provider(), include_embeddings).await);
 
     // Convert ZoteroItemMetadata to Arrow arrays
     let library_keys = StringArray::from(
@@ -204,7 +210,7 @@ pub async fn library_to_arrow(
         Arc::new(pdf_texts.clone()) as ArrayRef,
     ];
 
-    if lancedb_exists().await {
+    if include_embeddings {
         let embedding_provider = get_embedding_provider_with_config(&embedding_config)?;
         let query_vec = embedding_provider.compute_source_embeddings(Arc::new(pdf_texts))?;
         let query_vec = query_vec.as_fixed_size_list();
@@ -261,11 +267,13 @@ pub async fn full_library_to_arrow(
     .await?;
     log::info!("Finished parsing library items.");
 
+    let include_embeddings = lancedb_exists().await;
     library_to_arrow(
         lib_items,
         config.get_embedding_config().ok_or(ArrowError::Other(
             "Failed to get embedding config from application config".to_string(),
         ))?,
+        include_embeddings,
     )
     .await
 }

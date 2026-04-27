@@ -416,8 +416,13 @@ async fn fix_zero_embeddings<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Res
         return Ok(());
     }
 
-    let nonempty_zero_subset_batch =
-        library_to_arrow(nonempty_zero_subset, embedding_config.clone()).await?;
+    let include_embeddings = ctx.store.exists().await;
+    let nonempty_zero_subset_batch = library_to_arrow(
+        nonempty_zero_subset,
+        embedding_config.clone(),
+        include_embeddings,
+    )
+    .await?;
 
     let batches = vec![nonempty_zero_subset_batch.clone()];
 

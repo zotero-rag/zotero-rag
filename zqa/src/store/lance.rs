@@ -63,7 +63,7 @@ impl LanceZoteroStore {
 
     /// Create a Lance-backed Zotero store from an embedding configuration.
     pub(crate) async fn from_embedding_config(embedding_config: EmbeddingProviderConfig) -> Self {
-        let schema = Arc::new(get_schema(embedding_config.provider()).await);
+        let schema = Arc::new(get_schema(embedding_config.provider(), true).await);
         Self::from_schema(embedding_config, schema)
     }
 
@@ -238,7 +238,9 @@ impl ZoteroStore for LanceZoteroStore {
     ///
     /// Returns a [`CLIError`] if the upsert fails.
     async fn upsert_items(&self, items: Vec<ZoteroItem>) -> Result<(), Self::StoreError> {
-        let batch = library_to_arrow(items, self.embedding_config.clone()).await?;
+        let include_embeddings = self.exists().await;
+        let batch =
+            library_to_arrow(items, self.embedding_config.clone(), include_embeddings).await?;
         self.upsert_batches(vec![batch]).await
     }
 
