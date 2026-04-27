@@ -165,7 +165,6 @@ pub(crate) mod tests {
     use zqa_rag::embedding::common::EmbeddingProviderConfig;
     use zqa_rag::llm::tools::Tool;
     use zqa_rag::reranking::common::RerankProviderConfig;
-    use zqa_rag::vector::backends::lance::LanceBackend;
 
     use super::dispatch_command;
     use crate::common::Context;
@@ -208,11 +207,10 @@ pub(crate) mod tests {
         let config = get_config();
 
         let embedding_config = config.get_embedding_config().unwrap();
-        let backend = LanceBackend::new(embedding_config.clone(), schema.into(), "pdf_text".into());
 
         Context {
             state: State::default(),
-            store: LanceZoteroStore::new(backend, embedding_config),
+            store: LanceZoteroStore::from_schema(embedding_config, schema.into()),
             config,
             out,
             err,

@@ -1,10 +1,15 @@
 use std::sync::Arc;
 
 use arrow_array::RecordBatch;
+use arrow_schema::Schema;
 use async_trait::async_trait;
-use zqa_rag::vector::backends::{
-    backend::VectorBackend,
-    lance::{LanceBackend, LanceMetadata},
+use zqa_rag::{
+    embedding::common::EmbeddingProviderConfig,
+    reranking::common::{RerankProviderConfig, get_reranking_provider_with_config},
+    vector::backends::{
+        backend::VectorBackend,
+        lance::{LanceBackend, LanceMetadata},
+    },
 };
 
 use crate::{
@@ -20,20 +25,46 @@ use crate::{
 /// Zotero-specific store backed by LanceDB.
 pub(crate) struct LanceZoteroStore {
     backend: LanceBackend,
-    embedding_config: zqa_rag::embedding::common::EmbeddingProviderConfig,
+    embedding_config: EmbeddingProviderConfig,
+}
+
+/// Statistics about the characters processed in a vector search call, used for cost estimation.
+pub(crate) struct VectorSearchStats {
+    /// Number of characters in the query string that was embedded.
+    pub(crate) embedding_chars: usize,
+    /// Total characters of documents + query sent to the reranker (0 if no reranker was used).
+    pub(crate) rerank_chars: usize,
 }
 
 impl LanceZoteroStore {
     /// Create a new Lance-backed Zotero store from an existing backend and embedding config.
     #[must_use]
-    pub(crate) fn new(
-        backend: LanceBackend,
-        embedding_config: zqa_rag::embedding::common::EmbeddingProviderConfig,
-    ) -> Self {
+    fn new(backend: LanceBackend, embedding_config: EmbeddingProviderConfig) -> Self {
         Self {
             backend,
             embedding_config,
         }
+    }
+
+    /// Create a Lance-backed Zotero store from an embedding config and Arrow schema.
+    #[must_use]
+    pub(crate) fn from_schema(
+        embedding_config: EmbeddingProviderConfig,
+        schema: Arc<Schema>,
+    ) -> Self {
+        let backend = LanceBackend::new(
+            embedding_config.clone(),
+            schema,
+            DbFields::PdfText.as_ref().to_string(),
+        );
+
+        Self::new(backend, embedding_config)
+    }
+
+    /// Create a Lance-backed Zotero store from an embedding configuration.
+    pub(crate) async fn from_embedding_config(embedding_config: EmbeddingProviderConfig) -> Self {
+        let schema = Arc::new(get_schema(embedding_config.provider()).await);
+        Self::from_schema(embedding_config, schema)
     }
 
     /// Create a Lance-backed Zotero store from the application config.
@@ -45,14 +76,8 @@ impl LanceZoteroStore {
         let embedding_config = config.get_embedding_config().ok_or(CLIError::ConfigError(
             "Could not get embedding config".into(),
         ))?;
-        let schema = get_schema(embedding_config.provider()).await;
-        let backend = LanceBackend::new(
-            embedding_config.clone(),
-            Arc::new(schema),
-            DbFields::PdfText.as_ref().to_string(),
-        );
 
-        Ok(Self::new(backend, embedding_config))
+        Ok(Self::from_embedding_config(embedding_config).await)
     }
 
     /// Return metadata for the underlying LanceDB table.
@@ -60,7 +85,7 @@ impl LanceZoteroStore {
     /// # Errors
     ///
     /// Returns a [`CLIError`] if LanceDB metadata could not be read.
-    pub(crate) async fn metadata(&self) -> Result<LanceMetadata, CLIError> {
+    pub(crate) async fn get_metadata(&self) -> Result<LanceMetadata, CLIError> {
         self.backend.get_metadata().await.map_err(Into::into)
     }
 
@@ -86,6 +111,106 @@ impl LanceZoteroStore {
             .create_or_update_indices(DbFields::PdfText.as_ref(), DbFields::Embeddings.as_ref())
             .await
             .map_err(Into::into)
+    }
+
+    /// Return metadata for Zotero items that already exist in the store.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`CLIError`] if the existing rows cannot be fetched.
+    pub(crate) async fn existing_item_metadata(
+        &self,
+    ) -> Result<Vec<crate::utils::library::ZoteroItemMetadata>, CLIError> {
+        let db_items = self
+            .backend
+            .get_items(&[
+                DbFields::LibraryKey.into(),
+                DbFields::Title.into(),
+                DbFields::FilePath.into(),
+            ])
+            .await?;
+
+        Ok(db_items
+            .iter()
+            .flat_map(|batch| {
+                let library_keys = crate::utils::library::get_column_from_batch(batch, 0);
+                let titles = crate::utils::library::get_column_from_batch(batch, 1);
+                let file_paths = crate::utils::library::get_column_from_batch(batch, 2);
+
+                crate::izip!(library_keys, titles, file_paths)
+                    .map(
+                        |(key, title, path)| crate::utils::library::ZoteroItemMetadata {
+                            library_key: key,
+                            title,
+                            file_path: std::path::PathBuf::from(path),
+                            authors: None,
+                        },
+                    )
+                    .collect::<Vec<_>>()
+            })
+            .collect())
+    }
+
+    /// Perform vector search and optional reranking.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`CLIError`] if search or reranking fails.
+    pub(crate) async fn vector_search(
+        &self,
+        query: String,
+        limit: usize,
+        reranker_config: Option<&RerankProviderConfig>,
+    ) -> Result<(Vec<ZoteroItem>, VectorSearchStats), CLIError> {
+        let embedding_chars = query.len();
+        let items = <Self as ZoteroStore>::search(self, &query, limit).await?;
+
+        let filtered_items: Vec<ZoteroItem> = items
+            .into_iter()
+            .filter(|item| !item.text.trim().is_empty())
+            .collect();
+
+        if filtered_items.is_empty() {
+            return Ok((
+                Vec::new(),
+                VectorSearchStats {
+                    embedding_chars,
+                    rerank_chars: 0,
+                },
+            ));
+        }
+
+        let Some(reranker) = reranker_config else {
+            return Ok((
+                filtered_items,
+                VectorSearchStats {
+                    embedding_chars,
+                    rerank_chars: 0,
+                },
+            ));
+        };
+
+        let rerank_provider = get_reranking_provider_with_config(reranker)?;
+        let item_strings = filtered_items
+            .iter()
+            .map(|f| f.text.as_str())
+            .collect::<Vec<_>>();
+
+        let rerank_chars = item_strings.iter().map(|s| s.len()).sum::<usize>() + query.len();
+        let indices = rerank_provider.rerank(&item_strings, &query).await?;
+
+        let reranked_items = indices
+            .into_iter()
+            .filter_map(|idx| filtered_items.get(idx).cloned())
+            .collect();
+
+        Ok((
+            reranked_items,
+            VectorSearchStats {
+                embedding_chars,
+                rerank_chars,
+            },
+        ))
     }
 }
 

@@ -10,7 +10,7 @@ use std::sync::atomic::AtomicUsize;
 use std::thread;
 use std::time::Instant;
 
-use arrow_array::RecordBatch;
+use arrow_array::{RecordBatch, cast::AsArray};
 use directories::UserDirs;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use rusqlite::Connection;
@@ -23,8 +23,11 @@ use zqa_rag::vector::backends::{
     lance::{LanceError, db_exists as lancedb_exists, get_column_from_batch},
 };
 
-use crate::izip;
-use crate::utils::arrow::{DbFields, lance_backend};
+use crate::{
+    izip,
+    store::lance::LanceZoteroStore,
+    utils::arrow::{DbFields, lancedb_exists},
+};
 
 /// Gets the Zotero library path. Works on Linux, macOS, and Windows systems.
 /// On CI environments, returns a location to a toy library in assets/ instead.
@@ -154,16 +157,21 @@ impl From<rusqlite::Error> for LibraryParsingError {
     }
 }
 
-impl From<LanceError> for LibraryParsingError {
-    fn from(value: LanceError) -> Self {
-        LibraryParsingError::LanceDBError(value.to_string())
-    }
-}
-
 impl From<Box<dyn std::error::Error>> for LibraryParsingError {
     fn from(value: Box<dyn std::error::Error>) -> Self {
         LibraryParsingError::PdfParsingError(value.to_string())
     }
+}
+
+/// From a `RecordBatch`, return all values from a specified column as a `Vec<String>`.
+#[must_use]
+pub(crate) fn get_column_from_batch(batch: &RecordBatch, column: usize) -> Vec<String> {
+    let results = batch.column(column).as_string::<i32>();
+
+    results
+        .iter()
+        .filter_map(|s| Some(s?.to_string()))
+        .collect()
 }
 
 /// Assuming an existing `LanceDB` database exists, returns a list of items present in the Zotero
@@ -186,34 +194,11 @@ impl From<Box<dyn std::error::Error>> for LibraryParsingError {
 pub async fn get_new_library_items(
     embedding_config: &EmbeddingProviderConfig,
 ) -> Result<Vec<ZoteroItemMetadata>, LibraryParsingError> {
-    let backend = lance_backend(embedding_config.clone()).await;
-    let db_items = backend
-        .get_items(&[
-            DbFields::LibraryKey.into(),
-            DbFields::Title.into(),
-            DbFields::FilePath.into(),
-        ])
-        .await?;
-
-    let metadata_vecs = db_items
-        .iter()
-        .flat_map(|batch| {
-            let library_keys = get_column_from_batch(batch, 0);
-            let titles = get_column_from_batch(batch, 1);
-            let file_paths = get_column_from_batch(batch, 2);
-
-            let zipped = izip!(library_keys, titles, file_paths).collect::<Vec<_>>();
-            zipped
-                .iter()
-                .map(|(key, title, path)| ZoteroItemMetadata {
-                    library_key: key.clone(),
-                    title: title.clone(),
-                    file_path: PathBuf::from(path.clone()),
-                    authors: None,
-                })
-                .collect::<Vec<_>>()
-        })
-        .collect::<Vec<_>>();
+    let store = LanceZoteroStore::from_embedding_config(embedding_config.clone()).await;
+    let metadata_vecs = store
+        .existing_item_metadata()
+        .await
+        .map_err(|e| LibraryParsingError::LanceDBError(e.to_string()))?;
 
     let library_items = parse_library_metadata(None, None)?;
 

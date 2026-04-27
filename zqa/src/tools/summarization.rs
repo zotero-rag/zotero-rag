@@ -102,9 +102,6 @@ impl Tool for SummarizationTool {
                 .await
                 .map_err(|e| format!("Search failed: {e}"))?;
 
-            let batches: ZoteroItemSet = results.into();
-            let items: Vec<ZoteroItem> = batches.into();
-
             let mut set = JoinSet::new();
             for item in items {
                 let client = self.llm_client.clone();

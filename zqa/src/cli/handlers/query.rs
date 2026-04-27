@@ -29,7 +29,6 @@ use crate::{
     common::Context,
     tools::{retrieval::RetrievalTool, summarization::SummarizationTool},
     utils::{
-        arrow::vector_search,
         library::get_authors,
         rag::ModelResponse,
         terminal::{DIM_TEXT, RESET},
@@ -86,16 +85,14 @@ where
     }
 
     let vector_search_start = Instant::now();
-    let (mut search_results, _) = vector_search(
-        search_term.clone(),
-        &ctx.config
-            .get_embedding_config()
-            .ok_or(CLIError::ConfigError(
-                "Could not get embedding config".into(),
-            ))?,
-        ctx.config.get_reranker_config().as_ref(),
-    )
-    .await?;
+    let (mut search_results, _) = ctx
+        .store
+        .vector_search(
+            search_term.clone(),
+            10,
+            ctx.config.get_reranker_config().as_ref(),
+        )
+        .await?;
     let _ = get_authors(&mut search_results);
 
     let vector_search_duration = vector_search_start.elapsed();

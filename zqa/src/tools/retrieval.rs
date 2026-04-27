@@ -14,10 +14,12 @@ use zqa_rag::{
     reranking::common::RerankProviderConfig,
 };
 
-use crate::utils::{
-    arrow::vector_search,
-    library::get_authors,
-    terminal::{DIM_TEXT, RESET},
+use crate::{
+    store::lance::LanceZoteroStore,
+    utils::{
+        library::get_authors,
+        terminal::{DIM_TEXT, RESET},
+    },
 };
 
 pub(crate) const RETRIEVAL_TOOL_NAME: &str = "retrieval_tool";
@@ -98,10 +100,11 @@ impl Tool for RetrievalTool {
         Box::pin(async move {
             let input: RetrievalToolInput =
                 serde_json::from_value(args).map_err(|e| format!("Invalid arguments: {e}"))?;
-            let (mut results, stats) =
-                vector_search(input.query, &embedding_config, reranker_config.as_ref())
-                    .await
-                    .map_err(|e| format!("Search failed: {e}"))?;
+            let store = LanceZoteroStore::from_embedding_config(embedding_config).await;
+            let (mut results, stats) = store
+                .vector_search(input.query, 10, reranker_config.as_ref())
+                .await
+                .map_err(|e| format!("Search failed: {e}"))?;
             embedding_chars.fetch_add(stats.embedding_chars as u64, Ordering::Relaxed);
             rerank_chars.fetch_add(stats.rerank_chars as u64, Ordering::Relaxed);
 

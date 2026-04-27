@@ -39,7 +39,7 @@ where
     O: Write,
     E: Write,
 {
-    match ctx.store.metadata().await {
+    match ctx.store.get_metadata().await {
         Ok(stats) => writeln!(&mut ctx.out, "{stats}")?,
         Err(e) => writeln!(&mut ctx.err, "Could not get database statistics: {e}")?,
     }
