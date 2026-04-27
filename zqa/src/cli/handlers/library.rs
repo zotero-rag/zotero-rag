@@ -546,7 +546,7 @@ mod tests {
         let output = String::from_utf8(ctx.out.into_inner()).unwrap();
         test_ok!(stats);
         assert!(stats.is_ok());
-        assert!(output.contains("Table statistics:"));
+        assert!(output.contains("LanceDB Statistics:"));
         assert!(output.contains("Number of rows: 8"));
 
         if fs::metadata(BATCH_ITER_FILE).is_ok() {
