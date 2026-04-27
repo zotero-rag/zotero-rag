@@ -17,10 +17,7 @@ use zqa_rag::{
 };
 
 use super::library::{LibraryParsingError, parse_library};
-use crate::{
-    config::Config,
-    utils::library::{ZoteroItem, ZoteroItemSet},
-};
+use crate::utils::library::{ZoteroItem, ZoteroItemSet};
 
 /// An enum containing the fields stored by our application in `LanceDB`, in order. Implementations
 /// `as_ref()` and `into()` are provided to convert this to `&str` and `String` respectively.
@@ -93,16 +90,6 @@ impl From<LanceError> for ArrowError {
     fn from(value: LanceError) -> Self {
         Self::LanceError(value.to_string())
     }
-}
-
-/// Build the LanceDB backend used by the CLI for the supplied embedding configuration.
-pub(crate) async fn lance_backend(embedding_config: EmbeddingProviderConfig) -> LanceBackend {
-    let schema = Arc::new(get_schema(embedding_config.provider()).await);
-    LanceBackend::new(
-        embedding_config,
-        schema,
-        DbFields::PdfText.as_ref().to_string(),
-    )
 }
 
 /// Get the schema for our `LanceDB` table. This is required for both getting library items and
@@ -250,27 +237,14 @@ pub async fn library_to_arrow(
 ///   multi-threading, etc.
 /// * `limit` - Optional limit, meant to be used in conjunction with `start_from`.
 pub async fn full_library_to_arrow(
-    config: &Config,
+    backend: &LanceBackend,
     start_from: Option<usize>,
     limit: Option<usize>,
 ) -> Result<RecordBatch, ArrowError> {
-    let lib_items = parse_library(
-        &config.get_embedding_config().ok_or(ArrowError::Other(
-            "Failed to get embedding config from application config".to_string(),
-        ))?,
-        start_from,
-        limit,
-    )
-    .await?;
+    let lib_items = parse_library(backend, start_from, limit).await?;
     log::info!("Finished parsing library items.");
 
-    library_to_arrow(
-        lib_items,
-        config.get_embedding_config().ok_or(ArrowError::Other(
-            "Failed to get embedding config from application config".to_string(),
-        ))?,
-    )
-    .await
+    library_to_arrow(lib_items, backend.embedding_config().clone()).await
 }
 
 /// Statistics about the characters processed in a vector search call, used for cost estimation.
@@ -315,11 +289,10 @@ pub struct VectorSearchStats {
 /// * `ArrowError::LLMError` if reranking fails.
 pub async fn vector_search(
     query: String,
-    embedding_config: &EmbeddingProviderConfig,
+    backend: &LanceBackend,
     reranker_config: Option<&RerankProviderConfig>,
 ) -> Result<(Vec<ZoteroItem>, VectorSearchStats), ArrowError> {
     let embedding_chars = query.len();
-    let backend = lance_backend(embedding_config.clone()).await;
     let batches = backend.vector_search(query.clone(), 10).await?;
 
     let items: ZoteroItemSet = batches.into();
@@ -383,7 +356,10 @@ mod tests {
     };
 
     use super::*;
-    use crate::{common::setup_logger, config::VoyageAIConfig};
+    use crate::{
+        common::setup_logger,
+        config::{Config, VoyageAIConfig},
+    };
 
     fn get_config() -> Config {
         let mut config = Config {
@@ -416,7 +392,14 @@ mod tests {
         let config = get_config();
 
         let record_batch = temp_env::async_with_vars([("LANCEDB_URI", Some(&db_uri))], async {
-            full_library_to_arrow(&config, Some(0), Some(5)).await
+            let embedding_config = config.get_embedding_config().unwrap();
+            let schema = Arc::new(get_schema(embedding_config.provider()).await);
+            let backend = LanceBackend::new(
+                embedding_config,
+                schema,
+                DbFields::PdfText.as_ref().to_string(),
+            );
+            full_library_to_arrow(&backend, Some(0), Some(5)).await
         })
         .await;
 

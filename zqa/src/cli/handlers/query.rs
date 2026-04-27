@@ -88,11 +88,7 @@ where
     let vector_search_start = Instant::now();
     let (mut search_results, _) = vector_search(
         search_term.clone(),
-        &ctx.config
-            .get_embedding_config()
-            .ok_or(CLIError::ConfigError(
-                "Could not get embedding config".into(),
-            ))?,
+        &ctx.backend,
         ctx.config.get_reranker_config().as_ref(),
     )
     .await?;
@@ -212,7 +208,7 @@ where
         .as_ref()
         .map(|c| (c.provider_name().to_string(), c.model_name().to_string()));
 
-    let retrieval_tool = RetrievalTool::new(embedding_config.clone(), reranker_config);
+    let retrieval_tool = RetrievalTool::new(ctx.backend.clone(), reranker_config);
     let retrieval_embedding_chars = std::sync::Arc::clone(&retrieval_tool.embedding_chars);
     let retrieval_rerank_chars = std::sync::Arc::clone(&retrieval_tool.rerank_chars);
 

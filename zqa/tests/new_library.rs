@@ -49,18 +49,19 @@ async fn test_integration_works() {
         }),
     };
 
-    let record_batch = full_library_to_arrow(&config, None, None).await;
+    let embedding_config = config.get_embedding_config().unwrap();
+    let schema = zqa::utils::arrow::get_schema(embedding_config.provider()).await;
+    let backend = LanceBackend::new(
+        embedding_config,
+        std::sync::Arc::new(schema),
+        "pdf_text".into(),
+    );
+
+    let record_batch = full_library_to_arrow(&backend, None, None).await;
     test_ok!(record_batch);
 
     let record_batch = record_batch.unwrap();
-    let _schema = record_batch.schema();
     let batches = vec![record_batch.clone()];
-
-    let backend = LanceBackend::new(
-        config.get_embedding_config().unwrap(),
-        record_batch.schema(),
-        "pdf_text".into(),
-    );
     let db = backend.insert_items(batches, None).await;
 
     test_ok!(db);
