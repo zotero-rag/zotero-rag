@@ -124,6 +124,12 @@ impl LanceBackend {
             source_col,
         }
     }
+
+    /// Returns a reference to the embedding provider configuration.
+    #[must_use]
+    pub fn embedding_config(&self) -> &EmbeddingProviderConfig {
+        &self.config
+    }
 }
 
 /// From a `RecordBatch`, return all values from a specified column as a `Vec<String>`.
@@ -342,36 +348,43 @@ impl VectorBackend for LanceBackend {
                 ))
             })?;
 
-        if let Some((by_idx, _)) = self.schema.column_with_name(by)
-            && let Some((key_idx, _)) = self.schema.column_with_name(key)
+        if self.schema.column_with_name(by).is_none() || self.schema.column_with_name(key).is_none()
         {
-            let mut stream = table.query().execute().await?;
-            let mut seen_by_values = HashSet::new();
-            let mut duplicate_keys = Vec::new();
+            return Err(LanceError::ParameterError(format!(
+                "column '{by}' or '{key}' not found in schema"
+            )));
+        }
 
-            while let Some(batch) = stream.try_next().await? {
-                let by_values = get_column_from_batch(&batch, by_idx);
-                let key_values = get_column_from_batch(&batch, key_idx);
+        let mut stream = table.query().execute().await?;
+        let mut seen_by_values = HashSet::new();
+        let mut duplicate_keys = Vec::new();
 
-                for (by_val, key_val) in by_values.into_iter().zip(key_values) {
-                    if !seen_by_values.insert(by_val) {
-                        duplicate_keys.push(key_val);
-                    }
+        while let Some(batch) = stream.try_next().await? {
+            let batch_schema = batch.schema();
+            let Some((by_idx, _)) = batch_schema.column_with_name(by) else {
+                continue;
+            };
+            let Some((key_idx, _)) = batch_schema.column_with_name(key) else {
+                continue;
+            };
+
+            let by_values = get_column_from_batch(&batch, by_idx);
+            let key_values = get_column_from_batch(&batch, key_idx);
+
+            for (by_val, key_val) in by_values.into_iter().zip(key_values) {
+                if !seen_by_values.insert(by_val) {
+                    duplicate_keys.push(key_val);
                 }
             }
-
-            // Delete duplicate rows
-            let deleted_count = duplicate_keys.len();
-            if !duplicate_keys.is_empty() {
-                self.delete_rows(key, &duplicate_keys).await?;
-            }
-
-            Ok(deleted_count)
-        } else {
-            Err(LanceError::ParameterError(format!(
-                "column '{by}' or '{key}' not found in schema"
-            )))
         }
+
+        // Delete duplicate rows
+        let deleted_count = duplicate_keys.len();
+        if !duplicate_keys.is_empty() {
+            self.delete_rows(key, &duplicate_keys).await?;
+        }
+
+        Ok(deleted_count)
     }
 
     /// Return all the rows in the LanceDB table, selecting only the columns specified. This is useful

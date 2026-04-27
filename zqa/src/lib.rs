@@ -3,7 +3,10 @@
 #![allow(clippy::cast_precision_loss)]
 #![allow(clippy::cast_possible_wrap)]
 
-use std::io::{self, IsTerminal, stderr, stdout};
+use std::{
+    io::{self, IsTerminal, stderr, stdout},
+    sync::Arc,
+};
 
 use clap::Parser;
 
@@ -23,7 +26,7 @@ use state::{check_or_create_first_run_file, oobe};
 pub use utils::arrow::full_library_to_arrow;
 use zqa_rag::{
     config::LLMClientConfig, embedding::common::EmbeddingProviderConfig,
-    reranking::common::RerankProviderConfig,
+    reranking::common::RerankProviderConfig, vector::backends::lance::LanceBackend,
 };
 
 use crate::{

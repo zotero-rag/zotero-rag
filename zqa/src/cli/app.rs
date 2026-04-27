@@ -153,6 +153,7 @@ pub(crate) async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<()
 #[cfg(test)]
 pub(crate) mod tests {
     use std::io::Cursor;
+    use std::sync::Arc;
 
     use serde_json::json;
     use serial_test::serial;
@@ -165,6 +166,7 @@ pub(crate) mod tests {
     use zqa_rag::embedding::common::EmbeddingProviderConfig;
     use zqa_rag::llm::tools::Tool;
     use zqa_rag::reranking::common::RerankProviderConfig;
+    use zqa_rag::vector::backends::lance::LanceBackend;
 
     use super::dispatch_command;
     use crate::common::Context;
@@ -225,13 +227,18 @@ pub(crate) mod tests {
             embedding_dims: DEFAULT_VOYAGE_EMBEDDING_DIM as usize,
             reranker: DEFAULT_VOYAGE_RERANK_MODEL.into(),
         };
-
-        // Build a minimal tool; the embedding config is only used in `call`, not in the metadata
-        // methods, so we use a dummy VoyageAI config here.
-        RetrievalTool::new(
+        let schema = Arc::new(arrow_schema::Schema::new(vec![
+            arrow_schema::Field::new("library_key", arrow_schema::DataType::Utf8, false),
+            arrow_schema::Field::new("title", arrow_schema::DataType::Utf8, false),
+            arrow_schema::Field::new("file_path", arrow_schema::DataType::Utf8, false),
+            arrow_schema::Field::new("pdf_text", arrow_schema::DataType::Utf8, false),
+        ]));
+        let backend = LanceBackend::new(
             EmbeddingProviderConfig::VoyageAI(config.clone()),
-            Some(RerankProviderConfig::VoyageAI(config)),
-        )
+            schema,
+            "pdf_text".into(),
+        );
+        RetrievalTool::new(backend, Some(RerankProviderConfig::VoyageAI(config)))
     }
 
     #[retry(3)]

@@ -10,8 +10,8 @@ use schemars::{JsonSchema, schema_for};
 use serde::Deserialize;
 use serde_json::json;
 use zqa_rag::{
-    embedding::common::EmbeddingProviderConfig, llm::tools::Tool,
-    reranking::common::RerankProviderConfig,
+    llm::tools::Tool, reranking::common::RerankProviderConfig,
+    vector::backends::lance::LanceBackend,
 };
 
 use crate::store::common::ZoteroStore;
@@ -28,9 +28,8 @@ pub(crate) const RETRIEVAL_TOOL_NAME: &str = "retrieval_tool";
 /// A tool to perform vector search and reranking.
 #[derive(Debug)]
 pub(crate) struct RetrievalTool {
-    /// The embedding provider configuration. Note that this must be the same embedding provider
-    /// used when initially creating the database.
-    pub(crate) embedding_config: EmbeddingProviderConfig,
+    /// The backend used for vector search.
+    pub(crate) backend: LanceBackend,
     /// The reranker provider to use.
     pub(crate) reranker_config: Option<RerankProviderConfig>,
     /// Accumulated character count of text sent to the embedding API across all calls.
@@ -40,13 +39,13 @@ pub(crate) struct RetrievalTool {
 }
 
 impl RetrievalTool {
-    /// Create a new instance of the [`RetrievalTool`] given an embedding config and reranker config.
+    /// Create a new instance of the [`RetrievalTool`] given a backend and reranker config.
     pub(crate) fn new(
-        embedding_config: EmbeddingProviderConfig,
+        backend: LanceBackend,
         reranker_provider: Option<RerankProviderConfig>,
     ) -> Self {
         Self {
-            embedding_config,
+            backend,
             reranker_config: reranker_provider,
             embedding_chars: Arc::new(AtomicU64::new(0)),
             rerank_chars: Arc::new(AtomicU64::new(0)),
@@ -93,7 +92,7 @@ impl Tool for RetrievalTool {
     ) -> std::pin::Pin<Box<dyn Future<Output = Result<serde_json::Value, String>> + Send + '_>>
     {
         let start = Instant::now();
-        let embedding_config = self.embedding_config.clone();
+        let backend = self.backend.clone();
         let reranker_config = self.reranker_config.clone();
         let embedding_chars = Arc::clone(&self.embedding_chars);
         let rerank_chars = Arc::clone(&self.rerank_chars);
@@ -140,11 +139,14 @@ impl Tool for RetrievalTool {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use serde_json::json;
     use zqa_rag::constants::{
         DEFAULT_VOYAGE_EMBEDDING_DIM, DEFAULT_VOYAGE_EMBEDDING_MODEL, DEFAULT_VOYAGE_RERANK_MODEL,
     };
     use zqa_rag::embedding::common::EmbeddingProviderConfig;
+    use zqa_rag::vector::backends::lance::LanceBackend;
 
     use super::*;
 
@@ -155,13 +157,18 @@ mod tests {
             embedding_dims: DEFAULT_VOYAGE_EMBEDDING_DIM as usize,
             reranker: DEFAULT_VOYAGE_RERANK_MODEL.into(),
         };
-
-        // Build a minimal tool; the embedding config is only used in `call`, not in the metadata
-        // methods, so we use a dummy VoyageAI config here.
-        RetrievalTool::new(
+        let schema = Arc::new(arrow_schema::Schema::new(vec![
+            arrow_schema::Field::new("library_key", arrow_schema::DataType::Utf8, false),
+            arrow_schema::Field::new("title", arrow_schema::DataType::Utf8, false),
+            arrow_schema::Field::new("file_path", arrow_schema::DataType::Utf8, false),
+            arrow_schema::Field::new("pdf_text", arrow_schema::DataType::Utf8, false),
+        ]));
+        let backend = LanceBackend::new(
             EmbeddingProviderConfig::VoyageAI(config.clone()),
-            Some(RerankProviderConfig::VoyageAI(config)),
-        )
+            schema,
+            "pdf_text".into(),
+        );
+        RetrievalTool::new(backend, Some(RerankProviderConfig::VoyageAI(config)))
     }
 
     #[test]

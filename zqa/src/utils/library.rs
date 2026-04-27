@@ -193,7 +193,7 @@ pub(crate) fn get_column_from_batch(batch: &RecordBatch, column: usize) -> Vec<S
 ///   columns from the result set could not be parsed, or `query_map` fails.
 /// * `LibraryParsingError::LanceDBError` if fetching the rows from LanceDB fails.
 pub async fn get_new_library_items(
-    embedding_config: &EmbeddingProviderConfig,
+    backend: &LanceBackend,
 ) -> Result<Vec<ZoteroItemMetadata>, LibraryParsingError> {
     let store = LanceZoteroStore::from_embedding_config(embedding_config.clone()).await;
     let metadata_vecs = store
@@ -414,14 +414,14 @@ fn get_pbar_ticks() -> String {
 /// * If the threads could not be joined.
 #[allow(clippy::too_many_lines)]
 pub async fn parse_library(
-    embedding_config: &EmbeddingProviderConfig,
+    backend: &LanceBackend,
     start_from: Option<usize>,
     limit: Option<usize>,
 ) -> Result<Vec<ZoteroItem>, LibraryParsingError> {
     let start_time = Instant::now();
 
-    let metadata = if lancedb_exists().await {
-        get_new_library_items(embedding_config).await?
+    let metadata = if backend.db_exists().await {
+        get_new_library_items(backend).await?
     } else {
         parse_library_metadata(start_from, limit)?
     };
@@ -617,6 +617,8 @@ pub async fn parse_library(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use dotenv::dotenv;
     use zqa_macros::{test_eq, test_ok};
     use zqa_rag::{
@@ -625,6 +627,7 @@ mod tests {
             DEFAULT_VOYAGE_EMBEDDING_DIM, DEFAULT_VOYAGE_EMBEDDING_MODEL,
             DEFAULT_VOYAGE_RERANK_MODEL,
         },
+        embedding::common::EmbeddingProviderConfig,
     };
 
     use super::*;
@@ -705,17 +708,20 @@ mod tests {
         // SAFETY: single-threaded async test, no concurrent env var access
         unsafe { env::set_var("LANCEDB_URI", &db_uri) };
 
-        let items = parse_library(
-            &EmbeddingProviderConfig::VoyageAI(VoyageAIConfig {
-                embedding_model: DEFAULT_VOYAGE_EMBEDDING_MODEL.into(),
-                embedding_dims: DEFAULT_VOYAGE_EMBEDDING_DIM as usize,
-                api_key: env::var("VOYAGE_AI_API_KEY").expect("VOYAGE_AI_API_KEY not set"),
-                reranker: DEFAULT_VOYAGE_RERANK_MODEL.into(),
-            }),
-            Some(0),
-            Some(7),
-        )
-        .await;
+        let embedding_config = EmbeddingProviderConfig::VoyageAI(VoyageAIConfig {
+            embedding_model: DEFAULT_VOYAGE_EMBEDDING_MODEL.into(),
+            embedding_dims: DEFAULT_VOYAGE_EMBEDDING_DIM as usize,
+            api_key: env::var("VOYAGE_AI_API_KEY").expect("VOYAGE_AI_API_KEY not set"),
+            reranker: DEFAULT_VOYAGE_RERANK_MODEL.into(),
+        });
+        let schema = Arc::new(arrow_schema::Schema::new(vec![
+            arrow_schema::Field::new("library_key", arrow_schema::DataType::Utf8, false),
+            arrow_schema::Field::new("title", arrow_schema::DataType::Utf8, false),
+            arrow_schema::Field::new("file_path", arrow_schema::DataType::Utf8, false),
+            arrow_schema::Field::new("pdf_text", arrow_schema::DataType::Utf8, false),
+        ]));
+        let backend = LanceBackend::new(embedding_config, schema, "pdf_text".into());
+        let items = parse_library(&backend, Some(0), Some(7)).await;
         test_ok!(items);
 
         // Two of the items in the toy library are HTML files, so we actually

@@ -253,18 +253,11 @@ pub async fn library_to_arrow(
 ///   multi-threading, etc.
 /// * `limit` - Optional limit, meant to be used in conjunction with `start_from`.
 pub async fn full_library_to_arrow(
-    config: &Config,
+    backend: &LanceBackend,
     start_from: Option<usize>,
     limit: Option<usize>,
 ) -> Result<RecordBatch, ArrowError> {
-    let lib_items = parse_library(
-        &config.get_embedding_config().ok_or(ArrowError::Other(
-            "Failed to get embedding config from application config".to_string(),
-        ))?,
-        start_from,
-        limit,
-    )
-    .await?;
+    let lib_items = parse_library(backend, start_from, limit).await?;
     log::info!("Finished parsing library items.");
 
     let include_embeddings = lancedb_exists().await;
@@ -287,7 +280,10 @@ mod tests {
     };
 
     use super::*;
-    use crate::{common::setup_logger, config::VoyageAIConfig};
+    use crate::{
+        common::setup_logger,
+        config::{Config, VoyageAIConfig},
+    };
 
     fn get_config() -> Config {
         let mut config = Config {
@@ -320,7 +316,14 @@ mod tests {
         let config = get_config();
 
         let record_batch = temp_env::async_with_vars([("LANCEDB_URI", Some(&db_uri))], async {
-            full_library_to_arrow(&config, Some(0), Some(5)).await
+            let embedding_config = config.get_embedding_config().unwrap();
+            let schema = Arc::new(get_schema(embedding_config.provider()).await);
+            let backend = LanceBackend::new(
+                embedding_config,
+                schema,
+                DbFields::PdfText.as_ref().to_string(),
+            );
+            full_library_to_arrow(&backend, Some(0), Some(5)).await
         })
         .await;
 
