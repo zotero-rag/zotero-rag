@@ -1,4 +1,4 @@
-use std::{path::PathBuf, sync::Arc};
+use std::sync::Arc;
 
 use arrow_array::{ArrayRef, RecordBatch, StringArray, cast::AsArray};
 use arrow_schema;
@@ -12,7 +12,7 @@ use zqa_rag::{
     reranking::common::{RerankProviderConfig, get_reranking_provider_with_config},
     vector::backends::{
         backend::VectorBackend,
-        lance::{LANCE_TABLE_NAME, LanceBackend, LanceError, get_db_uri},
+        lance::{LanceBackend, LanceError, db_exists as lancedb_exists},
     },
 };
 
@@ -92,20 +92,6 @@ impl From<LibraryParsingError> for ArrowError {
 impl From<LanceError> for ArrowError {
     fn from(value: LanceError) -> Self {
         Self::LanceError(value.to_string())
-    }
-}
-
-/// Checks whether the configured LanceDB database exists and contains the expected table.
-pub(crate) async fn lancedb_exists() -> bool {
-    let uri = get_db_uri();
-    if !PathBuf::from(&uri).exists() {
-        return false;
-    }
-
-    if let Ok(db) = lancedb::connect(&uri).execute().await {
-        db.open_table(LANCE_TABLE_NAME).execute().await.is_ok()
-    } else {
-        false
     }
 }
 
