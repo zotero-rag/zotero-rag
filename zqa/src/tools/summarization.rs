@@ -9,20 +9,19 @@ use serde::Deserialize;
 use serde_json::json;
 use tokio::task::JoinSet;
 use zqa_rag::{
-    embedding::common::EmbeddingProviderConfig,
     llm::{
         base::{ApiClient, ChatRequest, CompletionApiResponse},
         errors::LLMError,
         factory::LLMClient,
         tools::Tool,
     },
-    vector::backends::backend::VectorBackend,
+    vector::backends::{backend::VectorBackend, lance::LanceBackend},
 };
 
 use crate::{
     cli::prompts::get_extraction_prompt,
     utils::{
-        arrow::{DbFields, lance_backend},
+        arrow::DbFields,
         library::{ZoteroItem, ZoteroItemSet},
         rag::ModelResponse,
     },
@@ -34,8 +33,8 @@ pub(crate) const SUMMARIZATION_TOOL_NAME: &str = "summarization_tool";
 #[derive(Debug, Clone)]
 pub(crate) struct SummarizationTool {
     pub(crate) llm_client: LLMClient,
-    /// Embedding configuration for searching stored Zotero papers.
-    pub(crate) embedding_config: EmbeddingProviderConfig,
+    /// Backend for searching stored Zotero papers.
+    pub(crate) backend: LanceBackend,
     /// The input tokens used
     pub(crate) input_tokens: Arc<Mutex<u32>>,
     /// The output tokens used
@@ -43,11 +42,11 @@ pub(crate) struct SummarizationTool {
 }
 
 impl SummarizationTool {
-    /// Create a new [`SummarizationTool`] instance, given an LLM client and embedding config.
-    pub fn new(llm_client: LLMClient, embedding_config: EmbeddingProviderConfig) -> Self {
+    /// Create a new [`SummarizationTool`] instance, given an LLM client and a backend.
+    pub fn new(llm_client: LLMClient, backend: LanceBackend) -> Self {
         Self {
             llm_client,
-            embedding_config,
+            backend,
             input_tokens: Arc::new(Mutex::new(0)),
             output_tokens: Arc::new(Mutex::new(0)),
         }
@@ -97,8 +96,8 @@ impl Tool for SummarizationTool {
             let input: SummarizationToolInput =
                 serde_json::from_value(args).map_err(|e| format!("Invalid arguments: {e}"))?;
 
-            let backend = lance_backend(self.embedding_config.clone()).await;
-            let results = backend
+            let results = self
+                .backend
                 .search_by_column(DbFields::LibraryKey.as_ref(), &input.ids)
                 .await
                 .map_err(|e| format!("Search failed: {e}"))?;
@@ -166,6 +165,7 @@ impl Tool for SummarizationTool {
 #[cfg(test)]
 mod tests {
     use std::env;
+    use std::sync::Arc;
 
     use serde_json::json;
     use temp_env;
@@ -175,6 +175,7 @@ mod tests {
         config::{AnthropicConfig, LLMClientConfig},
         constants::DEFAULT_ANTHROPIC_MODEL_SMALL,
         llm::factory::get_client_with_config,
+        vector::backends::lance::LanceBackend,
     };
 
     use super::*;
@@ -191,7 +192,15 @@ mod tests {
         .unwrap();
 
         let config = get_config();
-        SummarizationTool::new(client, config.get_embedding_config().unwrap())
+        let embedding_config = config.get_embedding_config().unwrap();
+        let schema = Arc::new(arrow_schema::Schema::new(vec![
+            arrow_schema::Field::new("library_key", arrow_schema::DataType::Utf8, false),
+            arrow_schema::Field::new("title", arrow_schema::DataType::Utf8, false),
+            arrow_schema::Field::new("file_path", arrow_schema::DataType::Utf8, false),
+            arrow_schema::Field::new("pdf_text", arrow_schema::DataType::Utf8, false),
+        ]));
+        let backend = LanceBackend::new(embedding_config, schema, "pdf_text".into());
+        SummarizationTool::new(client, backend)
     }
 
     #[test]

@@ -82,6 +82,7 @@ pub async fn db_exists() -> bool {
 }
 
 /// Backend for LanceDB vector store.
+#[derive(Debug, Clone)]
 pub struct LanceBackend {
     /// Configuration for the LanceDB embedding provider.
     config: EmbeddingProviderConfig,
@@ -94,8 +95,8 @@ pub struct LanceBackend {
 /// Metadata about the LanceDB database.
 #[derive(Debug, PartialEq)]
 pub struct LanceMetadata {
-    /// The names of the tables in the database.
-    table_names: Vec<String>,
+    /// Number of tables in the database.
+    num_tables: usize,
     /// The embedding table version. Each update to a table creates a new version.
     embedding_table_version: u64,
     /// Number of rows in the table
@@ -107,9 +108,7 @@ impl fmt::Display for LanceMetadata {
         write!(
             f,
             "LanceDB Statistics:\n\tNumber of tables: {}\n\tNumber of rows: {}\n\tEmbedding table version: {}",
-            self.table_names.len(),
-            self.num_rows,
-            self.embedding_table_version
+            self.num_tables, self.num_rows, self.embedding_table_version
         )
     }
 }
@@ -159,7 +158,7 @@ impl VectorBackend for LanceBackend {
 
     /// Returns the database URI, allowing override via `LANCEDB_URI` environment variable.
     fn get_db_path(&self) -> String {
-        std::env::var("LANCEDB_URI").unwrap_or_else(|_| LANCEDB_URI.to_string())
+        get_db_uri()
     }
 
     async fn get_metadata(&self) -> Result<Self::Metadata, Self::Error> {
@@ -184,9 +183,12 @@ impl VectorBackend for LanceBackend {
             ))
         })?;
 
-        let table_names = db.table_names().execute().await.map_err(|e| {
-            LanceError::InvalidStateError(format!("Failed to list table names: {e}"))
-        })?;
+        let num_tables = db
+            .table_names()
+            .execute()
+            .await
+            .map_err(|e| LanceError::InvalidStateError(format!("Failed to list table names: {e}")))?
+            .len();
 
         let num_rows = tbl.count_rows(None).await.map_err(|e| {
             LanceError::InvalidStateError(format!(
@@ -195,7 +197,7 @@ impl VectorBackend for LanceBackend {
         })?;
 
         Ok(LanceMetadata {
-            table_names,
+            num_tables,
             num_rows,
             embedding_table_version: table_version,
         })

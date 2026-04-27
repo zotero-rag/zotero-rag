@@ -216,7 +216,7 @@ where
     let retrieval_embedding_chars = std::sync::Arc::clone(&retrieval_tool.embedding_chars);
     let retrieval_rerank_chars = std::sync::Arc::clone(&retrieval_tool.rerank_chars);
 
-    let summarization_tool = SummarizationTool::new(llm_client.clone(), embedding_config);
+    let summarization_tool = SummarizationTool::new(llm_client.clone(), ctx.backend.clone());
     let summarization_tool_clone = summarization_tool.clone();
     let mut tools: Vec<Box<dyn Tool>> =
         vec![Box::new(retrieval_tool), Box::new(summarization_tool)];
