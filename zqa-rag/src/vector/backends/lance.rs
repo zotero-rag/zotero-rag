@@ -67,6 +67,20 @@ pub fn get_db_uri() -> String {
     std::env::var("LANCEDB_URI").unwrap_or_else(|_| LANCEDB_URI.to_string())
 }
 
+/// Checks whether the configured LanceDB database exists and contains the expected table.
+pub async fn db_exists() -> bool {
+    let uri = get_db_uri();
+    if !PathBuf::from(&uri).exists() {
+        return false;
+    }
+
+    if let Ok(db) = connect(&uri).execute().await {
+        db.open_table(LANCE_TABLE_NAME).execute().await.is_ok()
+    } else {
+        false
+    }
+}
+
 /// Backend for LanceDB vector store.
 pub struct LanceBackend {
     /// Configuration for the LanceDB embedding provider.
@@ -111,26 +125,26 @@ impl LanceBackend {
             source_col,
         }
     }
+}
 
-    /// From a `RecordBatch`, return all values from a specified column as a `Vec<String>`.
-    ///
-    /// # Arguments
-    ///
-    /// * `batch`: A reference to a `RecordBatch`.
-    /// * `column`: The index of the column to use.
-    ///
-    /// # Returns
-    ///
-    /// A `Vec<String>` containing all the items in the specified column of the `RecordBatch`.
-    #[must_use]
-    pub fn get_column_from_batch(batch: &RecordBatch, column: usize) -> Vec<String> {
-        let results = batch.column(column).as_string::<i32>();
+/// From a `RecordBatch`, return all values from a specified column as a `Vec<String>`.
+///
+/// # Arguments
+///
+/// * `batch`: A reference to a `RecordBatch`.
+/// * `column`: The index of the column to use.
+///
+/// # Returns
+///
+/// A `Vec<String>` containing all the items in the specified column of the `RecordBatch`.
+#[must_use]
+pub fn get_column_from_batch(batch: &RecordBatch, column: usize) -> Vec<String> {
+    let results = batch.column(column).as_string::<i32>();
 
-        results
-            .iter()
-            .filter_map(|s| Some(s?.to_string()))
-            .collect()
-    }
+    results
+        .iter()
+        .filter_map(|s| Some(s?.to_string()))
+        .collect()
 }
 
 #[async_trait]
@@ -164,16 +178,20 @@ impl VectorBackend for LanceBackend {
                 ))
             })?;
 
-        let table_version = tbl.version().await.map_err(|_| {
-            LanceError::InvalidStateError(format!("The table {LANCE_TABLE_NAME} does not exist"))
+        let table_version = tbl.version().await.map_err(|e| {
+            LanceError::InvalidStateError(format!(
+                "Failed to get version of table {LANCE_TABLE_NAME}: {e}"
+            ))
         })?;
 
-        let table_names = db.table_names().execute().await.map_err(|_| {
-            LanceError::InvalidStateError(format!("The table {LANCE_TABLE_NAME} does not exist"))
+        let table_names = db.table_names().execute().await.map_err(|e| {
+            LanceError::InvalidStateError(format!("Failed to list table names: {e}"))
         })?;
 
-        let num_rows = tbl.count_rows(None).await.map_err(|_| {
-            LanceError::InvalidStateError(format!("The table {LANCE_TABLE_NAME} does not exist"))
+        let num_rows = tbl.count_rows(None).await.map_err(|e| {
+            LanceError::InvalidStateError(format!(
+                "Failed to count rows in table {LANCE_TABLE_NAME}: {e}"
+            ))
         })?;
 
         Ok(LanceMetadata {
@@ -185,18 +203,7 @@ impl VectorBackend for LanceBackend {
 
     /// Checks if an existing LanceDB exists and has a valid table
     async fn db_exists(&self) -> bool {
-        let uri = self.get_db_path();
-        if !PathBuf::from(&uri).exists() {
-            return false;
-        }
-
-        // Check if we can actually connect and open the table
-        let db_result = connect(&uri).execute().await;
-        if let Ok(db) = db_result {
-            db.open_table(LANCE_TABLE_NAME).execute().await.is_ok()
-        } else {
-            false
-        }
+        db_exists().await
     }
 
     /// Create indices for the database. This function creates two indices: an IVF-PQ index on the
@@ -341,8 +348,8 @@ impl VectorBackend for LanceBackend {
             let mut duplicate_keys = Vec::new();
 
             while let Some(batch) = stream.try_next().await? {
-                let by_values = LanceBackend::get_column_from_batch(&batch, by_idx);
-                let key_values = LanceBackend::get_column_from_batch(&batch, key_idx);
+                let by_values = get_column_from_batch(&batch, by_idx);
+                let key_values = get_column_from_batch(&batch, key_idx);
 
                 for (by_val, key_val) in by_values.into_iter().zip(key_values) {
                     if !seen_by_values.insert(by_val) {

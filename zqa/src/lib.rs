@@ -217,7 +217,9 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         state: State::default(),
         config: config.clone(),
         backend: LanceBackend::new(
-            config.get_embedding_config().unwrap(),
+            config.get_embedding_config().ok_or_else(|| {
+                CLIError::ConfigError("No embedding provider configured".to_string())
+            })?,
             Arc::new(schema),
             "pdf_text".into(),
         ),
