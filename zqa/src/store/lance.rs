@@ -82,6 +82,11 @@ impl LanceZoteroStore {
 
     /// Upsert Arrow record batches into the LanceDB table by Zotero library key.
     ///
+    /// TODO: We should probably deprecate this at some point in favor of the `upsert_items` from
+    /// the trait. I'm keeping this around for now to keep refactor scopes relatively manageable.
+    /// Ideally, we would not have any Lance-specific architecture, but currently, commands such as
+    /// `/process` rely on this.
+    ///
     /// # Errors
     ///
     /// Returns a [`CLIError`] if LanceDB insertion fails.
@@ -126,7 +131,7 @@ impl ZoteroStore for LanceZoteroStore {
         reranker_config: Option<&RerankProviderConfig>,
     ) -> Result<(Vec<ZoteroItem>, VectorSearchStats), CLIError> {
         let embedding_chars = query.len();
-        let items = <Self as ZoteroStore>::search(self, &query, limit).await?;
+        let items = <Self as ZoteroStore>::vector_search_raw(self, &query, limit).await?;
 
         let filtered_items: Vec<ZoteroItem> = items
             .into_iter()
@@ -223,16 +228,48 @@ impl ZoteroStore for LanceZoteroStore {
         self.backend.get_metadata().await.map_err(Into::into)
     }
 
+    /// Upserts the given items into the store.
+    ///
+    /// # Arguments
+    ///
+    /// * `items` - The items to upsert.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`CLIError`] if the upsert fails.
     async fn upsert_items(&self, items: Vec<ZoteroItem>) -> Result<(), Self::StoreError> {
         let batch = library_to_arrow(items, self.embedding_config.clone()).await?;
         self.upsert_batches(vec![batch]).await
     }
 
-    async fn search(&self, query: &str, limit: usize) -> Result<Vec<ZoteroItem>, Self::StoreError> {
+    /// Performs a raw vector search on the store, returning the top `limit` results.
+    ///
+    /// # Arguments
+    ///
+    /// * `query` - The query string.
+    /// * `limit` - The maximum number of results to return.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`CLIError`] if the search fails.
+    async fn vector_search_raw(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<ZoteroItem>, Self::StoreError> {
         let batches = self.backend.vector_search(query.to_string(), limit).await?;
         Ok(ZoteroItemSet::from(batches).into())
     }
 
+    /// Returns the items with the given keys from the store.
+    ///
+    /// # Arguments
+    ///
+    /// * `keys` - The keys of the items to return.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`CLIError`] if the search fails.
     async fn get_items_by_keys(
         &self,
         keys: &[String],
@@ -244,6 +281,15 @@ impl ZoteroStore for LanceZoteroStore {
         Ok(ZoteroItemSet::from(batches).into())
     }
 
+    /// Deletes the items with the given keys from the store.
+    ///
+    /// # Arguments
+    ///
+    /// * `keys` - The keys of the items to delete.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`CLIError`] if the deletion fails.
     async fn delete_by_library_keys(&self, keys: &[String]) -> Result<(), Self::StoreError> {
         self.backend
             .delete_rows(DbFields::LibraryKey.as_ref(), keys)
@@ -251,6 +297,11 @@ impl ZoteroStore for LanceZoteroStore {
             .map_err(Into::into)
     }
 
+    /// Deduplicates items in the store by title, keeping the first occurrence.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`CLIError`] if the deduplication fails.
     async fn dedup_by_title(&self) -> Result<usize, Self::StoreError> {
         self.backend
             .dedup_rows(DbFields::Title.as_ref(), DbFields::LibraryKey.as_ref())
