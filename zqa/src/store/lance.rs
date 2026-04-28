@@ -28,12 +28,12 @@ pub(crate) struct LanceZoteroStore {
     embedding_config: EmbeddingProviderConfig,
 }
 
-/// Statistics about the characters processed in a vector search call, used for cost estimation.
+/// Token statistics from a vector search call, used for cost estimation.
 pub struct VectorSearchStats {
-    /// Number of characters in the query string that was embedded.
-    pub(crate) embedding_chars: usize,
-    /// Total characters of documents + query sent to the reranker (0 if no reranker was used).
-    pub(crate) rerank_chars: usize,
+    /// Number of tokens in the query string that was embedded
+    pub(crate) embedding_tokens: usize,
+    /// Total tokens of documents + query sent to the reranker
+    pub(crate) rerank_tokens: usize,
 }
 
 impl LanceZoteroStore {
@@ -142,8 +142,8 @@ impl ZoteroStore for LanceZoteroStore {
             return Ok((
                 Vec::new(),
                 VectorSearchStats {
-                    embedding_chars,
-                    rerank_chars: 0,
+                    embedding_tokens,
+                    rerank_tokens: 0,
                 },
             ));
         }
@@ -152,8 +152,8 @@ impl ZoteroStore for LanceZoteroStore {
             return Ok((
                 filtered_items,
                 VectorSearchStats {
-                    embedding_chars,
-                    rerank_chars: 0,
+                    embedding_tokens,
+                    rerank_tokens: 0,
                 },
             ));
         };
@@ -175,8 +175,8 @@ impl ZoteroStore for LanceZoteroStore {
         Ok((
             reranked_items,
             VectorSearchStats {
-                embedding_chars,
-                rerank_chars,
+                embedding_tokens,
+                rerank_tokens,
             },
         ))
     }

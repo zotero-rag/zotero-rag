@@ -105,8 +105,8 @@ impl Tool for RetrievalTool {
                 .vector_search(input.query, 10, reranker_config.as_ref())
                 .await
                 .map_err(|e| format!("Search failed: {e}"))?;
-            embedding_chars.fetch_add(stats.embedding_chars as u64, Ordering::Relaxed);
-            rerank_chars.fetch_add(stats.rerank_chars as u64, Ordering::Relaxed);
+            embedding_chars.fetch_add(stats.embedding_tokens as u64, Ordering::Relaxed);
+            rerank_chars.fetch_add(stats.rerank_tokens as u64, Ordering::Relaxed);
 
             get_authors(&mut results).map_err(|e| format!("Failed to get authors: {e}"))?;
             log::info!(

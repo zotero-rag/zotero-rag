@@ -17,11 +17,7 @@ use rusqlite::Connection;
 use serde::Serialize;
 use thiserror::Error;
 use zqa_pdftools::parse::extract_text;
-use zqa_rag::embedding::common::EmbeddingProviderConfig;
-use zqa_rag::vector::backends::{
-    backend::VectorBackend,
-    lance::{LanceError, db_exists as lancedb_exists, get_column_from_batch},
-};
+use zqa_rag::vector::backends::backend::VectorBackend;
 
 use crate::store::common::ZoteroStore;
 use crate::{

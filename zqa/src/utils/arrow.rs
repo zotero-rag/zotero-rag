@@ -275,8 +275,12 @@ pub async fn full_library_to_arrow(
 mod tests {
     use arrow_array::RecordBatchIterator;
     use dotenv::dotenv;
-    use zqa_rag::constants::{
-        DEFAULT_VOYAGE_EMBEDDING_DIM, DEFAULT_VOYAGE_EMBEDDING_MODEL, DEFAULT_VOYAGE_RERANK_MODEL,
+    use zqa_rag::{
+        constants::{
+            DEFAULT_VOYAGE_EMBEDDING_DIM, DEFAULT_VOYAGE_EMBEDDING_MODEL,
+            DEFAULT_VOYAGE_RERANK_MODEL,
+        },
+        vector::backends::lance::LanceBackend,
     };
 
     use super::*;
