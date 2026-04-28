@@ -8,45 +8,42 @@ use schemars::{JsonSchema, schema_for};
 use serde::Deserialize;
 use serde_json::json;
 use tokio::task::JoinSet;
-use zqa_rag::{
-    llm::{
-        base::{ApiClient, ChatRequest, CompletionApiResponse},
-        errors::LLMError,
-        factory::LLMClient,
-        tools::Tool,
-    },
-    vector::backends::{backend::VectorBackend, lance::LanceBackend},
+use zqa_rag::llm::{
+    base::{ApiClient, ChatRequest, CompletionApiResponse},
+    errors::LLMError,
+    factory::LLMClient,
+    tools::Tool,
 };
 
 use crate::{
     cli::prompts::get_extraction_prompt,
-    utils::{
-        arrow::DbFields,
-        library::{ZoteroItem, ZoteroItemSet},
-        rag::ModelResponse,
-    },
+    store::common::ZoteroStore,
+    utils::{library::ZoteroItem, rag::ModelResponse},
 };
 
 pub(crate) const SUMMARIZATION_TOOL_NAME: &str = "summarization_tool";
 
 /// A tool to summarize Zotero papers with a specified ID.
 #[derive(Debug, Clone)]
-pub(crate) struct SummarizationTool {
+pub(crate) struct SummarizationTool<T: ZoteroStore> {
     pub(crate) llm_client: LLMClient,
     /// Backend for searching stored Zotero papers.
-    pub(crate) backend: LanceBackend,
+    pub(crate) store: Arc<T>,
     /// The input tokens used
     pub(crate) input_tokens: Arc<Mutex<u32>>,
     /// The output tokens used
     pub(crate) output_tokens: Arc<Mutex<u32>>,
 }
 
-impl SummarizationTool {
+impl<T> SummarizationTool<T>
+where
+    T: ZoteroStore,
+{
     /// Create a new [`SummarizationTool`] instance, given an LLM client and a backend.
-    pub fn new(llm_client: LLMClient, backend: LanceBackend) -> Self {
+    pub fn new(llm_client: LLMClient, store: Arc<T>) -> Self {
         Self {
             llm_client,
-            backend,
+            store,
             input_tokens: Arc::new(Mutex::new(0)),
             output_tokens: Arc::new(Mutex::new(0)),
         }
@@ -62,7 +59,10 @@ pub(crate) struct SummarizationToolInput {
     ids: Vec<String>,
 }
 
-impl Tool for SummarizationTool {
+impl<T> Tool for SummarizationTool<T>
+where
+    T: ZoteroStore + 'static,
+{
     fn name(&self) -> String {
         SUMMARIZATION_TOOL_NAME.into()
     }
@@ -88,26 +88,26 @@ impl Tool for SummarizationTool {
     /// A JSON object with a `"summaries"` key mapping to a list of summary strings,
     /// one per successfully processed paper, and an `"errors"` key mapping to a list
     /// of error messages for papers that failed to summarize.
-    fn call<'a>(
-        &'a self,
+    fn call(
+        &self,
         args: serde_json::Value,
-    ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, String>> + Send + 'a>> {
+    ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, String>> + Send + '_>> {
+        let store = Arc::clone(&self.store);
+        let input_tokens = Arc::clone(&self.input_tokens);
+        let output_tokens = Arc::clone(&self.output_tokens);
+        let llm_client = self.llm_client.clone();
         Box::pin(async move {
             let input: SummarizationToolInput =
                 serde_json::from_value(args).map_err(|e| format!("Invalid arguments: {e}"))?;
 
-            let results = self
-                .backend
-                .search_by_column(DbFields::LibraryKey.as_ref(), &input.ids)
+            let results: Vec<ZoteroItem> = store
+                .get_items_by_keys(&input.ids)
                 .await
                 .map_err(|e| format!("Search failed: {e}"))?;
 
-            let batches: ZoteroItemSet = results.into();
-            let items: Vec<ZoteroItem> = batches.into();
-
             let mut set = JoinSet::new();
-            for item in items {
-                let client = self.llm_client.clone();
+            for item in results {
+                let client = llm_client.clone();
                 let text = item.text;
                 let metadata = item.metadata;
                 let query_cloned = input.query.clone();
@@ -140,11 +140,11 @@ impl Tool for SummarizationTool {
                         summaries.push(summary);
 
                         // Update token counts (with error handling for mutex poisoning)
-                        if let Ok(mut input_tokens) = self.input_tokens.lock() {
-                            *input_tokens += response.input_tokens;
+                        if let Ok(mut toks) = input_tokens.lock() {
+                            *toks += response.input_tokens;
                         }
-                        if let Ok(mut output_tokens) = self.output_tokens.lock() {
-                            *output_tokens += response.output_tokens;
+                        if let Ok(mut toks) = output_tokens.lock() {
+                            *toks += response.output_tokens;
                         }
                     }
                     Err(e) => {
@@ -175,14 +175,16 @@ mod tests {
         config::{AnthropicConfig, LLMClientConfig},
         constants::DEFAULT_ANTHROPIC_MODEL_SMALL,
         llm::factory::get_client_with_config,
-        vector::backends::lance::LanceBackend,
     };
 
     use super::*;
-    use crate::cli::app::tests::{create_test_context, get_config};
     use crate::cli::handlers::library::handle_process_cmd;
+    use crate::{
+        cli::app::tests::{create_test_context, get_config},
+        store::lance::LanceZoteroStore,
+    };
 
-    fn make_tool() -> SummarizationTool {
+    fn make_tool() -> SummarizationTool<LanceZoteroStore> {
         let client = get_client_with_config(&LLMClientConfig::Anthropic(AnthropicConfig {
             api_key: env::var("ANTHROPIC_API_KEY").unwrap(),
             model: DEFAULT_ANTHROPIC_MODEL_SMALL.into(),
@@ -199,8 +201,8 @@ mod tests {
             arrow_schema::Field::new("file_path", arrow_schema::DataType::Utf8, false),
             arrow_schema::Field::new("pdf_text", arrow_schema::DataType::Utf8, false),
         ]));
-        let backend = LanceBackend::new(embedding_config, schema, "pdf_text".into());
-        SummarizationTool::new(client, backend)
+        let store = LanceZoteroStore::from_schema(embedding_config, schema);
+        SummarizationTool::new(client, Arc::new(store))
     }
 
     #[test]

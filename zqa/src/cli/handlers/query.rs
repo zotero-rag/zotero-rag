@@ -20,6 +20,7 @@ use zqa_rag::{
     providers::registry::provider_registry,
 };
 
+use crate::store::common::ZoteroStore;
 use crate::{
     cli::{
         errors::CLIError,
@@ -29,7 +30,6 @@ use crate::{
     common::Context,
     tools::{retrieval::RetrievalTool, summarization::SummarizationTool},
     utils::{
-        arrow::vector_search,
         library::get_authors,
         rag::ModelResponse,
         terminal::{DIM_TEXT, RESET},
@@ -86,12 +86,14 @@ where
     }
 
     let vector_search_start = Instant::now();
-    let (mut search_results, _) = vector_search(
-        search_term.clone(),
-        &ctx.backend,
-        ctx.config.get_reranker_config().as_ref(),
-    )
-    .await?;
+    let (mut search_results, _) = ctx
+        .store
+        .vector_search(
+            search_term.clone(),
+            10,
+            ctx.config.get_reranker_config().as_ref(),
+        )
+        .await?;
     let _ = get_authors(&mut search_results);
 
     let vector_search_duration = vector_search_start.elapsed();
@@ -208,11 +210,12 @@ where
         .as_ref()
         .map(|c| (c.provider_name().to_string(), c.model_name().to_string()));
 
-    let retrieval_tool = RetrievalTool::new(ctx.backend.clone(), reranker_config);
-    let retrieval_embedding_chars = std::sync::Arc::clone(&retrieval_tool.embedding_chars);
-    let retrieval_rerank_chars = std::sync::Arc::clone(&retrieval_tool.rerank_chars);
+    let store_arc = std::sync::Arc::new(ctx.store.clone());
+    let retrieval_tool = RetrievalTool::new(std::sync::Arc::clone(&store_arc), reranker_config);
+    let retrieval_embedding_tokens = std::sync::Arc::clone(&retrieval_tool.embedding_tokens);
+    let retrieval_rerank_tokens = std::sync::Arc::clone(&retrieval_tool.rerank_tokens);
 
-    let summarization_tool = SummarizationTool::new(llm_client.clone(), ctx.backend.clone());
+    let summarization_tool = SummarizationTool::new(llm_client.clone(), store_arc);
     let summarization_tool_clone = summarization_tool.clone();
     let mut tools: Vec<Box<dyn Tool>> =
         vec![Box::new(retrieval_tool), Box::new(summarization_tool)];
@@ -289,7 +292,7 @@ where
             }
 
             // Add embedding cost to session cost
-            let emb_chars = retrieval_embedding_chars.load(atomic::Ordering::Relaxed);
+            let emb_chars = retrieval_embedding_tokens.load(atomic::Ordering::Relaxed);
             if emb_chars > 0 {
                 let emb_provider = embedding_provider_name.clone();
                 let emb_model = embedding_model_name.clone();
@@ -313,7 +316,7 @@ where
             }
 
             // Add reranker cost to session cost
-            let rerank_chars_val = retrieval_rerank_chars.load(atomic::Ordering::Relaxed);
+            let rerank_chars_val = retrieval_rerank_tokens.load(atomic::Ordering::Relaxed);
             if rerank_chars_val > 0
                 && let Some((rerank_provider, rerank_model)) = reranker_provider_and_model
             {

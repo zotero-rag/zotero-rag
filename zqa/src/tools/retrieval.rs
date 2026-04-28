@@ -9,13 +9,10 @@ use std::{
 use schemars::{JsonSchema, schema_for};
 use serde::Deserialize;
 use serde_json::json;
-use zqa_rag::{
-    llm::tools::Tool, reranking::common::RerankProviderConfig,
-    vector::backends::lance::LanceBackend,
-};
+use zqa_rag::{llm::tools::Tool, reranking::common::RerankProviderConfig};
 
+use crate::store::common::ZoteroStore;
 use crate::utils::{
-    arrow::vector_search,
     library::get_authors,
     terminal::{DIM_TEXT, RESET},
 };
@@ -24,28 +21,31 @@ pub(crate) const RETRIEVAL_TOOL_NAME: &str = "retrieval_tool";
 
 /// A tool to perform vector search and reranking.
 #[derive(Debug)]
-pub(crate) struct RetrievalTool {
-    /// The backend used for vector search.
-    pub(crate) backend: LanceBackend,
+pub(crate) struct RetrievalTool<T>
+where
+    T: ZoteroStore,
+{
+    /// The vector store abstraction
+    pub(crate) store: Arc<T>,
     /// The reranker provider to use.
     pub(crate) reranker_config: Option<RerankProviderConfig>,
-    /// Accumulated character count of text sent to the embedding API across all calls.
-    pub(crate) embedding_chars: Arc<AtomicU64>,
-    /// Accumulated character count of text sent to the reranker API across all calls.
-    pub(crate) rerank_chars: Arc<AtomicU64>,
+    /// Accumulated token count of text sent to the embedding API across all calls.
+    pub(crate) embedding_tokens: Arc<AtomicU64>,
+    /// Accumulated token count of text sent to the reranker API across all calls.
+    pub(crate) rerank_tokens: Arc<AtomicU64>,
 }
 
-impl RetrievalTool {
+impl<T> RetrievalTool<T>
+where
+    T: ZoteroStore,
+{
     /// Create a new instance of the [`RetrievalTool`] given a backend and reranker config.
-    pub(crate) fn new(
-        backend: LanceBackend,
-        reranker_provider: Option<RerankProviderConfig>,
-    ) -> Self {
+    pub(crate) fn new(store: Arc<T>, reranker_provider: Option<RerankProviderConfig>) -> Self {
         Self {
-            backend,
+            store,
             reranker_config: reranker_provider,
-            embedding_chars: Arc::new(AtomicU64::new(0)),
-            rerank_chars: Arc::new(AtomicU64::new(0)),
+            embedding_tokens: Arc::new(AtomicU64::new(0)),
+            rerank_tokens: Arc::new(AtomicU64::new(0)),
         }
     }
 }
@@ -56,7 +56,10 @@ pub struct RetrievalToolInput {
     pub query: String,
 }
 
-impl Tool for RetrievalTool {
+impl<T> Tool for RetrievalTool<T>
+where
+    T: ZoteroStore + 'static,
+{
     fn name(&self) -> String {
         RETRIEVAL_TOOL_NAME.into()
     }
@@ -89,20 +92,20 @@ impl Tool for RetrievalTool {
     ) -> std::pin::Pin<Box<dyn Future<Output = Result<serde_json::Value, String>> + Send + '_>>
     {
         let start = Instant::now();
-        let backend = self.backend.clone();
         let reranker_config = self.reranker_config.clone();
-        let embedding_chars = Arc::clone(&self.embedding_chars);
-        let rerank_chars = Arc::clone(&self.rerank_chars);
+        let embedding_tokens = Arc::clone(&self.embedding_tokens);
+        let rerank_tokens = Arc::clone(&self.rerank_tokens);
+        let store = Arc::clone(&self.store);
 
         Box::pin(async move {
             let input: RetrievalToolInput =
                 serde_json::from_value(args).map_err(|e| format!("Invalid arguments: {e}"))?;
-            let (mut results, stats) =
-                vector_search(input.query, &backend, reranker_config.as_ref())
-                    .await
-                    .map_err(|e| format!("Search failed: {e}"))?;
-            embedding_chars.fetch_add(stats.embedding_chars as u64, Ordering::Relaxed);
-            rerank_chars.fetch_add(stats.rerank_chars as u64, Ordering::Relaxed);
+            let (mut results, stats) = store
+                .vector_search(input.query, 10, reranker_config.as_ref())
+                .await
+                .map_err(|e| format!("Search failed: {e}"))?;
+            embedding_tokens.fetch_add(stats.embedding_tokens as u64, Ordering::Relaxed);
+            rerank_tokens.fetch_add(stats.rerank_tokens as u64, Ordering::Relaxed);
 
             get_authors(&mut results).map_err(|e| format!("Failed to get authors: {e}"))?;
             log::info!(
@@ -142,11 +145,11 @@ mod tests {
         DEFAULT_VOYAGE_EMBEDDING_DIM, DEFAULT_VOYAGE_EMBEDDING_MODEL, DEFAULT_VOYAGE_RERANK_MODEL,
     };
     use zqa_rag::embedding::common::EmbeddingProviderConfig;
-    use zqa_rag::vector::backends::lance::LanceBackend;
 
     use super::*;
+    use crate::LanceZoteroStore;
 
-    fn make_tool() -> RetrievalTool {
+    fn make_tool() -> RetrievalTool<LanceZoteroStore> {
         let config = zqa_rag::config::VoyageAIConfig {
             api_key: String::new(),
             embedding_model: DEFAULT_VOYAGE_EMBEDDING_MODEL.into(),
@@ -159,12 +162,14 @@ mod tests {
             arrow_schema::Field::new("file_path", arrow_schema::DataType::Utf8, false),
             arrow_schema::Field::new("pdf_text", arrow_schema::DataType::Utf8, false),
         ]));
-        let backend = LanceBackend::new(
+        let store = LanceZoteroStore::from_schema(
             EmbeddingProviderConfig::VoyageAI(config.clone()),
             schema,
-            "pdf_text".into(),
         );
-        RetrievalTool::new(backend, Some(RerankProviderConfig::VoyageAI(config)))
+        RetrievalTool::new(
+            Arc::new(store),
+            Some(RerankProviderConfig::VoyageAI(config)),
+        )
     }
 
     #[test]

@@ -10,20 +10,16 @@ use std::sync::atomic::AtomicUsize;
 use std::thread;
 use std::time::Instant;
 
-use arrow_array::RecordBatch;
+use arrow_array::{RecordBatch, cast::AsArray};
 use directories::UserDirs;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use rusqlite::Connection;
 use serde::Serialize;
 use thiserror::Error;
 use zqa_pdftools::parse::extract_text;
-use zqa_rag::vector::backends::{
-    backend::VectorBackend,
-    lance::{LanceBackend, LanceError, get_column_from_batch},
-};
 
-use crate::izip;
-use crate::utils::arrow::DbFields;
+use crate::store::common::ZoteroStore;
+use crate::{izip, utils::arrow::DbFields};
 
 /// Gets the Zotero library path. Works on Linux, macOS, and Windows systems.
 /// On CI environments, returns a location to a toy library in assets/ instead.
@@ -153,16 +149,21 @@ impl From<rusqlite::Error> for LibraryParsingError {
     }
 }
 
-impl From<LanceError> for LibraryParsingError {
-    fn from(value: LanceError) -> Self {
-        LibraryParsingError::LanceDBError(value.to_string())
-    }
-}
-
 impl From<Box<dyn std::error::Error>> for LibraryParsingError {
     fn from(value: Box<dyn std::error::Error>) -> Self {
         LibraryParsingError::PdfParsingError(value.to_string())
     }
+}
+
+/// From a `RecordBatch`, return all values from a specified column as a `Vec<String>`.
+#[must_use]
+pub(crate) fn get_column_from_batch(batch: &RecordBatch, column: usize) -> Vec<String> {
+    let results = batch.column(column).as_string::<i32>();
+
+    results
+        .iter()
+        .filter_map(|s| Some(s?.to_string()))
+        .collect()
 }
 
 /// Assuming an existing `LanceDB` database exists, returns a list of items present in the Zotero
@@ -182,36 +183,13 @@ impl From<Box<dyn std::error::Error>> for LibraryParsingError {
 /// * `LibraryParsingError::SqliteError` if the library path was not found, the query could not be prepared, or
 ///   columns from the result set could not be parsed, or `query_map` fails.
 /// * `LibraryParsingError::LanceDBError` if fetching the rows from LanceDB fails.
-pub async fn get_new_library_items(
-    backend: &LanceBackend,
+pub async fn get_new_library_items<T: ZoteroStore>(
+    store: &T,
 ) -> Result<Vec<ZoteroItemMetadata>, LibraryParsingError> {
-    let db_items = backend
-        .get_items(&[
-            DbFields::LibraryKey.into(),
-            DbFields::Title.into(),
-            DbFields::FilePath.into(),
-        ])
-        .await?;
-
-    let metadata_vecs = db_items
-        .iter()
-        .flat_map(|batch| {
-            let library_keys = get_column_from_batch(batch, 0);
-            let titles = get_column_from_batch(batch, 1);
-            let file_paths = get_column_from_batch(batch, 2);
-
-            let zipped = izip!(library_keys, titles, file_paths).collect::<Vec<_>>();
-            zipped
-                .iter()
-                .map(|(key, title, path)| ZoteroItemMetadata {
-                    library_key: key.clone(),
-                    title: title.clone(),
-                    file_path: PathBuf::from(path.clone()),
-                    authors: None,
-                })
-                .collect::<Vec<_>>()
-        })
-        .collect::<Vec<_>>();
+    let metadata_vecs = store
+        .existing_item_metadata()
+        .await
+        .map_err(|e| LibraryParsingError::LanceDBError(e.to_string()))?;
 
     let library_items = parse_library_metadata(None, None)?;
 
@@ -425,15 +403,15 @@ fn get_pbar_ticks() -> String {
 /// * If a Mutex lock could not be acquired on the progress bar.
 /// * If the threads could not be joined.
 #[allow(clippy::too_many_lines)]
-pub async fn parse_library(
-    backend: &LanceBackend,
+pub async fn parse_library<T: ZoteroStore>(
+    store: &T,
     start_from: Option<usize>,
     limit: Option<usize>,
 ) -> Result<Vec<ZoteroItem>, LibraryParsingError> {
     let start_time = Instant::now();
 
-    let metadata = if backend.db_exists().await {
-        get_new_library_items(backend).await?
+    let metadata = if store.exists().await {
+        get_new_library_items(store).await?
     } else {
         parse_library_metadata(start_from, limit)?
     };
@@ -643,6 +621,7 @@ mod tests {
     };
 
     use super::*;
+    use crate::LanceZoteroStore;
     use crate::common::setup_logger;
 
     #[test]
@@ -732,8 +711,8 @@ mod tests {
             arrow_schema::Field::new("file_path", arrow_schema::DataType::Utf8, false),
             arrow_schema::Field::new("pdf_text", arrow_schema::DataType::Utf8, false),
         ]));
-        let backend = LanceBackend::new(embedding_config, schema, "pdf_text".into());
-        let items = parse_library(&backend, Some(0), Some(7)).await;
+        let store = LanceZoteroStore::from_schema(embedding_config, schema);
+        let items = parse_library(&store, Some(0), Some(7)).await;
         test_ok!(items);
 
         // Two of the items in the toy library are HTML files, so we actually

@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{path::PathBuf, sync::Arc};
 
 use arrow_array::{ArrayRef, RecordBatch, StringArray, cast::AsArray};
 use arrow_schema;
@@ -9,15 +9,11 @@ use zqa_rag::{
         EmbeddingProviderConfig, get_embedding_dims_by_provider, get_embedding_provider_with_config,
     },
     llm::errors::LLMError,
-    reranking::common::{RerankProviderConfig, get_reranking_provider_with_config},
-    vector::backends::{
-        backend::VectorBackend,
-        lance::{LanceBackend, LanceError, db_exists as lancedb_exists},
-    },
+    vector::backends::lance::{LANCE_TABLE_NAME, LanceError, get_db_uri},
 };
 
 use super::library::{LibraryParsingError, parse_library};
-use crate::utils::library::{ZoteroItem, ZoteroItemSet};
+use crate::{store::lance::LanceZoteroStore, utils::library::ZoteroItem};
 
 /// An enum containing the fields stored by our application in `LanceDB`, in order. Implementations
 /// `as_ref()` and `into()` are provided to convert this to `&str` and `String` respectively.
@@ -92,17 +88,35 @@ impl From<LanceError> for ArrowError {
     }
 }
 
+/// Checks whether the configured LanceDB database exists and contains the expected table.
+pub(crate) async fn lancedb_exists() -> bool {
+    let uri = get_db_uri();
+    if !PathBuf::from(&uri).exists() {
+        return false;
+    }
+
+    if let Ok(db) = lancedb::connect(&uri).execute().await {
+        db.open_table(LANCE_TABLE_NAME).execute().await.is_ok()
+    } else {
+        false
+    }
+}
+
 /// Get the schema for our `LanceDB` table. This is required for both getting library items and
 /// checkhealth.
 ///
 /// # Arguments
 ///
 /// * `embedding_provider` - The embedding used by the current DB.
+/// * `include_embeddings` - Whether to include the embeddings field in the schema.
 ///
 /// # Returns
 ///
 /// The schema in Arrow format.
-pub async fn get_schema(embedding_provider: EmbeddingProvider) -> arrow_schema::Schema {
+pub async fn get_schema(
+    embedding_provider: EmbeddingProvider,
+    include_embeddings: bool,
+) -> arrow_schema::Schema {
     // Convert ZoteroItemMetadata to something that can be converted to Arrow
     // Need to extract fields and create appropriate Arrow arrays
     let mut schema_fields = vec![
@@ -112,7 +126,7 @@ pub async fn get_schema(embedding_provider: EmbeddingProvider) -> arrow_schema::
         arrow_schema::Field::new(DbFields::PdfText, arrow_schema::DataType::Utf8, false),
     ];
 
-    if lancedb_exists().await {
+    if include_embeddings {
         schema_fields.push(arrow_schema::Field::new(
             DbFields::Embeddings,
             arrow_schema::DataType::FixedSizeList(
@@ -137,6 +151,7 @@ pub async fn get_schema(embedding_provider: EmbeddingProvider) -> arrow_schema::
 ///
 /// * `items` - The items to convert to a `RecordBatch`
 /// * `embedding_config` - Configuration for the embedding provider to use when computing embeddings.
+/// * `include_embeddings` - Whether to include the embeddings field in the schema.
 ///
 /// # Errors
 ///
@@ -150,8 +165,9 @@ pub async fn get_schema(embedding_provider: EmbeddingProvider) -> arrow_schema::
 pub async fn library_to_arrow(
     items: Vec<ZoteroItem>,
     embedding_config: EmbeddingProviderConfig,
+    include_embeddings: bool,
 ) -> Result<RecordBatch, ArrowError> {
-    let schema = Arc::new(get_schema(embedding_config.provider()).await);
+    let schema = Arc::new(get_schema(embedding_config.provider(), include_embeddings).await);
 
     // Convert ZoteroItemMetadata to Arrow arrays
     let library_keys = StringArray::from(
@@ -194,7 +210,7 @@ pub async fn library_to_arrow(
         Arc::new(pdf_texts.clone()) as ArrayRef,
     ];
 
-    if lancedb_exists().await {
+    if include_embeddings {
         let embedding_provider = get_embedding_provider_with_config(&embedding_config)?;
         let query_vec = embedding_provider.compute_source_embeddings(Arc::new(pdf_texts))?;
         let query_vec = query_vec.as_fixed_size_list();
@@ -232,119 +248,20 @@ pub async fn library_to_arrow(
 ///
 /// # Arguments
 ///
-/// * `config` - Configuration containing embedding provider information.
+/// * `store` - [`LanceZoteroStore`] with configuration
 /// * `start_from` - An optional offset for the SQL query. Useful for debugging, pagination,
 ///   multi-threading, etc.
 /// * `limit` - Optional limit, meant to be used in conjunction with `start_from`.
 pub async fn full_library_to_arrow(
-    backend: &LanceBackend,
+    store: &LanceZoteroStore,
     start_from: Option<usize>,
     limit: Option<usize>,
 ) -> Result<RecordBatch, ArrowError> {
-    let lib_items = parse_library(backend, start_from, limit).await?;
+    let lib_items = parse_library(store, start_from, limit).await?;
     log::info!("Finished parsing library items.");
 
-    library_to_arrow(lib_items, backend.embedding_config().clone()).await
-}
-
-/// Statistics about the characters processed in a vector search call, used for cost estimation.
-pub struct VectorSearchStats {
-    /// Number of characters in the query string that was embedded.
-    pub embedding_chars: usize,
-    /// Total characters of documents + query sent to the reranker (0 if no reranker was used).
-    pub rerank_chars: usize,
-}
-
-/// Perform vector search using a query and a specified embedding method.
-///
-/// This function is a Zotero-specific wrapper for the `vector_search` function in the `rag` crate.
-/// It is implemented here since the knowledge of which column is which in the `RecordBatch`es that
-/// we create is in this file, so there's better locality-of-behaviour; this also makes the
-/// underlying implementation of `vector_search` simpler and potentially allows other RAG
-/// applications to be built on top of it.
-///
-/// TODO: A limit of 10 results is currently returned, but this will be changed in a future version.
-///
-/// In some sense, this function is the reverse of the `library_to_arrow` function, which creates a
-/// `RecordBatch` from vectors after calling `parse_library`.
-///
-/// This function also uses a reranking provider to perform reranking of the vector search results.
-///
-/// # Arguments
-///
-/// * `query` - The query to search the `LanceDB` table for.
-/// * `embedding_config` - The embedding provider configuration. Note that this must be the same
-///   embedding provider used when initially creating the database.
-/// * `reranker_config` - The reranker provider to use.
-///
-/// # Returns
-///
-/// A tuple of the matching `ZoteroItem`s and [`VectorSearchStats`] with character counts used for
-/// cost estimation. Returns an `ArrowError` that wraps the underlying `LanceError` if the `rag`
-/// crate's `vector_search` is unsuccessful for any reason.
-///
-/// # Errors
-///
-/// * `ArrowError::LanceError` if vector search fails.
-/// * `ArrowError::LLMError` if reranking fails.
-pub async fn vector_search(
-    query: String,
-    backend: &LanceBackend,
-    reranker_config: Option<&RerankProviderConfig>,
-) -> Result<(Vec<ZoteroItem>, VectorSearchStats), ArrowError> {
-    let embedding_chars = query.len();
-    let batches = backend.vector_search(query.clone(), 10).await?;
-
-    let items: ZoteroItemSet = batches.into();
-    let items: Vec<ZoteroItem> = items.into();
-
-    let filtered_items: Vec<ZoteroItem> = items
-        .into_iter()
-        .filter(|item| !item.text.trim().is_empty())
-        .collect();
-
-    if filtered_items.is_empty() {
-        return Ok((
-            Vec::new(),
-            VectorSearchStats {
-                embedding_chars,
-                rerank_chars: 0,
-            },
-        ));
-    }
-
-    let Some(reranker) = reranker_config else {
-        return Ok((
-            filtered_items,
-            VectorSearchStats {
-                embedding_chars,
-                rerank_chars: 0,
-            },
-        ));
-    };
-
-    let rerank_provider = get_reranking_provider_with_config(reranker)?;
-    let item_strings = filtered_items
-        .iter()
-        .map(|f| f.text.as_str())
-        .collect::<Vec<_>>();
-
-    let rerank_chars = item_strings.iter().map(|s| s.len()).sum::<usize>() + query.len();
-
-    let indices = rerank_provider.rerank(&item_strings, &query).await?;
-
-    let reranked_items = indices
-        .into_iter()
-        .filter_map(|idx| filtered_items.get(idx).cloned())
-        .collect();
-
-    Ok((
-        reranked_items,
-        VectorSearchStats {
-            embedding_chars,
-            rerank_chars,
-        },
-    ))
+    let include_embeddings = lancedb_exists().await;
+    library_to_arrow(lib_items, store.get_embedding_config(), include_embeddings).await
 }
 
 #[cfg(test)]
@@ -393,13 +310,9 @@ mod tests {
 
         let record_batch = temp_env::async_with_vars([("LANCEDB_URI", Some(&db_uri))], async {
             let embedding_config = config.get_embedding_config().unwrap();
-            let schema = Arc::new(get_schema(embedding_config.provider()).await);
-            let backend = LanceBackend::new(
-                embedding_config,
-                schema,
-                DbFields::PdfText.as_ref().to_string(),
-            );
-            full_library_to_arrow(&backend, Some(0), Some(5)).await
+            let schema = Arc::new(get_schema(embedding_config.provider(), true).await);
+            let store = LanceZoteroStore::from_schema(embedding_config, schema);
+            full_library_to_arrow(&store, Some(0), Some(5)).await
         })
         .await;
 

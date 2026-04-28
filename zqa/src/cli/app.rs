@@ -166,12 +166,12 @@ pub(crate) mod tests {
     use zqa_rag::embedding::common::EmbeddingProviderConfig;
     use zqa_rag::llm::tools::Tool;
     use zqa_rag::reranking::common::RerankProviderConfig;
-    use zqa_rag::vector::backends::lance::LanceBackend;
 
     use super::dispatch_command;
     use crate::common::Context;
     use crate::common::State;
     use crate::config::{Config, VoyageAIConfig};
+    use crate::store::lance::LanceZoteroStore;
     use crate::tools::retrieval::RetrievalTool;
 
     pub(crate) fn get_config() -> Config {
@@ -207,20 +207,18 @@ pub(crate) mod tests {
 
         let config = get_config();
 
+        let embedding_config = config.get_embedding_config().unwrap();
+
         Context {
             state: State::default(),
-            backend: LanceBackend::new(
-                config.get_embedding_config().unwrap(),
-                Arc::new(schema),
-                "pdf_text".into(),
-            ),
+            store: LanceZoteroStore::from_schema(embedding_config, schema.into()),
             config,
             out,
             err,
         }
     }
 
-    fn make_retrieval_tool(_schema_key: &str) -> RetrievalTool {
+    fn make_retrieval_tool(_schema_key: &str) -> RetrievalTool<LanceZoteroStore> {
         let api_key = std::env::var("VOYAGE_AI_API_KEY").unwrap_or_default();
         let config = zqa_rag::config::VoyageAIConfig {
             api_key,
@@ -234,12 +232,14 @@ pub(crate) mod tests {
             arrow_schema::Field::new("file_path", arrow_schema::DataType::Utf8, false),
             arrow_schema::Field::new("pdf_text", arrow_schema::DataType::Utf8, false),
         ]));
-        let backend = LanceBackend::new(
+        let store = LanceZoteroStore::from_schema(
             EmbeddingProviderConfig::VoyageAI(config.clone()),
             schema,
-            "pdf_text".into(),
         );
-        RetrievalTool::new(backend, Some(RerankProviderConfig::VoyageAI(config)))
+        RetrievalTool::new(
+            Arc::new(store),
+            Some(RerankProviderConfig::VoyageAI(config)),
+        )
     }
 
     #[retry(3)]
