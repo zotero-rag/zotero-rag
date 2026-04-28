@@ -13,7 +13,7 @@ use zqa_rag::{
 };
 
 use super::library::{LibraryParsingError, parse_library};
-use crate::{config::Config, utils::library::ZoteroItem};
+use crate::{store::lance::LanceZoteroStore, utils::library::ZoteroItem};
 
 /// An enum containing the fields stored by our application in `LanceDB`, in order. Implementations
 /// `as_ref()` and `into()` are provided to convert this to `&str` and `String` respectively.
@@ -253,34 +253,23 @@ pub async fn library_to_arrow(
 ///   multi-threading, etc.
 /// * `limit` - Optional limit, meant to be used in conjunction with `start_from`.
 pub async fn full_library_to_arrow(
-    backend: &LanceBackend,
+    store: &LanceZoteroStore,
     start_from: Option<usize>,
     limit: Option<usize>,
 ) -> Result<RecordBatch, ArrowError> {
-    let lib_items = parse_library(backend, start_from, limit).await?;
+    let lib_items = parse_library(store, start_from, limit).await?;
     log::info!("Finished parsing library items.");
 
     let include_embeddings = lancedb_exists().await;
-    library_to_arrow(
-        lib_items,
-        config.get_embedding_config().ok_or(ArrowError::Other(
-            "Failed to get embedding config from application config".to_string(),
-        ))?,
-        include_embeddings,
-    )
-    .await
+    library_to_arrow(lib_items, store.get_embedding_config(), include_embeddings).await
 }
 
 #[cfg(test)]
 mod tests {
     use arrow_array::RecordBatchIterator;
     use dotenv::dotenv;
-    use zqa_rag::{
-        constants::{
-            DEFAULT_VOYAGE_EMBEDDING_DIM, DEFAULT_VOYAGE_EMBEDDING_MODEL,
-            DEFAULT_VOYAGE_RERANK_MODEL,
-        },
-        vector::backends::lance::LanceBackend,
+    use zqa_rag::constants::{
+        DEFAULT_VOYAGE_EMBEDDING_DIM, DEFAULT_VOYAGE_EMBEDDING_MODEL, DEFAULT_VOYAGE_RERANK_MODEL,
     };
 
     use super::*;
@@ -321,13 +310,9 @@ mod tests {
 
         let record_batch = temp_env::async_with_vars([("LANCEDB_URI", Some(&db_uri))], async {
             let embedding_config = config.get_embedding_config().unwrap();
-            let schema = Arc::new(get_schema(embedding_config.provider()).await);
-            let backend = LanceBackend::new(
-                embedding_config,
-                schema,
-                DbFields::PdfText.as_ref().to_string(),
-            );
-            full_library_to_arrow(&backend, Some(0), Some(5)).await
+            let schema = Arc::new(get_schema(embedding_config.provider(), true).await);
+            let store = LanceZoteroStore::from_schema(embedding_config, schema);
+            full_library_to_arrow(&store, Some(0), Some(5)).await
         })
         .await;
 

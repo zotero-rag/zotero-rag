@@ -23,7 +23,8 @@ use crate::{
 };
 
 /// Zotero-specific store backed by LanceDB.
-pub(crate) struct LanceZoteroStore {
+#[derive(Clone)]
+pub struct LanceZoteroStore {
     backend: LanceBackend,
     embedding_config: EmbeddingProviderConfig,
 }
@@ -48,10 +49,7 @@ impl LanceZoteroStore {
 
     /// Create a Lance-backed Zotero store from an embedding config and Arrow schema.
     #[must_use]
-    pub(crate) fn from_schema(
-        embedding_config: EmbeddingProviderConfig,
-        schema: Arc<Schema>,
-    ) -> Self {
+    pub fn from_schema(embedding_config: EmbeddingProviderConfig, schema: Arc<Schema>) -> Self {
         let backend = LanceBackend::new(
             embedding_config.clone(),
             schema,
@@ -61,8 +59,14 @@ impl LanceZoteroStore {
         Self::new(backend, embedding_config)
     }
 
+    /// Get a read-only embedding config
+    #[must_use]
+    pub fn get_embedding_config(&self) -> EmbeddingProviderConfig {
+        self.embedding_config.clone()
+    }
+
     /// Create a Lance-backed Zotero store from an embedding configuration.
-    pub(crate) async fn from_embedding_config(embedding_config: EmbeddingProviderConfig) -> Self {
+    pub async fn from_embedding_config(embedding_config: EmbeddingProviderConfig) -> Self {
         let schema = Arc::new(get_schema(embedding_config.provider(), true).await);
         Self::from_schema(embedding_config, schema)
     }
@@ -130,7 +134,7 @@ impl ZoteroStore for LanceZoteroStore {
         limit: usize,
         reranker_config: Option<&RerankProviderConfig>,
     ) -> Result<(Vec<ZoteroItem>, VectorSearchStats), CLIError> {
-        let embedding_chars = query.len();
+        let embedding_tokens = query.len();
         let items = <Self as ZoteroStore>::vector_search_raw(self, &query, limit).await?;
 
         let filtered_items: Vec<ZoteroItem> = items
@@ -164,7 +168,7 @@ impl ZoteroStore for LanceZoteroStore {
             .map(|f| f.text.as_str())
             .collect::<Vec<_>>();
 
-        let rerank_chars = item_strings.iter().map(|s| s.len()).sum::<usize>() + query.len();
+        let rerank_tokens = item_strings.iter().map(|s| s.len()).sum::<usize>() + query.len();
         let indices = rerank_provider.rerank(&item_strings, &query).await?;
 
         let reranked_items = indices

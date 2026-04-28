@@ -3,10 +3,7 @@
 #![allow(clippy::cast_precision_loss)]
 #![allow(clippy::cast_possible_wrap)]
 
-use std::{
-    io::{self, IsTerminal, stderr, stdout},
-    sync::Arc,
-};
+use std::io::{self, IsTerminal, stderr, stdout};
 
 use clap::Parser;
 
@@ -23,16 +20,16 @@ use cli::app::cli;
 use common::{Args, Context, setup_logger};
 use config::Config;
 use state::{check_or_create_first_run_file, oobe};
+pub use store::lance::LanceZoteroStore;
 pub use utils::arrow::full_library_to_arrow;
 use zqa_rag::{
     config::LLMClientConfig, embedding::common::EmbeddingProviderConfig,
-    reranking::common::RerankProviderConfig, vector::backends::lance::LanceBackend,
+    reranking::common::RerankProviderConfig,
 };
 
 use crate::{
     cli::errors::CLIError,
     common::State,
-    store::lance::LanceZoteroStore,
     utils::terminal::{RED, RED_BOLD, RESET, YELLOW, YELLOW_BOLD},
 };
 

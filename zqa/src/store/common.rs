@@ -8,7 +8,7 @@ use crate::{
 
 /// An application-level trait for Zotero store implementations.
 #[async_trait]
-pub trait ZoteroStore {
+pub trait ZoteroStore: Send + Sync {
     /// The error type returned by store operations.
     type StoreError: std::error::Error + Send + Sync;
     /// The metadata type associated with the store.

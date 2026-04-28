@@ -15,7 +15,7 @@ use crate::{
     full_library_to_arrow,
     store::common::ZoteroStore,
     utils::{
-        arrow::{DbFields, library_to_arrow},
+        arrow::library_to_arrow,
         library::{ZoteroItem, ZoteroItemSet, get_new_library_items, parse_library_metadata},
     },
 };
@@ -74,7 +74,7 @@ where
     const WARNING_THRESHOLD: usize = 100;
 
     let item_metadata = if ctx.store.exists().await {
-        get_new_library_items(&ctx.backend).await
+        get_new_library_items(&ctx.store).await
     } else {
         parse_library_metadata(None, None)
     };
@@ -106,7 +106,7 @@ where
         }
     }
 
-    let record_batch = full_library_to_arrow(&ctx.backend, None, None).await?;
+    let record_batch = full_library_to_arrow(&ctx.store, None, None).await?;
     let schema = record_batch.schema();
     let batches = vec![record_batch.clone()];
 

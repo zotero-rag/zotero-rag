@@ -12,7 +12,7 @@ use fern;
 use humantime;
 use log::LevelFilter;
 use zqa_pdftools::parse::ExtractedContent;
-use zqa_rag::{llm::base::ChatHistoryItem, vector::backends::lance::LanceBackend};
+use zqa_rag::llm::base::ChatHistoryItem;
 
 use crate::{config::Config, store::lance::LanceZoteroStore};
 
