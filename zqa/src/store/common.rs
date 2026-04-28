@@ -1,10 +1,15 @@
 use async_trait::async_trait;
 use zqa_rag::reranking::common::RerankProviderConfig;
 
-use crate::{
-    store::lance::VectorSearchStats,
-    utils::library::{ZoteroItem, ZoteroItemMetadata},
-};
+use crate::utils::library::{ZoteroItem, ZoteroItemMetadata};
+
+/// Token statistics from a vector search call, used for cost estimation.
+pub struct VectorSearchStats {
+    /// Number of tokens in the query string that was embedded
+    pub(crate) embedding_tokens: usize,
+    /// Total tokens of documents + query sent to the reranker
+    pub(crate) rerank_tokens: usize,
+}
 
 /// An application-level trait for Zotero store implementations.
 #[async_trait]

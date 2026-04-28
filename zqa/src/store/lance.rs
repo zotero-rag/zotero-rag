@@ -12,6 +12,7 @@ use zqa_rag::{
     },
 };
 
+use crate::store::common::VectorSearchStats;
 use crate::{
     cli::errors::CLIError,
     config::Config,
@@ -27,14 +28,6 @@ use crate::{
 pub struct LanceZoteroStore {
     backend: LanceBackend,
     embedding_config: EmbeddingProviderConfig,
-}
-
-/// Token statistics from a vector search call, used for cost estimation.
-pub struct VectorSearchStats {
-    /// Number of tokens in the query string that was embedded
-    pub(crate) embedding_tokens: usize,
-    /// Total tokens of documents + query sent to the reranker
-    pub(crate) rerank_tokens: usize,
 }
 
 impl LanceZoteroStore {

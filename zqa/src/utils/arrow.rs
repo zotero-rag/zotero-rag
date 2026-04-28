@@ -248,7 +248,7 @@ pub async fn library_to_arrow(
 ///
 /// # Arguments
 ///
-/// * `config` - Configuration containing embedding provider information.
+/// * `store` - [`LanceZoteroStore`] with configuration
 /// * `start_from` - An optional offset for the SQL query. Useful for debugging, pagination,
 ///   multi-threading, etc.
 /// * `limit` - Optional limit, meant to be used in conjunction with `start_from`.
