@@ -58,9 +58,9 @@ async fn send_ollama_request(
 impl<T: HttpClient> ApiClient for OllamaClient<T> {
     /// Send a request to the `ollama` API, processing tool calls as necessary. Returns a final
     /// response after all tool calls are processed and sent back to the API.
-    async fn send_message<'a>(
+    async fn send_message(
         &self,
-        request: &'a ChatRequest<'a>,
+        request: &ChatRequest<'_>,
     ) -> Result<CompletionApiResponse, LLMError> {
         // Use config if available, otherwise fall back to env vars
         let (model, max_tokens, base_url) = if let Some(ref config) = self.config {

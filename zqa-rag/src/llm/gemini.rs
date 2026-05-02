@@ -318,9 +318,9 @@ fn map_response_to_chat_contents(contents: &[GeminiPart]) -> Vec<ChatHistoryCont
 }
 
 impl<T: HttpClient> ApiClient for GeminiClient<T> {
-    async fn send_message<'a>(
+    async fn send_message(
         &self,
-        request: &'a ChatRequest<'a>,
+        request: &ChatRequest<'_>,
     ) -> Result<CompletionApiResponse, LLMError> {
         let key = get_gemini_api_key()?;
         let model = match &self.config {

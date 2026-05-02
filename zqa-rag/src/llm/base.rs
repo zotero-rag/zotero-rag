@@ -177,8 +177,8 @@ pub struct CompletionApiResponse {
 #[allow(async_fn_in_trait)]
 pub trait ApiClient {
     /// Send a request to the API and return the response.
-    async fn send_message<'a>(
+    async fn send_message(
         &self,
-        request: &'a ChatRequest<'a>,
+        request: &ChatRequest<'_>,
     ) -> Result<CompletionApiResponse, LLMError>;
 }

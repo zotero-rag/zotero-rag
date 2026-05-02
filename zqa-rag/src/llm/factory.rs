@@ -79,9 +79,9 @@ impl LLMClient {
 
 // Implement ApiClient for LLMClient to delegate to the inner implementations
 impl ApiClient for LLMClient {
-    async fn send_message<'a>(
+    async fn send_message(
         &self,
-        message: &'a ChatRequest<'a>,
+        message: &ChatRequest<'_>,
     ) -> Result<crate::llm::base::CompletionApiResponse, LLMError> {
         match self {
             LLMClient::Anthropic(client) => client.send_message(message).await,

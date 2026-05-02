@@ -493,9 +493,9 @@ impl<T: HttpClient> ApiClient for OpenAIClient<T> {
     /// Send a request to the OpenAI Responses API, processing tool calls as necessary.
     /// Returns a final response after all tool calls are processed and sent back.
     #[allow(clippy::too_many_lines)]
-    async fn send_message<'a>(
+    async fn send_message(
         &self,
-        request: &'a ChatRequest<'a>,
+        request: &ChatRequest<'_>,
     ) -> Result<CompletionApiResponse, super::errors::LLMError> {
         // Use config if available, otherwise fall back to env vars
         let (api_key, model, _) = if let Some(ref config) = self.config {
