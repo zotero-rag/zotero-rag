@@ -42,59 +42,37 @@ impl LLMClient {
     #[must_use]
     pub fn get_reasoning_config(&self) -> Option<ReasoningConfig> {
         match self {
-            LLMClient::Anthropic(client) => client
-                .config
-                .clone()
-                .unwrap_or_default()
-                .reasoning_budget
-                .map(|budget| ReasoningConfig {
-                    max_tokens: Some(budget),
-                    effort: None,
-                    summary: None,
-                }),
-            LLMClient::Ollama(client) => client
-                .config
-                .clone()
-                .unwrap_or_default()
-                .reasoning_budget
-                .map(|budget| ReasoningConfig {
-                    max_tokens: Some(budget),
-                    effort: None,
-                    summary: None,
-                }),
-            LLMClient::OpenAI(client) => client
-                .config
-                .clone()
-                .unwrap_or_default()
-                .reasoning_effort
-                .map(|effort| ReasoningConfig {
-                    max_tokens: None,
-                    effort: Some(effort),
-                    summary: None,
-                }),
-            LLMClient::OpenRouter(client) => {
-                let config = client.config.clone().unwrap_or_default();
-
+            LLMClient::Anthropic(client) => client.config.as_ref().map(|c| ReasoningConfig {
+                max_tokens: c.reasoning_budget,
+                effort: None,
+                summary: None,
+            }),
+            LLMClient::Ollama(client) => client.config.as_ref().map(|c| ReasoningConfig {
+                max_tokens: c.reasoning_budget,
+                effort: None,
+                summary: None,
+            }),
+            LLMClient::OpenAI(client) => client.config.as_ref().map(|c| ReasoningConfig {
+                max_tokens: None,
+                effort: c.reasoning_effort.clone(),
+                summary: None,
+            }),
+            LLMClient::OpenRouter(client) => client.config.as_ref().map(|config| {
                 if config.reasoning_effort.is_none() && config.reasoning_budget.is_none() {
                     return None;
                 }
 
                 Some(ReasoningConfig {
                     max_tokens: config.reasoning_budget,
-                    effort: config.reasoning_effort,
+                    effort: config.reasoning_effort.clone(),
                     summary: None,
                 })
-            }
-            LLMClient::Gemini(client) => client
-                .config
-                .clone()
-                .unwrap_or_default()
-                .reasoning_budget
-                .map(|budget| ReasoningConfig {
-                    max_tokens: Some(budget),
-                    effort: None,
-                    summary: None,
-                }),
+            })?,
+            LLMClient::Gemini(client) => client.config.as_ref().map(|c| ReasoningConfig {
+                max_tokens: c.reasoning_budget,
+                effort: None,
+                summary: None,
+            }),
         }
     }
 }
