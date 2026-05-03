@@ -17,7 +17,7 @@ use crate::llm::anthropic::{
     AnthropicChatHistoryItem, AnthropicRequest, AnthropicResponse, AnthropicResponseContent,
     build_anthropic_messages_and_tools, map_response_to_chat_contents,
 };
-use crate::llm::base::ContentType;
+use crate::llm::base::{ContentType, MessageRole};
 use crate::llm::tools::process_tool_calls;
 
 /// Ollama supports the Anthropic Messages API, so we can reuse structs.
@@ -105,7 +105,7 @@ impl<T: HttpClient> ApiClient for OllamaClient<T> {
 
         // Append the contents
         chat_history.push(AnthropicChatHistoryItem {
-            role: "assistant".into(),
+            role: MessageRole::Assistant,
             content: response.content.clone(),
         });
 
@@ -140,7 +140,7 @@ impl<T: HttpClient> ApiClient for OllamaClient<T> {
 
             // Append the new response to chat history
             chat_history.push(AnthropicChatHistoryItem {
-                role: "assistant".into(),
+                role: MessageRole::Assistant,
                 content: response.content.clone(),
             });
 
@@ -191,7 +191,7 @@ mod tests {
         AnthropicTextResponseContent, AnthropicToolUseResponseContent, AnthropicUsageStats,
     };
     use crate::llm::base::{
-        ApiClient, ChatHistoryContent, ChatHistoryItem, ChatRequest, USER_ROLE,
+        ApiClient, ChatHistoryContent, ChatHistoryItem, ChatRequest, MessageRole,
     };
     use crate::llm::tools::test_utils::MockTool;
 
@@ -259,7 +259,7 @@ mod tests {
         let tool_call_response = AnthropicResponse {
             id: "msg-1".into(),
             model: DEFAULT_OLLAMA_MODEL.into(),
-            role: "assistant".into(),
+            role: MessageRole::Assistant,
             stop_reason: "tool_use".into(),
             stop_sequence: None,
             usage: AnthropicUsageStats {
@@ -282,7 +282,7 @@ mod tests {
         let text_response = AnthropicResponse {
             id: "msg-2".into(),
             model: DEFAULT_OLLAMA_MODEL.into(),
-            role: "assistant".into(),
+            role: MessageRole::Assistant,
             stop_reason: "end_turn".into(),
             stop_sequence: None,
             usage: AnthropicUsageStats {
@@ -355,7 +355,7 @@ mod tests {
         let second_message = ChatRequest {
             chat_history: vec![
                 ChatHistoryItem {
-                    role: USER_ROLE.into(),
+                    role: MessageRole::User,
                     content: vec![ChatHistoryContent::Text(first_message.message.clone())],
                 },
                 chat_history_contents,

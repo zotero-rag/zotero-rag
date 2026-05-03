@@ -151,7 +151,7 @@ mod tests {
     use chrono::Local;
     use temp_env;
     use zqa_macros::{test_contains, test_eq};
-    use zqa_rag::llm::base::{ASSISTANT_ROLE, ChatHistoryContent, ChatHistoryItem, USER_ROLE};
+    use zqa_rag::llm::base::{ChatHistoryContent, ChatHistoryItem, MessageRole};
 
     use super::resume_with_reader;
     use crate::{
@@ -178,18 +178,18 @@ mod tests {
         temp_env::with_var("ZQA_STATE_DIR", Some(temp_dir.path()), || {
             let history_a = vec![
                 ChatHistoryItem {
-                    role: USER_ROLE.into(),
+                    role: MessageRole::User,
                     content: vec![ChatHistoryContent::Text("What is attention?".into())],
                 },
                 ChatHistoryItem {
-                    role: ASSISTANT_ROLE.into(),
+                    role: MessageRole::Assistant,
                     content: vec![ChatHistoryContent::Text(
                         "Attention is a mechanism...".into(),
                     )],
                 },
             ];
             let history_b = vec![ChatHistoryItem {
-                role: USER_ROLE.into(),
+                role: MessageRole::User,
                 content: vec![ChatHistoryContent::Text(
                     "Tell me about transformers.".into(),
                 )],
@@ -232,7 +232,7 @@ mod tests {
         temp_env::with_var("ZQA_STATE_DIR", Some(temp_dir.path()), || {
             save_conversation(&SavedChatHistory {
                 history: vec![ChatHistoryItem {
-                    role: USER_ROLE.into(),
+                    role: MessageRole::User,
                     content: vec![ChatHistoryContent::Text("Hello".into())],
                 }],
                 date: Local::now(),

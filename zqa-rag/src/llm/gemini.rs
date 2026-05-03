@@ -15,7 +15,7 @@ use crate::constants::{
 };
 use crate::http_client::HttpClient;
 use crate::llm::base::{
-    ChatHistoryContent, ChatHistoryItem, ContentType, ReasoningConfig, ToolCallRequest, USER_ROLE,
+    ChatHistoryContent, ChatHistoryItem, ContentType, MessageRole, ReasoningConfig, ToolCallRequest,
 };
 use crate::llm::tools::{GEMINI_SCHEMA_KEY, SerializedTool, get_owned_tools, process_tool_calls};
 
@@ -63,18 +63,31 @@ pub(crate) enum GeminiPart {
     },
 }
 
+/// Gemini uses "model", not "assistant", so we need our own enum.
+#[derive(Copy, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum GeminiMessageRole {
+    /// The model response.
+    Model,
+    /// The user message or response.
+    User,
+}
+
 /// Content for requests to the Gemini API
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct GeminiContent {
-    role: String,
+    role: GeminiMessageRole,
     parts: Vec<GeminiPart>,
 }
 
 impl From<ChatHistoryItem> for GeminiContent {
     fn from(value: ChatHistoryItem) -> Self {
         Self {
-            role: value.role,
+            role: match value.role {
+                MessageRole::User | MessageRole::Tool => GeminiMessageRole::User,
+                MessageRole::Assistant => GeminiMessageRole::Model,
+            },
             parts: value
                 .content
                 .into_iter()
@@ -183,7 +196,7 @@ fn build_gemini_request_data<'a>(
         req.chat_history.iter().cloned().map(Into::into).collect();
 
     contents.push(GeminiContent {
-        role: USER_ROLE.to_string(),
+        role: GeminiMessageRole::User,
         parts: vec![GeminiPart::Text {
             text: req.message.clone(),
             thought_signature: None,
@@ -353,7 +366,7 @@ impl<T: HttpClient> ApiClient for GeminiClient<T> {
 
         // Append the contents
         chat_history.push(GeminiContent {
-            role: "assistant".into(),
+            role: GeminiMessageRole::Model,
             parts: response.content.parts.clone(),
         });
 
@@ -397,7 +410,7 @@ impl<T: HttpClient> ApiClient for GeminiClient<T> {
 
             // Append the new response to chat history
             chat_history.push(GeminiContent {
-                role: "assistant".into(),
+                role: GeminiMessageRole::Model,
                 parts: response.content.parts.clone(),
             });
 
@@ -452,7 +465,7 @@ mod tests {
         let mock_response = GeminiResponseBody {
             candidates: vec![GeminiResponseCandidate {
                 content: GeminiContent {
-                    role: "model".into(),
+                    role: GeminiMessageRole::Model,
                     parts: vec![GeminiPart::Text {
                         text: "Hello from Gemini!".into(),
                         thought_signature: None,
@@ -478,7 +491,7 @@ mod tests {
         let request = ChatRequest {
             message: "foo".into(),
             chat_history: vec![ChatHistoryItem {
-                role: "assistant".into(),
+                role: MessageRole::Assistant,
                 content: vec![ChatHistoryContent::Text("Prior".into())],
             }],
             max_tokens: Some(256),
@@ -612,7 +625,7 @@ mod tests {
         let tool_call_response = GeminiResponseBody {
             candidates: vec![GeminiResponseCandidate {
                 content: GeminiContent {
-                    role: "model".into(),
+                    role: GeminiMessageRole::Model,
                     parts: vec![GeminiPart::FunctionCall {
                         function_call: GeminiFunctionCall {
                             id: Some("call-1".into()),
@@ -635,7 +648,7 @@ mod tests {
         let text_response = GeminiResponseBody {
             candidates: vec![GeminiResponseCandidate {
                 content: GeminiContent {
-                    role: "model".into(),
+                    role: GeminiMessageRole::Model,
                     parts: vec![GeminiPart::Text {
                         text: "Done!".into(),
                         thought_signature: None,
@@ -708,7 +721,7 @@ mod tests {
         let second_message = ChatRequest {
             chat_history: vec![
                 ChatHistoryItem {
-                    role: USER_ROLE.into(),
+                    role: MessageRole::User,
                     content: vec![ChatHistoryContent::Text(first_message.message.clone())],
                 },
                 chat_history_contents,

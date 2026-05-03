@@ -15,7 +15,8 @@ use crate::constants::{
 };
 use crate::http_client::HttpClient;
 use crate::llm::base::{
-    ChatHistoryContent, ContentType, ReasoningConfig, ToolCallRequest, ToolCallResponse, USER_ROLE,
+    ChatHistoryContent, ContentType, MessageRole, ReasoningConfig, ToolCallRequest,
+    ToolCallResponse,
 };
 use crate::llm::tools::{
     ANTHROPIC_SCHEMA_KEY, SerializedTool, get_owned_tools, process_tool_calls,
@@ -27,14 +28,14 @@ const DEFAULT_CLAUDE_MODEL: &str = DEFAULT_ANTHROPIC_MODEL;
 #[derive(Clone, Serialize)]
 pub(crate) struct AnthropicChatHistoryItem {
     /// Either "user" or "assistant".
-    pub role: String,
+    pub role: MessageRole,
     /// The contents of this item.
     pub content: Vec<AnthropicResponseContent>,
 }
 
 impl From<ChatHistoryItem> for AnthropicChatHistoryItem {
     fn from(value: ChatHistoryItem) -> Self {
-        let role = value.role.clone();
+        let role = value.role;
         Self {
             content: value
                 .content
@@ -116,7 +117,7 @@ pub(crate) fn build_anthropic_messages_and_tools<'a>(
         .collect();
 
     messages.push(AnthropicChatHistoryItem {
-        role: USER_ROLE.to_owned(),
+        role: MessageRole::User,
         content: vec![req.message.clone().into()],
     });
 
@@ -239,7 +240,7 @@ pub(crate) struct AnthropicResponse {
     /// The model that generated the response
     pub(crate) model: String,
     /// The role of the message (usually "assistant")
-    pub(crate) role: String,
+    pub(crate) role: MessageRole,
     /// Why the model stopped generating (e.g., "end_turn")
     pub(crate) stop_reason: String,
     /// The stop sequence that caused generation to end, if any
@@ -373,7 +374,7 @@ impl<T: HttpClient> ApiClient for AnthropicClient<T> {
 
         // Append the contents
         chat_history.push(AnthropicChatHistoryItem {
-            role: "assistant".into(),
+            role: MessageRole::Assistant,
             content: response.content.clone(),
         });
 
@@ -408,7 +409,7 @@ impl<T: HttpClient> ApiClient for AnthropicClient<T> {
 
             // Append the new response to chat history
             chat_history.push(AnthropicChatHistoryItem {
-                role: "assistant".into(),
+                role: MessageRole::Assistant,
                 content: response.content.clone(),
             });
 
@@ -460,8 +461,8 @@ mod tests {
     use crate::http_client::{MockHttpClient, ReqwestClient, SequentialMockHttpClient};
     use crate::llm::anthropic::{AnthropicTextResponseContent, DEFAULT_CLAUDE_MODEL};
     use crate::llm::base::{
-        ApiClient, ChatHistoryContent, ChatHistoryItem, ChatRequest, ContentType, ToolCallResponse,
-        USER_ROLE,
+        ApiClient, ChatHistoryContent, ChatHistoryItem, ChatRequest, ContentType, MessageRole,
+        ToolCallResponse,
     };
     use crate::llm::tools::test_utils::MockTool;
 
@@ -494,7 +495,7 @@ mod tests {
         let mock_response = AnthropicResponse {
             id: "mock-id".to_string(),
             model: DEFAULT_CLAUDE_MODEL.to_string(),
-            role: "assistant".to_string(),
+            role: MessageRole::Assistant,
             stop_reason: "end_turn".to_string(),
             stop_sequence: None,
             usage: AnthropicUsageStats {
@@ -573,7 +574,7 @@ mod tests {
         let tool_call_response = AnthropicResponse {
             id: "msg-1".into(),
             model: DEFAULT_CLAUDE_MODEL.into(),
-            role: "assistant".into(),
+            role: MessageRole::Assistant,
             stop_reason: "tool_use".into(),
             stop_sequence: None,
             usage: AnthropicUsageStats {
@@ -596,7 +597,7 @@ mod tests {
         let text_response = AnthropicResponse {
             id: "msg-2".into(),
             model: DEFAULT_CLAUDE_MODEL.into(),
-            role: "assistant".into(),
+            role: MessageRole::Assistant,
             stop_reason: "end_turn".into(),
             stop_sequence: None,
             usage: AnthropicUsageStats {
@@ -702,7 +703,7 @@ mod tests {
         let second_message = ChatRequest {
             chat_history: vec![
                 ChatHistoryItem {
-                    role: USER_ROLE.into(),
+                    role: MessageRole::User,
                     content: vec![ChatHistoryContent::Text(first_message.message.clone())],
                 },
                 chat_history_contents,

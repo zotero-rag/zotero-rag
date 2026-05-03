@@ -25,7 +25,9 @@ use crate::constants::{
     DEFAULT_OPENAI_REASONING_EFFORT,
 };
 use crate::http_client::HttpClient;
-use crate::llm::base::{ChatHistoryContent, ContentType, ReasoningConfig, ToolUseStats, USER_ROLE};
+use crate::llm::base::{
+    ChatHistoryContent, ContentType, MessageRole, ReasoningConfig, ToolUseStats,
+};
 use crate::llm::tools::{CallbackFn, OPENAI_SCHEMA_KEY, SerializedTool, get_owned_tools};
 
 /// OpenAI-specific tool wrapper that adds the `type` and `strict` fields
@@ -108,7 +110,7 @@ pub(crate) enum OpenAIRequestInputItem {
 #[derive(Clone, Serialize)]
 pub(crate) struct OpenAIChatHistoryItem {
     /// Either USER_ROLE or "assistant".
-    pub role: String,
+    pub role: MessageRole,
     /// The content item for this role.
     pub content: OpenAIRequestInputItem,
     /// Always "message".
@@ -130,7 +132,7 @@ impl From<&ChatHistoryItem> for Vec<OpenAIRequestInput> {
             .iter()
             .map(|c| match c {
                 ChatHistoryContent::Text(s) => OpenAIRequestInput::Message(OpenAIChatHistoryItem {
-                    role: value.role.clone(),
+                    role: value.role,
                     r#type: "message".into(),
                     content: OpenAIRequestInputItem::Text(s.clone()),
                 }),
@@ -217,7 +219,7 @@ fn build_openai_messages_and_tools<'a>(
         .collect::<Vec<_>>();
 
     messages.push(OpenAIRequestInput::Message(OpenAIChatHistoryItem {
-        role: USER_ROLE.to_owned(),
+        role: MessageRole::User,
         r#type: "message".into(),
         content: OpenAIRequestInputItem::Text(req.message.clone()),
     }));
@@ -272,7 +274,7 @@ enum OpenAIOutput {
         id: String,
         status: String,
         content: Vec<OpenAIContent>,
-        role: String,
+        role: MessageRole,
     },
     /// A function call request to invoke a tool.
     #[serde(rename = "function_call")]
@@ -466,7 +468,7 @@ fn map_response_to_chat_history(response: &OpenAIResponse) -> Vec<OpenAIRequestI
             OpenAIOutput::Reasoning { .. } => None,
             OpenAIOutput::Message { content, .. } => {
                 Some(OpenAIRequestInput::Message(OpenAIChatHistoryItem {
-                    role: "assistant".into(),
+                    role: MessageRole::Assistant,
                     r#type: "message".into(),
                     content: OpenAIRequestInputItem::Text(
                         content.first()?.text.clone().unwrap_or_else(String::new),
@@ -685,7 +687,7 @@ mod tests {
     use crate::constants::DEFAULT_OPENAI_EMBEDDING_DIM;
     use crate::http_client::{MockHttpClient, ReqwestClient};
     use crate::llm::base::{
-        ApiClient, ChatHistoryContent, ChatHistoryItem, ChatRequest, ContentType, USER_ROLE,
+        ApiClient, ChatHistoryContent, ChatHistoryItem, ChatRequest, ContentType, MessageRole,
     };
     use crate::llm::tools::OPENAI_SCHEMA_KEY;
     use crate::llm::tools::test_utils::MockTool;
@@ -728,7 +730,7 @@ mod tests {
             output: vec![OpenAIOutput::Message {
                 id: "msg_id".into(),
                 status: "completed".into(),
-                role: "assistant".into(),
+                role: MessageRole::Assistant,
                 content: vec![OpenAIContent {
                     r#type: "output_text".into(),
                     text: Some("Hi there!".into()),
@@ -928,7 +930,7 @@ mod tests {
             output: vec![OpenAIOutput::Message {
                 id: "msg-1".into(),
                 status: "completed".into(),
-                role: "assistant".into(),
+                role: MessageRole::Assistant,
                 content: vec![OpenAIContent {
                     r#type: "output_text".into(),
                     text: Some("Done!".into()),
@@ -992,7 +994,7 @@ mod tests {
         let second_message = ChatRequest {
             chat_history: vec![
                 ChatHistoryItem {
-                    role: USER_ROLE.into(),
+                    role: MessageRole::User,
                     content: vec![ChatHistoryContent::Text(first_message.message.clone())],
                 },
                 chat_history_contents,

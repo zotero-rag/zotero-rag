@@ -497,7 +497,7 @@ mod tests {
     use chrono::Local;
     use clap::builder::OsStr;
     use zqa_macros::test_ok;
-    use zqa_rag::llm::base::{ChatHistoryContent, ChatHistoryItem, USER_ROLE};
+    use zqa_rag::llm::base::{ChatHistoryContent, ChatHistoryItem, MessageRole};
 
     use crate::state::{
         SavedChatHistory, get_conversation_history, get_state_dir, oobe, save_conversation,
@@ -537,7 +537,7 @@ mod tests {
                 date: Local::now(),
                 title: "foo".into(),
                 history: vec![ChatHistoryItem {
-                    role: USER_ROLE.into(),
+                    role: MessageRole::User,
                     content: vec![ChatHistoryContent::Text("Hello!".into())],
                 }],
             };
@@ -557,7 +557,7 @@ mod tests {
                 date: Local::now(),
                 title: "foo".into(),
                 history: vec![ChatHistoryItem {
-                    role: USER_ROLE.into(),
+                    role: MessageRole::User,
                     content: vec![ChatHistoryContent::Text("Hello!".into())],
                 }],
             };
@@ -575,7 +575,7 @@ mod tests {
             assert_eq!(conversations.len(), 1);
             assert_eq!(conversations[0].title, "foo");
             assert_eq!(conversations[0].history.len(), 1);
-            assert_eq!(conversations[0].history[0].role, USER_ROLE);
+            assert_eq!(conversations[0].history[0].role, MessageRole::User);
             assert_eq!(conversations[0].history[0].content.len(), 1);
             assert_eq!(
                 conversations[0].history[0].content[0],

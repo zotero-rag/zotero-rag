@@ -13,7 +13,7 @@ use crate::clients::openrouter::OpenRouterClient;
 use crate::common::request_with_backoff;
 use crate::http_client::HttpClient;
 use crate::llm::base::{
-    ChatHistoryContent, ContentType, ReasoningConfig, ToolCallRequest, USER_ROLE,
+    ChatHistoryContent, ContentType, MessageRole, ReasoningConfig, ToolCallRequest,
 };
 use crate::llm::tools::{
     OPENROUTER_SCHEMA_KEY, SerializedTool, get_owned_tools, process_tool_calls,
@@ -24,7 +24,7 @@ const DEFAULT_MODEL: &str = "anthropic/claude-sonnet-4.5";
 /// OpenRouter-specific message format
 #[derive(Clone, Debug, Serialize)]
 struct OpenRouterMessage {
-    role: String,
+    role: MessageRole,
     #[serde(skip_serializing_if = "Option::is_none")]
     content: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -119,7 +119,7 @@ fn convert_to_openrouter_messages(item: &ChatHistoryItem) -> Vec<OpenRouterMessa
             ChatHistoryContent::ToolCallResponse(res) => {
                 // Tool responses in OpenRouter are sent as a separate message with role "tool"
                 messages.push(OpenRouterMessage {
-                    role: "tool".into(),
+                    role: MessageRole::Tool,
                     content: Some(serde_json::to_string(&res.result).unwrap_or_default()),
                     tool_calls: None,
                     tool_call_id: Some(res.id.clone()),
@@ -133,7 +133,7 @@ fn convert_to_openrouter_messages(item: &ChatHistoryItem) -> Vec<OpenRouterMessa
         messages.insert(
             0,
             OpenRouterMessage {
-                role: item.role.clone(),
+                role: item.role,
                 content: if content_text.is_empty() {
                     None
                 } else {
@@ -164,7 +164,7 @@ fn build_openrouter_messages_and_tools<'a>(
         .collect();
 
     messages.push(OpenRouterMessage {
-        role: USER_ROLE.to_owned(),
+        role: MessageRole::User,
         content: Some(req.message.clone()),
         tool_calls: None,
         tool_call_id: None,
@@ -212,7 +212,7 @@ struct OpenRouterFunction {
 #[derive(Clone, Serialize, Deserialize)]
 struct OpenRouterResponseMessage {
     /// Usually "assistant"
-    role: String,
+    role: MessageRole,
     /// The model response
     #[serde(skip_serializing_if = "Option::is_none")]
     content: Option<String>,
@@ -378,7 +378,7 @@ impl<T: HttpClient> ApiClient for OpenRouterClient<T> {
 
         // Append the assistant's response to chat history
         chat_history.push(OpenRouterMessage {
-            role: choice.message.role.clone(),
+            role: choice.message.role,
             content: choice.message.content.clone(),
             tool_calls: choice.message.tool_calls.clone(),
             tool_call_id: None,
@@ -420,7 +420,7 @@ impl<T: HttpClient> ApiClient for OpenRouterClient<T> {
 
             // Append the new response to chat history
             chat_history.push(OpenRouterMessage {
-                role: choice.message.role.clone(),
+                role: choice.message.role,
                 content: choice.message.content.clone(),
                 tool_calls: choice.message.tool_calls.clone(),
                 tool_call_id: None,
@@ -503,7 +503,7 @@ mod tests {
             },
             choices: vec![OpenRouterResponseChoices {
                 message: OpenRouterResponseMessage {
-                    role: String::from("assistant"),
+                    role: MessageRole::Assistant,
                     content: Some(String::from("Hi there! How can I help you today?")),
                     tool_calls: None,
                     refusal: Some(String::new()),
@@ -589,7 +589,7 @@ mod tests {
             },
             choices: vec![OpenRouterResponseChoices {
                 message: OpenRouterResponseMessage {
-                    role: "assistant".into(),
+                    role: MessageRole::Assistant,
                     content: None,
                     tool_calls: Some(vec![OpenRouterToolCall {
                         id: "call-1".into(),
@@ -619,7 +619,7 @@ mod tests {
             },
             choices: vec![OpenRouterResponseChoices {
                 message: OpenRouterResponseMessage {
-                    role: "assistant".into(),
+                    role: MessageRole::Assistant,
                     content: Some("Done!".into()),
                     tool_calls: None,
                     refusal: None,
@@ -686,7 +686,7 @@ mod tests {
         let second_message = ChatRequest {
             chat_history: vec![
                 ChatHistoryItem {
-                    role: USER_ROLE.into(),
+                    role: MessageRole::User,
                     content: vec![ChatHistoryContent::Text(first_message.message.clone())],
                 },
                 chat_history_contents,

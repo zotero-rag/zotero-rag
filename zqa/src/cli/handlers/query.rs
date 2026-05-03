@@ -10,8 +10,7 @@ use std::{
 use zqa_rag::{
     llm::{
         base::{
-            ASSISTANT_ROLE, ApiClient, ChatHistoryContent, ChatHistoryItem, ChatRequest,
-            ToolUseStats, USER_ROLE,
+            ApiClient, ChatHistoryContent, ChatHistoryItem, ChatRequest, MessageRole, ToolUseStats,
         },
         factory::get_client_with_config,
         tools::{CallbackFn, Tool},
@@ -345,11 +344,11 @@ where
                 .lock()
                 .expect("Could not obtain lock on chat history.");
             history.push(ChatHistoryItem {
-                role: USER_ROLE.into(),
+                role: MessageRole::User,
                 content: vec![ChatHistoryContent::Text(query.clone())],
             });
             history.push(ChatHistoryItem {
-                role: ASSISTANT_ROLE.into(),
+                role: MessageRole::Assistant,
                 content: vec![ChatHistoryContent::Text(model_response_text)],
             });
             ctx.state.dirty.store(true, atomic::Ordering::Relaxed);

@@ -8,10 +8,17 @@ use serde::{Deserialize, Serialize};
 use super::errors::LLMError;
 use crate::llm::tools::{CallbackFn, Tool};
 
-/// The user role.
-pub const USER_ROLE: &str = "user";
-/// The assistant role.
-pub const ASSISTANT_ROLE: &str = "assistant";
+/// Roles for messages
+#[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MessageRole {
+    /// A user message/response. Some providers fold tool responses into this.
+    User,
+    /// An assistant response.
+    Assistant,
+    /// Some providers, like OpenRouter, use a separate role for tool responses.
+    Tool,
+}
 
 /// A user-facing, generic, tool call request. This contains the tool name and the parameters
 /// passed to that tool. It also includes the tool call id, which most providers use to
@@ -64,7 +71,7 @@ pub enum ChatHistoryContent {
 pub struct ChatHistoryItem {
     /// The chat role. Every supported provider has a "user" (`USER_ROLE`) and an "assistant"
     /// (`ASSISTANT_ROLE`) role.
-    pub role: String,
+    pub role: MessageRole,
     /// The contents of this item. This is a `Vec` because some APIs expect tool call requests to
     /// be bundled together with the text preceding it.
     pub content: Vec<ChatHistoryContent>,
@@ -91,7 +98,7 @@ impl From<Vec<ContentType>> for ChatHistoryItem {
             .collect();
 
         Self {
-            role: ASSISTANT_ROLE.into(),
+            role: MessageRole::Assistant,
             content,
         }
     }

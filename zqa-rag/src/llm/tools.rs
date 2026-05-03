@@ -14,7 +14,8 @@ use serde_json::{Map, Value};
 
 use crate::llm::{
     base::{
-        ChatHistoryContent, ChatHistoryItem, ContentType, ToolCallResponse, ToolUseStats, USER_ROLE,
+        ChatHistoryContent, ChatHistoryItem, ContentType, MessageRole, ToolCallResponse,
+        ToolUseStats,
     },
     errors::LLMError,
 };
@@ -251,7 +252,7 @@ where
                 };
 
                 let chat_history_item = ChatHistoryItem {
-                    role: USER_ROLE.into(),
+                    role: MessageRole::User,
                     content: vec![ChatHistoryContent::ToolCallResponse(ToolCallResponse {
                         id: tool_call_id,
                         tool_name: tool_call.tool_name.clone(),
