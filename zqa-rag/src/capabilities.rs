@@ -41,19 +41,6 @@ impl ModelProvider {
     pub fn as_str(&self) -> &'static str {
         ProviderId::from(self).as_str()
     }
-
-    /// Returns whether the provider is contained in the list of providers.
-    #[must_use]
-    pub fn contains(provider: &str) -> bool {
-        [
-            ModelProvider::Anthropic.as_str(),
-            ModelProvider::Ollama.as_str(),
-            ModelProvider::OpenAI.as_str(),
-            ModelProvider::OpenRouter.as_str(),
-            ModelProvider::Gemini.as_str(),
-        ]
-        .contains(&provider)
-    }
 }
 
 /// Providers of embedding models. Structs corresponding to these should implement LanceDB's
@@ -82,20 +69,6 @@ impl EmbeddingProvider {
     #[must_use]
     pub fn as_str(&self) -> &'static str {
         ProviderId::from(self).as_str()
-    }
-
-    /// Returns whether the provider is contained in the list of providers.
-    #[must_use]
-    pub fn contains(provider: &str) -> bool {
-        [
-            EmbeddingProvider::Cohere.as_str(),
-            EmbeddingProvider::OpenAI.as_str(),
-            EmbeddingProvider::Ollama.as_str(),
-            EmbeddingProvider::VoyageAI.as_str(),
-            EmbeddingProvider::Gemini.as_str(),
-            EmbeddingProvider::ZeroEntropy.as_str(),
-        ]
-        .contains(&provider)
     }
 
     /// Returns the recommended chunking strategy for this provider.
@@ -255,17 +228,6 @@ impl RerankerProvider {
     #[must_use]
     pub fn as_str(&self) -> &'static str {
         ProviderId::from(self).as_str()
-    }
-
-    /// Returns whether the provider is contained in the list of providers.
-    #[must_use]
-    pub fn contains(provider: &str) -> bool {
-        [
-            RerankerProvider::Cohere.as_str(),
-            RerankerProvider::VoyageAI.as_str(),
-            RerankerProvider::ZeroEntropy.as_str(),
-        ]
-        .contains(&provider)
     }
 }
 
