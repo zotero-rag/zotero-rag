@@ -314,6 +314,7 @@ impl Config {
                 .zeroentropy
                 .as_ref()
                 .map(|cfg| EmbeddingProviderConfig::ZeroEntropy(cfg.clone().into())),
+            _ => None,
         }
     }
 
@@ -360,6 +361,7 @@ impl Config {
                     summary: None,
                 })
             }),
+            _ => None,
         }
     }
 
@@ -399,6 +401,7 @@ impl Config {
                 .openrouter
                 .as_ref()
                 .and_then(|c| c.model_small.as_ref()),
+            _ => None,
         };
 
         if let Some(small_model_name) = small_model_name {
@@ -408,6 +411,7 @@ impl Config {
                 LLMClientConfig::OpenAI(c) => c.model.clone_from(small_model_name),
                 LLMClientConfig::Gemini(c) => c.model.clone_from(small_model_name),
                 LLMClientConfig::OpenRouter(c) => c.model.clone_from(small_model_name),
+                _ => (),
             }
         }
 
@@ -423,6 +427,7 @@ impl Config {
             EmbeddingProviderConfig::Ollama(cfg) => cfg.embedding_model,
             EmbeddingProviderConfig::Cohere(cfg) => cfg.embedding_model,
             EmbeddingProviderConfig::ZeroEntropy(cfg) => cfg.embedding_model,
+            _ => unimplemented!("unsupported embedding provider: {}", config.provider_id()),
         })
     }
 
@@ -434,6 +439,7 @@ impl Config {
             LLMClientConfig::OpenAI(cfg) => cfg.model,
             LLMClientConfig::Gemini(cfg) => cfg.model,
             LLMClientConfig::OpenRouter(cfg) => cfg.model,
+            _ => unimplemented!("unsupported generation provider: {}", config.provider_id()),
         })
     }
 
@@ -496,6 +502,7 @@ impl Config {
                 .openrouter
                 .as_ref()
                 .map(|cfg| LLMClientConfig::OpenRouter(cfg.clone().into())),
+            _ => None,
         }
     }
 }

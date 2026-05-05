@@ -48,6 +48,7 @@ pub fn get_reranking_provider_with_config(
 
 /// Configuration enum for reranking providers
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum RerankProviderConfig {
     /// Configuration for VoyageAI reranking provider
     VoyageAI(crate::config::VoyageAIConfig),

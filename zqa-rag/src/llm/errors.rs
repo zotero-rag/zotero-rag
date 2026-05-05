@@ -7,6 +7,7 @@ use thiserror::Error;
 /// A wrapper for all kinds of errors to one enum that tells us what happened.
 /// Variant error messages are handled via thiserror.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum LLMError {
     /// API errors that likely represent credential errors.
     #[error("Got 4xx response, possible credentials error: {0}")]

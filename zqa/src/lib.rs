@@ -62,7 +62,8 @@ fn check_api_keys_exist(config: &Config, log_level: log::LevelFilter) {
             LLMClientConfig::OpenAI(cfg) => cfg.api_key,
             LLMClientConfig::Gemini(cfg) => cfg.api_key,
             LLMClientConfig::OpenRouter(cfg) => cfg.api_key,
-            LLMClientConfig::Ollama(_) => String::new(), // Doesn't need one
+            LLMClientConfig::Ollama(_) => String::from("foo"), // Doesn't need one
+            _ => unimplemented!("unsupported generation provider: {}", c.provider_id()),
         })
         .is_empty()
     }) {
@@ -84,7 +85,9 @@ fn check_api_keys_exist(config: &Config, log_level: log::LevelFilter) {
             EmbeddingProviderConfig::VoyageAI(cfg) => cfg.api_key,
             EmbeddingProviderConfig::Gemini(cfg) => cfg.api_key,
             EmbeddingProviderConfig::ZeroEntropy(cfg) => cfg.api_key,
-            EmbeddingProviderConfig::Ollama(_) => String::new(),
+            // Ollama doesn't need an API key so we force a false condition
+            EmbeddingProviderConfig::Ollama(_) => String::from("foo"),
+            _ => unimplemented!("unsupported embedding provider: {}", c.provider_id()),
         })
         .is_empty()
     }) {
@@ -105,6 +108,7 @@ fn check_api_keys_exist(config: &Config, log_level: log::LevelFilter) {
                 RerankProviderConfig::VoyageAI(cfg) => cfg.api_key,
                 RerankProviderConfig::Cohere(cfg) => cfg.api_key,
                 RerankProviderConfig::ZeroEntropy(cfg) => cfg.api_key,
+                _ => unimplemented!("unsupported reranking provider: {}", c.provider_id()),
             })
             .is_empty()
         })

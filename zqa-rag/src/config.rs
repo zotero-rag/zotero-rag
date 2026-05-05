@@ -191,6 +191,7 @@ impl Default for OpenRouterConfig {
 
 /// Configuration for LLM clients
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum LLMClientConfig {
     /// Anthropic client configuration
     Anthropic(crate::config::AnthropicConfig),

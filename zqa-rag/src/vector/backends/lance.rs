@@ -34,6 +34,7 @@ pub const LANCE_TABLE_NAME: &str = "data";
 
 /// Errors that can occur when working with LanceDB
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum LanceError {
     /// Error connecting to LanceDB
     #[error("LanceDB connection error: {0}")]

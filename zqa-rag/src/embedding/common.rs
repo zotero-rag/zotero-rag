@@ -95,6 +95,7 @@ pub fn get_embedding_provider_with_config(
 
 /// Configuration enum for embedding providers
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum EmbeddingProviderConfig {
     /// Configuration for OpenAI embedding provider
     OpenAI(crate::config::OpenAIConfig),

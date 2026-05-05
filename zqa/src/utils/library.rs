@@ -134,6 +134,7 @@ impl From<Vec<RecordBatch>> for ZoteroItemSet {
 
 /// A general error struct for Zotero library parsing.
 #[derive(Clone, Debug, Error)]
+#[non_exhaustive]
 pub enum LibraryParsingError {
     #[error("SQLite error: {0}. Try closing Zotero, which can sometimes hold a lock.")]
     SqlError(String),

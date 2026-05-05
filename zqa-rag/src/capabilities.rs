@@ -21,6 +21,7 @@ use crate::{
 /// implementations will be in the `llm/` directory.
 #[derive(Copy, Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum ModelProvider {
     /// Anthropic model provider
     Anthropic,
@@ -60,6 +61,7 @@ impl ModelProvider {
 /// generation, you will find the structs in `llm/` or `embedding/`.
 #[derive(Copy, Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum EmbeddingProvider {
     /// Cohere embedding provider
     Cohere,
@@ -126,6 +128,7 @@ impl EmbeddingProvider {
 /// state, but the [`crate::embedding::voyage::VoyageAIClient`] changes this to
 /// [`BatchJobState::InProgress`].
 #[derive(Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum BatchJobState {
     /// The batch job has been created, but it may not have started processing.
     Created,
@@ -216,6 +219,7 @@ pub trait BatchAPIProvider {
 /// Providers of batch embedding APIs. Structs corresponding to these should implement
 /// [`BatchAPIProvider`]. By definition, this enum is a subset of [`EmbeddingProvider`].
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub enum BatchEmbeddingProvider {
     /// Voyage AI batch API provider
     VoyageAI,
@@ -236,6 +240,7 @@ impl BatchEmbeddingProvider {
 /// should implement the `Rerank` trait.
 #[derive(Copy, Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum RerankerProvider {
     /// Cohere reranking provider
     Cohere,

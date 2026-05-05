@@ -9,6 +9,7 @@ use crate::vector::backends::lance::{LANCE_TABLE_NAME as TABLE_NAME, get_db_uri}
 
 /// Errors that can occur during backup operations
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum BackupError {
     /// LanceDB library error during backup operations
     #[error("LanceDB library error during backup: {0}")]

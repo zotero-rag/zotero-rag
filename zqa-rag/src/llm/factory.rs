@@ -12,6 +12,7 @@ use crate::providers::registry::provider_registry;
 
 /// Enum representing different LLM client implementations
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum LLMClient {
     /// Anthropic client
     Anthropic(AnthropicClient),
