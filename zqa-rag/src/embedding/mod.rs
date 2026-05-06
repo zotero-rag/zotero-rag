@@ -1,5 +1,6 @@
 //! Structs, traits, and implementations for embedding providers.
 
+pub mod batch_adapter;
 pub(crate) mod cohere;
 pub mod common;
 pub(crate) mod gemini;

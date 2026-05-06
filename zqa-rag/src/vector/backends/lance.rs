@@ -690,6 +690,67 @@ impl VectorBackend for LanceBackend {
     }
 }
 
+impl LanceBackend {
+    /// Insert record batches that already contain a pre-computed `embeddings` column, bypassing
+    /// the embedding function entirely.
+    ///
+    /// This is the write path for the batch API workflow: embeddings are computed asynchronously
+    /// by an external service and then written to the database in a later CLI session.
+    ///
+    /// When the database already exists and `merge_on` is provided, records are upserted via
+    /// `merge_insert` (same as [`VectorBackend::insert_items`]). When the database does not yet
+    /// exist, the table is created directly from the batch schema — no embedding function is
+    /// registered, since `embeddings` values are already present in the batches.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`LanceError`] if connection, table creation, or data insertion fails.
+    pub async fn insert_precomputed_items(
+        &self,
+        items: Vec<RecordBatch>,
+        merge_on: Option<&[&str]>,
+    ) -> Result<(), LanceError> {
+        if items.is_empty() {
+            return Ok(());
+        }
+
+        let db = self.connect().await?;
+
+        if self.db_exists().await
+            && let Some(merge_on) = merge_on
+            && let Some(first_batch) = items.first()
+        {
+            let tbl = db
+                .open_table(LANCE_TABLE_NAME)
+                .execute()
+                .await
+                .map_err(|e| LanceError::TableUpdateError(e.to_string()))?;
+
+            let schema = first_batch.schema();
+            let reader = RecordBatchIterator::new(
+                items.into_iter().map(std::result::Result::Ok),
+                schema.clone(),
+            );
+            tbl.merge_insert(merge_on)
+                .when_not_matched_insert_all()
+                .clone()
+                .execute(Box::new(reader))
+                .await
+                .map_err(|e| LanceError::TableUpdateError(e.to_string()))?;
+        } else {
+            // Create the table without an embedding function — the `embeddings` column
+            // is already populated in the supplied batches.
+            db.create_table(LANCE_TABLE_NAME, items)
+                .mode(CreateTableMode::Overwrite)
+                .execute()
+                .await
+                .map_err(|e| LanceError::TableUpdateError(e.to_string()))?;
+        }
+
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::env;

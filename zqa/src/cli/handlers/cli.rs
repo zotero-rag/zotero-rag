@@ -128,6 +128,18 @@ where
     )?;
     writeln!(
         &mut ctx.out,
+        "/batch submit\tSubmit parsed texts to the provider batch API (reads batch_iter.bin)."
+    )?;
+    writeln!(
+        &mut ctx.out,
+        "/batch status\tCheck the status of the last submitted batch job."
+    )?;
+    writeln!(
+        &mut ctx.out,
+        "/batch collect\tDownload completed batch embeddings and write them to the database."
+    )?;
+    writeln!(
+        &mut ctx.out,
         "/search\t\tSearch for papers without summarizing them. Usage: /search <query>"
     )?;
     writeln!(

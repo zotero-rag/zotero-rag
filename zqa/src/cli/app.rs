@@ -3,8 +3,11 @@ use std::sync::Arc;
 
 use rustyline::error::ReadlineError;
 
-use crate::cli::commands::{Command, parse_command};
+use crate::cli::commands::{BatchSubcommand, Command, parse_command};
 use crate::cli::errors::CLIError;
+use crate::cli::handlers::batch::{
+    handle_batch_collect_cmd, handle_batch_status_cmd, handle_batch_submit_cmd,
+};
 use crate::cli::handlers::cli::{
     handle_config_cmd, handle_help_cmd, handle_new_conversation_cmd, handle_quit_cmd,
 };
@@ -63,6 +66,13 @@ pub(crate) async fn dispatch_command<O: Write, E: Write>(
         Command::Config => handle_config_cmd(ctx),
         Command::Stats => handle_stats_cmd(ctx).await,
         Command::Search { query } => handle_search_cmd(query, ctx).await,
+        Command::Batch(BatchSubcommand::Submit) => handle_batch_submit_cmd(ctx).await,
+        Command::Batch(BatchSubcommand::Status { batch_id }) => {
+            handle_batch_status_cmd(batch_id, ctx).await
+        }
+        Command::Batch(BatchSubcommand::Collect { batch_id }) => {
+            handle_batch_collect_cmd(batch_id, ctx).await
+        }
         Command::Docs(subcmd) => handle_docs_cmd(subcmd, ctx),
     }
     .and(Ok(true))

@@ -1,3 +1,4 @@
+pub(crate) mod batch;
 pub(crate) mod cli;
 pub(crate) mod conversation;
 pub(crate) mod documents;

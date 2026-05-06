@@ -14,9 +14,16 @@ pub(crate) enum Command {
     Config,
     NewConversation,
     Quit,
+    Batch(BatchSubcommand),
     Docs(DocsCommand),
     Search { query: String },
     Query { text: String },
+}
+
+pub(crate) enum BatchSubcommand {
+    Submit,
+    Status { batch_id: Option<String> },
+    Collect { batch_id: Option<String> },
 }
 
 pub(crate) enum DocsCommand {
@@ -69,6 +76,26 @@ pub(crate) fn parse_command(command: &str) -> Result<Command, CommandParseError>
                 }
 
                 return Ok(Command::Embed { fix: true });
+            }
+
+            if let Some(rest) = query.strip_prefix("/batch") {
+                let rest = rest.trim();
+                let mut parts = rest.splitn(2, ' ');
+                let sub = parts.next().unwrap_or("");
+                let arg = parts.next().map(str::trim).filter(|s| !s.is_empty());
+
+                return match sub {
+                    "submit" => Ok(Command::Batch(BatchSubcommand::Submit)),
+                    "status" => Ok(Command::Batch(BatchSubcommand::Status {
+                        batch_id: arg.map(str::to_string),
+                    })),
+                    "collect" => Ok(Command::Batch(BatchSubcommand::Collect {
+                        batch_id: arg.map(str::to_string),
+                    })),
+                    _ => Err(CommandParseError::InvalidCommand(format!(
+                        "Invalid subcommand to /batch: '{rest}'. Valid subcommands: submit, status, collect."
+                    ))),
+                };
             }
 
             if let Some(subcmd) = query.strip_prefix("/docs") {

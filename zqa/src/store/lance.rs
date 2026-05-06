@@ -94,6 +94,25 @@ impl LanceZoteroStore {
             .map_err(Into::into)
     }
 
+    /// Upsert Arrow record batches that already contain pre-computed `embeddings` into the
+    /// LanceDB table.
+    ///
+    /// Unlike [`Self::upsert_batches`], this bypasses the embedding function and writes the
+    /// `embeddings` column directly. Use this when embeddings have been obtained via the batch API.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`CLIError`] if LanceDB insertion fails.
+    pub(crate) async fn upsert_precomputed_batches(
+        &self,
+        batches: Vec<RecordBatch>,
+    ) -> Result<(), CLIError> {
+        self.backend
+            .insert_precomputed_items(batches, Some(&[DbFields::LibraryKey.as_ref()]))
+            .await
+            .map_err(Into::into)
+    }
+
     /// Create or update retrieval indices for the LanceDB table.
     ///
     /// # Errors

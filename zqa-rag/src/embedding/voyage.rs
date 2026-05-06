@@ -554,6 +554,67 @@ where
     }
 }
 
+impl<T> VoyageAIClient<T>
+where
+    T: HttpClient,
+{
+    /// Collect batch results and return embeddings ordered by original submission position.
+    ///
+    /// Results are re-assembled by parsing the `req-{i}` custom IDs set during
+    /// [`BatchAPIProvider::submit_batch`] and expanding each per-request result by the
+    /// corresponding entry in `request_sizes`. Failed requests are substituted with zero vectors.
+    ///
+    /// # Errors
+    ///
+    /// * `LLMError::BatchNotCompleted` - If the batch has not yet reached `Completed` or `Failed`
+    /// * All errors from [`VoyageAIClient::get_batch_results`]
+    pub(crate) async fn collect_batch_embeddings_ordered(
+        &self,
+        batch_id: &str,
+        request_sizes: &[usize],
+    ) -> Result<Vec<Vec<f32>>, LLMError> {
+        let (results, errors) = BatchAPIProvider::get_batch_results(self, batch_id).await?;
+
+        if let Some(errors) = &errors {
+            for err in errors {
+                log::warn!("Batch request '{}' failed", err.custom_id);
+            }
+        }
+
+        let output_dim = self
+            .config
+            .as_ref()
+            .map_or(DEFAULT_VOYAGE_EMBEDDING_DIM as usize, |c| c.embedding_dims);
+
+        // Index results by request number for O(1) lookup
+        let mut result_map: std::collections::HashMap<usize, VoyageAISuccess> =
+            std::collections::HashMap::new();
+        for result in results.unwrap_or_default() {
+            if let Some(idx_str) = result.custom_id.strip_prefix("req-")
+                && let Ok(idx) = idx_str.parse::<usize>()
+            {
+                result_map.insert(idx, result.response.body);
+            }
+        }
+
+        let mut embeddings: Vec<Vec<f32>> = Vec::with_capacity(request_sizes.iter().sum());
+        for (req_idx, &size) in request_sizes.iter().enumerate() {
+            if let Some(mut success) = result_map.remove(&req_idx) {
+                success.data.sort_by_key(|e| e.index);
+                for emb in success.data {
+                    embeddings.push(emb.embedding);
+                }
+            } else {
+                for _ in 0..size {
+                    embeddings.push(vec![0.0_f32; output_dim]);
+                }
+            }
+        }
+
+        Ok(embeddings)
+    }
+}
+
 impl<T> BatchAPIProvider for VoyageAIClient<T>
 where
     T: HttpClient,
