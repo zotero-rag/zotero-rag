@@ -9,7 +9,6 @@ use lancedb::embeddings::EmbeddingFunction;
 use reqwest::multipart::Form;
 use serde::{Deserialize, Serialize};
 use serde_jsonlines::{json_lines, write_json_lines};
-use uuid::Uuid;
 
 use crate::embedding::common::{
     BatchEmbeddingError, BatchEmbeddingRequest, BatchEmbeddingResult, BatchEmbeddingResults,
@@ -347,12 +346,6 @@ pub(crate) struct VoyageAIBatchCreateResponse {
     pub(crate) id: String,
 }
 
-impl From<VoyageAIBatchCreateResponse> for BatchSubmission {
-    fn from(value: VoyageAIBatchCreateResponse) -> Self {
-        Self { batch_id: value.id }
-    }
-}
-
 /// A request to the Voyage AI Batch API. This assumes a call to the Files API has been made,
 /// uploading the JSONL file in the right format.
 ///
@@ -406,19 +399,6 @@ impl<'a> Default for VoyageAIBatchRequest<'a> {
             completion_window: "12h",
             request_params: VoyageAIBatchRequestParams::<'a>::default(),
             input_file_id: String::new(),
-        }
-    }
-}
-
-impl From<BatchEmbeddingRequest> for VoyageAIBatchRequest<'_> {
-    fn from(value: BatchEmbeddingRequest) -> Self {
-        // For now, we won't let consumers set these; might be worth revisiting once we have more
-        // batch providers supported.
-        Self {
-            endpoint: "/v1/embeddings",
-            completion_window: "12h",
-            request_params: value.into(),
-            input_file_id: Uuid::new_v4().to_string(),
         }
     }
 }
@@ -705,7 +685,10 @@ where
                 LLMError::DeserializationError(e.to_string())
             })?;
 
-        Ok(response.into())
+        Ok(BatchSubmission {
+            batch_id: response.id,
+            file_id: file_id.clone(),
+        })
     }
 
     /// Returns the current [`BatchJobState`] for the given batch ID.
