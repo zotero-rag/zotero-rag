@@ -7,10 +7,14 @@ use std::{
 use lancedb::embeddings::EmbeddingFunction;
 
 use crate::{
-    capabilities::{EmbeddingFactory, LlmFactory, RerankFactory},
+    capabilities::{BatchEmbeddingFactory, EmbeddingFactory, LlmFactory, RerankFactory},
     config::LLMClientConfig,
-    embedding::common::EmbeddingProviderConfig,
-    llm::{errors::LLMError, factory::LLMClient},
+    embedding::{common::EmbeddingProviderConfig, voyage::VoyageAIClient},
+    http_client::ReqwestClient,
+    llm::{
+        errors::LLMError,
+        factory::{BatchEmbeddingClient, LLMClient},
+    },
     providers::{
         anthropic::AnthropicProvider, cohere::CohereProvider, gemini::GeminiProvider,
         ollama::OllamaProvider, openai::OpenAIProvider, openrouter::OpenRouterProvider,
@@ -29,6 +33,9 @@ pub struct ProviderRegistry {
     llm: HashMap<ProviderId, Arc<dyn LlmFactory>>,
     /// Mappings from embedding providers to corresponding factory methods
     embedding: HashMap<ProviderId, Arc<dyn EmbeddingFactory>>,
+    /// Mappings from batch embedding providers to corresponding factory methods. The keys here are
+    /// a subset of those in `embedding`.
+    batch_embedding: HashMap<ProviderId, Arc<dyn BatchEmbeddingFactory>>,
     /// Mappings from reranking providers to corresponding factory methods
     rerank: HashMap<ProviderId, Arc<dyn RerankFactory>>,
     /// Mappings from LanceDB embedding providers to corresponding factory methods
@@ -42,6 +49,7 @@ impl ProviderRegistry {
         Self {
             llm: HashMap::new(),
             embedding: HashMap::new(),
+            batch_embedding: HashMap::new(),
             rerank: HashMap::new(),
             lance_embedding: HashMap::new(),
         }
@@ -55,6 +63,11 @@ impl ProviderRegistry {
     /// Register an embedding factory.
     pub fn register_embedding(&mut self, factory: Arc<dyn EmbeddingFactory>) {
         self.embedding.insert(factory.provider_id(), factory);
+    }
+
+    /// Register a batch embedding factory.
+    pub fn register_batch_embedding(&mut self, factory: Arc<dyn BatchEmbeddingFactory>) {
+        self.batch_embedding.insert(factory.provider_id(), factory);
     }
 
     /// Register a reranking factory.
@@ -100,6 +113,29 @@ impl ProviderRegistry {
             .get(&provider)
             .ok_or_else(|| LLMError::InvalidProviderError(provider.as_str().to_string()))?;
         factory.create_embedding(config)
+    }
+
+    /// Create a batch embedding client from provider-specific config.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the provider is not registered or client creation fails.
+    pub fn create_batch_embedding(
+        &self,
+        config: &EmbeddingProviderConfig,
+    ) -> Result<BatchEmbeddingClient, LLMError> {
+        match config {
+            EmbeddingProviderConfig::VoyageAI(cfg) => {
+                Ok(BatchEmbeddingClient::VoyageAI(Arc::new(VoyageAIClient::<
+                    ReqwestClient,
+                >::with_config(
+                    cfg.clone()
+                ))))
+            }
+            other => Err(LLMError::InvalidProviderError(
+                other.provider_id().as_str().to_string(),
+            )),
+        }
     }
 
     /// Create a reranker from provider-specific config.
@@ -164,6 +200,8 @@ pub fn default_provider_registry() -> ProviderRegistry {
     registry.register_embedding(Arc::new(ZeroEntropyProvider));
     registry.register_embedding(Arc::new(GeminiProvider));
     registry.register_embedding(Arc::new(OllamaProvider));
+
+    registry.register_batch_embedding(Arc::new(VoyageAIProvider));
 
     registry.register_rerank(Arc::new(VoyageAIProvider));
     registry.register_rerank(Arc::new(CohereProvider));

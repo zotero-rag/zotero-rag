@@ -12,7 +12,7 @@ use lancedb::embeddings::EmbeddingFunction;
 use reqwest::header::HeaderMap;
 use serde::{Deserialize, Serialize};
 
-use crate::capabilities::EmbeddingProvider;
+use crate::capabilities::{BatchJobState, EmbeddingProvider};
 use crate::constants::{
     DEFAULT_COHERE_EMBEDDING_DIM, DEFAULT_GEMINI_EMBEDDING_DIM, DEFAULT_MAX_CONCURRENT_REQUESTS,
     DEFAULT_OLLAMA_EMBEDDING_DIM, DEFAULT_OPENAI_EMBEDDING_DIM, DEFAULT_VOYAGE_EMBEDDING_DIM,
@@ -391,4 +391,82 @@ where
     .map_err(|e| LLMError::GenericLLMError(format!("Failed to create FixedSizeListArray: {e}")))?;
 
     Ok(Arc::new(list_array) as Arc<dyn arrow_array::Array>)
+}
+
+/// Public-facing embedding request struct for batch embedding providers. Each
+/// [`BatchEmbeddingProvider`] is expected to convert these to their native formats.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct BatchEmbeddingRequest {
+    /// Embedding inputs
+    pub inputs: Vec<BatchEmbeddingInput>,
+    /// The model to use
+    pub model: String,
+    /// The output dimensions
+    pub dims: usize,
+}
+
+/// Input to the batch API. This struct corresponds to one of the batch's inputs. Usually, providers
+/// expose such functionality by requiring one JSONL line per [`BatchEmbeddingInput`].
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct BatchEmbeddingInput {
+    /// A unique ID for this input.
+    pub id: String,
+    /// The text to embed.
+    pub text: String,
+}
+
+/// A result of a successful embedding batch submission. The contained ID is used to check on the
+/// status of batches.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct BatchSubmission {
+    /// The batch's unique ID.
+    pub batch_id: String,
+}
+
+/// Results of a completed batch embedding job.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct BatchEmbeddingResults {
+    /// The results for successfully embedded inputs
+    pub succeeded: Vec<BatchEmbeddingResult>,
+    /// Errors for failed inputs
+    pub failed: Vec<BatchEmbeddingError>,
+}
+
+/// A response part containing the result of a successful embedding, when a batch embedding provider
+/// is used.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct BatchEmbeddingResult {
+    /// The ID for this input. Corresponds to the `id` in [`BatchEmbeddingInput`].
+    pub id: String,
+    /// The embedding result
+    pub embedding: Vec<f32>,
+}
+
+/// Description for a failed batch embedding input.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct BatchEmbeddingError {
+    /// The ID for this input. Corresponds to the `id` in [`BatchEmbeddingInput`].
+    pub id: String,
+    /// The error message
+    pub error: String,
+}
+
+/// A provider for batch embeddings. Implementers of this trait should also be constructable via a
+/// [`crate::capabilities::BatchEmbeddingFactory`].
+#[allow(async_fn_in_trait)]
+pub trait BatchEmbeddingProvider {
+    /// Submit a batch of embeddings. Each input in the batch can only contain one text.
+    async fn submit_batch_embeddings(
+        &self,
+        request: BatchEmbeddingRequest,
+    ) -> Result<BatchSubmission, LLMError>;
+
+    /// Get the status of a submitted batch job.
+    async fn get_batch_status(&self, batch_id: &str) -> Result<BatchJobState, LLMError>;
+
+    /// Get the results of a completed batch job.
+    async fn get_batch_embedding_results(
+        &self,
+        batch_id: &str,
+    ) -> Result<BatchEmbeddingResults, LLMError>;
 }
