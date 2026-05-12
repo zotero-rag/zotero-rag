@@ -62,14 +62,14 @@ impl BatchEmbeddingFactory for VoyageAIProvider {
     fn create_batch_embedding(
         &self,
         config: &EmbeddingProviderConfig,
-    ) -> Result<Arc<BatchEmbeddingClient>, LLMError> {
+    ) -> Result<BatchEmbeddingClient, LLMError> {
         let EmbeddingProviderConfig::VoyageAI(cfg) = config else {
             return Err(LLMError::InvalidProviderError("voyageai".into()));
         };
 
-        Ok(Arc::new(BatchEmbeddingClient::VoyageAI(Arc::new(
+        Ok(BatchEmbeddingClient::VoyageAI(Arc::new(
             VoyageAIClient::with_config(cfg.clone()),
-        ))))
+        )))
     }
 }
 

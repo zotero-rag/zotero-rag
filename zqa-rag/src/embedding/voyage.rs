@@ -974,21 +974,6 @@ mod tests {
 
         let client = VoyageAIClient::<ReqwestClient>::default();
 
-        let _request = [
-            VoyageAIFilesRequest {
-                custom_id: "live-req-1".to_string(),
-                body: VoyageAIFilesRequestBody {
-                    input: vec!["Hello, World!".to_string(), "A second string".to_string()],
-                },
-            },
-            VoyageAIFilesRequest {
-                custom_id: "live-req-2".to_string(),
-                body: VoyageAIFilesRequestBody {
-                    input: vec!["A third string".to_string()],
-                },
-            },
-        ];
-
         let request = BatchEmbeddingRequest {
             inputs: vec![
                 BatchEmbeddingInput {

@@ -284,7 +284,7 @@ pub trait BatchEmbeddingFactory: Send + Sync {
     fn create_batch_embedding(
         &self,
         config: &EmbeddingProviderConfig,
-    ) -> Result<Arc<BatchEmbeddingClient>, LLMError>;
+    ) -> Result<BatchEmbeddingClient, LLMError>;
 }
 
 #[cfg(test)]

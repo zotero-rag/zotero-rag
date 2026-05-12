@@ -450,23 +450,3 @@ pub struct BatchEmbeddingError {
     /// The error message
     pub error: String,
 }
-
-/// A provider for batch embeddings. Implementers of this trait should also be constructable via a
-/// [`crate::capabilities::BatchEmbeddingFactory`].
-#[allow(async_fn_in_trait)]
-pub trait BatchEmbeddingProvider {
-    /// Submit a batch of embeddings. Each input in the batch can only contain one text.
-    async fn submit_batch_embeddings(
-        &self,
-        request: BatchEmbeddingRequest,
-    ) -> Result<BatchSubmission, LLMError>;
-
-    /// Get the status of a submitted batch job.
-    async fn get_batch_status(&self, batch_id: &str) -> Result<BatchJobState, LLMError>;
-
-    /// Get the results of a completed batch job.
-    async fn get_batch_embedding_results(
-        &self,
-        batch_id: &str,
-    ) -> Result<BatchEmbeddingResults, LLMError>;
-}
