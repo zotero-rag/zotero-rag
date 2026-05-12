@@ -472,7 +472,7 @@ mod tests {
         let result = temp_env::async_with_vars(
             [("CI", Some("true")), ("LANCEDB_URI", Some(&db_uri))],
             handle_query_cmd(
-                "How should I oversample in defect prediction?".to_string(),
+                "What papers do I have about learning rate scheduling?".to_string(),
                 &mut ctx,
             ),
         )

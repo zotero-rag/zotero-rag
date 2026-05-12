@@ -124,18 +124,13 @@ impl ProviderRegistry {
         &self,
         config: &EmbeddingProviderConfig,
     ) -> Result<BatchEmbeddingClient, LLMError> {
-        match config {
-            EmbeddingProviderConfig::VoyageAI(cfg) => {
-                Ok(BatchEmbeddingClient::VoyageAI(Arc::new(VoyageAIClient::<
-                    ReqwestClient,
-                >::with_config(
-                    cfg.clone()
-                ))))
-            }
-            other => Err(LLMError::InvalidProviderError(
-                other.provider_id().as_str().to_string(),
-            )),
-        }
+        let provider = config.provider_id();
+        let factory = self
+            .batch_embedding
+            .get(&provider)
+            .ok_or_else(|| LLMError::InvalidProviderError(provider.as_str().to_string()))?;
+
+        factory.create_batch_embedding(config)
     }
 
     /// Create a reranker from provider-specific config.

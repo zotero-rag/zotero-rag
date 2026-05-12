@@ -108,6 +108,7 @@ pub fn get_client_with_config(config: &LLMClientConfig) -> Result<LLMClient, LLM
 }
 
 /// Enum representing different batch embedding client implementations
+#[non_exhaustive]
 pub enum BatchEmbeddingClient {
     /// Voyage AI batch embedding client
     VoyageAI(Arc<VoyageAIClient<ReqwestClient>>),
