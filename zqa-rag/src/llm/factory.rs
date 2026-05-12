@@ -1,11 +1,15 @@
 //! Factory methods for creating clients based on the provider name.
 
+use std::sync::Arc;
+
 use crate::clients::anthropic::AnthropicClient;
 use crate::clients::gemini::GeminiClient;
 use crate::clients::ollama::OllamaClient;
 use crate::clients::openai::OpenAIClient;
 use crate::clients::openrouter::OpenRouterClient;
 use crate::config::LLMClientConfig;
+use crate::embedding::voyage::VoyageAIClient;
+use crate::http_client::ReqwestClient;
 use crate::llm::base::{ApiClient, ChatRequest, ReasoningConfig};
 use crate::llm::errors::LLMError;
 use crate::providers::registry::provider_registry;
@@ -101,4 +105,10 @@ impl ApiClient for LLMClient {
 /// * `LLMError::InvalidProviderError` if the provider is not supported
 pub fn get_client_with_config(config: &LLMClientConfig) -> Result<LLMClient, LLMError> {
     provider_registry().create_llm(config)
+}
+
+/// Enum representing different batch embedding client implementations
+pub enum BatchEmbeddingClient {
+    /// Voyage AI batch embedding client
+    VoyageAI(Arc<VoyageAIClient<ReqwestClient>>),
 }

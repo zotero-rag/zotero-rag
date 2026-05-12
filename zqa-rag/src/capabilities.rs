@@ -10,8 +10,13 @@ use zqa_pdftools::chunk::ChunkingStrategy;
 
 use crate::{
     config::LLMClientConfig,
-    embedding::common::EmbeddingProviderConfig,
-    llm::{errors::LLMError, factory::LLMClient},
+    embedding::common::{
+        BatchEmbeddingRequest, BatchEmbeddingResults, BatchSubmission, EmbeddingProviderConfig,
+    },
+    llm::{
+        errors::LLMError,
+        factory::{BatchEmbeddingClient, LLMClient},
+    },
     providers::provider_id::ProviderId,
     reranking::common::{Rerank, RerankProviderConfig},
 };
@@ -169,24 +174,17 @@ impl PartialOrd for BatchJobState {
 /// A provider of a batch API.
 #[allow(async_fn_in_trait)]
 pub trait BatchAPIProvider {
-    /// The embedding batch creation request
-    type BatchInput: Serialize;
-    /// The embedding batch creation response
-    type BatchSubmitResponse: for<'de> Deserialize<'de>;
-    /// The embedding results
-    type BatchResults: for<'de> Deserialize<'de>;
-
     /// Submit a job to the batch API.
     async fn submit_batch(
         &self,
-        request: Self::BatchInput,
-    ) -> Result<Self::BatchSubmitResponse, LLMError>;
+        request: BatchEmbeddingRequest,
+    ) -> Result<BatchSubmission, LLMError>;
 
     /// Check the status of a submitted batch job.
     async fn get_batch_status(&self, batch_id: &str) -> Result<BatchJobState, LLMError>;
 
     /// Get the results of a completed batch job.
-    async fn get_batch_results(&self, batch_id: &str) -> Result<Self::BatchResults, LLMError>;
+    async fn get_batch_results(&self, batch_id: &str) -> Result<BatchEmbeddingResults, LLMError>;
 }
 
 /// Providers of batch embedding APIs. Structs corresponding to these should implement
@@ -202,7 +200,6 @@ impl BatchEmbeddingProvider {
     /// Return a string representation of the provider.
     #[must_use]
     pub fn as_str(&self) -> &str {
-        // Oh boy, what enum variant will we get, I wonder
         match self {
             BatchEmbeddingProvider::VoyageAI => "voyageai",
         }
@@ -235,6 +232,7 @@ impl RerankerProvider {
 pub trait LlmFactory: Send + Sync {
     /// Return the canonical provider ID
     fn provider_id(&self) -> ProviderId;
+
     /// Attempt to create an [`LLMClient`] with the provided config.
     ///
     /// # Errors
@@ -247,6 +245,7 @@ pub trait LlmFactory: Send + Sync {
 pub trait EmbeddingFactory: Send + Sync {
     /// Return the canonical provider ID
     fn provider_id(&self) -> ProviderId;
+
     /// Attempt to create a [`EmbeddingProvider`] object with the provided config.
     ///
     /// # Errors
@@ -262,12 +261,30 @@ pub trait EmbeddingFactory: Send + Sync {
 pub trait RerankFactory: Send + Sync {
     /// Return the canonical provider ID
     fn provider_id(&self) -> ProviderId;
+
     /// Attempt to create a [`Rerank`] object with the provided config.
     ///
     /// # Errors
     ///
     /// [`LLMError`] variant if creating a reranker fails.
     fn create_reranker(&self, config: &RerankProviderConfig) -> Result<Arc<dyn Rerank>, LLMError>;
+}
+
+/// Factory trait to create a [`BatchAPIProvider`] object
+pub trait BatchEmbeddingFactory: Send + Sync {
+    /// Return the canonical provider ID
+    fn provider_id(&self) -> ProviderId;
+
+    /// Attempt to create a [`BatchAPIProvider`] given the embedding config. This assumes that every
+    /// batch embedding provider is also an embedding provider, which is generally true.
+    ///
+    /// # Errors
+    ///
+    /// [`LLMError`] variant if creating a reranker fails.
+    fn create_batch_embedding(
+        &self,
+        config: &EmbeddingProviderConfig,
+    ) -> Result<Arc<BatchEmbeddingClient>, LLMError>;
 }
 
 #[cfg(test)]
