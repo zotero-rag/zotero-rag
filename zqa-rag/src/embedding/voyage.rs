@@ -369,29 +369,6 @@ pub(crate) struct VoyageAIBatchRequest<'a> {
     input_file_id: String,
 }
 
-impl VoyageAIBatchRequest<'_> {
-    /// Add a file ID to the current batch request.
-    #[must_use]
-    pub(crate) fn with_file_id(mut self, file_id: &str) -> Self {
-        self.input_file_id = file_id.into();
-
-        self
-    }
-
-    /// Build a batch request using values from the provided config.
-    #[must_use]
-    pub(crate) fn from_config(config: &crate::config::VoyageAIConfig) -> Self {
-        Self {
-            request_params: VoyageAIBatchRequestParams {
-                model: config.embedding_model.clone(),
-                output_dimension: config.embedding_dims,
-                ..VoyageAIBatchRequestParams::default()
-            },
-            ..Default::default()
-        }
-    }
-}
-
 impl<'a> Default for VoyageAIBatchRequest<'a> {
     fn default() -> Self {
         Self {
@@ -625,6 +602,7 @@ where
         const FILES_API_URL: &str = "https://api.voyageai.com/v1/files";
 
         let inputs = request
+            .clone()
             .inputs
             .into_iter()
             .map(|v| VoyageAIFilesRequest {
@@ -667,10 +645,11 @@ where
         const BATCH_API_URL: &str = "https://api.voyageai.com/v1/batches";
 
         let file_id = &response.id;
-        let batch_request = if let Some(ref config) = self.config {
-            VoyageAIBatchRequest::from_config(config).with_file_id(file_id)
-        } else {
-            VoyageAIBatchRequest::default().with_file_id(file_id)
+        let params = VoyageAIBatchRequestParams::from(request);
+        let batch_request = VoyageAIBatchRequest {
+            input_file_id: file_id.clone(),
+            request_params: params,
+            ..Default::default()
         };
 
         let res = self
@@ -729,7 +708,7 @@ where
                     Vec::new()
                 };
 
-                let embedding_dims = self
+                let _embedding_dims = self
                     .config
                     .as_ref()
                     .map_or(DEFAULT_VOYAGE_EMBEDDING_DIM as usize, |cfg| {
@@ -755,9 +734,8 @@ where
                                 .body
                                 .data
                                 .first()
-                                .map_or((0..embedding_dims).map(|_| 0.0).collect(), |v| {
-                                    v.embedding.clone()
-                                }),
+                                .map(|v| v.embedding.clone())
+                                .unwrap_or_default(),
                         }
                     })
                     .collect();
