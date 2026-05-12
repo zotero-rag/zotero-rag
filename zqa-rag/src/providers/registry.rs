@@ -9,8 +9,7 @@ use lancedb::embeddings::EmbeddingFunction;
 use crate::{
     capabilities::{BatchEmbeddingFactory, EmbeddingFactory, LlmFactory, RerankFactory},
     config::LLMClientConfig,
-    embedding::{common::EmbeddingProviderConfig, voyage::VoyageAIClient},
-    http_client::ReqwestClient,
+    embedding::common::EmbeddingProviderConfig,
     llm::{
         errors::LLMError,
         factory::{BatchEmbeddingClient, LLMClient},

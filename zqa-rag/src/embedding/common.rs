@@ -12,7 +12,7 @@ use lancedb::embeddings::EmbeddingFunction;
 use reqwest::header::HeaderMap;
 use serde::{Deserialize, Serialize};
 
-use crate::capabilities::{BatchJobState, EmbeddingProvider};
+use crate::capabilities::EmbeddingProvider;
 use crate::constants::{
     DEFAULT_COHERE_EMBEDDING_DIM, DEFAULT_GEMINI_EMBEDDING_DIM, DEFAULT_MAX_CONCURRENT_REQUESTS,
     DEFAULT_OLLAMA_EMBEDDING_DIM, DEFAULT_OPENAI_EMBEDDING_DIM, DEFAULT_VOYAGE_EMBEDDING_DIM,
@@ -421,6 +421,9 @@ pub struct BatchEmbeddingInput {
 pub struct BatchSubmission {
     /// The batch's unique ID.
     pub batch_id: String,
+    /// The ID of the uploaded file. This is useful to correctly reference batches when actually
+    /// submitting a batch request.
+    pub file_id: String,
 }
 
 /// Results of a completed batch embedding job.
