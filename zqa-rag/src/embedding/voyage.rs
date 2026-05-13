@@ -348,14 +348,6 @@ pub(crate) struct VoyageAIBatchCreateResponse {
 
 /// A request to the Voyage AI Batch API. This assumes a call to the Files API has been made,
 /// uploading the JSONL file in the right format.
-///
-/// # Construction example
-///
-/// ```ignore
-/// # use zqa_rag::embedding::voyage::VoyageAIBatchRequest;
-///
-/// let request = VoyageAIBatchRequest::default()
-///     .with_file_id("file-123");
 /// ```
 #[derive(Serialize)]
 pub(crate) struct VoyageAIBatchRequest<'a> {
@@ -602,13 +594,12 @@ where
         const FILES_API_URL: &str = "https://api.voyageai.com/v1/files";
 
         let inputs = request
-            .clone()
             .inputs
-            .into_iter()
+            .iter()
             .map(|v| VoyageAIFilesRequest {
-                custom_id: v.id,
+                custom_id: v.id.clone(),
                 body: VoyageAIFilesRequestBody {
-                    input: vec![v.text],
+                    input: vec![v.text.clone()],
                 },
             })
             .collect::<Vec<_>>();
@@ -707,13 +698,6 @@ where
                 } else {
                     Vec::new()
                 };
-
-                let _embedding_dims = self
-                    .config
-                    .as_ref()
-                    .map_or(DEFAULT_VOYAGE_EMBEDDING_DIM as usize, |cfg| {
-                        cfg.embedding_dims
-                    });
 
                 let success = results
                     .into_iter()
