@@ -2,11 +2,14 @@
 
 use std::str::FromStr;
 
+use serde::{Deserialize, Serialize};
+
 use crate::capabilities::{EmbeddingProvider, ModelProvider, RerankerProvider};
 
 /// The canonical list of providers, regardless of capabilities. The
 /// [`super::registry::ProviderRegistry`] is responsible for maintaining that information.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 #[non_exhaustive]
 #[allow(missing_docs)]
 pub enum ProviderId {

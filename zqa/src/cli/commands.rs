@@ -1,22 +1,55 @@
 use thiserror::Error;
 
+pub(crate) enum BatchCommand {
+    Create,
+    CheckStatus,
+    FetchResults,
+}
+
+impl BatchCommand {
+    pub(crate) const VARIANTS: &'static [Self] =
+        &[Self::Create, Self::CheckStatus, Self::FetchResults];
+
+    pub(crate) fn as_str(&self) -> &str {
+        match self {
+            Self::Create => "create",
+            Self::CheckStatus => "check",
+            Self::FetchResults => "fetch",
+        }
+    }
+
+    pub(crate) fn from_str(s: &str) -> Result<Self, ()> {
+        match s {
+            "create" => Ok(Self::Create),
+            "check" => Ok(Self::CheckStatus),
+            "fetch" => Ok(Self::FetchResults),
+            _ => Err(()),
+        }
+    }
+
+    fn variants() -> impl Iterator<Item = &'static str> {
+        Self::VARIANTS.iter().map(Self::as_str)
+    }
+}
+
 pub(crate) enum Command {
-    Help,
+    Batch(BatchCommand),
     CheckHealth,
-    DoNothing,
-    Doctor,
-    Embed { fix: bool },
-    Process,
-    Index,
-    Stats,
-    Dedup,
-    Resume,
     Config,
-    NewConversation,
-    Quit,
+    Dedup,
     Docs(DocsCommand),
-    Search { query: String },
+    Doctor,
+    DoNothing,
+    Embed { fix: bool },
+    Help,
+    Index,
+    NewConversation,
+    Process,
     Query { text: String },
+    Quit,
+    Resume,
+    Search { query: String },
+    Stats,
 }
 
 pub(crate) enum DocsCommand {
@@ -34,19 +67,20 @@ pub(crate) enum CommandParseError {
 pub(crate) fn parse_command(command: &str) -> Result<Command, CommandParseError> {
     match command {
         "" => Ok(Command::DoNothing),
-        "/new" => Ok(Command::NewConversation),
-        "/help" | "help" | "?" => Ok(Command::Help),
         "/checkhealth" => Ok(Command::CheckHealth),
+        "/config" => Ok(Command::Config),
+        "/dedup" => Ok(Command::Dedup),
         "/doctor" => Ok(Command::Doctor),
         "/embed" => Ok(Command::Embed { fix: false }),
-        "/process" => Ok(Command::Process),
+        "/help" | "help" | "?" => Ok(Command::Help),
         "/index" => Ok(Command::Index),
-        "/stats" => Ok(Command::Stats),
-        "/dedup" => Ok(Command::Dedup),
+        "/new" => Ok(Command::NewConversation),
+        "/process" => Ok(Command::Process),
         "/resume" => Ok(Command::Resume),
-        "/config" => Ok(Command::Config),
+        "/stats" => Ok(Command::Stats),
         "/quit" | "/exit" | "quit" | "exit" => Ok(Command::Quit),
         query if query.starts_with('/') => {
+            // Handle commands that take subcommands
             if let Some(search_term) = query.strip_prefix("/search") {
                 let search_term = search_term.trim();
                 if search_term.is_empty() {
@@ -69,6 +103,17 @@ pub(crate) fn parse_command(command: &str) -> Result<Command, CommandParseError>
                 }
 
                 return Ok(Command::Embed { fix: true });
+            }
+
+            if let Some(subcmd) = query.strip_prefix("/batch") {
+                let subcmd = subcmd.trim();
+                let Ok(subcmd) = BatchCommand::from_str(subcmd) else {
+                    return Err(CommandParseError::InvalidCommand(format!(
+                        "Invalid subcommand to /embed: {subcmd}"
+                    )));
+                };
+
+                return Ok(Command::Batch(subcmd));
             }
 
             if let Some(subcmd) = query.strip_prefix("/docs") {

@@ -5,6 +5,7 @@ use rustyline::error::ReadlineError;
 
 use crate::cli::commands::{Command, parse_command};
 use crate::cli::errors::CLIError;
+use crate::cli::handlers::batch::handle_batch_cmd;
 use crate::cli::handlers::cli::{
     handle_config_cmd, handle_help_cmd, handle_new_conversation_cmd, handle_quit_cmd,
 };
@@ -44,26 +45,27 @@ pub(crate) async fn dispatch_command<O: Write, E: Write>(
         parse_command(command.trim()).map_err(|e| CLIError::CommandError(e.to_string()))?;
 
     match command {
+        Command::Batch(subcmd) => handle_batch_cmd(subcmd, ctx).await,
+        Command::CheckHealth => handle_checkhealth_cmd(ctx).await,
+        Command::Config => handle_config_cmd(ctx),
+        Command::Dedup => handle_dedup_cmd(ctx).await,
+        Command::Docs(subcmd) => handle_docs_cmd(subcmd, ctx),
+        Command::Doctor => handle_doctor_cmd(ctx).await,
         Command::DoNothing => {
             return Ok(true);
         }
-        Command::Process => handle_process_cmd(ctx).await,
         Command::Embed { fix } => handle_embed_cmd(fix, ctx).await,
-        Command::Dedup => handle_dedup_cmd(ctx).await,
-        Command::Index => handle_index_cmd(ctx).await,
-        Command::Resume => handle_resume_cmd(ctx),
         Command::Help => handle_help_cmd(ctx),
+        Command::Index => handle_index_cmd(ctx).await,
+        Command::NewConversation => handle_new_conversation_cmd(ctx),
+        Command::Process => handle_process_cmd(ctx).await,
         Command::Quit => {
             return handle_quit_cmd(ctx).and(Ok(false));
         }
-        Command::CheckHealth => handle_checkhealth_cmd(ctx).await,
         Command::Query { text } => handle_query_cmd(text, ctx).await,
-        Command::Doctor => handle_doctor_cmd(ctx).await,
-        Command::NewConversation => handle_new_conversation_cmd(ctx),
-        Command::Config => handle_config_cmd(ctx),
-        Command::Stats => handle_stats_cmd(ctx).await,
+        Command::Resume => handle_resume_cmd(ctx),
         Command::Search { query } => handle_search_cmd(query, ctx).await,
-        Command::Docs(subcmd) => handle_docs_cmd(subcmd, ctx),
+        Command::Stats => handle_stats_cmd(ctx).await,
     }
     .and(Ok(true))
 }
