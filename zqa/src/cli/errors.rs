@@ -21,8 +21,6 @@ pub enum CLIError {
     LLMError(String),
     #[error("Mutex poisoning error: {0}")]
     LockPoisoningError(String),
-    #[error("Malformed batch in batch_iter.bin")]
-    MalformedBatchError,
     #[error("Error from readline: {0}")]
     ReadlineError(String),
     #[error("Serialization error: {0}")]
