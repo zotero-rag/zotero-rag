@@ -155,17 +155,18 @@ pub(crate) async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<()
 #[cfg(test)]
 pub(crate) mod tests {
     use std::io::Cursor;
-    use std::sync::Arc;
+    use std::sync::{Arc, atomic};
 
     use serde_json::json;
     use serial_test::serial;
     use temp_env;
-    use zqa_macros::test_ok;
+    use zqa_macros::{test_contains, test_eq, test_ok};
     use zqa_macros_proc::retry;
     use zqa_rag::constants::{
         DEFAULT_VOYAGE_EMBEDDING_DIM, DEFAULT_VOYAGE_EMBEDDING_MODEL, DEFAULT_VOYAGE_RERANK_MODEL,
     };
     use zqa_rag::embedding::common::EmbeddingProviderConfig;
+    use zqa_rag::llm::base::{ChatHistoryContent, ChatHistoryItem, MessageRole};
     use zqa_rag::llm::tools::Tool;
     use zqa_rag::reranking::common::RerankProviderConfig;
 
@@ -242,6 +243,89 @@ pub(crate) mod tests {
             Arc::new(store),
             Some(RerankProviderConfig::VoyageAI(config)),
         )
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_dispatch_new_command_resets_conversation_state() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let state_dir = temp_dir.path().to_str().unwrap().to_string();
+
+        temp_env::async_with_vars([("ZQA_STATE_DIR", Some(state_dir.as_str()))], async {
+            let mut ctx = create_test_context();
+            *ctx.state.title.lock().unwrap() = Some("Existing conversation".to_string());
+            ctx.state
+                .chat_history
+                .lock()
+                .unwrap()
+                .push(ChatHistoryItem {
+                    role: MessageRole::User,
+                    content: vec![ChatHistoryContent::Text("Summarize this paper".into())],
+                });
+            ctx.state.dirty.store(true, atomic::Ordering::Relaxed);
+
+            let result = dispatch_command("/new", &mut ctx).await;
+            test_ok!(result);
+            assert!(result.unwrap());
+
+            assert!(!ctx.state.dirty.load(atomic::Ordering::Relaxed));
+            assert!(ctx.state.chat_history.lock().unwrap().is_empty());
+            test_eq!(*ctx.state.title.lock().unwrap(), None);
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_dispatch_resume_command_handles_no_saved_conversations() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let state_dir = temp_dir.path().to_str().unwrap().to_string();
+
+        temp_env::async_with_vars([("ZQA_STATE_DIR", Some(state_dir.as_str()))], async {
+            let mut ctx = create_test_context();
+
+            let result = dispatch_command("/resume", &mut ctx).await;
+            test_ok!(result);
+            assert!(result.unwrap());
+
+            let output = String::from_utf8(ctx.out.into_inner()).unwrap();
+            test_contains!(output, "No saved conversations found.");
+        })
+        .await;
+    }
+
+    #[retry(3)]
+    #[tokio::test(flavor = "multi_thread")]
+    #[serial]
+    async fn test_dispatch_dedup_command() {
+        dotenv::dotenv().ok();
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_uri = temp_dir
+            .path()
+            .join("lancedb-table")
+            .to_str()
+            .unwrap()
+            .to_string();
+
+        temp_env::async_with_vars(
+            [("CI", Some("true")), ("LANCEDB_URI", Some(db_uri.as_str()))],
+            async {
+                let mut ctx = create_test_context();
+
+                let process_result = dispatch_command("/process", &mut ctx).await;
+                test_ok!(process_result);
+                assert!(process_result.unwrap());
+
+                let dedup_result = dispatch_command("/dedup", &mut ctx).await;
+                test_ok!(dedup_result);
+                assert!(dedup_result.unwrap());
+
+                let output = String::from_utf8(ctx.out.into_inner()).unwrap();
+                test_contains!(output, "Deduped ");
+            },
+        )
+        .await;
     }
 
     #[retry(3)]
