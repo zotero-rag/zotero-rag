@@ -24,7 +24,7 @@ const RESET: &str = "\x1b[0m";
 
 /// Errors that can occur when interacting with the state directory.
 #[derive(PartialEq, Debug, Error)]
-pub(crate) enum StateError {
+pub enum StateError {
     #[error("Failed to get home directory.")]
     DirectoryError,
     #[error("Failed to save first run information.")]
