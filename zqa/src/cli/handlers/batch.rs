@@ -50,7 +50,11 @@
 //!
 //! For the structure of this file, see [`BatchEmbeddingMetadata`].
 
-use std::{fs, io::Write};
+use std::{
+    fs,
+    hash::{DefaultHasher, Hash, Hasher},
+    io::Write,
+};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -71,12 +75,13 @@ use crate::{state::get_state_dir, utils::library::parse_library};
 struct BatchEmbeddingMetadata {
     /// The batch ID
     batch_id: String,
+    /// The file ID from the provider's Files API
+    file_id: String,
     /// The batch embedding provider
     provider: ProviderId,
     /// The embedding model name
     model: String,
-    /// Date of creation, from the API (as opposed to local time). Used to give users context when
-    /// referring to a batch.
+    /// Date of creation (local time, in UTC). Used to give users context when referring to a batch.
     created_at: DateTime<Utc>,
     /// Hashes of each text in this batch. Since our texts can be quite large, and we only need
     /// equality tests, a hash is a simpler solution.
@@ -107,7 +112,7 @@ fn get_seq_id() -> Result<usize, CLIError> {
         return Ok(1);
     }
 
-    let mut entries = fs::read_dir(batch_dir)?
+    let mut entries = fs::read_dir(&batch_dir)?
         .filter_map(|entry| {
             let file_name = entry.ok()?.file_name().into_string().ok()?;
 
@@ -123,11 +128,16 @@ fn get_seq_id() -> Result<usize, CLIError> {
     }
 
     entries.sort();
-    let last_seq = entries.into_iter().rev().find_map(|f| {
-        // Ignore elements that don't parse to a valid integer.
-        let (_, seq_str) = f.split_at("batch_".len());
-        seq_str.parse::<usize>().ok()
-    });
+    let last_seq = fs::read_dir(batch_dir)?
+        .filter_map(|entry| {
+            let file_name = entry.ok()?.file_name().into_string().ok()?;
+            file_name
+                .strip_prefix("batch_")?
+                .strip_suffix(".log")?
+                .parse::<usize>()
+                .ok()
+        })
+        .max();
 
     last_seq.map_or_else(|| Ok(1), |val| Ok(val + 1))
 }
@@ -165,6 +175,7 @@ fn write_batch_metadata(
 
     let metadata = BatchEmbeddingMetadata {
         batch_id: submission.batch_id,
+        file_id: submission.file_id,
         provider,
         model,
         created_at: Utc::now(),
@@ -174,7 +185,7 @@ fn write_batch_metadata(
     };
 
     let seq = get_seq_id()?;
-    let filename = format!("batch_{seq}");
+    let filename = format!("batch_{seq}.log");
     let contents = serde_json::to_string_pretty(&metadata)?;
     fs::write(batch_dir.join(filename), contents)?;
 
@@ -199,7 +210,8 @@ where
 
     let cfg = ctx.config.get_embedding_config();
     let Some(cfg) = cfg else {
-        return Err(CLIError::ConfigError(
+        // `CommandError` variants don't exit the CLI
+        return Err(CLIError::CommandError(
             concat!(
                 "Could not get a config for batch embeddings. Ensure your config has an ",
                 "embedding provider configured. See https://github.com/zotero-rag/zotero-rag#configuration ",
@@ -217,6 +229,16 @@ where
         Ok(embedder) => embedder,
     };
 
+    let hashes = new_items
+        .iter()
+        .map(|item| {
+            let mut hasher = DefaultHasher::new();
+            item.text.hash(&mut hasher);
+
+            hasher.finish().to_string()
+        })
+        .collect::<Vec<_>>();
+
     let request = BatchEmbeddingRequest {
         model: cfg.model_name().into(),
         dims: cfg.dims(),
@@ -230,12 +252,16 @@ where
     };
 
     let submission = embedder.submit_batch(request).await?;
+    let batch_id = submission.batch_id.clone();
     write_batch_metadata(
         cfg.provider_id(),
         cfg.model_name().into(),
-        vec![],
+        hashes,
         submission,
-    )
+    )?;
+
+    writeln!(ctx.out, "Batch {batch_id} successfully created.")?;
+    Ok(())
 }
 
 /// Handle the `/batch` commands.

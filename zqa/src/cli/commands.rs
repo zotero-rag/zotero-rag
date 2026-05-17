@@ -112,7 +112,7 @@ pub(crate) fn parse_command(command: &str) -> Result<Command, CommandParseError>
                 let subcmd = subcmd.trim();
                 let Ok(subcmd) = BatchCommand::from_str(subcmd) else {
                     return Err(CommandParseError::InvalidCommand(format!(
-                        "Invalid subcommand to /embed: {subcmd}"
+                        "Invalid subcommand to /batch: {subcmd}"
                     )));
                 };
 
