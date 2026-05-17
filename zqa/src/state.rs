@@ -605,16 +605,7 @@ mod tests {
                 // 3. "sk-test-model" (Model API key)
                 // 4. "v" (Embedding provider: Voyage AI)
                 // 5. "sk-test-embedding" (Embedding API key)
-                // 6. "v" (Reranker provider: Voyage AI - same as embedding default choice logic but we pick explicitly or default?)
-                //    Wait, logic says:
-                //    if reranker_provider != embedding_provider { ... }
-                //    We need to select reranker provider.
-                //    "println!("[C]ohere"); println!("[V]oyage AI");"
-                //    read_char(embedding_provider, &['c', 'v'])
-                //    Since embedding is 'v', default is 'v'.
-                //    So we can just press enter (empty line) to accept default 'v'.
-                //    But read_char handles newline as default.
-                //    So let's send "\n".
+                // 6. "\n" (Reranker provider: Voyage AI - same as embedding default choice)
                 // 7. Max concurrent requests: "10"
                 let input_data = "y\na\nsk-test-model\nv\nsk-test-embedding\n\n10\n";
                 let mut cursor = Cursor::new(input_data);
