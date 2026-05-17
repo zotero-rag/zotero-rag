@@ -2,12 +2,14 @@
 
 use std::sync::Arc;
 
+use crate::capabilities::BatchAPIProvider;
 use crate::clients::anthropic::AnthropicClient;
 use crate::clients::gemini::GeminiClient;
 use crate::clients::ollama::OllamaClient;
 use crate::clients::openai::OpenAIClient;
 use crate::clients::openrouter::OpenRouterClient;
 use crate::config::LLMClientConfig;
+use crate::embedding::common::{BatchEmbeddingRequest, BatchSubmission};
 use crate::embedding::voyage::VoyageAIClient;
 use crate::http_client::ReqwestClient;
 use crate::llm::base::{ApiClient, ChatRequest, ReasoningConfig};
@@ -112,4 +114,35 @@ pub fn get_client_with_config(config: &LLMClientConfig) -> Result<LLMClient, LLM
 pub enum BatchEmbeddingClient {
     /// Voyage AI batch embedding client
     VoyageAI(Arc<VoyageAIClient<ReqwestClient>>),
+}
+
+impl BatchEmbeddingClient {
+    /// Submit a request to the batch embedding API.
+    ///
+    /// # Arguments
+    ///
+    /// * `request` - A [`BatchEmbeddingRequest`] object containing all the texts.
+    ///
+    /// # Returns
+    ///
+    /// Details of the submitted batch if succeeded, or an [`LLMError`].
+    ///
+    /// # Errors
+    ///
+    /// * `LLMError::EnvError` - If the API key is not set, and no config is provided
+    /// * `LLMError::InvalidHeaderError` - If the API key cannot be parsed as a header value
+    /// * `LLMError::TimeoutError` - If the HTTP request times out
+    /// * `LLMError::CredentialError` - If the API returns 401 or 403
+    /// * `LLMError::HttpStatusError` - If the API returns another unsuccessful status code
+    /// * `LLMError::NetworkError` - If a network connectivity error occurs
+    /// * `LLMError::DeserializationError` - If either API response cannot be parsed
+    /// * `LLMError::GenericLLMError` - If the temporary JSONL file cannot be written
+    pub async fn submit_batch(
+        &self,
+        request: BatchEmbeddingRequest,
+    ) -> Result<BatchSubmission, LLMError> {
+        match self {
+            Self::VoyageAI(client) => client.submit_batch(request).await,
+        }
+    }
 }

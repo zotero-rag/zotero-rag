@@ -7,9 +7,11 @@ pub(crate) enum BatchCommand {
 }
 
 impl BatchCommand {
+    #[allow(dead_code)]
     pub(crate) const VARIANTS: &'static [Self] =
         &[Self::Create, Self::CheckStatus, Self::FetchResults];
 
+    #[allow(dead_code)]
     pub(crate) fn as_str(&self) -> &str {
         match self {
             Self::Create => "create",
@@ -27,7 +29,8 @@ impl BatchCommand {
         }
     }
 
-    fn variants() -> impl Iterator<Item = &'static str> {
+    #[allow(dead_code)]
+    pub(crate) fn variants() -> impl Iterator<Item = &'static str> {
         Self::VARIANTS.iter().map(Self::as_str)
     }
 }

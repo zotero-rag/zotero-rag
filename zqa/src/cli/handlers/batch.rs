@@ -14,7 +14,7 @@
 //!     provider/model ID are different from the currently-used one. This is actually a bigger
 //!     problem since the DB shouldn't contain embeddings from different providers in the first place.
 //! * The entire abstraction for a batch submission is a file placed in the user's state dir (see
-//!   [`crate::state`] for an implementation). This means:
+//!   [`crate::state`] for an implementation), in a `batches` subdirectory. This means:
 //!   * A file existing, and being valid (in its contents) implies that that batch exists. Whether
 //!     it *actually* exists or is invalid data (e.g., it contains a batch ID that doesn't exist) is
 //!     not guaranteed.
@@ -22,7 +22,7 @@
 //!     us; not our circus, not our monkeys.
 //!   * The origin of the file is irrelevant. Users are free to create a file in that directory, and
 //!     we will treat it as valid if the structure is right.
-//!   * Files are named `batch_<id>.log`, where `id` are sequence numbers to avoid dealing with
+//!   * Files are named `batch_<id>.log`, where `id` are (1-based) sequence numbers to avoid dealing with
 //!     clock drift ([`std::time::SystemTime`] is a fun read for the uninitiated).
 //! * We check the status of batches on startup and when the user explicitly requests it.
 //! * When we check the status of a batch:
@@ -35,7 +35,7 @@
 //!     The user should also have the option to just ignore and retry the whole thing, or pick the
 //!     successes and drop the rest.
 //!   * If the batch has completely succeeded, we notify the user only if this check was initiated
-//!     at startup (as opposed to by user request). We add these to our backend and remove this batch.
+//!     at startup. We add these to our backend and remove this batch.
 //! * Broadly, our semantics resemble a write-ahead log. The files are sorted by creation time, and
 //!   we scan a cache when inserting a batch into the backend to check conflicts (and the newest
 //!   one wins). Moreover, we maintain a cache of hashes (try saying that thrice quickly) with the
@@ -50,16 +50,20 @@
 //!
 //! For the structure of this file, see [`BatchEmbeddingMetadata`].
 
-use std::io::Write;
+use std::{fs, io::Write};
 
-use chrono::NaiveDate;
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use zqa_rag::providers::ProviderId;
+use zqa_rag::{
+    embedding::common::{BatchEmbeddingInput, BatchEmbeddingRequest, BatchSubmission},
+    providers::{ProviderId, registry::provider_registry},
+};
 
 use crate::{
     cli::{commands::BatchCommand, errors::CLIError},
     common::Context,
 };
+use crate::{state::get_state_dir, utils::library::parse_library};
 
 /// Metadata about a batch embedding request. This is the file structure used to represent a batch
 /// in progress.
@@ -69,9 +73,11 @@ struct BatchEmbeddingMetadata {
     batch_id: String,
     /// The batch embedding provider
     provider: ProviderId,
+    /// The embedding model name
+    model: String,
     /// Date of creation, from the API (as opposed to local time). Used to give users context when
     /// referring to a batch.
-    created_at: NaiveDate,
+    created_at: DateTime<Utc>,
     /// Hashes of each text in this batch. Since our texts can be quite large, and we only need
     /// equality tests, a hash is a simpler solution.
     hashes: Vec<String>,
@@ -81,14 +87,321 @@ struct BatchEmbeddingMetadata {
     failed: Option<Vec<usize>>,
 }
 
+/// Gets the next available sequence number among the batch files in the state directory.
+///
+/// # Returns
+///
+/// The next available sequence number
+///
+/// # Errors
+///
+/// * `CLIError::StateDirError` if the user's base directory could not be obtained. See
+///   `directories::BaseDirError` for when this can occur.
+/// * `CLIError::IOError` if writing to the state directory failed. This is typically caused
+///   by permission issues.
+fn get_seq_id() -> Result<usize, CLIError> {
+    let batch_dir = get_state_dir()?.join("batches");
+    if !batch_dir.exists() {
+        // If it doesn't exist, we start at 1. This also eliminates this cause of an `Err` result
+        // from [`std::fs::read_dir`].
+        return Ok(1);
+    }
+
+    let mut entries = fs::read_dir(batch_dir)?
+        .filter_map(|entry| {
+            let file_name = entry.ok()?.file_name().into_string().ok()?;
+
+            if file_name.starts_with("batch_") {
+                return Some(file_name);
+            }
+            None
+        })
+        .collect::<Vec<_>>();
+
+    if entries.is_empty() {
+        return Ok(1);
+    }
+
+    entries.sort();
+    let last_seq = entries.into_iter().rev().find_map(|f| {
+        // Ignore elements that don't parse to a valid integer.
+        let (_, seq_str) = f.split_at("batch_".len());
+        seq_str.parse::<usize>().ok()
+    });
+
+    last_seq.map_or_else(|| Ok(1), |val| Ok(val + 1))
+}
+
+/// Write out metadata for a *new* batch.
+///
+/// This creates a new 1-indexed batch file in the state dir and writes out a
+/// [`BatchEmbeddingMetadata`] object.
+///
+/// # Arguments
+///
+/// * `provider` - The provider of the embedding model
+/// * `model` - The embedding model string
+/// * `hashes` - Hashes for the texts in this batch
+/// * `submission` - The result of a `submit_batch` on a batch embedding provider
+///
+/// # Errors
+///
+/// * `CLIError::StateDirError` if the user's base directory could not be obtained. See
+///   `directories::BaseDirError` for when this can occur.
+/// * `CLIError::IOError` in the following cases:
+///     * writing to the state directory failed. This is typically caused by permission issues.
+///     * writing out the serialized data failed
+/// * `CLIError::SerializationError` if JSON serialization failed.
+fn write_batch_metadata(
+    provider: ProviderId,
+    model: String,
+    hashes: Vec<String>,
+    submission: BatchSubmission,
+) -> Result<(), CLIError> {
+    let batch_dir = get_state_dir()?.join("batches");
+    if !batch_dir.exists() {
+        fs::create_dir_all(&batch_dir)?;
+    }
+
+    let metadata = BatchEmbeddingMetadata {
+        batch_id: submission.batch_id,
+        provider,
+        model,
+        created_at: Utc::now(),
+        hashes,
+        succeeded: None,
+        failed: None,
+    };
+
+    let seq = get_seq_id()?;
+    let filename = format!("batch_{seq}");
+    let contents = serde_json::to_string_pretty(&metadata)?;
+    fs::write(batch_dir.join(filename), contents)?;
+
+    Ok(())
+}
+
+async fn handle_batch_create_cmd<O, E>(ctx: &mut Context<O, E>) -> Result<(), CLIError>
+where
+    O: Write,
+    E: Write,
+{
+    let new_items = match parse_library(&ctx.store, None, None).await {
+        Ok(items) => items,
+        Err(parse_err) => {
+            writeln!(
+                &mut ctx.err,
+                "Could not parse library metadata: {parse_err}"
+            )?;
+            return Ok(());
+        }
+    };
+
+    let cfg = ctx.config.get_embedding_config();
+    let Some(cfg) = cfg else {
+        return Err(CLIError::ConfigError(
+            concat!(
+                "Could not get a config for batch embeddings. Ensure your config has an ",
+                "embedding provider configured. See https://github.com/zotero-rag/zotero-rag#configuration ",
+                "for configuration instructions."
+            )
+            .into(),
+        ))?;
+    };
+
+    let registry = provider_registry();
+    let embedder = match registry.create_batch_embedding(&cfg) {
+        Err(e) => {
+            return Err(CLIError::ConfigError(e.to_string()));
+        }
+        Ok(embedder) => embedder,
+    };
+
+    let request = BatchEmbeddingRequest {
+        model: cfg.model_name().into(),
+        dims: cfg.dims(),
+        inputs: new_items
+            .into_iter()
+            .map(|item| BatchEmbeddingInput {
+                id: item.metadata.library_key,
+                text: item.text,
+            })
+            .collect(),
+    };
+
+    let submission = embedder.submit_batch(request).await?;
+    write_batch_metadata(
+        cfg.provider_id(),
+        cfg.model_name().into(),
+        vec![],
+        submission,
+    )
+}
+
 /// Handle the `/batch` commands.
 pub(crate) async fn handle_batch_cmd<O, E>(
-    _subcmd: BatchCommand,
-    _ctx: &mut Context<O, E>,
+    subcmd: BatchCommand,
+    ctx: &mut Context<O, E>,
 ) -> Result<(), CLIError>
 where
     O: Write,
     E: Write,
 {
-    Ok(())
+    match subcmd {
+        BatchCommand::Create => handle_batch_create_cmd(ctx).await,
+        BatchCommand::CheckStatus => todo!(),
+        BatchCommand::FetchResults => todo!(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use tempfile::tempdir;
+    use zqa_rag::{embedding::common::BatchSubmission, providers::ProviderId};
+
+    use super::{BatchEmbeddingMetadata, get_seq_id, write_batch_metadata};
+
+    fn make_submission(batch_id: &str) -> BatchSubmission {
+        BatchSubmission {
+            batch_id: batch_id.into(),
+            file_id: "file-id".into(),
+        }
+    }
+
+    #[test]
+    fn get_seq_id_returns_one_when_batch_dir_absent() {
+        let tmp = tempdir().unwrap();
+        temp_env::with_var("ZQA_STATE_DIR", Some(tmp.path()), || {
+            assert_eq!(get_seq_id().unwrap(), 1);
+        });
+    }
+
+    #[test]
+    fn get_seq_id_returns_one_for_empty_dir() {
+        let tmp = tempdir().unwrap();
+        let batch_dir = tmp.path().join("batches");
+        fs::create_dir_all(&batch_dir).unwrap();
+
+        temp_env::with_var("ZQA_STATE_DIR", Some(tmp.path()), || {
+            assert_eq!(get_seq_id().unwrap(), 1);
+        });
+    }
+
+    #[test]
+    fn get_seq_id_returns_next_after_existing_files() {
+        let tmp = tempdir().unwrap();
+        let batch_dir = tmp.path().join("batches");
+        fs::create_dir_all(&batch_dir).unwrap();
+        fs::write(batch_dir.join("batch_1"), "").unwrap();
+        fs::write(batch_dir.join("batch_2"), "").unwrap();
+        fs::write(batch_dir.join("batch_3"), "").unwrap();
+
+        temp_env::with_var("ZQA_STATE_DIR", Some(tmp.path()), || {
+            assert_eq!(get_seq_id().unwrap(), 4);
+        });
+    }
+
+    #[test]
+    fn get_seq_id_ignores_non_batch_files() {
+        let tmp = tempdir().unwrap();
+        let batch_dir = tmp.path().join("batches");
+        fs::create_dir_all(&batch_dir).unwrap();
+        fs::write(batch_dir.join("other_file"), "").unwrap();
+        fs::write(batch_dir.join("cache.bin"), "").unwrap();
+
+        temp_env::with_var("ZQA_STATE_DIR", Some(tmp.path()), || {
+            assert_eq!(get_seq_id().unwrap(), 1);
+        });
+    }
+
+    #[test]
+    fn get_seq_id_ignores_non_numeric_batch_suffixes() {
+        let tmp = tempdir().unwrap();
+        let batch_dir = tmp.path().join("batches");
+        fs::create_dir_all(&batch_dir).unwrap();
+        fs::write(batch_dir.join("batch_1"), "").unwrap();
+        // "batch_abc" has a non-numeric suffix and should be silently skipped
+        fs::write(batch_dir.join("batch_abc"), "").unwrap();
+
+        temp_env::with_var("ZQA_STATE_DIR", Some(tmp.path()), || {
+            assert_eq!(get_seq_id().unwrap(), 2);
+        });
+    }
+
+    #[test]
+    fn write_batch_metadata_creates_batches_dir() {
+        let tmp = tempdir().unwrap();
+        temp_env::with_var("ZQA_STATE_DIR", Some(tmp.path()), || {
+            write_batch_metadata(
+                ProviderId::VoyageAI,
+                "voyage-3".into(),
+                vec![],
+                make_submission("batch-abc"),
+            )
+            .unwrap();
+
+            assert!(tmp.path().join("batches").exists());
+        });
+    }
+
+    #[test]
+    fn write_batch_metadata_stores_correct_fields() {
+        let tmp = tempdir().unwrap();
+        let hashes = vec!["hash-a".to_string(), "hash-b".to_string()];
+
+        temp_env::with_var("ZQA_STATE_DIR", Some(tmp.path()), || {
+            write_batch_metadata(
+                ProviderId::VoyageAI,
+                "voyage-3".into(),
+                hashes.clone(),
+                make_submission("my-batch-id"),
+            )
+            .unwrap();
+
+            let batch_dir = tmp.path().join("batches");
+            let files: Vec<_> = fs::read_dir(&batch_dir)
+                .unwrap()
+                .filter_map(std::result::Result::ok)
+                .collect();
+            assert_eq!(files.len(), 1);
+
+            let content = fs::read_to_string(files[0].path()).unwrap();
+            let meta: BatchEmbeddingMetadata = serde_json::from_str(&content).unwrap();
+
+            assert_eq!(meta.batch_id, "my-batch-id");
+            assert_eq!(meta.provider, ProviderId::VoyageAI);
+            assert_eq!(meta.model, "voyage-3");
+            assert_eq!(meta.hashes, hashes);
+            assert!(meta.succeeded.is_none());
+            assert!(meta.failed.is_none());
+        });
+    }
+
+    #[test]
+    fn write_batch_metadata_increments_sequence_number() {
+        let tmp = tempdir().unwrap();
+        temp_env::with_var("ZQA_STATE_DIR", Some(tmp.path()), || {
+            write_batch_metadata(
+                ProviderId::VoyageAI,
+                "voyage-3".into(),
+                vec![],
+                make_submission("batch-1"),
+            )
+            .unwrap();
+
+            write_batch_metadata(
+                ProviderId::VoyageAI,
+                "voyage-3".into(),
+                vec![],
+                make_submission("batch-2"),
+            )
+            .unwrap();
+
+            let batch_dir = tmp.path().join("batches");
+            assert!(batch_dir.join("batch_1").exists());
+            assert!(batch_dir.join("batch_2").exists());
+        });
+    }
 }

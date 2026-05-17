@@ -152,6 +152,19 @@ impl EmbeddingProviderConfig {
             Self::ZeroEntropy(c) => &c.embedding_model,
         }
     }
+
+    /// Returns the embedding dimensions.
+    #[must_use]
+    pub fn dims(&self) -> usize {
+        match self {
+            Self::OpenAI(c) => c.embedding_dims,
+            Self::VoyageAI(c) => c.embedding_dims,
+            Self::Gemini(c) => c.embedding_dims,
+            Self::Cohere(c) => c.embedding_dims,
+            Self::Ollama(c) => c.embedding_dims,
+            Self::ZeroEntropy(c) => c.embedding_dims,
+        }
+    }
 }
 
 /// A trait intended to be used for responses from embedding provider APIs. Typically, these APIs
