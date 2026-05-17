@@ -32,7 +32,7 @@ You can install the "nightly" version (the `HEAD` of the GitHub repo, which will
 cargo install --git https://github.com/zotero-rag/zotero-rag
 ```
 
-In general, this "nightly" release should be stable enough to use, but YMMV. This version will report its version `--version` as the latest stable release, so if you wish to switch to a new "stable" version when a release is made, it should, in theory, work seamlessly.
+In general, this "nightly" release should be stable enough to use, but YMMV (if it means anything, though, I use the nightly version since it's convenient; I am therefore incentivized to fix bugs I encounter). This version will report its version `--version` as the latest stable release, so if you wish to switch to a new "stable" version when a release is made, it should, in theory, work seamlessly.
 
 The crates.io release is kept up-to-date with the latest release on GitHub, so there's no benefit to using one over the other.
 
@@ -44,7 +44,8 @@ Although you *could* store your API keys in this config, I recommend you don't. 
 
 Once you have a config set up, you should first run `/process`, which will use your embedding provider to create a vector database. **This step takes a long time!** On my machine, with about 1100 papers in my Zotero library, this took about 4 hours. This is mostly to respect the API's rate limits; the PDF parsing itself took about 40 minutes (though if you're using a release build, this will likely be much faster). I recommend leaving this running in the background, possibly while you're sleeping. It's possible that some PDFs fail to process when you're back; this is fine, and you can re-run `/process` at any time to handle failed/new Zotero entries.
 
-**Note:** If you're using the "nightly" version, this should be *significantly* faster. The PDF parser has been rewritten, and took about 3 seconds for the same library, and getting embeddings took about 35 minutes.
+> [!NOTE]
+> If you're using the "nightly" version, this should be *significantly* faster. The PDF parser has been rewritten, and took about 3 seconds for the same library, and getting embeddings took about 35 minutes.
 
 The easiest way to get started is to run `/help`. This gives you a list of things you can do. If you only need to use this to ask questions, you simply type in your question and hit Enter. It's likely you might want to do other things as well; for example, `/search <query>` gives you papers in your library that are most relevant, with no further processing. This is particularly useful if you know some relevant keywords or ideas used by that paper. This also takes about 3 seconds and is *very* cheap, so it's an appealing option.
 
@@ -83,9 +84,8 @@ The project is organized into five Rust crates:
 - Zotero with a local library
 - API key for OpenAI and Anthropic (for LLM capabilities), and Voyage AI (for embeddings)
 
-### Note for building on Linux
-
-On Linux, the project is configured to use the `mold` linker for faster linking. You can either install `mold` by following the [repo's instructions](https://github.com/rui314/mold) or simply remove the `rustflags` line from `.cargo/config.toml`.
+> [!NOTE]
+> On Linux, the project is configured to use the `mold` linker for faster linking. You can either install `mold` by following the [repo's instructions](https://github.com/rui314/mold) or simply remove the `rustflags` line from `.cargo/config.toml`.
 
 ## Contributing
 
