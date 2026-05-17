@@ -20,6 +20,8 @@ This project provides a command-line interface for querying your Zotero library 
 
 ## Installation
 
+This project is written in Rust, so you'll need `cargo` installed. If you don't already have it installed, follow the instructions from [the Rust website](https://rustup.rs/).
+
 The most straightforward way to install this is using `cargo` directly:
 
 ```bash
