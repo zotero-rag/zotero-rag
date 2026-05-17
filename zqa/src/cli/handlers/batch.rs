@@ -112,22 +112,6 @@ fn get_seq_id() -> Result<usize, CLIError> {
         return Ok(1);
     }
 
-    let mut entries = fs::read_dir(&batch_dir)?
-        .filter_map(|entry| {
-            let file_name = entry.ok()?.file_name().into_string().ok()?;
-
-            if file_name.starts_with("batch_") {
-                return Some(file_name);
-            }
-            None
-        })
-        .collect::<Vec<_>>();
-
-    if entries.is_empty() {
-        return Ok(1);
-    }
-
-    entries.sort();
     let last_seq = fs::read_dir(batch_dir)?
         .filter_map(|entry| {
             let file_name = entry.ok()?.file_name().into_string().ok()?;
@@ -224,7 +208,7 @@ where
     let registry = provider_registry();
     let embedder = match registry.create_batch_embedding(&cfg) {
         Err(e) => {
-            return Err(CLIError::ConfigError(e.to_string()));
+            return Err(CLIError::CommandError(e.to_string()));
         }
         Ok(embedder) => embedder,
     };
@@ -320,9 +304,9 @@ mod tests {
         let tmp = tempdir().unwrap();
         let batch_dir = tmp.path().join("batches");
         fs::create_dir_all(&batch_dir).unwrap();
-        fs::write(batch_dir.join("batch_1"), "").unwrap();
-        fs::write(batch_dir.join("batch_2"), "").unwrap();
-        fs::write(batch_dir.join("batch_3"), "").unwrap();
+        fs::write(batch_dir.join("batch_1.log"), "").unwrap();
+        fs::write(batch_dir.join("batch_2.log"), "").unwrap();
+        fs::write(batch_dir.join("batch_3.log"), "").unwrap();
 
         temp_env::with_var("ZQA_STATE_DIR", Some(tmp.path()), || {
             assert_eq!(get_seq_id().unwrap(), 4);
@@ -347,9 +331,9 @@ mod tests {
         let tmp = tempdir().unwrap();
         let batch_dir = tmp.path().join("batches");
         fs::create_dir_all(&batch_dir).unwrap();
-        fs::write(batch_dir.join("batch_1"), "").unwrap();
-        // "batch_abc" has a non-numeric suffix and should be silently skipped
-        fs::write(batch_dir.join("batch_abc"), "").unwrap();
+        fs::write(batch_dir.join("batch_1.log"), "").unwrap();
+        // "batch_abc.log" has a non-numeric suffix and should be silently skipped
+        fs::write(batch_dir.join("batch_abc.log"), "").unwrap();
 
         temp_env::with_var("ZQA_STATE_DIR", Some(tmp.path()), || {
             assert_eq!(get_seq_id().unwrap(), 2);
@@ -426,8 +410,8 @@ mod tests {
             .unwrap();
 
             let batch_dir = tmp.path().join("batches");
-            assert!(batch_dir.join("batch_1").exists());
-            assert!(batch_dir.join("batch_2").exists());
+            assert!(batch_dir.join("batch_1.log").exists());
+            assert!(batch_dir.join("batch_2.log").exists());
         });
     }
 }
