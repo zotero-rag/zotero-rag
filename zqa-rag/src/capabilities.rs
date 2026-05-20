@@ -122,6 +122,21 @@ pub enum BatchJobState {
     Canceled,
 }
 
+impl BatchJobState {
+    /// Get a string representation of the batch job state.
+    #[must_use]
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Created => "created",
+            Self::InProgress => "in progress",
+            Self::Completed => "completed",
+            Self::Failed => "failed",
+            Self::Canceling => "canceling",
+            Self::Canceled => "canceled",
+        }
+    }
+}
+
 impl PartialOrd for BatchJobState {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         if self == other {

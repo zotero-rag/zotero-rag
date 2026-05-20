@@ -51,12 +51,15 @@
 //! For the structure of this file, see [`BatchEmbeddingMetadata`].
 
 use std::{
+    fmt::Display,
     fs,
     hash::{DefaultHasher, Hash, Hasher},
-    io::Write,
+    io::{self, Write},
+    path::Path,
 };
 
 use chrono::{DateTime, Utc};
+use humantime::format_duration;
 use serde::{Deserialize, Serialize};
 use zqa_rag::{
     embedding::common::{BatchEmbeddingInput, BatchEmbeddingRequest, BatchSubmission},
@@ -66,6 +69,7 @@ use zqa_rag::{
 use crate::{
     cli::{commands::BatchCommand, errors::CLIError},
     common::Context,
+    state::read_number,
 };
 use crate::{state::get_state_dir, utils::library::parse_library};
 
@@ -90,6 +94,24 @@ struct BatchEmbeddingMetadata {
     succeeded: Option<Vec<usize>>,
     /// Optional indices to the hashes above if we know this information (by checking).
     failed: Option<Vec<usize>>,
+}
+
+impl Display for BatchEmbeddingMetadata {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let elapsed = (self.created_at - Utc::now())
+            .to_std()
+            .map_or("Unknown time ago".into(), |d| {
+                format_duration(d).to_string()
+            });
+
+        f.write_fmt(format_args!(
+            "({}) {} ({}) - {} items\n",
+            elapsed,
+            self.provider.as_str(),
+            self.model,
+            self.hashes.len()
+        ))
+    }
 }
 
 /// Gets the next available sequence number among the batch files in the state directory.
@@ -176,6 +198,103 @@ fn write_batch_metadata(
     Ok(())
 }
 
+async fn handle_batch_check_status_cmd<O, E>(ctx: &mut Context<O, E>) -> Result<(), CLIError>
+where
+    O: Write,
+    E: Write,
+{
+    let config = &ctx
+        .config
+        .get_embedding_config()
+        .ok_or(CLIError::CommandError(
+        concat!(
+            "Embedding config not set up. Verify that ~/.config/zqa/config.toml exists ",
+            "and is set up correctly. See https://github.com/zotero-rag/zotero-rag#configuration ",
+            "for configuration instructions."
+        )
+        .into(),
+    ))?;
+
+    // Get a list of batches
+    let batch_dir = get_state_dir()?.join("batches");
+    if !batch_dir.exists() {
+        writeln!(
+            &mut ctx.err,
+            "No batches have been submitted. Try `/batch create` to submit one."
+        )?;
+        return Ok(());
+    }
+
+    let mut files = fs::read_dir(&batch_dir)?
+        .filter_map(|e| e.ok()?.file_name().into_string().ok())
+        .filter(|f| {
+            f.starts_with("batch_")
+                && Path::new(f)
+                    .extension()
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("log"))
+        })
+        .filter_map(|f| {
+            f.strip_prefix("batch_")?
+                .strip_suffix(".log")?
+                .parse::<usize>()
+                .ok()
+        })
+        .collect::<Vec<_>>();
+    files.sort_unstable();
+    files.reverse();
+
+    let batches = files
+        .into_iter()
+        .filter_map(|id| fs::read_to_string(batch_dir.join(format!("batch_{id}.log"))).ok())
+        .filter_map(|c| serde_json::from_str::<BatchEmbeddingMetadata>(&c).ok())
+        .collect::<Vec<_>>();
+
+    let selected_batch = match batches.len() {
+        0 => {
+            writeln!(
+                &mut ctx.err,
+                "No valid batches were found. Your state directory may have been corrupted."
+            )?;
+            return Ok(());
+        }
+        1 => batches.first().unwrap(),
+        _ => {
+            writeln!(
+                &mut ctx.out,
+                "You have multiple submitted batches. Please choose one from the below options:"
+            )?;
+
+            batches.iter().enumerate().for_each(|(i, batch)| {
+                _ = writeln!(&mut ctx.out, "{}. {}", i + 1, batch);
+            });
+            let choice = read_number(
+                &mut io::stdin().lock(),
+                1,
+                (1, u8::try_from(batches.len()).unwrap() + 1), // we don't expect > 255 batches
+            );
+
+            batches.get((choice as usize).saturating_sub(1)).unwrap()
+        }
+    };
+
+    let registry = provider_registry();
+    let embedder = match registry.create_batch_embedding(config) {
+        Err(e) => {
+            return Err(CLIError::CommandError(e.to_string()));
+        }
+        Ok(embedder) => embedder,
+    };
+
+    let status = embedder
+        .check_batch_status(&selected_batch.batch_id)
+        .await?;
+    writeln!(&mut ctx.out, "Current status: {}", status.as_str())?;
+
+    // TODO: For better UX, if this is completed, prompt to fetch, when that subcmd is implemented
+
+    Ok(())
+}
+
 async fn handle_batch_create_cmd<O, E>(ctx: &mut Context<O, E>) -> Result<(), CLIError>
 where
     O: Write,
@@ -216,6 +335,7 @@ where
     let hashes = new_items
         .iter()
         .map(|item| {
+            // TODO: Consider using `sha2`, `fxhash`, or similar
             let mut hasher = DefaultHasher::new();
             item.text.hash(&mut hasher);
 
@@ -259,7 +379,7 @@ where
 {
     match subcmd {
         BatchCommand::Create => handle_batch_create_cmd(ctx).await,
-        BatchCommand::CheckStatus => todo!(),
+        BatchCommand::CheckStatus => handle_batch_check_status_cmd(ctx).await,
         BatchCommand::FetchResults => todo!(),
     }
 }
@@ -268,10 +388,14 @@ where
 mod tests {
     use std::fs;
 
+    use serial_test::serial;
     use tempfile::tempdir;
     use zqa_rag::{embedding::common::BatchSubmission, providers::ProviderId};
 
-    use super::{BatchEmbeddingMetadata, get_seq_id, write_batch_metadata};
+    use super::{
+        BatchEmbeddingMetadata, get_seq_id, handle_batch_check_status_cmd, write_batch_metadata,
+    };
+    use crate::cli::app::tests::create_test_context;
 
     fn make_submission(batch_id: &str) -> BatchSubmission {
         BatchSubmission {
@@ -413,5 +537,71 @@ mod tests {
             assert!(batch_dir.join("batch_1.log").exists());
             assert!(batch_dir.join("batch_2.log").exists());
         });
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn check_status_errors_when_embedding_config_missing() {
+        let tmp = tempdir().unwrap();
+        temp_env::async_with_vars(
+            [("ZQA_STATE_DIR", Some(tmp.path().to_str().unwrap()))],
+            async {
+                let mut ctx = create_test_context();
+                // Strip the (only) embedding provider config so `get_embedding_config` returns
+                // `None`, which should short-circuit before any provider/network interaction.
+                ctx.config.voyageai = None;
+
+                let result = handle_batch_check_status_cmd(&mut ctx).await;
+                assert!(matches!(
+                    result,
+                    Err(crate::cli::errors::CLIError::CommandError(_))
+                ));
+            },
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn check_status_reports_when_no_batch_dir() {
+        let tmp = tempdir().unwrap();
+        temp_env::async_with_vars(
+            [("ZQA_STATE_DIR", Some(tmp.path().to_str().unwrap()))],
+            async {
+                let mut ctx = create_test_context();
+
+                let result = handle_batch_check_status_cmd(&mut ctx).await;
+                assert!(result.is_ok());
+
+                let err = String::from_utf8(ctx.err.into_inner()).unwrap();
+                assert!(err.contains("No batches have been submitted"));
+            },
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn check_status_reports_when_no_valid_batches() {
+        let tmp = tempdir().unwrap();
+        let batch_dir = tmp.path().join("batches");
+        fs::create_dir_all(&batch_dir).unwrap();
+        // A correctly-named file whose contents don't deserialize into `BatchEmbeddingMetadata`
+        // should be skipped, leaving no valid batches to choose from.
+        fs::write(batch_dir.join("batch_1.log"), "not valid json").unwrap();
+
+        temp_env::async_with_vars(
+            [("ZQA_STATE_DIR", Some(tmp.path().to_str().unwrap()))],
+            async {
+                let mut ctx = create_test_context();
+
+                let result = handle_batch_check_status_cmd(&mut ctx).await;
+                assert!(result.is_ok());
+
+                let err = String::from_utf8(ctx.err.into_inner()).unwrap();
+                assert!(err.contains("No valid batches were found"));
+            },
+        )
+        .await;
     }
 }
