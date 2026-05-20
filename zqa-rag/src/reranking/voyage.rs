@@ -95,9 +95,7 @@ impl<T: HttpClient> Rerank for VoyageAIClient<T> {
 
                     Ok(res)
                 }
-                VoyageAIRerankResponse::Error(err) => {
-                    Err(LLMError::DeserializationError(err.detail))
-                }
+                VoyageAIRerankResponse::Error(err) => Err(LLMError::HttpStatusError(err.detail)),
             }
         })
     }
