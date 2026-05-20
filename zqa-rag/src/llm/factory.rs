@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use crate::capabilities::BatchAPIProvider;
+use crate::capabilities::{BatchAPIProvider, BatchJobState};
 use crate::clients::anthropic::AnthropicClient;
 use crate::clients::gemini::GeminiClient;
 use crate::clients::ollama::OllamaClient;
@@ -143,6 +143,31 @@ impl BatchEmbeddingClient {
     ) -> Result<BatchSubmission, LLMError> {
         match self {
             Self::VoyageAI(client) => client.submit_batch(request).await,
+        }
+    }
+
+    /// Check the status of a submitted batch.
+    ///
+    /// # Arguments
+    ///
+    /// * `batch_id` - The ID of the submitted batch, returned by the provider during submission.
+    ///
+    /// # Returns
+    ///
+    /// The state of the batch job
+    ///
+    /// # Errors
+    ///
+    /// * `LLMError::EnvError` - If no API key was supplied.
+    /// * `LLMError::InvalidHeaderError` - If the API key cannot be parsed as a header value
+    /// * `LLMError::TimeoutError` - If the HTTP request times out
+    /// * `LLMError::CredentialError` - If the API returns 401 or 403
+    /// * `LLMError::HttpStatusError` - If the API returns another unsuccessful status code
+    /// * `LLMError::NetworkError` - If a network connectivity error occurs
+    /// * `LLMError::DeserializationError` - If the response cannot be parsed
+    pub async fn check_batch_status(&self, batch_id: &str) -> Result<BatchJobState, LLMError> {
+        match self {
+            Self::VoyageAI(client) => client.get_batch_status(batch_id).await,
         }
     }
 }

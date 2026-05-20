@@ -21,8 +21,20 @@ struct VoyageAIRerankedDoc {
 }
 
 #[derive(Deserialize)]
-struct VoyageAIRerankResponse {
+struct VoyageAIRerankSuccess {
     data: Vec<VoyageAIRerankedDoc>,
+}
+
+#[derive(Deserialize)]
+struct VoyageAIError {
+    detail: String,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum VoyageAIRerankResponse {
+    Success(VoyageAIRerankSuccess),
+    Error(VoyageAIError),
 }
 
 impl<T: HttpClient> Rerank for VoyageAIClient<T> {
@@ -73,13 +85,20 @@ impl<T: HttpClient> Rerank for VoyageAIClient<T> {
                     LLMError::DeserializationError(e.to_string())
                 })?;
 
-            let voyage_response = voyage_response.data;
-            let res = voyage_response
-                .iter()
-                .map(|result| result.index)
-                .collect::<Vec<_>>();
+            match voyage_response {
+                VoyageAIRerankResponse::Success(success) => {
+                    let res = success
+                        .data
+                        .iter()
+                        .map(|result| result.index)
+                        .collect::<Vec<_>>();
 
-            Ok(res)
+                    Ok(res)
+                }
+                VoyageAIRerankResponse::Error(err) => {
+                    Err(LLMError::DeserializationError(err.detail))
+                }
+            }
         })
     }
 }
