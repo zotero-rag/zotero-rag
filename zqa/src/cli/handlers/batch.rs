@@ -98,14 +98,14 @@ struct BatchEmbeddingMetadata {
 
 impl Display for BatchEmbeddingMetadata {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let elapsed = (self.created_at - Utc::now())
+        let elapsed = (Utc::now() - self.created_at)
             .to_std()
             .map_or("Unknown time ago".into(), |d| {
                 format_duration(d).to_string()
             });
 
         f.write_fmt(format_args!(
-            "({}) {} ({}) - {} items\n",
+            "({}) {} ({}) - {} items",
             elapsed,
             self.provider.as_str(),
             self.model,
@@ -264,13 +264,23 @@ where
                 "You have multiple submitted batches. Please choose one from the below options:"
             )?;
 
-            batches.iter().enumerate().for_each(|(i, batch)| {
-                _ = writeln!(&mut ctx.out, "{}. {}", i + 1, batch);
-            });
+            // We enforce a u8 (max 255) for `choice` below regardless, so we should also limit the
+            // iterator. In any case, a list of 200+ items is overwhelming for users anyway.
+            batches
+                .iter()
+                .take((u8::MAX - 1) as usize)
+                .enumerate()
+                .for_each(|(i, batch)| {
+                    _ = writeln!(&mut ctx.out, "{}. {}", i + 1, batch);
+                });
+
             let choice = read_number(
                 &mut io::stdin().lock(),
                 1,
-                (1, u8::try_from(batches.len()).unwrap() + 1), // we don't expect > 255 batches
+                (
+                    1,
+                    u8::try_from(batches.len().min((u8::MAX - 1) as usize)).unwrap() + 1, // we don't expect > 255 batches
+                ),
             );
 
             batches.get((choice as usize).saturating_sub(1)).unwrap()
