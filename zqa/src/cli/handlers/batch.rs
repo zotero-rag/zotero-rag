@@ -608,7 +608,8 @@ mod tests {
     use zqa_rag::{embedding::common::BatchSubmission, providers::ProviderId};
 
     use super::{
-        BatchEmbeddingMetadata, get_seq_id, handle_batch_check_status_cmd, write_batch_metadata,
+        BatchEmbeddingMetadata, BatchItem, get_seq_id, handle_batch_check_status_cmd,
+        write_batch_metadata,
     };
     use crate::cli::app::tests::create_test_context;
 
@@ -698,13 +699,28 @@ mod tests {
     #[test]
     fn write_batch_metadata_stores_correct_fields() {
         let tmp = tempdir().unwrap();
-        let hashes = vec!["hash-a".to_string(), "hash-b".to_string()];
+        let items = vec![
+            BatchItem {
+                file_path: std::path::PathBuf::from("/tmp/a.pdf"),
+                library_key: "KEY-A".into(),
+                title: "Title A".into(),
+                text: "text a".into(),
+                hash: 1,
+            },
+            BatchItem {
+                file_path: std::path::PathBuf::from("/tmp/b.pdf"),
+                library_key: "KEY-B".into(),
+                title: "Title B".into(),
+                text: "text b".into(),
+                hash: 2,
+            },
+        ];
 
         temp_env::with_var("ZQA_STATE_DIR", Some(tmp.path()), || {
             write_batch_metadata(
                 ProviderId::VoyageAI,
                 "voyage-3".into(),
-                hashes.clone(),
+                items,
                 make_submission("my-batch-id"),
             )
             .unwrap();
@@ -722,6 +738,11 @@ mod tests {
             assert_eq!(meta.batch_id, "my-batch-id");
             assert_eq!(meta.provider, ProviderId::VoyageAI);
             assert_eq!(meta.model, "voyage-3");
+            assert_eq!(meta.items.len(), 2);
+            assert_eq!(meta.items[0].library_key, "KEY-A");
+            assert_eq!(meta.items[0].hash, 1);
+            assert_eq!(meta.items[1].library_key, "KEY-B");
+            assert_eq!(meta.items[1].hash, 2);
             assert!(meta.succeeded.is_none());
             assert!(meta.failed.is_none());
         });
