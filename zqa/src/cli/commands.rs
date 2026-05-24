@@ -3,20 +3,17 @@ use thiserror::Error;
 pub(crate) enum BatchCommand {
     Create,
     CheckStatus,
-    FetchResults,
 }
 
 impl BatchCommand {
     #[allow(dead_code)]
-    pub(crate) const VARIANTS: &'static [Self] =
-        &[Self::Create, Self::CheckStatus, Self::FetchResults];
+    pub(crate) const VARIANTS: &'static [Self] = &[Self::Create, Self::CheckStatus];
 
     #[allow(dead_code)]
     pub(crate) fn as_str(&self) -> &str {
         match self {
             Self::Create => "create",
             Self::CheckStatus => "check",
-            Self::FetchResults => "fetch",
         }
     }
 
@@ -24,7 +21,6 @@ impl BatchCommand {
         match s {
             "create" => Ok(Self::Create),
             "check" => Ok(Self::CheckStatus),
-            "fetch" => Ok(Self::FetchResults),
             _ => Err(()),
         }
     }

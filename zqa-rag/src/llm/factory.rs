@@ -9,7 +9,7 @@ use crate::clients::ollama::OllamaClient;
 use crate::clients::openai::OpenAIClient;
 use crate::clients::openrouter::OpenRouterClient;
 use crate::config::LLMClientConfig;
-use crate::embedding::common::{BatchEmbeddingRequest, BatchSubmission};
+use crate::embedding::common::{BatchEmbeddingRequest, BatchEmbeddingResults, BatchSubmission};
 use crate::embedding::voyage::VoyageAIClient;
 use crate::http_client::ReqwestClient;
 use crate::llm::base::{ApiClient, ChatRequest, ReasoningConfig};
@@ -168,6 +168,33 @@ impl BatchEmbeddingClient {
     pub async fn check_batch_status(&self, batch_id: &str) -> Result<BatchJobState, LLMError> {
         match self {
             Self::VoyageAI(client) => client.get_batch_status(batch_id).await,
+        }
+    }
+
+    /// Attempt to fetch the results of a submitted batch job.
+    ///
+    /// # Arguments
+    ///
+    /// * `batch_id` - The ID of the submitted batch, returned by the provider during submission.
+    ///
+    /// # Returns
+    ///
+    /// The results of the batch, including successes and failures.
+    ///
+    /// # Errors
+    ///
+    /// * `LLMError::BatchNotCompleted` - If the batch has not yet reached [`BatchJobState::Completed`] or [`BatchJobState::Failed`]
+    /// * `LLMError::EnvError` - If an API key is not set up
+    /// * `LLMError::InvalidHeaderError` - If the API key cannot be parsed as a header value
+    /// * `LLMError::TimeoutError` - If the HTTP request times out
+    /// * `LLMError::CredentialError` - If the API returns 401 or 403
+    /// * `LLMError::HttpStatusError` - If the API returns another unsuccessful status code
+    /// * `LLMError::NetworkError` - If a network connectivity error occurs
+    /// * `LLMError::DeserializationError` - If the response cannot be parsed
+    /// * `LLMError::GenericLLMError` - If a temporary file cannot be written
+    pub async fn fetch_results(&self, batch_id: &str) -> Result<BatchEmbeddingResults, LLMError> {
+        match self {
+            Self::VoyageAI(client) => client.get_batch_results(batch_id).await,
         }
     }
 }

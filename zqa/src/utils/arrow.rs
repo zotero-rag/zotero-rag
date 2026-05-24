@@ -1,6 +1,8 @@
 use std::{path::PathBuf, sync::Arc};
 
-use arrow_array::{ArrayRef, RecordBatch, StringArray, cast::AsArray};
+use arrow_array::{
+    ArrayRef, FixedSizeListArray, Float32Array, RecordBatch, StringArray, cast::AsArray,
+};
 use arrow_schema;
 use thiserror::Error;
 use zqa_rag::{
@@ -113,7 +115,7 @@ pub(crate) async fn lancedb_exists() -> bool {
 /// # Returns
 ///
 /// The schema in Arrow format.
-pub async fn get_schema(
+pub fn get_schema(
     embedding_provider: EmbeddingProvider,
     include_embeddings: bool,
 ) -> arrow_schema::Schema {
@@ -162,12 +164,12 @@ pub async fn get_schema(
 /// # Returns
 ///
 /// A `RecordBatch` that can be used to interact with `LanceDB`.
-pub async fn library_to_arrow(
+pub fn library_to_arrow(
     items: Vec<ZoteroItem>,
     embedding_config: EmbeddingProviderConfig,
     include_embeddings: bool,
 ) -> Result<RecordBatch, ArrowError> {
-    let schema = Arc::new(get_schema(embedding_config.provider(), include_embeddings).await);
+    let schema = Arc::new(get_schema(embedding_config.provider(), include_embeddings));
 
     // Convert ZoteroItemMetadata to Arrow arrays
     let library_keys = StringArray::from(
@@ -261,7 +263,86 @@ pub async fn full_library_to_arrow(
     log::info!("Finished parsing library items.");
 
     let include_embeddings = lancedb_exists().await;
-    library_to_arrow(lib_items, store.get_embedding_config(), include_embeddings).await
+    library_to_arrow(lib_items, store.get_embedding_config(), include_embeddings)
+}
+
+/// Given metadata about Zotero items, *including embeddings*, inserts them into the LanceDB store.
+///
+/// This function does not check that the metadata provided correspond to items in Zotero; nor does
+/// it query Zotero at all. This function is a "manual" alternative to [`library_to_arrow`] when you
+/// already have embeddings. This function also assumes that the array slices passed all have the
+/// same length, and that for any $i$, the $i$th element of each array corresponds to the same item.
+///
+/// # Arguments
+///
+/// * `library_keys` - The library keys of the items
+//  * `titles` - The titles of the items
+//  * `file_paths` - The UTF-8 file paths to the items
+//  * `pdf_texts` - The full texts for each item
+//  * `embeddings` - The embeddings for each element
+//  * `embedding_config` - The embedding config
+///
+/// # Returns
+///
+/// An Arrow [`RecordBatch`] with the Zotero schema and passed items.
+///
+/// # Errors
+///
+/// * `ArrowError::Other` - if the lengths of the arrays do not match, or any of the embedding
+///   vectors do not have the dimensions configured in `embedding_config`.
+/// * `ArrowError::ArrowSchemaError` - if the schema does not match the items.
+pub fn library_to_arrow_with_embeddings(
+    library_keys: &[&str],
+    titles: &[&str],
+    file_paths: &[&str],
+    pdf_texts: &[&str],
+    embeddings: Vec<Vec<f32>>,
+    embedding_config: &EmbeddingProviderConfig,
+) -> Result<RecordBatch, ArrowError> {
+    if library_keys.len() != titles.len()
+        || library_keys.len() != file_paths.len()
+        || library_keys.len() != pdf_texts.len()
+        || library_keys.len() != embeddings.len()
+    {
+        return Err(ArrowError::Other(
+            "Passed slices do not have equal lengths.".into(),
+        ));
+    }
+
+    let expected_dim = embedding_config.dims();
+    if embeddings.iter().any(|e| e.len() != expected_dim) {
+        return Err(ArrowError::Other(format!(
+            "All embeddings must have dimension {expected_dim}."
+        )));
+    }
+
+    let schema = Arc::new(get_schema(embedding_config.provider(), true));
+    let library_keys = StringArray::from(Vec::from(library_keys));
+    let titles = StringArray::from(Vec::from(titles));
+    let pdf_texts = StringArray::from(Vec::from(pdf_texts));
+    let file_paths = StringArray::from(Vec::from(file_paths));
+
+    let flattened_embeddings = embeddings.into_iter().flatten().collect::<Vec<_>>();
+    let embeddings_array = Float32Array::from(flattened_embeddings);
+    let field = Arc::new(arrow_schema::Field::new(
+        "item",
+        arrow_schema::DataType::Float32,
+        true,
+    ));
+
+    let embeddings_array =
+        FixedSizeListArray::new(field, expected_dim as i32, Arc::new(embeddings_array), None);
+
+    Ok(RecordBatch::try_new(
+        schema,
+        vec![
+            Arc::new(library_keys),
+            Arc::new(titles),
+            Arc::new(file_paths),
+            Arc::new(pdf_texts),
+            Arc::new(embeddings_array),
+        ],
+    )?)
 }
 
 #[cfg(test)]
@@ -310,7 +391,7 @@ mod tests {
 
         let record_batch = temp_env::async_with_vars([("LANCEDB_URI", Some(&db_uri))], async {
             let embedding_config = config.get_embedding_config().unwrap();
-            let schema = Arc::new(get_schema(embedding_config.provider(), true).await);
+            let schema = Arc::new(get_schema(embedding_config.provider(), true));
             let store = LanceZoteroStore::from_schema(embedding_config, schema);
             full_library_to_arrow(&store, Some(0), Some(5)).await
         })

@@ -40,7 +40,10 @@
 //!   we scan a cache when inserting a batch into the backend to check conflicts (and the newest
 //!   one wins). Moreover, we maintain a cache of hashes (try saying that thrice quickly) with the
 //!   following semantics:
-//!   * This file is shared across batches.
+//!   * The file is named `.hash_cache`, and is placed in `~/.local/state/zqa/batches`.
+//!   * This file is shared across batches. Shared/exclusive locks to this file preclude other
+//!     file handles from accessing it (this is unlikely, but it is a stronger guarantee than doing
+//!     nothing).
 //!   * The file contains a map from text hashes to corresponding provider ID, provider model, and
 //!     the sequence number of the (newest) batch it belonged to.
 //!   * Before writing to the DB, we filter out items that match the hash, provider, and provider
@@ -51,32 +54,65 @@
 //! For the structure of this file, see [`BatchEmbeddingMetadata`].
 
 use std::{
+    collections::HashMap,
     fmt::Display,
-    fs,
-    hash::{DefaultHasher, Hash, Hasher},
-    io::{self, Write},
-    path::Path,
+    fs::{self, OpenOptions},
+    hash::{DefaultHasher, Hasher},
+    io::{self, Read, Seek, SeekFrom, Write},
+    path::{Path, PathBuf},
 };
 
 use chrono::{DateTime, Utc};
 use humantime::format_duration;
 use serde::{Deserialize, Serialize};
 use zqa_rag::{
+    capabilities::BatchJobState,
     embedding::common::{BatchEmbeddingInput, BatchEmbeddingRequest, BatchSubmission},
+    llm::factory::BatchEmbeddingClient,
     providers::{ProviderId, registry::provider_registry},
 };
 
 use crate::{
     cli::{commands::BatchCommand, errors::CLIError},
     common::Context,
-    state::read_number,
+    utils::{
+        arrow::library_to_arrow_with_embeddings,
+        library::ZoteroItem,
+        terminal::{read_char, read_number},
+    },
 };
 use crate::{state::get_state_dir, utils::library::parse_library};
+
+#[derive(Debug, Serialize, Deserialize)]
+struct BatchItem {
+    file_path: PathBuf,
+    library_key: String,
+    title: String,
+    text: String,
+    hash: u64,
+}
+
+impl From<ZoteroItem> for BatchItem {
+    fn from(value: ZoteroItem) -> Self {
+        let mut hasher = DefaultHasher::new();
+        hasher.write(value.text.as_bytes());
+
+        Self {
+            file_path: value.metadata.file_path,
+            library_key: value.metadata.library_key,
+            title: value.metadata.title,
+            text: value.text,
+            hash: hasher.finish(),
+        }
+    }
+}
 
 /// Metadata about a batch embedding request. This is the file structure used to represent a batch
 /// in progress.
 #[derive(Debug, Serialize, Deserialize)]
 struct BatchEmbeddingMetadata {
+    /// The sequence number of this batch
+    seq_id: usize,
     /// The batch ID
     batch_id: String,
     /// The file ID from the provider's Files API
@@ -87,14 +123,26 @@ struct BatchEmbeddingMetadata {
     model: String,
     /// Date of creation (local time, in UTC). Used to give users context when referring to a batch.
     created_at: DateTime<Utc>,
-    /// Hashes of each text in this batch. Since our texts can be quite large, and we only need
-    /// equality tests, a hash is a simpler solution.
-    hashes: Vec<String>,
+    /// Items in this batch
+    items: Vec<BatchItem>,
     /// Optional indices to the hashes above if we know this information (by checking).
     succeeded: Option<Vec<usize>>,
     /// Optional indices to the hashes above if we know this information (by checking).
     failed: Option<Vec<usize>>,
 }
+
+#[derive(Serialize, Deserialize)]
+struct CacheEntry {
+    /// Embedding provider ID
+    provider_id: ProviderId,
+    /// Embedding model string
+    model: String,
+    /// Sequence number of the batch that added this hash.
+    seq_id: usize,
+}
+
+/// The structure stored in the hash cache.
+type HashCache = HashMap<u64, CacheEntry>;
 
 impl Display for BatchEmbeddingMetadata {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -109,7 +157,7 @@ impl Display for BatchEmbeddingMetadata {
             elapsed,
             self.provider.as_str(),
             self.model,
-            self.hashes.len()
+            self.items.len()
         ))
     }
 }
@@ -157,7 +205,7 @@ fn get_seq_id() -> Result<usize, CLIError> {
 ///
 /// * `provider` - The provider of the embedding model
 /// * `model` - The embedding model string
-/// * `hashes` - Hashes for the texts in this batch
+/// * `items` - The items in this batch
 /// * `submission` - The result of a `submit_batch` on a batch embedding provider
 ///
 /// # Errors
@@ -171,7 +219,7 @@ fn get_seq_id() -> Result<usize, CLIError> {
 fn write_batch_metadata(
     provider: ProviderId,
     model: String,
-    hashes: Vec<String>,
+    items: Vec<BatchItem>,
     submission: BatchSubmission,
 ) -> Result<(), CLIError> {
     let batch_dir = get_state_dir()?.join("batches");
@@ -179,21 +227,160 @@ fn write_batch_metadata(
         fs::create_dir_all(&batch_dir)?;
     }
 
+    let seq = get_seq_id()?;
     let metadata = BatchEmbeddingMetadata {
+        seq_id: seq,
         batch_id: submission.batch_id,
         file_id: submission.file_id,
         provider,
         model,
         created_at: Utc::now(),
-        hashes,
+        items,
         succeeded: None,
         failed: None,
     };
 
-    let seq = get_seq_id()?;
     let filename = format!("batch_{seq}.log");
     let contents = serde_json::to_string_pretty(&metadata)?;
     fs::write(batch_dir.join(filename), contents)?;
+
+    Ok(())
+}
+
+async fn prompt_and_fetch_batch_results<O, E>(
+    ctx: &mut Context<O, E>,
+    client: BatchEmbeddingClient,
+    batch: &BatchEmbeddingMetadata,
+) -> Result<(), CLIError>
+where
+    O: Write,
+    E: Write,
+{
+    writeln!(&mut ctx.out, "Fetch results now? ([y]/n)")?;
+    if read_char(&mut io::stdin().lock(), 'y', &['y', 'n']) != 'y' {
+        return Ok(());
+    }
+
+    let batch_id = batch.batch_id.as_str();
+    let results = client.fetch_results(batch_id).await?;
+
+    // TODO: attempt a best-effort match anyway; maybe use a boolean flag or something and handle it
+    // specially later.
+    if results.succeeded.len() + results.failed.len() != batch.items.len() {
+        writeln!(
+            &mut ctx.err,
+            "Length mismatch between batch results and saved batch. The file may have been corrupted."
+        )?;
+    }
+
+    let ids_to_items = batch
+        .items
+        .iter()
+        .map(|i| (i.library_key.as_str(), i)) // we use `library_key` as the id in the batch
+        .collect::<HashMap<&str, &BatchItem>>();
+
+    let items_to_embeddings: Vec<(&BatchItem, Vec<f32>)> = results.succeeded.iter().filter_map(|res| {
+        if let Some(item) = ids_to_items.get(res.id.as_str()) {
+            Some((*item, res.embedding.clone()))
+        } else {
+            writeln!(&mut ctx.err,
+                "Item {} from batch response not in library. If you removed items from your library, this is fine.",
+                res.id
+            ).ok()?;
+
+            None
+        }
+    })
+    .collect();
+
+    let batch_dir = get_state_dir()?.join("batches");
+
+    let mut buf = Vec::<u8>::new(); // allocate before obtaining lock
+    let mut cache_file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .open(batch_dir.join(".hash_cache"))?;
+
+    cache_file.lock()?;
+    cache_file.read_to_end(&mut buf)?;
+
+    // First batch ever: the cache will be empty but the file exists
+    let cache = if buf.is_empty() {
+        HashCache::new()
+    } else {
+        serde_json::from_slice::<HashCache>(buf.as_ref())?
+    };
+
+    // Filter the items in `batch` using `items_to_embeddings`: if the cache doesn't contain it,
+    // it's new so we keep it; otherwise, look for a mismatch
+    let to_insert = items_to_embeddings
+        .into_iter()
+        .filter(|(item, _)| {
+            cache.get(&item.hash).is_none_or(|entry| {
+                entry.provider_id != batch.provider || entry.model != batch.model
+            })
+        })
+        .collect::<Vec<_>>();
+
+    writeln!(
+        &mut ctx.out,
+        "{} items to insert, {} items dropped as duplicates.",
+        to_insert.len(),
+        batch.items.len() - to_insert.len()
+    )?;
+
+    let library_keys: Vec<&str> = to_insert
+        .iter()
+        .map(|(i, _)| i.library_key.as_str())
+        .collect();
+    let titles: Vec<&str> = to_insert.iter().map(|(i, _)| i.title.as_str()).collect();
+    let file_paths: Vec<&str> = to_insert
+        .iter()
+        .map(|(i, _)| {
+            i.file_path.to_str().ok_or(CLIError::CommandError(format!(
+                "Invalid file path for item: {}",
+                i.title.clone()
+            )))
+        })
+        .collect::<Result<_, _>>()?;
+    let pdf_texts: Vec<&str> = to_insert.iter().map(|(i, _)| i.text.as_str()).collect();
+    let embeddings: Vec<Vec<f32>> = to_insert.into_iter().map(|(_, e)| e).collect();
+
+    let embedding_config = ctx
+        .config
+        .get_embedding_config()
+        .ok_or(CLIError::ConfigError("Embedding config not set up.".into()))?;
+
+    ctx.store
+        .upsert_batches(vec![library_to_arrow_with_embeddings(
+            &library_keys,
+            &titles,
+            &file_paths,
+            &pdf_texts,
+            embeddings,
+            &embedding_config,
+        )?])
+        .await?;
+
+    let (mut overwriteable, rest): (HashMap<_, _>, HashMap<_, _>) =
+        cache.into_iter().partition(|(k, v)| {
+            batch.items.iter().any(|i| i.hash == *k)
+                && v.provider_id == batch.provider
+                && v.model == batch.model
+                && v.seq_id < batch.seq_id
+        });
+
+    // For the matches, update the batch seq number
+    overwriteable.iter_mut().for_each(|(_, v)| {
+        v.seq_id = batch.seq_id;
+    });
+
+    overwriteable.extend(rest);
+    cache_file.seek(SeekFrom::Start(0))?;
+    cache_file.set_len(0)?;
+    cache_file.write_all(serde_json::to_string_pretty(&overwriteable)?.as_bytes())?;
+    cache_file.unlock()?;
 
     Ok(())
 }
@@ -301,6 +488,9 @@ where
     writeln!(&mut ctx.out, "Current status: {}", status.as_str())?;
 
     // TODO: For better UX, if this is completed, prompt to fetch, when that subcmd is implemented
+    if status == BatchJobState::Completed {
+        prompt_and_fetch_batch_results(ctx, embedder, &selected_batch).await?;
+    }
 
     Ok(())
 }
@@ -320,6 +510,7 @@ where
             return Ok(());
         }
     };
+    let new_items: Vec<BatchItem> = new_items.into_iter().map(Into::into).collect();
 
     let cfg = ctx.config.get_embedding_config();
     let Some(cfg) = cfg else {
@@ -342,35 +533,24 @@ where
         Ok(embedder) => embedder,
     };
 
-    let hashes = new_items
-        .iter()
-        .map(|item| {
-            // TODO: Consider using `sha2`, `fxhash`, or similar
-            let mut hasher = DefaultHasher::new();
-            item.text.hash(&mut hasher);
-
-            hasher.finish().to_string()
-        })
-        .collect::<Vec<_>>();
-
     let request = BatchEmbeddingRequest {
         model: cfg.model_name().into(),
         dims: cfg.dims(),
         inputs: new_items
-            .into_iter()
+            .iter()
             .map(|item| BatchEmbeddingInput {
-                id: item.metadata.library_key,
-                text: item.text,
+                id: item.library_key.clone(),
+                text: item.text.clone(),
             })
             .collect(),
     };
 
-    let submission = embedder.submit_batch(request).await?;
+    let submission = embedder.submit_batch(request.clone()).await?;
     let batch_id = submission.batch_id.clone();
     write_batch_metadata(
         cfg.provider_id(),
         cfg.model_name().into(),
-        hashes,
+        new_items,
         submission,
     )?;
 
@@ -390,7 +570,6 @@ where
     match subcmd {
         BatchCommand::Create => handle_batch_create_cmd(ctx).await,
         BatchCommand::CheckStatus => handle_batch_check_status_cmd(ctx).await,
-        BatchCommand::FetchResults => todo!(),
     }
 }
 
@@ -517,7 +696,6 @@ mod tests {
             assert_eq!(meta.batch_id, "my-batch-id");
             assert_eq!(meta.provider, ProviderId::VoyageAI);
             assert_eq!(meta.model, "voyage-3");
-            assert_eq!(meta.hashes, hashes);
             assert!(meta.succeeded.is_none());
             assert!(meta.failed.is_none());
         });
