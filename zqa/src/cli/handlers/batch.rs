@@ -323,6 +323,15 @@ where
         })
         .collect::<Vec<_>>();
 
+    if to_insert.is_empty() {
+        writeln!(
+            &mut ctx.out,
+            "All items in the batch were duplicates; no action taken.",
+        )?;
+
+        return Ok(());
+    }
+
     writeln!(
         &mut ctx.out,
         "{} items to insert, {} items dropped as duplicates.",
@@ -330,6 +339,32 @@ where
         batch.items.len() - to_insert.len()
     )?;
 
+    // Partition cache items to separate those whose sequence ID needs to be updated
+    let (mut overwriteable, rest): (HashMap<_, _>, HashMap<_, _>) =
+        cache.into_iter().partition(|(k, v)| {
+            batch.items.iter().any(|i| i.hash == *k)
+                && v.provider_id == batch.provider
+                && v.model == batch.model
+                && v.seq_id < batch.seq_id
+        });
+
+    // For the matches, update the batch seq number
+    overwriteable.iter_mut().for_each(|(_, v)| {
+        v.seq_id = batch.seq_id;
+    });
+
+    overwriteable.extend(rest);
+
+    // Add the batch's new items to the set of cache entries to update
+    for (item, _) in &to_insert {
+        overwriteable.entry(item.hash).or_insert(CacheEntry {
+            provider_id: batch.provider,
+            model: batch.model.clone(),
+            seq_id: batch.seq_id,
+        });
+    }
+
+    // Build batch to insert into the LanceDB store
     let library_keys: Vec<&str> = to_insert
         .iter()
         .map(|(i, _)| i.library_key.as_str())
@@ -362,25 +397,16 @@ where
             &embedding_config,
         )?])
         .await?;
+    ctx.store.create_or_update_indices().await?;
 
-    let (mut overwriteable, rest): (HashMap<_, _>, HashMap<_, _>) =
-        cache.into_iter().partition(|(k, v)| {
-            batch.items.iter().any(|i| i.hash == *k)
-                && v.provider_id == batch.provider
-                && v.model == batch.model
-                && v.seq_id < batch.seq_id
-        });
-
-    // For the matches, update the batch seq number
-    overwriteable.iter_mut().for_each(|(_, v)| {
-        v.seq_id = batch.seq_id;
-    });
-
-    overwriteable.extend(rest);
     cache_file.seek(SeekFrom::Start(0))?;
     cache_file.set_len(0)?;
     cache_file.write_all(serde_json::to_string_pretty(&overwriteable)?.as_bytes())?;
     cache_file.unlock()?;
+
+    if results.failed.is_empty() {
+        fs::remove_file(batch_dir.join(format!("batch_{}.log", batch.seq_id)))?;
+    }
 
     Ok(())
 }
