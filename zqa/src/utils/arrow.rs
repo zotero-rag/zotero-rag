@@ -276,11 +276,11 @@ pub async fn full_library_to_arrow(
 /// # Arguments
 ///
 /// * `library_keys` - The library keys of the items
-//  * `titles` - The titles of the items
-//  * `file_paths` - The UTF-8 file paths to the items
-//  * `pdf_texts` - The full texts for each item
-//  * `embeddings` - The embeddings for each element
-//  * `embedding_config` - The embedding config
+/// * `titles` - The titles of the items
+/// * `file_paths` - The UTF-8 file paths to the items
+/// * `pdf_texts` - The full texts for each item
+/// * `embeddings` - The embeddings for each element
+/// * `embedding_config` - The embedding config
 ///
 /// # Returns
 ///
