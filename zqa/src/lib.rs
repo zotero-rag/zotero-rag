@@ -211,7 +211,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    let store = LanceZoteroStore::from_config(&config).await?;
+    let store = LanceZoteroStore::from_config(&config)?;
     let context = Context {
         state: State::default(),
         config,

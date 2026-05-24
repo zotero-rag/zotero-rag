@@ -58,7 +58,7 @@ use std::{
     fmt::Display,
     fs::{self, OpenOptions},
     hash::{DefaultHasher, Hasher},
-    io::{self, Read, Seek, SeekFrom, Write},
+    io::{self, Read, Write},
     path::{Path, PathBuf},
 };
 
@@ -247,6 +247,9 @@ fn write_batch_metadata(
     Ok(())
 }
 
+/// Interactively fetch batch results, and update the LanceDB store and the hash cache following the
+/// protocol above.
+#[allow(clippy::too_many_lines)]
 async fn prompt_and_fetch_batch_results<O, E>(
     ctx: &mut Context<O, E>,
     client: BatchEmbeddingClient,
@@ -300,6 +303,7 @@ where
         .read(true)
         .write(true)
         .create(true)
+        .truncate(true)
         .open(batch_dir.join(".hash_cache"))?;
 
     cache_file.lock()?;
@@ -349,9 +353,9 @@ where
         });
 
     // For the matches, update the batch seq number
-    overwriteable.iter_mut().for_each(|(_, v)| {
+    for v in overwriteable.values_mut() {
         v.seq_id = batch.seq_id;
-    });
+    }
 
     overwriteable.extend(rest);
 
@@ -399,8 +403,7 @@ where
         .await?;
     ctx.store.create_or_update_indices().await?;
 
-    cache_file.seek(SeekFrom::Start(0))?;
-    cache_file.set_len(0)?;
+    // We already set `.truncate(true)`
     cache_file.write_all(serde_json::to_string_pretty(&overwriteable)?.as_bytes())?;
     cache_file.unlock()?;
 
@@ -515,7 +518,7 @@ where
 
     // TODO: For better UX, if this is completed, prompt to fetch, when that subcmd is implemented
     if status == BatchJobState::Completed {
-        prompt_and_fetch_batch_results(ctx, embedder, &selected_batch).await?;
+        prompt_and_fetch_batch_results(ctx, embedder, selected_batch).await?;
     }
 
     Ok(())

@@ -115,6 +115,7 @@ pub(crate) async fn lancedb_exists() -> bool {
 /// # Returns
 ///
 /// The schema in Arrow format.
+#[must_use]
 pub fn get_schema(
     embedding_provider: EmbeddingProvider,
     include_embeddings: bool,
@@ -165,8 +166,8 @@ pub fn get_schema(
 ///
 /// A `RecordBatch` that can be used to interact with `LanceDB`.
 pub fn library_to_arrow(
-    items: Vec<ZoteroItem>,
-    embedding_config: EmbeddingProviderConfig,
+    items: &[ZoteroItem],
+    embedding_config: &EmbeddingProviderConfig,
     include_embeddings: bool,
 ) -> Result<RecordBatch, ArrowError> {
     let schema = Arc::new(get_schema(embedding_config.provider(), include_embeddings));
@@ -213,7 +214,7 @@ pub fn library_to_arrow(
     ];
 
     if include_embeddings {
-        let embedding_provider = get_embedding_provider_with_config(&embedding_config)?;
+        let embedding_provider = get_embedding_provider_with_config(embedding_config)?;
         let query_vec = embedding_provider.compute_source_embeddings(Arc::new(pdf_texts))?;
         let query_vec = query_vec.as_fixed_size_list();
 
@@ -263,7 +264,11 @@ pub async fn full_library_to_arrow(
     log::info!("Finished parsing library items.");
 
     let include_embeddings = lancedb_exists().await;
-    library_to_arrow(lib_items, store.get_embedding_config(), include_embeddings)
+    library_to_arrow(
+        &lib_items,
+        &store.get_embedding_config(),
+        include_embeddings,
+    )
 }
 
 /// Given metadata about Zotero items, *including embeddings*, inserts them into the LanceDB store.
@@ -330,6 +335,7 @@ pub fn library_to_arrow_with_embeddings(
         true,
     ));
 
+    #[allow(clippy::cast_possible_truncation)]
     let embeddings_array =
         FixedSizeListArray::new(field, expected_dim as i32, Arc::new(embeddings_array), None);
 
