@@ -15,6 +15,7 @@ use zqa_rag::{
 };
 
 use crate::config::{BaseDirError, Config, get_config_dir};
+use crate::utils::terminal::{read_char, read_number, read_password};
 
 /// ANSI escape code for dimming text
 const DIM_TEXT: &str = "\x1b[2m";
@@ -179,78 +180,6 @@ pub(crate) fn check_or_create_first_run_file() -> Result<bool, StateError> {
         fs::create_dir_all(&state_dir)?;
         fs::File::create(&first_run_file)?;
         Ok(true)
-    }
-}
-
-/// Read a line of input.
-fn read_line<R: BufRead>(reader: &mut R) -> String {
-    let mut input = String::new();
-    reader.read_line(&mut input).expect("Failed to read input");
-
-    input
-}
-
-/// Read a password from standard input.
-fn read_password<R: BufRead>(reader: &mut R, is_terminal: bool) -> Result<String, StateError> {
-    if is_terminal {
-        rpassword::read_password().map_err(|e| StateError::PasswordReadError(e.to_string()))
-    } else {
-        Ok(read_line(reader))
-    }
-}
-
-/// Read a character from standard input and return it, handling Enter as a default.
-///
-/// # Arguments:
-///
-/// * `reader` - The input reader.
-/// * `default` - The default if Enter is pressed.
-/// * `valid_set` - The valid set of characters.
-fn read_char<R: BufRead>(reader: &mut R, default: char, valid_set: &[char]) -> char {
-    loop {
-        print!("> ");
-        let input = read_line(reader);
-        let choice = input.chars().next().unwrap_or(default).to_ascii_lowercase();
-
-        if valid_set.contains(&choice) {
-            return choice;
-        }
-
-        if choice == '\n' {
-            return default;
-        }
-    }
-}
-
-/// Read an integer from standard input, and validate that it is within bounds.
-///
-/// # Arguments:
-///
-/// * `reader` - The input reader.
-/// * `default` - The default value if Enter is pressed.
-/// * `bounds` - Lower and upper bounds to accept. Lower bound is inclusive, upper is exclusive.
-pub(crate) fn read_number<R: BufRead>(reader: &mut R, default: u8, bounds: (u8, u8)) -> u8 {
-    loop {
-        print!("> ");
-        let input = read_line(reader);
-        let input = input.trim();
-        if input.is_empty() {
-            return default;
-        }
-
-        let choice = input.parse::<u8>();
-
-        match choice {
-            Ok(num) => {
-                if bounds.0 <= num && num < bounds.1 {
-                    return num;
-                }
-                println!("Choice must be in [{}, {}).", bounds.0, bounds.1);
-            }
-            Err(_) => {
-                println!("Choice must be in [{}, {}).", bounds.0, bounds.1);
-            }
-        }
     }
 }
 
