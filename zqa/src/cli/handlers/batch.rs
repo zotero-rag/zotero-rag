@@ -87,7 +87,7 @@ use crate::{
 };
 use crate::{state::get_state_dir, utils::library::parse_library};
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct BatchItem {
     file_path: PathBuf,
     library_key: String,
@@ -114,7 +114,7 @@ impl From<ZoteroItem> for BatchItem {
 
 /// Metadata about a batch embedding request. This is the file structure used to represent a batch
 /// in progress.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct BatchEmbeddingMetadata {
     /// The sequence number of this batch
     seq_id: usize,
@@ -420,20 +420,20 @@ where
         return Ok(());
     }
 
+    let batch_dir = get_state_dir()?.join("batches");
+
     let batch_id = batch.batch_id.as_str();
     let results = client.fetch_results(batch_id).await?;
 
     // TODO: attempt a best-effort match anyway; maybe use a boolean flag or something and handle it
     // specially later.
     if results.succeeded.len() + results.failed.len() != batch.items.len() {
-        writeln!(
-            &mut ctx.err,
-            "Length mismatch between batch results and saved batch. The file may have been corrupted."
-        )?;
+        return Err(CLIError::CommandError("Length mismatch between batch results and saved batch. The file may have been corrupted.".into()));
     }
 
     match (results.succeeded.is_empty(), results.failed.is_empty()) {
         (true, true) => {
+            // no results
             writeln!(
                 &mut ctx.out,
                 "The batch API did not send any results despite the batch being completed."
@@ -459,21 +459,46 @@ where
             // complete success
             handle_successful_batch_results(ctx, batch, &results.succeeded).await?;
 
-            let batch_dir = get_state_dir()?.join("batches");
-            if results.failed.is_empty() {
-                fs::remove_file(batch_dir.join(format!("batch_{}.log", batch.seq_id)))?;
-            }
+            fs::remove_file(batch_dir.join(format!("batch_{}.log", batch.seq_id)))?;
         }
         (false, false) => {
             // partial success
             writeln!(
                 &mut ctx.out,
-                "{} of {} items succeeded.",
+                "{} of {} items succeeded, and will be imported.",
                 results.succeeded.len(),
                 results.succeeded.len() + results.failed.len()
             )?;
 
             // TODO: prompt for retry
+
+            handle_successful_batch_results(ctx, batch, &results.succeeded).await?;
+
+            let ids_to_idx: HashMap<&str, usize> = batch
+                .items
+                .iter()
+                .enumerate()
+                .map(|(i, item)| (item.library_key.as_str(), i))
+                .collect();
+
+            let succ_idx: Vec<usize> = results
+                .succeeded
+                .iter()
+                .filter_map(|r| ids_to_idx.get(r.id.as_str()).copied())
+                .collect();
+            let failed_idx: Vec<usize> = results
+                .failed
+                .iter()
+                .filter_map(|r| ids_to_idx.get(r.id.as_str()).copied())
+                .collect();
+
+            let mut batch_metadata = batch.clone();
+            batch_metadata.succeeded = Some(succ_idx);
+            batch_metadata.failed = Some(failed_idx);
+            fs::write(
+                batch_dir.join(format!("batch_{}.log", batch.seq_id)),
+                serde_json::to_string_pretty(&batch_metadata)?,
+            )?;
         }
     }
 
