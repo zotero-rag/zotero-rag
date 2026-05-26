@@ -69,7 +69,9 @@ use humantime::format_duration;
 use serde::{Deserialize, Serialize};
 use zqa_rag::{
     capabilities::BatchJobState,
-    embedding::common::{BatchEmbeddingInput, BatchEmbeddingRequest, BatchSubmission},
+    embedding::common::{
+        BatchEmbeddingInput, BatchEmbeddingRequest, BatchEmbeddingResult, BatchSubmission,
+    },
     llm::factory::BatchEmbeddingClient,
     providers::{ProviderId, registry::provider_registry},
 };
@@ -250,35 +252,15 @@ fn write_batch_metadata(
     Ok(())
 }
 
-/// Interactively fetch batch results, and update the LanceDB store and the hash cache following the
-/// protocol above.
-#[allow(clippy::too_many_lines)]
-async fn prompt_and_fetch_batch_results<O, E>(
+async fn handle_successful_batch_results<O, E>(
     ctx: &mut Context<O, E>,
-    client: BatchEmbeddingClient,
     batch: &BatchEmbeddingMetadata,
+    successes: &[BatchEmbeddingResult],
 ) -> Result<(), CLIError>
 where
     O: Write,
     E: Write,
 {
-    writeln!(&mut ctx.out, "Fetch results now? ([y]/n)")?;
-    if read_char(&mut io::stdin().lock(), 'y', &['y', 'n']) != 'y' {
-        return Ok(());
-    }
-
-    let batch_id = batch.batch_id.as_str();
-    let results = client.fetch_results(batch_id).await?;
-
-    // TODO: attempt a best-effort match anyway; maybe use a boolean flag or something and handle it
-    // specially later.
-    if results.succeeded.len() + results.failed.len() != batch.items.len() {
-        writeln!(
-            &mut ctx.err,
-            "Length mismatch between batch results and saved batch. The file may have been corrupted."
-        )?;
-    }
-
     let ids_to_items = batch
         .items
         .iter()
@@ -418,8 +400,81 @@ where
     cache_file.write_all(serde_json::to_string_pretty(&overwriteable)?.as_bytes())?;
     cache_file.unlock()?;
 
-    if results.failed.is_empty() {
-        fs::remove_file(batch_dir.join(format!("batch_{}.log", batch.seq_id)))?;
+    Ok(())
+}
+
+/// Interactively fetch batch results, and update the LanceDB store and the hash cache following the
+/// protocol above.
+#[allow(clippy::too_many_lines)]
+async fn prompt_and_fetch_batch_results<O, E>(
+    ctx: &mut Context<O, E>,
+    client: BatchEmbeddingClient,
+    batch: &BatchEmbeddingMetadata,
+) -> Result<(), CLIError>
+where
+    O: Write,
+    E: Write,
+{
+    writeln!(&mut ctx.out, "Fetch results now? ([y]/n)")?;
+    if read_char(&mut io::stdin().lock(), 'y', &['y', 'n']) != 'y' {
+        return Ok(());
+    }
+
+    let batch_id = batch.batch_id.as_str();
+    let results = client.fetch_results(batch_id).await?;
+
+    // TODO: attempt a best-effort match anyway; maybe use a boolean flag or something and handle it
+    // specially later.
+    if results.succeeded.len() + results.failed.len() != batch.items.len() {
+        writeln!(
+            &mut ctx.err,
+            "Length mismatch between batch results and saved batch. The file may have been corrupted."
+        )?;
+    }
+
+    match (results.succeeded.is_empty(), results.failed.is_empty()) {
+        (true, true) => {
+            writeln!(
+                &mut ctx.out,
+                "The batch API did not send any results despite the batch being completed."
+            )?;
+            // TODO: prompt for retry
+        }
+        (true, false) => {
+            // complete failure
+            writeln!(
+                &mut ctx.err,
+                "All {} batch items failed.",
+                results.failed.len()
+            )?;
+
+            for err in results.failed.iter().take(3) {
+                writeln!(&mut ctx.err, "  {} - {}", err.id, err.error)?;
+            }
+
+            writeln!(&mut ctx.out, "Retry the entire batch? ([y]/n)")?;
+            // TODO: implement retry here
+        }
+        (false, true) => {
+            // complete success
+            handle_successful_batch_results(ctx, batch, &results.succeeded).await?;
+
+            let batch_dir = get_state_dir()?.join("batches");
+            if results.failed.is_empty() {
+                fs::remove_file(batch_dir.join(format!("batch_{}.log", batch.seq_id)))?;
+            }
+        }
+        (false, false) => {
+            // partial success
+            writeln!(
+                &mut ctx.out,
+                "{} of {} items succeeded.",
+                results.succeeded.len(),
+                results.succeeded.len() + results.failed.len()
+            )?;
+
+            // TODO: prompt for retry
+        }
     }
 
     Ok(())
