@@ -25,21 +25,31 @@
 //!   * Files are named `batch_<id>.log`, where `id` are (1-based) sequence numbers to avoid dealing with
 //!     clock drift ([`std::time::SystemTime`] is a fun read for the uninitiated).
 //! * We check the status of batches on startup and when the user explicitly requests it.
-//! * When we check the status of a batch:
+//! * When we check the status of a batch and fetch its results, exactly one of the following applies:
 //!   * If on startup, checking the status reveals a state that is not "submitted" (or that
 //!     provider's lifecycle equivalent), we notify the user, and they decide how to proceed. This
 //!     includes a response indicating that the batch doesn't exist.
-//!   * If the batch has completely failed and there are no successes, we prompt the user to try again.
+//!   * If the provider returns a number of results that does not match the items in our batch file,
+//!     we treat the file as corrupted and surface a hard error. We don't try to partially reconcile.
+//!   * If the batch has completely failed and there are no successes, we prompt the user to try
+//!     again. A retry creates a new batch with the same items (see "retries" below).
 //!   * If the batch has partially succeeded, we notify the user and let them decide. The default
 //!     option here should be to add the processed results to our backend and retry the remaining.
 //!     The user should also have the option to just ignore and retry the whole thing, or pick the
-//!     successes and drop the rest.
+//!     successes and drop the rest. Regardless of choice, successes that are applied flow through
+//!     the hash cache so they aren't re-embedded later.
 //!   * If the batch has completely succeeded, we notify the user only if this check was initiated
-//!     at startup. We add these to our backend and remove this batch.
-//! * Broadly, our semantics resemble a write-ahead log. The files are sorted by creation time, and
-//!   we scan a cache when inserting a batch into the backend to check conflicts (and the newest
-//!   one wins). Moreover, we maintain a cache of hashes (try saying that thrice quickly) with the
-//!   following semantics:
+//!     at startup. We add these to our backend and remove the batch file.
+//! * Retries are *new* batches. Batch IDs are immutable at the provider, and we mirror that on disk:
+//!   a retry submits a fresh request (containing only the items that need re-embedding) and writes
+//!   a new `batch_<id>.log` with its own sequence number. The original file is removed once its
+//!   successes have been applied and the retry has been submitted. This keeps each file a
+//!   self-contained WAL entry rather than a mutable progress log, and means the four-way
+//!   classification above is always a snapshot of one batch — never a merge across runs.
+//! * Broadly, our semantics resemble a write-ahead log. The files are processed in sequence-number
+//!   order, and we scan a cache when inserting a batch into the backend to check conflicts (and
+//!   the newest one wins). Moreover, we maintain a cache of hashes (try saying that thrice
+//!   quickly) with the following semantics:
 //!   * The file is named `.hash_cache`, and is placed in `~/.local/state/zqa/batches`.
 //!   * This file is shared across batches. Shared/exclusive locks to this file preclude other
 //!     file handles from accessing it (this is unlikely, but it is a stronger guarantee than doing
@@ -252,6 +262,7 @@ fn write_batch_metadata(
     Ok(())
 }
 
+#[allow(clippy::too_many_lines)]
 async fn handle_successful_batch_results<O, E>(
     ctx: &mut Context<O, E>,
     batch: &BatchEmbeddingMetadata,
