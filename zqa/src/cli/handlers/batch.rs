@@ -414,6 +414,59 @@ where
     Ok(())
 }
 
+/// Given a set of items, submit a batch request based on the configuration in `ctx`, and write the
+/// batch metadata file in the state dir.
+async fn retry_items<O, E>(ctx: &mut Context<O, E>, items: Vec<BatchItem>) -> Result<(), CLIError>
+where
+    O: Write,
+    E: Write,
+{
+    let cfg = ctx.config.get_embedding_config();
+    let Some(cfg) = cfg else {
+        // `CommandError` variants don't exit the CLI
+        return Err(CLIError::CommandError(
+            concat!(
+                "Could not get a config for batch embeddings. Ensure your config has an ",
+                "embedding provider configured. See https://github.com/zotero-rag/zotero-rag#configuration ",
+                "for configuration instructions."
+            )
+            .into(),
+        ))?;
+    };
+
+    let registry = provider_registry();
+    let embedder = match registry.create_batch_embedding(&cfg) {
+        Err(e) => {
+            return Err(CLIError::CommandError(e.to_string()));
+        }
+        Ok(embedder) => embedder,
+    };
+
+    let request = BatchEmbeddingRequest {
+        model: cfg.model_name().into(),
+        dims: cfg.dims(),
+        inputs: items
+            .iter()
+            .map(|item| BatchEmbeddingInput {
+                id: item.library_key.clone(),
+                text: item.text.clone(),
+            })
+            .collect(),
+    };
+
+    let submission = embedder.submit_batch(request.clone()).await?;
+    let batch_id = submission.batch_id.clone();
+    write_batch_metadata(
+        cfg.provider_id(),
+        cfg.model_name().into(),
+        items,
+        submission,
+    )?;
+
+    writeln!(ctx.out, "Batch {batch_id} successfully created.")?;
+    Ok(())
+}
+
 /// Interactively fetch batch results, and update the LanceDB store and the hash cache following the
 /// protocol above.
 #[allow(clippy::too_many_lines)]
@@ -436,20 +489,24 @@ where
     let batch_id = batch.batch_id.as_str();
     let results = client.fetch_results(batch_id).await?;
 
-    // TODO: attempt a best-effort match anyway; maybe use a boolean flag or something and handle it
-    // specially later.
     if results.succeeded.len() + results.failed.len() != batch.items.len() {
         return Err(CLIError::CommandError("Length mismatch between batch results and saved batch. The file may have been corrupted.".into()));
     }
 
     match (results.succeeded.is_empty(), results.failed.is_empty()) {
         (true, true) => {
-            // no results
+            // no results; this is a strange state to be in, admittedly, so we might handle this
+            // differently in the future
             writeln!(
                 &mut ctx.out,
                 "The batch API did not send any results despite the batch being completed."
             )?;
-            // TODO: prompt for retry
+
+            writeln!(&mut ctx.out, "Do you want to retry? ([y]/n) ")?;
+            if read_char(&mut io::stdin().lock(), 'y', &['y', 'n']) == 'y' {
+                retry_items(ctx, batch.items.clone()).await?;
+                fs::remove_file(batch_dir.join(format!("batch_{}.log", batch.seq_id)))?;
+            }
         }
         (true, false) => {
             // complete failure
@@ -464,7 +521,10 @@ where
             }
 
             writeln!(&mut ctx.out, "Retry the entire batch? ([y]/n)")?;
-            // TODO: implement retry here
+            if read_char(&mut io::stdin().lock(), 'y', &['y', 'n']) == 'y' {
+                retry_items(ctx, batch.items.clone()).await?;
+                fs::remove_file(batch_dir.join(format!("batch_{}.log", batch.seq_id)))?;
+            }
         }
         (false, true) => {
             // complete success
@@ -480,8 +540,6 @@ where
                 results.succeeded.len(),
                 results.succeeded.len() + results.failed.len()
             )?;
-
-            // TODO: prompt for retry
 
             handle_successful_batch_results(ctx, batch, &results.succeeded).await?;
 
@@ -505,11 +563,26 @@ where
 
             let mut batch_metadata = batch.clone();
             batch_metadata.succeeded = Some(succ_idx);
-            batch_metadata.failed = Some(failed_idx);
+            batch_metadata.failed = Some(failed_idx.clone());
             fs::write(
                 batch_dir.join(format!("batch_{}.log", batch.seq_id)),
                 serde_json::to_string_pretty(&batch_metadata)?,
             )?;
+
+            // Retry failed items
+            writeln!(
+                &mut ctx.out,
+                "Do you want to retry the failed items? ([y]/n) "
+            )?;
+            if read_char(&mut io::stdin().lock(), 'y', &['y', 'n']) == 'y' {
+                let failed_items: Vec<BatchItem> = failed_idx
+                    .iter()
+                    .filter_map(|i| batch.items.get(*i).cloned())
+                    .collect();
+
+                retry_items(ctx, failed_items).await?;
+                fs::remove_file(batch_dir.join(format!("batch_{}.log", batch.seq_id)))?;
+            }
         }
     }
 
@@ -618,7 +691,6 @@ where
         .await?;
     writeln!(&mut ctx.out, "Current status: {}", status.as_str())?;
 
-    // TODO: For better UX, if this is completed, prompt to fetch, when that subcmd is implemented
     if status == BatchJobState::Completed {
         prompt_and_fetch_batch_results(ctx, embedder, selected_batch).await?;
     }
@@ -643,50 +715,8 @@ where
     };
     let new_items: Vec<BatchItem> = new_items.into_iter().map(Into::into).collect();
 
-    let cfg = ctx.config.get_embedding_config();
-    let Some(cfg) = cfg else {
-        // `CommandError` variants don't exit the CLI
-        return Err(CLIError::CommandError(
-            concat!(
-                "Could not get a config for batch embeddings. Ensure your config has an ",
-                "embedding provider configured. See https://github.com/zotero-rag/zotero-rag#configuration ",
-                "for configuration instructions."
-            )
-            .into(),
-        ))?;
-    };
-
-    let registry = provider_registry();
-    let embedder = match registry.create_batch_embedding(&cfg) {
-        Err(e) => {
-            return Err(CLIError::CommandError(e.to_string()));
-        }
-        Ok(embedder) => embedder,
-    };
-
-    let request = BatchEmbeddingRequest {
-        model: cfg.model_name().into(),
-        dims: cfg.dims(),
-        inputs: new_items
-            .iter()
-            .map(|item| BatchEmbeddingInput {
-                id: item.library_key.clone(),
-                text: item.text.clone(),
-            })
-            .collect(),
-    };
-
-    let submission = embedder.submit_batch(request).await?;
-    let batch_id = submission.batch_id.clone();
-    write_batch_metadata(
-        cfg.provider_id(),
-        cfg.model_name().into(),
-        new_items,
-        submission,
-    )?;
-
-    writeln!(ctx.out, "Batch {batch_id} successfully created.")?;
-    Ok(())
+    // Creating a new batch is equivalent to "retrying" with all items
+    retry_items(ctx, new_items).await
 }
 
 /// Handle the `/batch` commands.
