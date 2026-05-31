@@ -738,8 +738,10 @@ where
 mod tests {
     use std::fs;
 
+    use chrono::{Duration, Utc};
     use serial_test::serial;
     use tempfile::tempdir;
+    use zqa_macros::{test_contains, test_eq};
     use zqa_rag::{embedding::common::BatchSubmission, providers::ProviderId};
 
     use super::{
@@ -747,6 +749,7 @@ mod tests {
         write_batch_metadata,
     };
     use crate::cli::app::tests::create_test_context;
+    use crate::utils::library::{ZoteroItem, ZoteroItemMetadata};
 
     fn make_submission(batch_id: &str) -> BatchSubmission {
         BatchSubmission {
@@ -759,7 +762,7 @@ mod tests {
     fn get_seq_id_returns_one_when_batch_dir_absent() {
         let tmp = tempdir().unwrap();
         temp_env::with_var("ZQA_STATE_DIR", Some(tmp.path()), || {
-            assert_eq!(get_seq_id().unwrap(), 1);
+            test_eq!(get_seq_id().unwrap(), 1);
         });
     }
 
@@ -770,7 +773,7 @@ mod tests {
         fs::create_dir_all(&batch_dir).unwrap();
 
         temp_env::with_var("ZQA_STATE_DIR", Some(tmp.path()), || {
-            assert_eq!(get_seq_id().unwrap(), 1);
+            test_eq!(get_seq_id().unwrap(), 1);
         });
     }
 
@@ -784,7 +787,7 @@ mod tests {
         fs::write(batch_dir.join("batch_3.log"), "").unwrap();
 
         temp_env::with_var("ZQA_STATE_DIR", Some(tmp.path()), || {
-            assert_eq!(get_seq_id().unwrap(), 4);
+            test_eq!(get_seq_id().unwrap(), 4);
         });
     }
 
@@ -797,7 +800,7 @@ mod tests {
         fs::write(batch_dir.join("cache.bin"), "").unwrap();
 
         temp_env::with_var("ZQA_STATE_DIR", Some(tmp.path()), || {
-            assert_eq!(get_seq_id().unwrap(), 1);
+            test_eq!(get_seq_id().unwrap(), 1);
         });
     }
 
@@ -811,7 +814,7 @@ mod tests {
         fs::write(batch_dir.join("batch_abc.log"), "").unwrap();
 
         temp_env::with_var("ZQA_STATE_DIR", Some(tmp.path()), || {
-            assert_eq!(get_seq_id().unwrap(), 2);
+            test_eq!(get_seq_id().unwrap(), 2);
         });
     }
 
@@ -865,19 +868,19 @@ mod tests {
                 .unwrap()
                 .filter_map(std::result::Result::ok)
                 .collect();
-            assert_eq!(files.len(), 1);
+            test_eq!(files.len(), 1);
 
             let content = fs::read_to_string(files[0].path()).unwrap();
             let meta: BatchEmbeddingMetadata = serde_json::from_str(&content).unwrap();
 
-            assert_eq!(meta.batch_id, "my-batch-id");
-            assert_eq!(meta.provider, ProviderId::VoyageAI);
-            assert_eq!(meta.model, "voyage-3");
-            assert_eq!(meta.items.len(), 2);
-            assert_eq!(meta.items[0].library_key, "KEY-A");
-            assert_eq!(meta.items[0].hash, 1);
-            assert_eq!(meta.items[1].library_key, "KEY-B");
-            assert_eq!(meta.items[1].hash, 2);
+            test_eq!(meta.batch_id, "my-batch-id");
+            test_eq!(meta.provider, ProviderId::VoyageAI);
+            test_eq!(meta.model, "voyage-3");
+            test_eq!(meta.items.len(), 2);
+            test_eq!(meta.items[0].library_key, "KEY-A");
+            test_eq!(meta.items[0].hash, 1);
+            test_eq!(meta.items[1].library_key, "KEY-B");
+            test_eq!(meta.items[1].hash, 2);
             assert!(meta.succeeded.is_none());
             assert!(meta.failed.is_none());
         });
@@ -944,10 +947,128 @@ mod tests {
                 assert!(result.is_ok());
 
                 let err = String::from_utf8(ctx.err.into_inner()).unwrap();
-                assert!(err.contains("No batches have been submitted"));
+                test_contains!(err, "No batches have been submitted");
             },
         )
         .await;
+    }
+
+    #[test]
+    fn from_zotero_item_maps_all_fields() {
+        let zi = ZoteroItem {
+            metadata: ZoteroItemMetadata {
+                library_key: "KEY-1".into(),
+                title: "Some Title".into(),
+                file_path: std::path::PathBuf::from("/tmp/x.pdf"),
+                authors: Some(vec!["Author A".into()]),
+            },
+            text: "body text".into(),
+        };
+
+        let bi: BatchItem = zi.into();
+        test_eq!(bi.library_key, "KEY-1");
+        test_eq!(bi.title, "Some Title");
+        test_eq!(bi.file_path, std::path::PathBuf::from("/tmp/x.pdf"));
+        test_eq!(bi.text, "body text");
+    }
+
+    fn make_zotero_item(text: &str) -> ZoteroItem {
+        ZoteroItem {
+            metadata: ZoteroItemMetadata {
+                library_key: "K".into(),
+                title: "T".into(),
+                file_path: std::path::PathBuf::from("/tmp/p.pdf"),
+                authors: None,
+            },
+            text: text.into(),
+        }
+    }
+
+    #[test]
+    fn from_zotero_item_hash_is_deterministic() {
+        let a: BatchItem = make_zotero_item("identical text").into();
+        let b: BatchItem = make_zotero_item("identical text").into();
+        test_eq!(a.hash, b.hash);
+    }
+
+    #[test]
+    fn from_zotero_item_hash_distinguishes_text() {
+        let a: BatchItem = make_zotero_item("one").into();
+        let b: BatchItem = make_zotero_item("two").into();
+        assert_ne!(a.hash, b.hash);
+    }
+
+    fn make_metadata_at(when: chrono::DateTime<Utc>, items_count: usize) -> BatchEmbeddingMetadata {
+        let items = (0..items_count)
+            .map(|i| BatchItem {
+                file_path: std::path::PathBuf::from(format!("/tmp/{i}.pdf")),
+                library_key: format!("K{i}"),
+                title: format!("T{i}"),
+                text: format!("text {i}"),
+                hash: i as u64,
+            })
+            .collect();
+        BatchEmbeddingMetadata {
+            seq_id: 1,
+            batch_id: "bid".into(),
+            file_id: "fid".into(),
+            provider: ProviderId::VoyageAI,
+            model: "voyage-3".into(),
+            created_at: when,
+            items,
+            succeeded: None,
+            failed: None,
+        }
+    }
+
+    #[test]
+    fn display_includes_provider_model_and_count() {
+        let meta = make_metadata_at(Utc::now() - Duration::seconds(30), 3);
+        let s = format!("{meta}");
+
+        test_contains!(s, "voyageai");
+        test_contains!(s, "voyage-3");
+        test_contains!(s, "3 items");
+    }
+
+    #[test]
+    fn display_handles_future_created_at() {
+        // A negative duration can't be converted to `std::time::Duration`, so the formatter
+        // falls back to the "Unknown" branch.
+        let meta = make_metadata_at(Utc::now() + Duration::days(365), 0);
+        let s = format!("{meta}");
+        assert!(s.contains("Unknown"), "expected unknown-time fallback: {s}");
+    }
+
+    #[test]
+    fn get_seq_id_handles_gaps_in_sequence() {
+        let tmp = tempdir().unwrap();
+        let batch_dir = tmp.path().join("batches");
+        fs::create_dir_all(&batch_dir).unwrap();
+        // Gaps from deleted batches: next seq should be (max + 1), not (count + 1).
+        fs::write(batch_dir.join("batch_1.log"), "").unwrap();
+        fs::write(batch_dir.join("batch_3.log"), "").unwrap();
+        fs::write(batch_dir.join("batch_7.log"), "").unwrap();
+
+        temp_env::with_var("ZQA_STATE_DIR", Some(tmp.path()), || {
+            test_eq!(get_seq_id().unwrap(), 8);
+        });
+    }
+
+    #[test]
+    fn metadata_round_trips_with_indices_populated() {
+        let mut meta = make_metadata_at(Utc::now() - Duration::seconds(10), 4);
+        meta.succeeded = Some(vec![0, 2]);
+        meta.failed = Some(vec![1, 3]);
+
+        let json = serde_json::to_string_pretty(&meta).unwrap();
+        let round_tripped: BatchEmbeddingMetadata = serde_json::from_str(&json).unwrap();
+
+        test_eq!(round_tripped.succeeded.as_deref(), Some(&[0usize, 2][..]));
+        test_eq!(round_tripped.failed.as_deref(), Some(&[1usize, 3][..]));
+        test_eq!(round_tripped.items.len(), 4);
+        test_eq!(round_tripped.batch_id, "bid");
+        test_eq!(round_tripped.provider, ProviderId::VoyageAI);
     }
 
     #[tokio::test]
@@ -969,7 +1090,7 @@ mod tests {
                 assert!(result.is_ok());
 
                 let err = String::from_utf8(ctx.err.into_inner()).unwrap();
-                assert!(err.contains("No valid batches were found"));
+                test_contains!(err, "No valid batches were found");
             },
         )
         .await;
