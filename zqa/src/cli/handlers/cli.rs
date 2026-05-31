@@ -212,5 +212,10 @@ mod tests {
         test_contains!(output, "/config");
         test_contains!(output, "/new");
         test_contains!(output, "/quit");
+        test_contains!(output, "/docs clear");
+        test_contains!(output, "/docs remove");
+        test_contains!(output, "/docs list");
+        test_contains!(output, "/batch check");
+        test_contains!(output, "/batch create");
     }
 }
