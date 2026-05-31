@@ -304,7 +304,11 @@ pub(crate) fn oobe<R: BufRead>(reader: &mut R, is_terminal: bool) -> Result<(), 
         }
     }
     println!();
-    let reranker_provider = read_char(reader, embedding_provider, &['c', 'v', 'z']);
+    let reranker_default = match embedding_provider {
+        'c' | 'g' | 'o' => 'c', // UI shows [C]ohere as the default for this group
+        other => other,
+    };
+    let reranker_provider = read_char(reader, reranker_default, &['c', 'v', 'z']);
     config.reranker_provider = match reranker_provider {
         'c' => Some(RerankerProvider::Cohere),
         'v' => Some(RerankerProvider::VoyageAI),

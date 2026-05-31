@@ -1,4 +1,4 @@
-use std::io::BufRead;
+use std::io::{BufRead, Write};
 
 use crate::state::StateError;
 
@@ -51,6 +51,11 @@ pub(crate) fn read_password<R: BufRead>(
 /// * `default` - The default if Enter is pressed.
 /// * `valid_set` - The valid set of characters, in lowercase.
 pub(crate) fn read_char<R: BufRead>(reader: &mut R, default: char, valid_set: &[char]) -> char {
+    debug_assert!(
+        valid_set.contains(&default),
+        "`default` must be a member of `valid_set`"
+    );
+
     loop {
         print!("> ");
         let input = read_line(reader);
@@ -76,24 +81,20 @@ pub(crate) fn read_char<R: BufRead>(reader: &mut R, default: char, valid_set: &[
 pub(crate) fn read_number<R: BufRead>(reader: &mut R, default: u8, bounds: (u8, u8)) -> u8 {
     loop {
         print!("> ");
+        let _ = std::io::stdout().flush();
+
         let input = read_line(reader);
         let input = input.trim();
         if input.is_empty() {
             return default;
         }
 
-        let choice = input.parse::<u8>();
-
-        match choice {
-            Ok(num) => {
-                if bounds.0 <= num && num < bounds.1 {
-                    return num;
-                }
-                println!("Choice must be in [{}, {}).", bounds.0, bounds.1);
-            }
-            Err(_) => {
-                println!("Choice must be in [{}, {}).", bounds.0, bounds.1);
-            }
+        if let Ok(num) = input.parse::<u8>()
+            && bounds.0 <= num
+            && num < bounds.1
+        {
+            return num;
         }
+        println!("Choice must be in [{}, {}).", bounds.0, bounds.1);
     }
 }
