@@ -264,6 +264,25 @@ fn write_batch_metadata(
     Ok(())
 }
 
+/// Given a `batch` that has nonzero successes, insert those items into the vector store and update the
+/// hash cache. As necessary, this function updates the sequence IDs of elements in the hash cache
+/// (since the newest one wins) and adds elements from the batch that are not already present in the
+/// cache.
+///
+/// # Arguments
+///
+/// * `ctx` - The app's context object
+/// * `batch` - Metadata about the batch embedding request
+/// * `successes` - Result objects corresponding to the batch API's successful results
+///
+/// # Errors
+///
+/// * `CLIError::StateDirError` if the user's base directory could not be obtained. See
+///   `directories::BaseDirError` for when this can occur.
+/// * `CLIError::IOError` in the following cases:
+///     * writing to the state directory failed. This is typically caused by permission issues.
+///     * writing out the serialized data failed
+/// * `CLIError::SerializationError` if JSON serialization failed.
 #[allow(clippy::too_many_lines)]
 async fn handle_successful_batch_results<O, E>(
     ctx: &mut Context<O, E>,
@@ -418,6 +437,19 @@ where
 
 /// Given a set of items, submit a batch request based on the configuration in `ctx`, and write the
 /// batch metadata file in the state dir.
+///
+/// # Arguments
+///
+/// * `ctx` - The app's context object
+/// * `items` - The items to send as a batch request
+///
+/// # Errors
+///
+/// * `CLIError::StateDirError` if the user's base directory could not be obtained. See
+///   `directories::BaseDirError` for when this can occur.
+/// * `CLIError::IOError` in the following cases:
+///     * writing to the state directory failed. This is typically caused by permission issues.
+///     * writing out the serialized data failed
 async fn retry_items<O, E>(ctx: &mut Context<O, E>, items: Vec<BatchItem>) -> Result<(), CLIError>
 where
     O: Write,
@@ -471,6 +503,21 @@ where
 
 /// Interactively fetch batch results, and update the LanceDB store and the hash cache following the
 /// protocol above.
+///
+/// # Arguments
+///
+/// * `ctx` - The app's context object
+/// * `client` - The client to use to interact with the batch API
+/// * `batch` - Metadata about the batch to fetch results for
+///
+/// # Errors
+///
+/// * `CLIError::StateDirError` if the user's base directory could not be obtained. See
+///   `directories::BaseDirError` for when this can occur.
+/// * `CLIError::IOError` in the following cases:
+///     * writing to the state directory failed. This is typically caused by permission issues.
+///     * writing out the serialized data failed
+/// * `CLIError::SerializationError` if JSON serialization failed.
 #[allow(clippy::too_many_lines)]
 async fn prompt_and_fetch_batch_results<O, E>(
     ctx: &mut Context<O, E>,
@@ -560,6 +607,14 @@ where
                 .collect();
 
             handle_successful_batch_results(ctx, batch, results.succeeded).await?;
+
+            writeln!(
+                &mut ctx.err,
+                "\nBelow are a few of the errors sent by the API:"
+            )?;
+            for err in results.failed.iter().take(3) {
+                writeln!(&mut ctx.err, "  {} - {}", err.id, err.error)?;
+            }
 
             // Persist the classification so (a) a crash between here and the retry submission
             // below doesn't lose what we've already applied to the DB, and (b) a future
