@@ -58,3 +58,8 @@ jobs:
       
     - name: Run clippy
       run: cargo clippy --all-targets --all-features -- -D warnings
+
+    - name: Check dependencies (advisories, licenses, bans, sources)
+      uses: EmbarkStudios/cargo-deny-action@v2
+      with:
+        command: check
