@@ -43,9 +43,11 @@
 //! * Retries are *new* batches. Batch IDs are immutable at the provider, and we mirror that on disk:
 //!   a retry submits a fresh request (containing only the items that need re-embedding) and writes
 //!   a new `batch_<id>.log` with its own sequence number. The original file is removed once its
-//!   successes have been applied and the retry has been submitted. This keeps each file a
-//!   self-contained WAL entry rather than a mutable progress log, and means the four-way
-//!   classification above is always a snapshot of one batch — never a merge across runs.
+//!   successes have been applied and the retry has been submitted. Each file is a self-contained
+//!   record of one batch: `items`, `batch_id`, `provider`, `model`, and `seq_id` are immutable
+//!   once written. The `succeeded` / `failed` index fields are bookkeeping — they may be updated
+//!   in place to record what we've observed about that batch, but the classification is always a
+//!   snapshot of a single fetch, never a merge across runs.
 //! * Broadly, our semantics resemble a write-ahead log. The files are processed in sequence-number
 //!   order, and we scan a cache when inserting a batch into the backend to check conflicts (and
 //!   the newest one wins). Moreover, we maintain a cache of hashes (try saying that thrice
@@ -266,7 +268,7 @@ fn write_batch_metadata(
 async fn handle_successful_batch_results<O, E>(
     ctx: &mut Context<O, E>,
     batch: &BatchEmbeddingMetadata,
-    successes: &[BatchEmbeddingResult],
+    successes: Vec<BatchEmbeddingResult>,
 ) -> Result<(), CLIError>
 where
     O: Write,
@@ -278,7 +280,7 @@ where
         .map(|i| (i.library_key.as_str(), i)) // we use `library_key` as the id in the batch
         .collect::<HashMap<&str, &BatchItem>>();
 
-    let items_to_embeddings: Vec<(&BatchItem, Vec<f32>)> = results.succeeded.into_iter().filter_map(|res| {
+    let items_to_embeddings: Vec<(&BatchItem, Vec<f32>)> = successes.into_iter().filter_map(|res| {
         if let Some(item) = ids_to_items.get(res.id.as_str()) {
             Some((*item, res.embedding))
         } else {
@@ -431,7 +433,7 @@ where
                 "for configuration instructions."
             )
             .into(),
-        ))?;
+        ));
     };
 
     let registry = provider_registry();
@@ -454,7 +456,7 @@ where
             .collect(),
     };
 
-    let submission = embedder.submit_batch(request.clone()).await?;
+    let submission = embedder.submit_batch(request).await?;
     let batch_id = submission.batch_id.clone();
     write_batch_metadata(
         cfg.provider_id(),
@@ -493,20 +495,17 @@ where
         return Err(CLIError::CommandError("Length mismatch between batch results and saved batch. The file may have been corrupted.".into()));
     }
 
+    if batch.items.is_empty() {
+        return Err(CLIError::CommandError(
+            "Cannot fetch the results of an empty batch. This may be due to a corrupted file."
+                .into(),
+        ));
+    }
+
     match (results.succeeded.is_empty(), results.failed.is_empty()) {
         (true, true) => {
-            // no results; this is a strange state to be in, admittedly, so we might handle this
-            // differently in the future
-            writeln!(
-                &mut ctx.out,
-                "The batch API did not send any results despite the batch being completed."
-            )?;
-
-            writeln!(&mut ctx.out, "Do you want to retry? ([y]/n) ")?;
-            if read_char(&mut io::stdin().lock(), 'y', &['y', 'n']) == 'y' {
-                retry_items(ctx, batch.items.clone()).await?;
-                fs::remove_file(batch_dir.join(format!("batch_{}.log", batch.seq_id)))?;
-            }
+            // The checks above early-return with an error
+            unreachable!("Both succeeded and failed batches cannot be empty.");
         }
         (true, false) => {
             // complete failure
@@ -528,7 +527,7 @@ where
         }
         (false, true) => {
             // complete success
-            handle_successful_batch_results(ctx, batch, &results.succeeded).await?;
+            handle_successful_batch_results(ctx, batch, results.succeeded).await?;
 
             fs::remove_file(batch_dir.join(format!("batch_{}.log", batch.seq_id)))?;
         }
@@ -541,8 +540,6 @@ where
                 results.succeeded.len() + results.failed.len()
             )?;
 
-            handle_successful_batch_results(ctx, batch, &results.succeeded).await?;
-
             let ids_to_idx: HashMap<&str, usize> = batch
                 .items
                 .iter()
@@ -550,6 +547,7 @@ where
                 .map(|(i, item)| (item.library_key.as_str(), i))
                 .collect();
 
+            // Collect indices first so we can move later
             let succ_idx: Vec<usize> = results
                 .succeeded
                 .iter()
@@ -561,6 +559,11 @@ where
                 .filter_map(|r| ids_to_idx.get(r.id.as_str()).copied())
                 .collect();
 
+            handle_successful_batch_results(ctx, batch, results.succeeded).await?;
+
+            // Persist the classification so (a) a crash between here and the retry submission
+            // below doesn't lose what we've already applied to the DB, and (b) a future
+            // check-status pass can short-circuit re-fetching once that's implemented.
             let mut batch_metadata = batch.clone();
             batch_metadata.succeeded = Some(succ_idx);
             batch_metadata.failed = Some(failed_idx.clone());
