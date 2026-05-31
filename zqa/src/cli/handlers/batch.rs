@@ -53,6 +53,8 @@
 //!
 //! For the structure of this file, see [`BatchEmbeddingMetadata`].
 
+use std::collections::HashSet;
+use std::io::Seek;
 use std::{
     collections::HashMap,
     fmt::Display,
@@ -94,6 +96,7 @@ struct BatchItem {
 
 impl From<ZoteroItem> for BatchItem {
     fn from(value: ZoteroItem) -> Self {
+        // TODO: Replace DefaultHasher with a stable algorithm (e.g. xxhash or sha2)
         let mut hasher = DefaultHasher::new();
         hasher.write(value.text.as_bytes());
 
@@ -125,9 +128,9 @@ struct BatchEmbeddingMetadata {
     created_at: DateTime<Utc>,
     /// Items in this batch
     items: Vec<BatchItem>,
-    /// Optional indices to the hashes above if we know this information (by checking).
+    /// Optional indices to the items above if we know this information (by checking).
     succeeded: Option<Vec<usize>>,
-    /// Optional indices to the hashes above if we know this information (by checking).
+    /// Optional indices to the items above if we know this information (by checking).
     failed: Option<Vec<usize>>,
 }
 
@@ -282,9 +285,9 @@ where
         .map(|i| (i.library_key.as_str(), i)) // we use `library_key` as the id in the batch
         .collect::<HashMap<&str, &BatchItem>>();
 
-    let items_to_embeddings: Vec<(&BatchItem, Vec<f32>)> = results.succeeded.iter().filter_map(|res| {
+    let items_to_embeddings: Vec<(&BatchItem, Vec<f32>)> = results.succeeded.into_iter().filter_map(|res| {
         if let Some(item) = ids_to_items.get(res.id.as_str()) {
-            Some((*item, res.embedding.clone()))
+            Some((*item, res.embedding))
         } else {
             writeln!(&mut ctx.err,
                 "Item {} from batch response not in library. If you removed items from your library, this is fine.",
@@ -303,7 +306,7 @@ where
         .read(true)
         .write(true)
         .create(true)
-        .truncate(true)
+        .truncate(false)
         .open(batch_dir.join(".hash_cache"))?;
 
     cache_file.lock()?;
@@ -328,6 +331,7 @@ where
         .collect::<Vec<_>>();
 
     if to_insert.is_empty() {
+        // TODO: this can result in a "zombie" batch, need to handle
         writeln!(
             &mut ctx.out,
             "All items in the batch were duplicates; no action taken.",
@@ -343,10 +347,12 @@ where
         batch.items.len() - to_insert.len()
     )?;
 
+    let item_hashes: HashSet<u64> = batch.items.iter().map(|i| i.hash).collect();
+
     // Partition cache items to separate those whose sequence ID needs to be updated
     let (mut overwriteable, rest): (HashMap<_, _>, HashMap<_, _>) =
         cache.into_iter().partition(|(k, v)| {
-            batch.items.iter().any(|i| i.hash == *k)
+            item_hashes.contains(k)
                 && v.provider_id == batch.provider
                 && v.model == batch.model
                 && v.seq_id < batch.seq_id
@@ -361,11 +367,14 @@ where
 
     // Add the batch's new items to the set of cache entries to update
     for (item, _) in &to_insert {
-        overwriteable.entry(item.hash).or_insert(CacheEntry {
-            provider_id: batch.provider,
-            model: batch.model.clone(),
-            seq_id: batch.seq_id,
-        });
+        overwriteable.insert(
+            item.hash,
+            CacheEntry {
+                provider_id: batch.provider,
+                model: batch.model.clone(),
+                seq_id: batch.seq_id,
+            },
+        );
     }
 
     // Build batch to insert into the LanceDB store
@@ -403,7 +412,9 @@ where
         .await?;
     ctx.store.create_or_update_indices().await?;
 
-    // We already set `.truncate(true)`
+    cache_file.seek(io::SeekFrom::Start(0))?;
+    cache_file.set_len(0)?;
+
     cache_file.write_all(serde_json::to_string_pretty(&overwriteable)?.as_bytes())?;
     cache_file.unlock()?;
 
@@ -574,7 +585,7 @@ where
             .collect(),
     };
 
-    let submission = embedder.submit_batch(request.clone()).await?;
+    let submission = embedder.submit_batch(request).await?;
     let batch_id = submission.batch_id.clone();
     write_batch_metadata(
         cfg.provider_id(),
