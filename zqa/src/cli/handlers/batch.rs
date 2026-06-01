@@ -71,7 +71,6 @@ use std::{
     collections::HashMap,
     fmt::Display,
     fs::{self, OpenOptions},
-    hash::{DefaultHasher, Hasher},
     io::{self, Read, Write},
     path::{Path, PathBuf},
 };
@@ -145,7 +144,7 @@ struct BatchEmbeddingMetadata {
     failed: Option<Vec<usize>>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 struct CacheEntry {
     /// Embedding provider ID
     provider_id: ProviderId,
@@ -341,23 +340,6 @@ where
         })
         .collect::<Vec<_>>();
 
-    if to_insert.is_empty() {
-        // TODO: this can result in a "zombie" batch, need to handle
-        writeln!(
-            &mut ctx.out,
-            "All items in the batch were duplicates; no action taken.",
-        )?;
-
-        return Ok(());
-    }
-
-    writeln!(
-        &mut ctx.out,
-        "{} items to insert, {} items dropped as duplicates.",
-        to_insert.len(),
-        batch.items.len() - to_insert.len()
-    )?;
-
     let item_hashes: HashSet<u64> = batch.items.iter().map(|i| i.hash).collect();
 
     // Partition cache items to separate those whose sequence ID needs to be updated
@@ -373,8 +355,29 @@ where
     for v in overwriteable.values_mut() {
         v.seq_id = batch.seq_id;
     }
-
     overwriteable.extend(rest);
+
+    if to_insert.is_empty() {
+        cache_file.seek(io::SeekFrom::Start(0))?;
+        cache_file.set_len(0)?;
+        cache_file.write_all(serde_json::to_string_pretty(&overwriteable)?.as_bytes())?;
+        cache_file.unlock()?;
+
+        // The user likely doesn't really care about the WAL semantics.
+        writeln!(
+            &mut ctx.out,
+            "All items in the batch were duplicates; no action taken.",
+        )?;
+
+        return Ok(());
+    }
+
+    writeln!(
+        &mut ctx.out,
+        "{} items to insert, {} items dropped as duplicates.",
+        to_insert.len(),
+        batch.items.len() - to_insert.len()
+    )?;
 
     // Add the batch's new items to the set of cache entries to update
     for (item, _) in &to_insert {
@@ -532,6 +535,20 @@ where
 
     let batch_dir = get_state_dir()?.join("batches");
 
+    if batch.succeeded.is_some()
+        && let Some(failed_idx) = &batch.failed
+    {
+        let failed_items: Vec<BatchItem> = failed_idx
+            .iter()
+            .filter_map(|i| batch.items.get(*i).cloned())
+            .collect();
+
+        retry_items(ctx, failed_items).await?;
+        fs::remove_file(batch_dir.join(format!("batch_{}.log", batch.seq_id)))?;
+
+        return Ok(());
+    }
+
     let batch_id = batch.batch_id.as_str();
     let results = client.fetch_results(batch_id).await?;
 
@@ -597,11 +614,14 @@ where
                 .iter()
                 .filter_map(|r| ids_to_idx.get(r.id.as_str()).copied())
                 .collect();
+            debug_assert_eq!(succ_idx.len(), results.succeeded.len()); // implicitly assumed invariants
+
             let failed_idx: Vec<usize> = results
                 .failed
                 .iter()
                 .filter_map(|r| ids_to_idx.get(r.id.as_str()).copied())
                 .collect();
+            debug_assert_eq!(failed_idx.len(), results.failed.len());
 
             handle_successful_batch_results(ctx, batch, results.succeeded).await?;
 
@@ -761,11 +781,9 @@ where
     let new_items = match parse_library(&ctx.store, None, None).await {
         Ok(items) => items,
         Err(parse_err) => {
-            writeln!(
-                &mut ctx.err,
-                "Could not parse library metadata: {parse_err}"
-            )?;
-            return Ok(());
+            return Err(CLIError::CommandError(format!(
+                "Could not parse library metadata: {parse_err}",
+            )));
         }
     };
     let new_items: Vec<BatchItem> = new_items.into_iter().map(Into::into).collect();
