@@ -6586,6 +6586,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "toml",
+ "xxhash-rust",
  "zqa-macros",
  "zqa-macros-proc",
  "zqa-pdftools",

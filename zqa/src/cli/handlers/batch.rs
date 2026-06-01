@@ -79,6 +79,7 @@ use std::{
 use chrono::{DateTime, Utc};
 use humantime::format_duration;
 use serde::{Deserialize, Serialize};
+use xxhash_rust::xxh3;
 use zqa_rag::{
     capabilities::BatchJobState,
     embedding::common::{
@@ -110,16 +111,12 @@ struct BatchItem {
 
 impl From<ZoteroItem> for BatchItem {
     fn from(value: ZoteroItem) -> Self {
-        // TODO: Replace DefaultHasher with a stable algorithm (e.g. xxhash or sha2)
-        let mut hasher = DefaultHasher::new();
-        hasher.write(value.text.as_bytes());
-
         Self {
             file_path: value.metadata.file_path,
             library_key: value.metadata.library_key,
             title: value.metadata.title,
+            hash: xxh3::xxh3_64(value.text.as_bytes()),
             text: value.text,
-            hash: hasher.finish(),
         }
     }
 }
