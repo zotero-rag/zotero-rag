@@ -260,6 +260,57 @@ fn write_batch_metadata(
     Ok(())
 }
 
+/// Given an existing hash cache, metadata about a batch, and the hashes of the items this batch
+/// added to the backend, return an updated cache. Existing entries owned by this batch (matching
+/// provider/model with an older sequence number) have their sequence number bumped; `new_hashes`
+/// are inserted with this batch's provider/model/sequence number.
+///
+/// # Arguments
+///
+/// * `cache` - The existing hash cache.
+/// * `batch` - Details about the batch whose results are being processed.
+/// * `new_hashes` - Hashes of the items this batch inserted into the backend.
+///
+/// # Returns
+///
+/// An updated hash cache.
+fn update_hash_cache(
+    cache: HashCache,
+    batch: &BatchEmbeddingMetadata,
+    new_hashes: impl IntoIterator<Item = u64>,
+) -> HashCache {
+    let item_hashes: HashSet<u64> = batch.items.iter().map(|i| i.hash).collect();
+
+    // Partition cache items to separate those whose sequence ID needs to be updated
+    let (mut overwriteable, rest): (HashMap<_, _>, HashMap<_, _>) =
+        cache.into_iter().partition(|(k, v)| {
+            item_hashes.contains(k)
+                && v.provider_id == batch.provider
+                && v.model == batch.model
+                && v.seq_id < batch.seq_id
+        });
+
+    // For the matches, update the batch seq number
+    for v in overwriteable.values_mut() {
+        v.seq_id = batch.seq_id;
+    }
+    overwriteable.extend(rest);
+
+    // Add the batch's new items to the set of cache entries to update
+    for hash in new_hashes {
+        overwriteable.insert(
+            hash,
+            CacheEntry {
+                provider_id: batch.provider,
+                model: batch.model.clone(),
+                seq_id: batch.seq_id,
+            },
+        );
+    }
+
+    overwriteable
+}
+
 /// Given a `batch` that has nonzero successes, insert those items into the vector store and update the
 /// hash cache. As necessary, this function updates the sequence IDs of elements in the hash cache
 /// (since the newest one wins) and adds elements from the batch that are not already present in the
@@ -279,7 +330,6 @@ fn write_batch_metadata(
 ///     * writing to the state directory failed. This is typically caused by permission issues.
 ///     * writing out the serialized data failed
 /// * `CLIError::SerializationError` if JSON serialization failed.
-#[allow(clippy::too_many_lines)]
 async fn handle_successful_batch_results<O, E>(
     ctx: &mut Context<O, E>,
     batch: &BatchEmbeddingMetadata,
@@ -340,27 +390,12 @@ where
         })
         .collect::<Vec<_>>();
 
-    let item_hashes: HashSet<u64> = batch.items.iter().map(|i| i.hash).collect();
-
-    // Partition cache items to separate those whose sequence ID needs to be updated
-    let (mut overwriteable, rest): (HashMap<_, _>, HashMap<_, _>) =
-        cache.into_iter().partition(|(k, v)| {
-            item_hashes.contains(k)
-                && v.provider_id == batch.provider
-                && v.model == batch.model
-                && v.seq_id < batch.seq_id
-        });
-
-    // For the matches, update the batch seq number
-    for v in overwriteable.values_mut() {
-        v.seq_id = batch.seq_id;
-    }
-    overwriteable.extend(rest);
+    let updated_cache = update_hash_cache(cache, batch, to_insert.iter().map(|(i, _)| i.hash));
 
     if to_insert.is_empty() {
         cache_file.seek(io::SeekFrom::Start(0))?;
         cache_file.set_len(0)?;
-        cache_file.write_all(serde_json::to_string_pretty(&overwriteable)?.as_bytes())?;
+        cache_file.write_all(serde_json::to_string_pretty(&updated_cache)?.as_bytes())?;
         cache_file.unlock()?;
 
         // The user likely doesn't really care about the WAL semantics.
@@ -378,18 +413,6 @@ where
         to_insert.len(),
         batch.items.len() - to_insert.len()
     )?;
-
-    // Add the batch's new items to the set of cache entries to update
-    for (item, _) in &to_insert {
-        overwriteable.insert(
-            item.hash,
-            CacheEntry {
-                provider_id: batch.provider,
-                model: batch.model.clone(),
-                seq_id: batch.seq_id,
-            },
-        );
-    }
 
     // Build batch to insert into the LanceDB store
     let library_keys: Vec<&str> = to_insert
@@ -429,7 +452,7 @@ where
     cache_file.seek(io::SeekFrom::Start(0))?;
     cache_file.set_len(0)?;
 
-    cache_file.write_all(serde_json::to_string_pretty(&overwriteable)?.as_bytes())?;
+    cache_file.write_all(serde_json::to_string_pretty(&updated_cache)?.as_bytes())?;
     cache_file.unlock()?;
 
     Ok(())
@@ -822,11 +845,104 @@ mod tests {
     use zqa_rag::providers::ProviderId;
 
     use super::{
-        BatchEmbeddingMetadata, BatchItem, get_seq_id, handle_batch_check_status_cmd,
-        prompt_and_fetch_batch_results, write_batch_metadata,
+        BatchEmbeddingMetadata, BatchItem, CacheEntry, HashCache, get_seq_id,
+        handle_batch_check_status_cmd, prompt_and_fetch_batch_results, update_hash_cache,
+        write_batch_metadata,
     };
     use crate::cli::app::tests::create_test_context;
     use crate::utils::library::{ZoteroItem, ZoteroItemMetadata};
+
+    /// A [`CacheEntry`] for a VoyageAI batch with the given model and sequence number.
+    fn entry(model: &str, seq: usize) -> CacheEntry {
+        CacheEntry {
+            provider_id: ProviderId::VoyageAI,
+            model: model.into(),
+            seq_id: seq,
+        }
+    }
+
+    #[test]
+    fn update_hash_cache_inserts_new_items() {
+        // `make_metadata_at` gives items with hashes 0..count and model "voyage-3".
+        let mut batch = make_metadata_at(Utc::now(), 2);
+        batch.seq_id = 5;
+
+        let updated =
+            update_hash_cache(HashCache::new(), &batch, batch.items.iter().map(|i| i.hash));
+
+        for item in &batch.items {
+            let e = updated.get(&item.hash).expect("new item should be cached");
+            test_eq!(e.seq_id, 5);
+            test_eq!(e.provider_id, ProviderId::VoyageAI);
+            test_eq!(e.model, "voyage-3");
+        }
+    }
+
+    #[test]
+    fn update_hash_cache_bumps_seq_for_duplicate() {
+        let mut batch = make_metadata_at(Utc::now(), 1);
+        batch.seq_id = 5;
+        let h = batch.items[0].hash;
+
+        let mut cache = HashCache::new();
+        cache.insert(h, entry("voyage-3", 2)); // older, same provider/model
+
+        // Nothing to insert (it's a duplicate), but the seq must advance to the newer batch so
+        // a later overlapping batch is correctly judged older.
+        let updated = update_hash_cache(cache, &batch, std::iter::empty());
+
+        test_eq!(updated.get(&h).unwrap().seq_id, 5);
+    }
+
+    #[test]
+    fn update_hash_cache_does_not_lower_seq() {
+        let mut batch = make_metadata_at(Utc::now(), 1);
+        batch.seq_id = 5;
+        let h = batch.items[0].hash;
+
+        let mut cache = HashCache::new();
+        cache.insert(h, entry("voyage-3", 9)); // newer than this batch
+
+        let updated = update_hash_cache(cache, &batch, std::iter::empty());
+
+        // A newer batch already owns this hash; an older one must not claw it back.
+        test_eq!(updated.get(&h).unwrap().seq_id, 9);
+    }
+
+    #[test]
+    fn update_hash_cache_overwrites_on_model_change() {
+        let mut batch = make_metadata_at(Utc::now(), 1);
+        batch.seq_id = 5;
+        let h = batch.items[0].hash;
+
+        let mut cache = HashCache::new();
+        cache.insert(h, entry("old-model", 9)); // model mismatch
+
+        // On a model change the item is re-embedded (so its hash is in `new_hashes`); the new
+        // batch wins regardless of the old, higher seq.
+        let updated = update_hash_cache(cache, &batch, [h]);
+
+        let e = updated.get(&h).unwrap();
+        test_eq!(e.model, "voyage-3");
+        test_eq!(e.seq_id, 5);
+    }
+
+    #[test]
+    fn update_hash_cache_leaves_unrelated_entries() {
+        let mut batch = make_metadata_at(Utc::now(), 1);
+        batch.seq_id = 5;
+
+        // Hashes for this batch are 0..1, so this entry belongs to some other batch.
+        let unrelated_hash = 999_999_u64;
+        let mut cache = HashCache::new();
+        cache.insert(unrelated_hash, entry("voyage-3", 2));
+
+        let updated = update_hash_cache(cache, &batch, std::iter::empty());
+
+        let e = updated.get(&unrelated_hash).unwrap();
+        test_eq!(e.seq_id, 2); // untouched
+        test_eq!(e.model, "voyage-3");
+    }
 
     /// A stand-in [`BatchAPIProvider`] that returns canned results, so the fetch and branch logic
     /// in [`prompt_and_fetch_batch_results`] can be exercised without a real provider or network.
