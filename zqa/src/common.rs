@@ -1,6 +1,6 @@
 use std::{
     collections::HashMap,
-    io::Write,
+    io::{BufRead, Write},
     sync::{
         Arc, Mutex, RwLock,
         atomic::{AtomicBool, AtomicU64},
@@ -72,6 +72,11 @@ pub(crate) struct Context<OutStream: Write, ErrStream: Write> {
     pub(crate) config: Config,
     /// The store to use for storage and retrieval
     pub(crate) store: LanceZoteroStore,
+    /// Abstraction for `stdin()`. Boxed rather than generic because, unlike `out`/`err` (which
+    /// tests substitute with an inspectable `Cursor` to assert on), input is only ever *supplied*:
+    /// no caller needs the concrete reader type. Boxing also keeps the input concern off every
+    /// handler signature.
+    pub(crate) input: Box<dyn BufRead>,
     /// Abstraction for `stdout()`
     pub(crate) out: OutStream,
     /// Abstraction for `stderr()`

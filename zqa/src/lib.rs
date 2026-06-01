@@ -216,6 +216,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         state: State::default(),
         config,
         store,
+        input: Box::new(io::stdin().lock()),
         out: stdout(),
         err: stderr(),
     };

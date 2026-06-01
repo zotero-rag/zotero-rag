@@ -79,12 +79,12 @@ use chrono::{DateTime, Utc};
 use humantime::format_duration;
 use serde::{Deserialize, Serialize};
 use xxhash_rust::xxh3;
+use zqa_rag::capabilities::BatchAPIProvider;
 use zqa_rag::{
     capabilities::BatchJobState,
     embedding::common::{
         BatchEmbeddingInput, BatchEmbeddingRequest, BatchEmbeddingResult, BatchSubmission,
     },
-    llm::factory::BatchEmbeddingClient,
     providers::{ProviderId, registry::provider_registry},
 };
 
@@ -521,7 +521,7 @@ where
 #[allow(clippy::too_many_lines)]
 async fn prompt_and_fetch_batch_results<O, E>(
     ctx: &mut Context<O, E>,
-    client: BatchEmbeddingClient,
+    client: impl BatchAPIProvider,
     batch: &BatchEmbeddingMetadata,
 ) -> Result<(), CLIError>
 where
@@ -529,7 +529,7 @@ where
     E: Write,
 {
     writeln!(&mut ctx.out, "Fetch results now? ([y]/n)")?;
-    if read_char(&mut io::stdin().lock(), 'y', &['y', 'n']) != 'y' {
+    if read_char(&mut ctx.input, 'y', &['y', 'n']) != 'y' {
         return Ok(());
     }
 
@@ -550,7 +550,7 @@ where
     }
 
     let batch_id = batch.batch_id.as_str();
-    let results = client.fetch_results(batch_id).await?;
+    let results = client.get_batch_results(batch_id).await?;
 
     if results.succeeded.len() + results.failed.len() != batch.items.len() {
         return Err(CLIError::CommandError("Length mismatch between batch results and saved batch. The file may have been corrupted.".into()));
@@ -581,7 +581,7 @@ where
             }
 
             writeln!(&mut ctx.out, "Retry the entire batch? ([y]/n)")?;
-            if read_char(&mut io::stdin().lock(), 'y', &['y', 'n']) == 'y' {
+            if read_char(&mut ctx.input, 'y', &['y', 'n']) == 'y' {
                 retry_items(ctx, batch.items.clone()).await?;
                 fs::remove_file(batch_dir.join(format!("batch_{}.log", batch.seq_id)))?;
             }
@@ -649,7 +649,7 @@ where
                 &mut ctx.out,
                 "Do you want to retry the failed items? ([y]/n) "
             )?;
-            if read_char(&mut io::stdin().lock(), 'y', &['y', 'n']) == 'y' {
+            if read_char(&mut ctx.input, 'y', &['y', 'n']) == 'y' {
                 let failed_items: Vec<BatchItem> = failed_idx
                     .iter()
                     .filter_map(|i| batch.items.get(*i).cloned())
@@ -741,7 +741,7 @@ where
                 });
 
             let choice = read_number(
-                &mut io::stdin().lock(),
+                &mut ctx.input,
                 1,
                 (
                     1,
@@ -761,9 +761,7 @@ where
         Ok(embedder) => embedder,
     };
 
-    let status = embedder
-        .check_batch_status(&selected_batch.batch_id)
-        .await?;
+    let status = embedder.get_batch_status(&selected_batch.batch_id).await?;
     writeln!(&mut ctx.out, "Current status: {}", status.as_str())?;
 
     if status == BatchJobState::Completed {
@@ -809,20 +807,74 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
+    use std::{fs, io::Cursor};
 
     use chrono::{Duration, Utc};
     use serial_test::serial;
     use tempfile::tempdir;
     use zqa_macros::{test_contains, test_eq};
-    use zqa_rag::{embedding::common::BatchSubmission, providers::ProviderId};
+    use zqa_rag::capabilities::{BatchAPIProvider, BatchJobState};
+    use zqa_rag::embedding::common::{
+        BatchEmbeddingError, BatchEmbeddingRequest, BatchEmbeddingResult, BatchEmbeddingResults,
+        BatchSubmission,
+    };
+    use zqa_rag::llm::errors::LLMError;
+    use zqa_rag::providers::ProviderId;
 
     use super::{
         BatchEmbeddingMetadata, BatchItem, get_seq_id, handle_batch_check_status_cmd,
-        write_batch_metadata,
+        prompt_and_fetch_batch_results, write_batch_metadata,
     };
     use crate::cli::app::tests::create_test_context;
     use crate::utils::library::{ZoteroItem, ZoteroItemMetadata};
+
+    /// A stand-in [`BatchAPIProvider`] that returns canned results, so the fetch and branch logic
+    /// in [`prompt_and_fetch_batch_results`] can be exercised without a real provider or network.
+    /// Injecting this is exactly what the `BatchAPIProvider`-trait refactor enabled.
+    struct MockBatchProvider {
+        results: BatchEmbeddingResults,
+    }
+
+    impl BatchAPIProvider for MockBatchProvider {
+        async fn submit_batch(
+            &self,
+            _request: BatchEmbeddingRequest,
+        ) -> Result<BatchSubmission, LLMError> {
+            Ok(make_submission("mock-batch"))
+        }
+
+        async fn get_batch_status(&self, _batch_id: &str) -> Result<BatchJobState, LLMError> {
+            Ok(BatchJobState::Completed)
+        }
+
+        async fn get_batch_results(
+            &self,
+            _batch_id: &str,
+        ) -> Result<BatchEmbeddingResults, LLMError> {
+            Ok(self.results.clone())
+        }
+    }
+
+    /// Build a [`BatchEmbeddingResults`] from the ids that should land in each bucket. Embeddings
+    /// are zero vectors — the branch logic under test never inspects their contents.
+    fn make_results(succeeded_ids: &[&str], failed_ids: &[&str]) -> BatchEmbeddingResults {
+        BatchEmbeddingResults {
+            succeeded: succeeded_ids
+                .iter()
+                .map(|id| BatchEmbeddingResult {
+                    id: (*id).into(),
+                    embedding: vec![0.0_f32; 8],
+                })
+                .collect(),
+            failed: failed_ids
+                .iter()
+                .map(|id| BatchEmbeddingError {
+                    id: (*id).into(),
+                    error: "mock failure".into(),
+                })
+                .collect(),
+        }
+    }
 
     fn make_submission(batch_id: &str) -> BatchSubmission {
         BatchSubmission {
@@ -1142,6 +1194,122 @@ mod tests {
         test_eq!(round_tripped.items.len(), 4);
         test_eq!(round_tripped.batch_id, "bid");
         test_eq!(round_tripped.provider, ProviderId::VoyageAI);
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn fetch_results_declined_returns_early() {
+        let tmp = tempdir().unwrap();
+        temp_env::async_with_vars(
+            [("ZQA_STATE_DIR", Some(tmp.path().to_str().unwrap()))],
+            async {
+                let mut ctx = create_test_context();
+                // Decline the very first "Fetch results now?" prompt.
+                ctx.input = Box::new(Cursor::new(b"n\n".to_vec()));
+
+                let batch = make_metadata_at(Utc::now() - Duration::seconds(5), 2);
+                // The provider would return a mismatched (empty) payload, but declining must
+                // short-circuit before it is ever consulted.
+                let mock = MockBatchProvider {
+                    results: make_results(&[], &[]),
+                };
+
+                let result = prompt_and_fetch_batch_results(&mut ctx, mock, &batch).await;
+                assert!(result.is_ok());
+
+                let out = String::from_utf8(ctx.out.into_inner()).unwrap();
+                test_contains!(out, "Fetch results now?");
+            },
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn fetch_results_errors_on_length_mismatch() {
+        let tmp = tempdir().unwrap();
+        temp_env::async_with_vars(
+            [("ZQA_STATE_DIR", Some(tmp.path().to_str().unwrap()))],
+            async {
+                let mut ctx = create_test_context();
+                ctx.input = Box::new(Cursor::new(b"y\n".to_vec()));
+
+                // The batch has 3 items, but the provider returns results for only 2. The
+                // length-mismatch guard must reject before any DB write or retry.
+                let batch = make_metadata_at(Utc::now() - Duration::seconds(5), 3);
+                let mock = MockBatchProvider {
+                    results: make_results(&["K0"], &["K1"]),
+                };
+
+                let result = prompt_and_fetch_batch_results(&mut ctx, mock, &batch).await;
+                assert!(matches!(
+                    result,
+                    Err(crate::cli::errors::CLIError::CommandError(_))
+                ));
+            },
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn fetch_results_errors_on_empty_batch() {
+        let tmp = tempdir().unwrap();
+        temp_env::async_with_vars(
+            [("ZQA_STATE_DIR", Some(tmp.path().to_str().unwrap()))],
+            async {
+                let mut ctx = create_test_context();
+                ctx.input = Box::new(Cursor::new(b"y\n".to_vec()));
+
+                // 0 items + 0 results passes the length check (0 == 0) but trips the empty-batch
+                // guard right after it.
+                let batch = make_metadata_at(Utc::now() - Duration::seconds(5), 0);
+                let mock = MockBatchProvider {
+                    results: make_results(&[], &[]),
+                };
+
+                let result = prompt_and_fetch_batch_results(&mut ctx, mock, &batch).await;
+                assert!(matches!(
+                    result,
+                    Err(crate::cli::errors::CLIError::CommandError(_))
+                ));
+            },
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn fetch_results_all_failed_declining_retry_keeps_log() {
+        let tmp = tempdir().unwrap();
+        let batch_dir = tmp.path().join("batches");
+        fs::create_dir_all(&batch_dir).unwrap();
+        // `make_metadata_at` uses seq_id 1, so this is the batch's own WAL entry.
+        fs::write(batch_dir.join("batch_1.log"), "placeholder").unwrap();
+
+        temp_env::async_with_vars(
+            [("ZQA_STATE_DIR", Some(tmp.path().to_str().unwrap()))],
+            async {
+                let mut ctx = create_test_context();
+                // 'y' to fetch, then 'n' to decline retrying the whole batch.
+                ctx.input = Box::new(Cursor::new(b"y\nn\n".to_vec()));
+
+                let batch = make_metadata_at(Utc::now() - Duration::seconds(5), 2);
+                let mock = MockBatchProvider {
+                    results: make_results(&[], &["K0", "K1"]),
+                };
+
+                let result = prompt_and_fetch_batch_results(&mut ctx, mock, &batch).await;
+                assert!(result.is_ok());
+
+                let err = String::from_utf8(ctx.err.into_inner()).unwrap();
+                test_contains!(err, "All 2 batch items failed");
+                // Declining the retry must leave the WAL entry untouched — nothing was applied,
+                // so there is nothing to clean up.
+                assert!(batch_dir.join("batch_1.log").exists());
+            },
+        )
+        .await;
     }
 
     #[tokio::test]
