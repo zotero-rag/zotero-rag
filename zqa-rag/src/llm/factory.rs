@@ -110,13 +110,15 @@ pub fn get_client_with_config(config: &LLMClientConfig) -> Result<LLMClient, LLM
 }
 
 /// Enum representing different batch embedding client implementations
+///
+/// `BatchAPIProvider` is not dyn-compatible, so this acts as a hand-rolled vtable.
 #[non_exhaustive]
 pub enum BatchEmbeddingClient {
     /// Voyage AI batch embedding client
     VoyageAI(Arc<VoyageAIClient<ReqwestClient>>),
 }
 
-impl BatchEmbeddingClient {
+impl BatchAPIProvider for BatchEmbeddingClient {
     /// Submit a request to the batch embedding API.
     ///
     /// # Arguments
@@ -137,7 +139,7 @@ impl BatchEmbeddingClient {
     /// * `LLMError::NetworkError` - If a network connectivity error occurs
     /// * `LLMError::DeserializationError` - If either API response cannot be parsed
     /// * `LLMError::GenericLLMError` - If the temporary JSONL file cannot be written
-    pub async fn submit_batch(
+    async fn submit_batch(
         &self,
         request: BatchEmbeddingRequest,
     ) -> Result<BatchSubmission, LLMError> {
@@ -165,7 +167,7 @@ impl BatchEmbeddingClient {
     /// * `LLMError::HttpStatusError` - If the API returns another unsuccessful status code
     /// * `LLMError::NetworkError` - If a network connectivity error occurs
     /// * `LLMError::DeserializationError` - If the response cannot be parsed
-    pub async fn check_batch_status(&self, batch_id: &str) -> Result<BatchJobState, LLMError> {
+    async fn get_batch_status(&self, batch_id: &str) -> Result<BatchJobState, LLMError> {
         match self {
             Self::VoyageAI(client) => client.get_batch_status(batch_id).await,
         }
@@ -192,7 +194,7 @@ impl BatchEmbeddingClient {
     /// * `LLMError::NetworkError` - If a network connectivity error occurs
     /// * `LLMError::DeserializationError` - If the response cannot be parsed
     /// * `LLMError::GenericLLMError` - If a temporary file cannot be written
-    pub async fn fetch_results(&self, batch_id: &str) -> Result<BatchEmbeddingResults, LLMError> {
+    async fn get_batch_results(&self, batch_id: &str) -> Result<BatchEmbeddingResults, LLMError> {
         match self {
             Self::VoyageAI(client) => client.get_batch_results(batch_id).await,
         }

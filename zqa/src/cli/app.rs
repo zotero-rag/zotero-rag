@@ -216,6 +216,8 @@ pub(crate) mod tests {
             state: State::default(),
             store: LanceZoteroStore::from_schema(embedding_config, schema.into()),
             config,
+            // Default to empty input (EOF); tests that drive prompts overwrite `ctx.input`.
+            input: Box::new(Cursor::new(Vec::new())),
             out,
             err,
         }
