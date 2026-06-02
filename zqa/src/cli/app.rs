@@ -1,4 +1,6 @@
+use std::fs;
 use std::io::Write;
+use std::path::Path;
 use std::sync::Arc;
 
 use rustyline::error::ReadlineError;
@@ -19,6 +21,7 @@ use crate::cli::handlers::query::{handle_query_cmd, handle_search_cmd};
 use crate::cli::placeholder::PlaceholderText;
 use crate::cli::readline::get_readline_config;
 use crate::common::Context;
+use crate::state::get_state_dir;
 
 /// A file that contains parsed PDF texts from the user's Zotero library. In case the
 /// embedding generation fails, the user does not need to rerun the full PDF parsing,
@@ -82,12 +85,39 @@ pub(crate) async fn dispatch_command<O: Write, E: Write>(
 /// * `CLIError::ReadlineError` - If we could not get the history file path, a `readline` editor could not be created,
 ///   or the history could not be saved.
 /// * `CLIError::IOError` - If `writeln!` fails.
-///
-/// # Panics
-///
-/// Cannot happen; `unwrap()` is called on `strip_prefix` result after checking that the prefix exists.
+/// * `CLIError::StateDirError` - If the state dir could not be obtained.
 #[allow(clippy::needless_continue)]
 pub(crate) async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<(), CLIError> {
+    // At startup, we should check if there are pending embedding batches and notify the user if so.
+    // [`crate::cli::handlers::batch`] has more details about the semantics of interacting with
+    // batch APIs. We don't do the check itself since we have two bad options:
+    //
+    // * If we `await` the check, we risk a longer startup time
+    // * If we use a task, we need to be careful about not messing with the CLI output/readline.
+    let batch_dir = get_state_dir()?.join("batches");
+
+    // `batch_dir` is created lazily on the first batch
+    if batch_dir.exists() {
+        let batch_files: Vec<String> = fs::read_dir(&batch_dir)?
+            .filter_map(|x| x.ok()?.file_name().into_string().ok())
+            .filter(|f| {
+                f.starts_with("batch_")
+                    && Path::new(f)
+                        .extension()
+                        .is_some_and(|ext| ext.eq_ignore_ascii_case("log"))
+            })
+            .collect();
+
+        if !batch_files.is_empty() {
+            writeln!(
+                &mut ctx.out,
+                "You have {} embedding batch{} pending. Use /batch check to check their status.\n",
+                batch_files.len(),
+                if batch_files.len() > 1 { "es" } else { "" }
+            )?;
+        }
+    }
+
     // First, get the path to the history file used by the `readline` implementation.
     let user_dirs = directories::UserDirs::new().ok_or(CLIError::ReadlineError(
         "Could not get user directories".into(),
