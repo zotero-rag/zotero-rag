@@ -24,22 +24,22 @@
 //!     we will treat it as valid if the structure is right.
 //!   * Files are named `batch_<id>.log`, where `id` are (1-based) sequence numbers to avoid dealing with
 //!     clock drift ([`std::time::SystemTime`] is a fun read for the uninitiated).
-//! * We check the status of batches on startup and when the user explicitly requests it.
-//! * When we check the status of a batch and fetch its results, exactly one of the following applies:
-//!   * If on startup, checking the status reveals a state that is not "submitted" (or that
-//!     provider's lifecycle equivalent), we notify the user, and they decide how to proceed. This
-//!     includes a response indicating that the batch doesn't exist.
+//! * On startup we notify the user of any pending batches — a local scan of the `batches`
+//!   directory, with no provider calls — but we only check their status and fetch results when the
+//!   user explicitly requests it (`/batch check`).
+//! * When the user requests a status check and we fetch results, exactly one of the following
+//!   applies:
 //!   * If the provider returns a number of results that does not match the items in our batch file,
 //!     we treat the file as corrupted and surface a hard error. We don't try to partially reconcile.
 //!   * If the batch has completely failed and there are no successes, we prompt the user to try
 //!     again. A retry creates a new batch with the same items (see "retries" below).
-//!   * If the batch has partially succeeded, we notify the user and let them decide. The default
-//!     option here should be to add the processed results to our backend and retry the remaining.
-//!     The user should also have the option to just ignore and retry the whole thing, or pick the
-//!     successes and drop the rest. Regardless of choice, successes that are applied flow through
-//!     the hash cache so they aren't re-embedded later.
-//!   * If the batch has completely succeeded, we notify the user only if this check was initiated
-//!     at startup. We add these to our backend and remove the batch file.
+//!   * If the batch has partially succeeded, we notify the user and let them decide between four
+//!     options: (default) add the processed results to our backend and retry the remaining; add
+//!     the successes and drop the rest without retrying; ignore all results and retry the whole
+//!     thing; or decide later and do nothing for now. Regardless of choice, successes that are
+//!     applied flow through the hash cache so they aren't re-embedded later.
+//!   * If the batch has completely succeeded, we add these to our backend and remove the batch
+//!     file.
 //! * Retries are *new* batches. Batch IDs are immutable at the provider, and we mirror that on disk:
 //!   a retry submits a fresh request (containing only the items that need re-embedding) and writes
 //!   a new `batch_<id>.log` with its own sequence number. The original file is removed once its
@@ -558,20 +558,6 @@ where
 
     let batch_dir = get_state_dir()?.join("batches");
 
-    if batch.succeeded.is_some()
-        && let Some(failed_idx) = &batch.failed
-    {
-        let failed_items: Vec<BatchItem> = failed_idx
-            .iter()
-            .filter_map(|i| batch.items.get(*i).cloned())
-            .collect();
-
-        retry_items(ctx, failed_items).await?;
-        fs::remove_file(batch_dir.join(format!("batch_{}.log", batch.seq_id)))?;
-
-        return Ok(());
-    }
-
     let batch_id = batch.batch_id.as_str();
     let results = client.get_batch_results(batch_id).await?;
 
@@ -619,67 +605,65 @@ where
             // partial success
             writeln!(
                 &mut ctx.out,
-                "{} of {} items succeeded, and will be imported.",
+                "{} of {} items succeeded.",
                 results.succeeded.len(),
                 results.succeeded.len() + results.failed.len()
             )?;
 
-            let ids_to_idx: HashMap<&str, usize> = batch
-                .items
-                .iter()
-                .enumerate()
-                .map(|(i, item)| (item.library_key.as_str(), i))
-                .collect();
-
-            // Collect indices first so we can move later
-            let succ_idx: Vec<usize> = results
-                .succeeded
-                .iter()
-                .filter_map(|r| ids_to_idx.get(r.id.as_str()).copied())
-                .collect();
-            debug_assert_eq!(succ_idx.len(), results.succeeded.len()); // implicitly assumed invariants
-
-            let failed_idx: Vec<usize> = results
-                .failed
-                .iter()
-                .filter_map(|r| ids_to_idx.get(r.id.as_str()).copied())
-                .collect();
-            debug_assert_eq!(failed_idx.len(), results.failed.len());
-
-            handle_successful_batch_results(ctx, batch, results.succeeded).await?;
-
+            // Show a few of the failures so the user can make an informed choice below.
             writeln!(
                 &mut ctx.err,
-                "\nBelow are a few of the errors sent by the API:"
+                "Below are a few of the errors sent by the API:"
             )?;
             for err in results.failed.iter().take(3) {
                 writeln!(&mut ctx.err, "  {} - {}", err.id, err.error)?;
             }
 
-            // Persist the classification so (a) a crash between here and the retry submission
-            // below doesn't lose what we've already applied to the DB, and (b) a future
-            // check-status pass can short-circuit re-fetching once that's implemented.
-            let mut batch_metadata = batch.clone();
-            batch_metadata.succeeded = Some(succ_idx);
-            batch_metadata.failed = Some(failed_idx.clone());
-            fs::write(
-                batch_dir.join(format!("batch_{}.log", batch.seq_id)),
-                serde_json::to_string_pretty(&batch_metadata)?,
-            )?;
-
-            // Retry failed items
+            writeln!(&mut ctx.out, "What do you want to do?")?;
             writeln!(
                 &mut ctx.out,
-                "Do you want to retry the failed items? ([y]/n) "
+                "  [a] Import the successful items and retry the remaining (default)"
             )?;
-            if read_char(&mut ctx.input, 'y', &['y', 'n']) == 'y' {
-                let failed_items: Vec<BatchItem> = failed_idx
-                    .iter()
-                    .filter_map(|i| batch.items.get(*i).cloned())
-                    .collect();
+            writeln!(
+                &mut ctx.out,
+                "  (b) Import the successful items and drop the remaining ones without retrying"
+            )?;
+            writeln!(
+                &mut ctx.out,
+                "  (c) Drop all results and retry the entire batch"
+            )?;
+            writeln!(&mut ctx.out, "  (d) Decide later, do nothing right now")?;
 
-                retry_items(ctx, failed_items).await?;
-                fs::remove_file(batch_dir.join(format!("batch_{}.log", batch.seq_id)))?;
+            let log_file = batch_dir.join(format!("batch_{}.log", batch.seq_id));
+
+            match read_char(&mut ctx.input, 'a', &['a', 'b', 'c', 'd']) {
+                'a' => {
+                    handle_successful_batch_results(ctx, batch, results.succeeded).await?;
+
+                    let failed_ids: HashSet<&str> =
+                        results.failed.iter().map(|err| err.id.as_str()).collect();
+                    let failed_items: Vec<BatchItem> = batch
+                        .items
+                        .iter()
+                        .filter(|i| failed_ids.contains(i.library_key.as_str()))
+                        .cloned()
+                        .collect();
+
+                    debug_assert_eq!(failed_items.len(), results.failed.len());
+                    retry_items(ctx, failed_items).await?;
+
+                    fs::remove_file(log_file)?;
+                }
+                'b' => {
+                    handle_successful_batch_results(ctx, batch, results.succeeded).await?;
+                    fs::remove_file(log_file)?;
+                }
+                'c' => {
+                    retry_items(ctx, batch.items.clone()).await?;
+                    fs::remove_file(log_file)?;
+                }
+                'd' => {}
+                _ => unreachable!("read_char restricts to the valid set"),
             }
         }
     }
@@ -1423,6 +1407,40 @@ mod tests {
                 // Declining the retry must leave the WAL entry untouched — nothing was applied,
                 // so there is nothing to clean up.
                 assert!(batch_dir.join("batch_1.log").exists());
+            },
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn fetch_results_partial_decide_later_keeps_log() {
+        let tmp = tempdir().unwrap();
+        let batch_dir = tmp.path().join("batches");
+        fs::create_dir_all(&batch_dir).unwrap();
+        fs::write(batch_dir.join("batch_1.log"), "placeholder").unwrap();
+
+        temp_env::async_with_vars(
+            [("ZQA_STATE_DIR", Some(tmp.path().to_str().unwrap()))],
+            async {
+                let mut ctx = create_test_context();
+                // 'y' to fetch, then 'd' to decide later (no import, no retry, no network/DB).
+                ctx.input = Box::new(Cursor::new(b"y\nd\n".to_vec()));
+
+                // K0 succeeded, K1 failed => partial success.
+                let batch = make_metadata_at(Utc::now() - Duration::seconds(5), 2);
+                let mock = MockBatchProvider {
+                    results: make_results(&["K0"], &["K1"]),
+                };
+
+                let result = prompt_and_fetch_batch_results(&mut ctx, mock, &batch).await;
+                assert!(result.is_ok());
+
+                // "Decide later" must touch nothing: the WAL entry stays put.
+                assert!(batch_dir.join("batch_1.log").exists());
+
+                let out = String::from_utf8(ctx.out.into_inner()).unwrap();
+                test_contains!(out, "What do you want to do?");
             },
         )
         .await;
