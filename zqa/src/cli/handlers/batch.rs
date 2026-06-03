@@ -671,6 +671,37 @@ where
     Ok(())
 }
 
+/// Read the files in the batches directory and get a list of pending batches. "Pending" in this
+/// context means "not checked", and independent of whether the batch is currently being processed
+/// by the provider.
+fn get_pending_batches() -> Result<Vec<BatchEmbeddingMetadata>, CLIError> {
+    let batch_dir = get_state_dir()?.join("batches");
+
+    let mut files = fs::read_dir(&batch_dir)?
+        .filter_map(|e| e.ok()?.file_name().into_string().ok())
+        .filter(|f| {
+            f.starts_with("batch_")
+                && Path::new(f)
+                    .extension()
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("log"))
+        })
+        .filter_map(|f| {
+            f.strip_prefix("batch_")?
+                .strip_suffix(".log")?
+                .parse::<usize>()
+                .ok()
+        })
+        .collect::<Vec<_>>();
+    files.sort_unstable();
+    files.reverse();
+
+    Ok(files
+        .into_iter()
+        .filter_map(|id| fs::read_to_string(batch_dir.join(format!("batch_{id}.log"))).ok())
+        .filter_map(|c| serde_json::from_str::<BatchEmbeddingMetadata>(&c).ok())
+        .collect())
+}
+
 async fn handle_batch_check_status_cmd<O, E>(ctx: &mut Context<O, E>) -> Result<(), CLIError>
 where
     O: Write,
@@ -698,31 +729,9 @@ where
         return Ok(());
     }
 
-    let mut files = fs::read_dir(&batch_dir)?
-        .filter_map(|e| e.ok()?.file_name().into_string().ok())
-        .filter(|f| {
-            f.starts_with("batch_")
-                && Path::new(f)
-                    .extension()
-                    .is_some_and(|ext| ext.eq_ignore_ascii_case("log"))
-        })
-        .filter_map(|f| {
-            f.strip_prefix("batch_")?
-                .strip_suffix(".log")?
-                .parse::<usize>()
-                .ok()
-        })
-        .collect::<Vec<_>>();
-    files.sort_unstable();
-    files.reverse();
+    let pending_batches = get_pending_batches()?;
 
-    let batches = files
-        .into_iter()
-        .filter_map(|id| fs::read_to_string(batch_dir.join(format!("batch_{id}.log"))).ok())
-        .filter_map(|c| serde_json::from_str::<BatchEmbeddingMetadata>(&c).ok())
-        .collect::<Vec<_>>();
-
-    let selected_batch = match batches.len() {
+    let selected_batch = match pending_batches.len() {
         0 => {
             writeln!(
                 &mut ctx.err,
@@ -730,7 +739,7 @@ where
             )?;
             return Ok(());
         }
-        1 => batches.first().unwrap(),
+        1 => pending_batches.first().unwrap(),
         _ => {
             writeln!(
                 &mut ctx.out,
@@ -739,7 +748,7 @@ where
 
             // We enforce a u8 (max 255) for `choice` below regardless, so we should also limit the
             // iterator. In any case, a list of 200+ items is overwhelming for users anyway.
-            batches
+            pending_batches
                 .iter()
                 .take((u8::MAX - 1) as usize)
                 .enumerate()
@@ -752,11 +761,13 @@ where
                 1,
                 (
                     1,
-                    u8::try_from(batches.len().min((u8::MAX - 1) as usize)).unwrap() + 1, // we don't expect > 255 batches
+                    u8::try_from(pending_batches.len().min((u8::MAX - 1) as usize)).unwrap() + 1, // we don't expect > 255 batches
                 ),
             );
 
-            batches.get((choice as usize).saturating_sub(1)).unwrap()
+            pending_batches
+                .get((choice as usize).saturating_sub(1))
+                .unwrap()
         }
     };
 
@@ -783,7 +794,15 @@ where
     O: Write,
     E: Write,
 {
-    let new_items = match parse_library(&ctx.store, None, None).await {
+    let pending_batches = get_pending_batches()?;
+    let pending_items: Vec<(u64, ProviderId, &str)> = pending_batches
+        .iter()
+        .flat_map(|b| b.items.iter().map(|i| i.hash).collect::<Vec<_>>())
+        .zip(pending_batches.iter())
+        .map(|(hash, batch)| (hash, batch.provider, batch.model.as_str()))
+        .collect();
+
+    let lib_items = match parse_library(&ctx.store, None, None).await {
         Ok(items) => items,
         Err(parse_err) => {
             return Err(CLIError::CommandError(format!(
@@ -791,10 +810,62 @@ where
             )));
         }
     };
-    let new_items: Vec<BatchItem> = new_items.into_iter().map(Into::into).collect();
+    let lib_items: Vec<BatchItem> = lib_items.into_iter().map(Into::into).collect();
+    if lib_items.is_empty() {
+        writeln!(
+            &mut ctx.out,
+            "No new items in Zotero library. Nothing to do."
+        )?;
+        return Ok(());
+    }
 
-    // Creating a new batch is equivalent to "retrying" with all items
-    retry_items(ctx, new_items).await
+    let embedding_config = ctx
+        .config
+        .get_embedding_config()
+        .ok_or(CLIError::ConfigError(
+            "In `handle_batch_create_cmd`, embedding config not set.".into(),
+        ))?;
+
+    let embedding_provider = embedding_config.provider_id();
+    let embedding_model = embedding_config.model_name();
+
+    let (mut overlap, mut new_items): (Vec<BatchItem>, Vec<BatchItem>) =
+        lib_items.into_iter().partition(|item| {
+            pending_items.contains(&(item.hash, embedding_provider, embedding_model))
+        });
+
+    match (overlap.is_empty(), new_items.is_empty()) {
+        (true, true) => unreachable!("lib_items is nonempty, so both subsets cannot be empty"),
+        (true, false) => {
+            // Creating a new batch is equivalent to "retrying" with all items
+            retry_items(ctx, new_items).await
+        }
+        (false, true) => {
+            // TODO: the protocol says this the other way around
+            // This batch is a proper subset of the union of pending batches
+            todo!();
+        }
+        (false, false) => {
+            writeln!(
+                &mut ctx.out,
+                "Some new items from Zotero are currently pending in other batches. What do you want to do?"
+            )?;
+            writeln!(
+                &mut ctx.out,
+                "  [a] Create a new batch with only the non-overlapping items (default)"
+            )?;
+            writeln!(&mut ctx.out, "  (b) Process all items anyway")?;
+
+            match read_char(&mut ctx.input, 'a', &['a', 'b']) {
+                'a' => retry_items(ctx, new_items).await,
+                'b' => {
+                    overlap.append(&mut new_items);
+                    retry_items(ctx, overlap).await
+                }
+                _ => unreachable!("read_char guarantees valid input"),
+            }
+        }
+    }
 }
 
 /// Handle the `/batch` commands.
