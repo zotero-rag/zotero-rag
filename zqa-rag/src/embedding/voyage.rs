@@ -296,7 +296,6 @@ pub(crate) struct VoyageAIFilesRequest {
 
 /// A response from the Voyage AI Files API.
 #[derive(Deserialize, Serialize, Clone)]
-#[allow(dead_code)]
 pub(crate) struct VoyageAIFilesResponse {
     /// The file ID, used to refer to input, output, and error files. This starts with "file-".
     pub(crate) id: String,
@@ -340,15 +339,13 @@ impl Default for VoyageAIBatchRequestParams<'_> {
 /// A response from the Voyage AI Batch API (POST /v1/batches). This is distinct from
 /// [`VoyageAIFilesResponse`], which is returned by the Files API.
 #[derive(Deserialize, Serialize, Clone)]
-#[allow(dead_code)]
 pub(crate) struct VoyageAIBatchCreateResponse {
     /// The batch ID, used to check status and retrieve results.
     pub(crate) id: String,
 }
 
-/// A request to the Voyage AI Batch API. This assumes a call to the Files API has been made,
-/// uploading the JSONL file in the right format.
-/// ```
+/// A batch creation request to the Voyage AI Batch API. This assumes a call to the Files API
+/// has been made, uploading the JSONL file in the right format.
 #[derive(Serialize)]
 pub(crate) struct VoyageAIBatchRequest<'a> {
     /// The Voyage AI embedding endpoint. Defaults to "/v1/embeddings".
@@ -474,6 +471,18 @@ impl From<VoyageAIBatchError> for BatchEmbeddingError {
     }
 }
 
+/// Returns the response body as text, or an [`LLMError::HttpStatusError`] carrying the body if the
+/// HTTP status is not a success. The Voyage batch methods below don't use reqwest's
+/// `error_for_status`, so we check explicitly here to surface clear failures instead of an opaque
+/// deserialization error when the API returns a non-2xx response.
+async fn body_or_status_error(res: reqwest::Response, context: &str) -> Result<String, LLMError> {
+    if !res.status().is_success() {
+        let body = res.text().await.unwrap_or_default();
+        return Err(LLMError::HttpStatusError(format!("{context}: {body}")));
+    }
+    Ok(res.text().await?)
+}
+
 impl<T> VoyageAIClient<T>
 where
     T: HttpClient,
@@ -506,7 +515,8 @@ where
         headers.insert("Content-Type", "application/json".parse()?);
 
         let res = self.client.get_json(files_api_url, headers).await?;
-        let body = res.text().await?;
+        let body = body_or_status_error(res, &format!("Failed to get status for batch {batch_id}"))
+            .await?;
         let response: VoyageAIBatchStatusResponse = serde_json::from_str(&body).map_err(|e| {
             log::warn!("Error deserializing Voyage AI batch status response: {e}");
             LLMError::DeserializationError(e.to_string())
@@ -546,7 +556,7 @@ where
         headers.insert("Content-Type", "application/json".parse()?);
 
         let res = self.client.get_json(files_api_url, headers).await?;
-        let body = res.text().await?;
+        let body = body_or_status_error(res, &format!("Failed to download file {file_id}")).await?;
 
         let tmp_file = tempfile::NamedTempFile::new()?;
         tokio::fs::write(tmp_file.path(), body).await?;
@@ -626,7 +636,7 @@ where
             .post_form(FILES_API_URL, headers.clone(), form_data)
             .await?;
 
-        let response = res.text().await?;
+        let response = body_or_status_error(res, "Failed to upload batch input file").await?;
         let response: VoyageAIFilesResponse = serde_json::from_str(&response).map_err(|e| {
             log::warn!("Error deserializing Voyage AI Files API response: {e}");
             LLMError::DeserializationError(e.to_string())
@@ -648,7 +658,7 @@ where
             .post_json(BATCH_API_URL, headers, &batch_request)
             .await?;
 
-        let response = res.text().await?;
+        let response = body_or_status_error(res, "Failed to create batch").await?;
         let response: VoyageAIBatchCreateResponse =
             serde_json::from_str(&response).map_err(|e| {
                 log::warn!("Error deserializing Voyage AI Batch API response: {e}");
@@ -669,6 +679,29 @@ where
     async fn get_batch_status(&self, batch_id: &str) -> Result<BatchJobState, LLMError> {
         let response = self.get_batch_status(batch_id).await?;
         Ok(response.status.into())
+    }
+
+    async fn cancel_batch(&self, batch_id: &str) -> Result<(), LLMError> {
+        const BATCH_API_URL: &str = "https://api.voyageai.com/v1/batches";
+
+        let api_key = if let Some(ref config) = self.config {
+            config.api_key.clone()
+        } else {
+            env::var("VOYAGE_AI_API_KEY")?
+        };
+
+        let mut headers = HeaderMap::new();
+        headers.insert("Authorization", format!("Bearer {api_key}").parse()?);
+
+        // TODO: Technically, we need to pass *no body*, but for now, this still works
+        let res = self
+            .client
+            .post_json(&format!("{BATCH_API_URL}/{batch_id}/cancel"), headers, &())
+            .await?;
+
+        body_or_status_error(res, &format!("Failed to cancel batch {batch_id}")).await?;
+
+        Ok(())
     }
 
     /// Retrieves the results of a completed or failed batch job.

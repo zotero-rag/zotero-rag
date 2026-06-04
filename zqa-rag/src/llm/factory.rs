@@ -199,4 +199,10 @@ impl BatchAPIProvider for BatchEmbeddingClient {
             Self::VoyageAI(client) => client.get_batch_results(batch_id).await,
         }
     }
+
+    async fn cancel_batch(&self, batch_id: &str) -> Result<(), LLMError> {
+        match self {
+            Self::VoyageAI(client) => client.cancel_batch(batch_id).await,
+        }
+    }
 }

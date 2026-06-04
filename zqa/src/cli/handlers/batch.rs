@@ -904,6 +904,57 @@ where
     }
 }
 
+async fn handle_batch_cancel_cmd<O, E>(
+    batch_id: usize,
+    ctx: &mut Context<O, E>,
+) -> Result<(), CLIError>
+where
+    O: Write,
+    E: Write,
+{
+    let batch_dir = get_state_dir()?.join("batches");
+    if !batch_dir.exists() {
+        writeln!(
+            &mut ctx.err,
+            "Cannot cancel batch because the batches directory does not exist."
+        )?;
+        return Ok(());
+    }
+
+    let batch_file = batch_dir.join(format!("batch_{batch_id}.log"));
+    if !batch_file.exists() {
+        writeln!(
+            &mut ctx.err,
+            "Cannot cancel batch {batch_id} because its batch file does not exist."
+        )?;
+        return Ok(());
+    }
+
+    // The provider knows the batch by its own ID (stored in the file), not our sequence number.
+    let metadata: BatchEmbeddingMetadata = serde_json::from_str(&fs::read_to_string(&batch_file)?)
+        .map_err(|e| CLIError::CommandError(format!("Corrupted batch file: {e}")))?;
+
+    let embedding_config = ctx
+        .config
+        .get_embedding_config()
+        .ok_or(CLIError::ConfigError(
+            "In `handle_batch_cancel_cmd`, embedding config not set.".into(),
+        ))?;
+    let registry = provider_registry();
+    let embedder = match registry.create_batch_embedding(&embedding_config) {
+        Err(e) => {
+            return Err(CLIError::CommandError(e.to_string()));
+        }
+        Ok(embedder) => embedder,
+    };
+
+    embedder.cancel_batch(&metadata.batch_id).await?;
+
+    // NOTE: Technically prone to a TOCTOU bug, but quite a few stars have to (poorly) align, so we
+    // won't worry about it
+    Ok(fs::remove_file(batch_file)?)
+}
+
 /// Handle the `/batch` commands.
 pub(crate) async fn handle_batch_cmd<O, E>(
     subcmd: BatchCommand,
@@ -914,8 +965,9 @@ where
     E: Write,
 {
     match subcmd {
-        BatchCommand::Create => handle_batch_create_cmd(ctx).await,
+        BatchCommand::Cancel(id) => handle_batch_cancel_cmd(id, ctx).await,
         BatchCommand::CheckStatus => handle_batch_check_status_cmd(ctx).await,
+        BatchCommand::Create => handle_batch_create_cmd(ctx).await,
     }
 }
 
@@ -1059,6 +1111,10 @@ mod tests {
             _batch_id: &str,
         ) -> Result<BatchEmbeddingResults, LLMError> {
             Ok(self.results.clone())
+        }
+
+        async fn cancel_batch(&self, _batch_id: &str) -> Result<(), LLMError> {
+            Ok(())
         }
     }
 
