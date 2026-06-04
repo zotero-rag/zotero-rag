@@ -153,6 +153,10 @@ where
         &mut ctx.out,
         "/batch check\t\tCheck on the status of a submitted batch."
     )?;
+    writeln!(
+        &mut ctx.out,
+        "/batch cancel <id>\t\tCancel a pending batch."
+    )?;
     writeln!(&mut ctx.out)?;
     writeln!(&mut ctx.out, "Session document commands:")?;
     writeln!(

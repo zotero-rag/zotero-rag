@@ -200,6 +200,9 @@ pub trait BatchAPIProvider {
 
     /// Get the results of a completed batch job.
     async fn get_batch_results(&self, batch_id: &str) -> Result<BatchEmbeddingResults, LLMError>;
+
+    /// Cancel a job in progress.
+    async fn cancel_batch(&self, batch_id: &str) -> Result<(), LLMError>;
 }
 
 /// Providers of batch embedding APIs. Structs corresponding to these should implement

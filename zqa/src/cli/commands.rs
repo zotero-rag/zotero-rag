@@ -1,34 +1,9 @@
 use thiserror::Error;
 
 pub(crate) enum BatchCommand {
-    Create,
+    Cancel(usize),
     CheckStatus,
-}
-
-impl BatchCommand {
-    #[allow(dead_code)]
-    pub(crate) const VARIANTS: &'static [Self] = &[Self::Create, Self::CheckStatus];
-
-    #[allow(dead_code)]
-    pub(crate) fn as_str(&self) -> &str {
-        match self {
-            Self::Create => "create",
-            Self::CheckStatus => "check",
-        }
-    }
-
-    pub(crate) fn from_str(s: &str) -> Result<Self, ()> {
-        match s {
-            "create" => Ok(Self::Create),
-            "check" => Ok(Self::CheckStatus),
-            _ => Err(()),
-        }
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn variants() -> impl Iterator<Item = &'static str> {
-        Self::VARIANTS.iter().map(Self::as_str)
-    }
+    Create,
 }
 
 pub(crate) enum Command {
@@ -106,13 +81,28 @@ pub(crate) fn parse_command(command: &str) -> Result<Command, CommandParseError>
 
             if let Some(subcmd) = query.strip_prefix("/batch") {
                 let subcmd = subcmd.trim();
-                let Ok(subcmd) = BatchCommand::from_str(subcmd) else {
-                    return Err(CommandParseError::InvalidCommand(format!(
-                        "Invalid subcommand to /batch: {subcmd}"
-                    )));
-                };
+                let parts: Vec<&str> = subcmd.splitn(2, ' ').collect();
 
-                return Ok(Command::Batch(subcmd));
+                return match parts[0] {
+                    "cancel" => {
+                        let id = parts
+                            .get(1)
+                            .and_then(|key| key.trim().parse::<usize>().ok());
+
+                        match id {
+                            None => Err(CommandParseError::InvalidCommand(format!(
+                                "Invalid parameter to /batch cancel: '{}', expected a number.",
+                                parts.get(1).copied().unwrap_or("")
+                            ))),
+                            Some(id) => Ok(Command::Batch(BatchCommand::Cancel(id))),
+                        }
+                    }
+                    "check" => Ok(Command::Batch(BatchCommand::CheckStatus)),
+                    "create" => Ok(Command::Batch(BatchCommand::Create)),
+                    _ => Err(CommandParseError::InvalidCommand(format!(
+                        "Invalid subcommand to /batch: {subcmd}"
+                    ))),
+                };
             }
 
             if let Some(subcmd) = query.strip_prefix("/docs") {
