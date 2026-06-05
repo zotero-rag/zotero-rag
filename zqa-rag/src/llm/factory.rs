@@ -200,6 +200,20 @@ impl BatchAPIProvider for BatchEmbeddingClient {
         }
     }
 
+    /// Cancel the batch job given its (provider) id.
+    ///
+    /// # Arguments
+    ///
+    /// * `batch_id` - The batch id from the provider
+    ///
+    /// # Errors
+    ///
+    /// * `LLMError::EnvError` - If an API key is not set up
+    /// * `LLMError::InvalidHeaderError` - If the API key cannot be parsed as a header value
+    /// * `LLMError::TimeoutError` - If the HTTP request times out
+    /// * `LLMError::CredentialError` - If the API returns 401 or 403
+    /// * `LLMError::HttpStatusError` - If the API returns another unsuccessful status code
+    /// * `LLMError::NetworkError` - If a network connectivity error occurs
     async fn cancel_batch(&self, batch_id: &str) -> Result<(), LLMError> {
         match self {
             Self::VoyageAI(client) => client.cancel_batch(batch_id).await,
