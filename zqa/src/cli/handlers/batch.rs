@@ -759,15 +759,12 @@ where
 
                 seq_id_to_idx.insert(batch.seq_id, i);
             }
-            let choice = read_number(
-                &mut ctx.input,
-                u8::try_from(first_printed_seq).unwrap(),
-                (1, u8::MAX),
-            );
+            let choice = read_number(&mut ctx.input, first_printed_seq, (1, 256));
+            let idx = *seq_id_to_idx
+                .get(&{ choice })
+                .expect("read_number bounds should ensure a valid seq_id");
 
-            pending_batches
-                .get((choice as usize).saturating_sub(1))
-                .unwrap()
+            pending_batches.get(idx).unwrap()
         }
     };
 
