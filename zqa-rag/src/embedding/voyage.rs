@@ -790,6 +790,7 @@ mod tests {
 
     use super::*;
     use crate::capabilities::{BatchAPIProvider, BatchJobState};
+    use crate::config::VoyageAIConfig;
     use crate::constants::{DEFAULT_VOYAGE_EMBEDDING_DIM, DEFAULT_VOYAGE_EMBEDDING_MODEL};
     use crate::embedding::common::BatchEmbeddingInput;
     use crate::http_client::{MockHttpClient, ReqwestClient};
@@ -859,6 +860,23 @@ mod tests {
     fn test_batch_status_cancelled_maps_to_canceled() {
         let state: BatchJobState = VoyageAIBatchStatus::Cancelled.into();
         test_eq!(state, BatchJobState::Canceled);
+    }
+
+    #[tokio::test]
+    async fn test_cancel_batch_success() {
+        let config = VoyageAIConfig {
+            api_key: "test-key".into(),
+            embedding_model: DEFAULT_VOYAGE_EMBEDDING_MODEL.into(),
+            embedding_dims: DEFAULT_VOYAGE_EMBEDDING_DIM as usize,
+            reranker: "rerank-2.5".into(),
+        };
+        let client = VoyageAIClient {
+            client: MockHttpClient::new(()),
+            config: Some(config),
+        };
+
+        let result = client.cancel_batch("batch-xyz").await;
+        test_ok!(result);
     }
 
     /// `get_batch_status` deserializes a `VoyageAIBatchStatusResponse` and converts the status
