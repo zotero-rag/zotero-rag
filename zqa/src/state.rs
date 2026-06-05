@@ -335,7 +335,7 @@ pub(crate) fn oobe<R: BufRead>(reader: &mut R, is_terminal: bool) -> Result<(), 
         "{DIM_TEXT}A higher number can yield faster results, but can also result in being rate-limited. You should check what tier of API you have access to and check the TPM (tokens per minute) limit to make a choice here. As a rough estimate, your TPM limit divided by 150,000 is a somewhat reasonable estimate.{RESET}"
     );
     let max_concurrent_requests = read_number(reader, 5, (1, 20));
-    config.max_concurrent_requests = max_concurrent_requests as usize;
+    config.max_concurrent_requests = max_concurrent_requests;
 
     // We can unwrap the provider configs since we initialized via `Default`, which sets them to a `Some(..)`.
     match model_provider {

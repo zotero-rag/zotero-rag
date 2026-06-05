@@ -78,7 +78,11 @@ pub(crate) fn read_char<R: BufRead>(reader: &mut R, default: char, valid_set: &[
 /// * `reader` - The input reader.
 /// * `default` - The default value if Enter is pressed.
 /// * `bounds` - Lower and upper bounds to accept. Lower bound is inclusive, upper is exclusive.
-pub(crate) fn read_number<R: BufRead>(reader: &mut R, default: u8, bounds: (u8, u8)) -> u8 {
+pub(crate) fn read_number<R: BufRead>(
+    reader: &mut R,
+    default: usize,
+    bounds: (usize, usize),
+) -> usize {
     loop {
         print!("> ");
         let _ = std::io::stdout().flush();
@@ -89,7 +93,7 @@ pub(crate) fn read_number<R: BufRead>(reader: &mut R, default: u8, bounds: (u8, 
             return default;
         }
 
-        if let Ok(num) = input.parse::<u8>()
+        if let Ok(num) = input.parse::<usize>()
             && bounds.0 <= num
             && num < bounds.1
         {
