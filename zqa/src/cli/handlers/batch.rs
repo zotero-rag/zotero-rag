@@ -159,7 +159,8 @@ impl Display for BatchEmbeddingMetadata {
             });
 
         f.write_fmt(format_args!(
-            "({}) {} ({}) - {} items",
+            "[{}] ({}) {} ({}) - {} items",
+            self.seq_id,
             elapsed,
             self.provider.as_str(),
             self.model,
@@ -745,9 +746,8 @@ where
             pending_batches
                 .iter()
                 .take((u8::MAX - 1) as usize)
-                .enumerate()
-                .for_each(|(i, batch)| {
-                    _ = writeln!(&mut ctx.out, "{}. {}", i + 1, batch);
+                .for_each(|batch| {
+                    _ = writeln!(&mut ctx.out, "{batch}");
                 });
 
             let choice = read_number(
