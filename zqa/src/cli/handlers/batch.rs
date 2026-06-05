@@ -159,8 +159,7 @@ impl Display for BatchEmbeddingMetadata {
             });
 
         f.write_fmt(format_args!(
-            "[{}] ({}) {} ({}) - {} items",
-            self.seq_id,
+            "({}) {} ({}) - {} items",
             elapsed,
             self.provider.as_str(),
             self.model,
@@ -741,22 +740,29 @@ where
                 "You have multiple submitted batches. Please choose one from the below options:"
             )?;
 
+            let mut first_printed_seq = 0;
+            let mut seq_id_to_idx = HashMap::new();
+
             // We enforce a u8 (max 255) for `choice` below regardless, so we should also limit the
             // iterator. In any case, a list of 200+ items is overwhelming for users anyway.
-            pending_batches
+            for (i, batch) in pending_batches
                 .iter()
                 .take((u8::MAX - 1) as usize)
-                .for_each(|batch| {
-                    _ = writeln!(&mut ctx.out, "{batch}");
-                });
+                .enumerate()
+            {
+                if i == 0 {
+                    _ = writeln!(&mut ctx.out, "[{}] {batch}", batch.seq_id);
+                    first_printed_seq = batch.seq_id;
+                } else {
+                    _ = writeln!(&mut ctx.out, "({}) {batch}", batch.seq_id);
+                }
 
+                seq_id_to_idx.insert(batch.seq_id, i);
+            }
             let choice = read_number(
                 &mut ctx.input,
-                1,
-                (
-                    1,
-                    u8::try_from(pending_batches.len().min((u8::MAX - 1) as usize)).unwrap() + 1, // we don't expect > 255 batches
-                ),
+                u8::try_from(first_printed_seq).unwrap(),
+                (1, u8::MAX),
             );
 
             pending_batches
