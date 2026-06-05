@@ -740,31 +740,16 @@ where
                 "You have multiple submitted batches. Please choose one from the below options:"
             )?;
 
-            let mut first_printed_seq = 0;
-            let mut seq_id_to_idx = HashMap::new();
-
-            // We enforce a u8 (max 255) for `choice` below regardless, so we should also limit the
-            // iterator. In any case, a list of 200+ items is overwhelming for users anyway.
-            for (i, batch) in pending_batches
-                .iter()
-                .take((u8::MAX - 1) as usize)
-                .enumerate()
-            {
+            for (i, batch) in pending_batches.iter().enumerate() {
                 if i == 0 {
-                    _ = writeln!(&mut ctx.out, "[{}] {batch}", batch.seq_id);
-                    first_printed_seq = batch.seq_id;
+                    _ = writeln!(&mut ctx.out, "[{}]. [seq {}] {batch}", i + 1, batch.seq_id);
                 } else {
-                    _ = writeln!(&mut ctx.out, "({}) {batch}", batch.seq_id);
+                    _ = writeln!(&mut ctx.out, "({}). [seq {}] {batch}", i + 1, batch.seq_id);
                 }
-
-                seq_id_to_idx.insert(batch.seq_id, i);
             }
-            let choice = read_number(&mut ctx.input, first_printed_seq, (1, 256));
-            let idx = *seq_id_to_idx
-                .get(&{ choice })
-                .expect("read_number bounds should ensure a valid seq_id");
 
-            pending_batches.get(idx).unwrap()
+            let choice = read_number(&mut ctx.input, 1, (1, pending_batches.len() + 1));
+            pending_batches.get(choice.saturating_sub(1)).unwrap()
         }
     };
 
@@ -1029,8 +1014,8 @@ mod tests {
 
     use super::{
         BatchEmbeddingMetadata, BatchItem, CacheEntry, HashCache, get_pending_batches, get_seq_id,
-        handle_batch_cancel_cmd, handle_batch_check_status_cmd, prompt_and_fetch_batch_results,
-        update_hash_cache, write_batch_metadata,
+        handle_batch_cancel_cmd, handle_batch_check_status_cmd, handle_batch_create_cmd,
+        prompt_and_fetch_batch_results, update_hash_cache, write_batch_metadata,
     };
     use crate::cli::app::tests::create_test_context;
     use crate::utils::library::{ZoteroItem, ZoteroItemMetadata};
@@ -1587,6 +1572,38 @@ mod tests {
                     result,
                     Err(crate::cli::errors::CLIError::CommandError(_))
                 ));
+            },
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn create_warns_on_provider_mismatch_and_returns_ok() {
+        let tmp = tempdir().unwrap();
+        let batch_dir = tmp.path().join("batches");
+        fs::create_dir_all(&batch_dir).unwrap();
+        // A pending batch from a *different* provider than the test context's (VoyageAI) config.
+        // The provider-mismatch guard must warn and bail before touching the library or backend.
+        let mut meta = make_metadata_at(Utc::now(), 1);
+        meta.provider = ProviderId::OpenAI;
+        fs::write(
+            batch_dir.join("batch_1.log"),
+            serde_json::to_string(&meta).unwrap(),
+        )
+        .unwrap();
+
+        temp_env::async_with_vars(
+            [("ZQA_STATE_DIR", Some(tmp.path().to_str().unwrap()))],
+            async {
+                let mut ctx = create_test_context();
+                let result = handle_batch_create_cmd(&mut ctx).await;
+                assert!(result.is_ok());
+
+                let err = String::from_utf8(ctx.err.into_inner()).unwrap();
+                test_contains!(err, "incompatible");
+                // The mismatching batch must be left untouched.
+                assert!(batch_dir.join("batch_1.log").exists());
             },
         )
         .await;
