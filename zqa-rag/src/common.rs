@@ -173,6 +173,15 @@ mod tests {
         {
             self.post_json(url, headers, &())
         }
+
+        fn post_empty<'a>(
+            &'a self,
+            url: &'a str,
+            headers: HeaderMap,
+        ) -> Pin<Box<dyn Future<Output = Result<reqwest::Response, reqwest::Error>> + Send + 'a>>
+        {
+            self.post_json(url, headers, &())
+        }
     }
 
     #[tokio::test]

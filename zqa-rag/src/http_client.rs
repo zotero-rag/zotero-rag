@@ -63,6 +63,18 @@ pub trait HttpClient: Send + Sync {
         headers: HeaderMap,
         form_data: Form,
     ) -> Pin<Box<dyn Future<Output = Result<reqwest::Response, reqwest::Error>> + Send + '_>>;
+
+    /// Send a POST request with no body (no `Content-Type`) to `url` with the given `headers`.
+    ///
+    /// # Arguments
+    ///
+    /// * `url` - The URL to send the request to.
+    /// * `headers` - The headers to include in the request.
+    fn post_empty<'a>(
+        &'a self,
+        url: &'a str,
+        headers: HeaderMap,
+    ) -> Pin<Box<dyn Future<Output = Result<reqwest::Response, reqwest::Error>> + Send + 'a>>;
 }
 
 /// A default implementation of the `HttpClient` trait using the `reqwest` crate.
@@ -124,6 +136,14 @@ impl HttpClient for ReqwestClient {
         headers: HeaderMap,
     ) -> Pin<Box<dyn Future<Output = Result<reqwest::Response, reqwest::Error>> + Send + 'a>> {
         Box::pin(async move { self.client.get(url).headers(headers).send().await })
+    }
+
+    fn post_empty<'a>(
+        &'a self,
+        url: &'a str,
+        headers: HeaderMap,
+    ) -> Pin<Box<dyn Future<Output = Result<reqwest::Response, reqwest::Error>> + Send + 'a>> {
+        Box::pin(async move { self.client.post(url).headers(headers).send().await })
     }
 }
 
@@ -223,6 +243,14 @@ impl HttpClient for SequentialMockHttpClient {
     ) -> Pin<Box<dyn Future<Output = Result<reqwest::Response, reqwest::Error>> + Send + 'a>> {
         self.post_json(url, headers, &None::<usize>)
     }
+
+    fn post_empty<'a>(
+        &'a self,
+        url: &'a str,
+        headers: HeaderMap,
+    ) -> Pin<Box<dyn Future<Output = Result<reqwest::Response, reqwest::Error>> + Send + 'a>> {
+        self.post_json(url, headers, &None::<usize>)
+    }
 }
 
 #[cfg(test)]
@@ -267,6 +295,15 @@ impl<T: serde::Serialize + Send + Sync + Clone> HttpClient for MockHttpClient<T>
         headers: HeaderMap,
     ) -> Pin<Box<dyn Future<Output = Result<reqwest::Response, reqwest::Error>> + Send + 'a>> {
         // We can use dummy data as a placeholder for the body
+        self.post_json(url, headers, &None::<usize>)
+    }
+
+    fn post_empty<'a>(
+        &'a self,
+        url: &'a str,
+        headers: HeaderMap,
+    ) -> Pin<Box<dyn Future<Output = Result<reqwest::Response, reqwest::Error>> + Send + 'a>> {
+        // No body to send; reuse the post_json path for the canned response.
         self.post_json(url, headers, &None::<usize>)
     }
 }

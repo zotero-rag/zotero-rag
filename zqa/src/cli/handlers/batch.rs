@@ -891,20 +891,22 @@ where
                     // It is possible to end up in this branch when there are pending batches, some
                     // of which are proper subsets of the batch we are submitting. In this case, we
                     // should let the user know and ask before deleting those.
-                    let new_hashes: HashSet<u64> = overlap
+                    let new_keys: HashSet<(u64, ProviderId, &str)> = overlap
                         .iter()
                         .chain(new_items.iter())
-                        .map(|i| i.hash)
+                        .map(|i| (i.hash, embedding_provider, embedding_model))
                         .collect();
                     let subsumed = pending_batches
                         .iter()
                         .filter(|b| {
-                            let batch_hashes: HashSet<u64> =
-                                b.items.iter().map(|bi| bi.hash).collect();
+                            let batch_keys: HashSet<(u64, ProviderId, &str)> = b
+                                .items
+                                .iter()
+                                .map(|bi| (bi.hash, b.provider, b.model.as_str()))
+                                .collect();
 
                             // Second condition ensures proper subset
-                            batch_hashes.is_subset(&new_hashes)
-                                && batch_hashes.len() != new_hashes.len()
+                            batch_keys.is_subset(&new_keys) && batch_keys.len() != new_keys.len()
                         })
                         .collect::<Vec<_>>();
 

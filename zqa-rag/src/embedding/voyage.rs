@@ -693,10 +693,9 @@ where
         let mut headers = HeaderMap::new();
         headers.insert("Authorization", format!("Bearer {api_key}").parse()?);
 
-        // TODO: Technically, we need to pass *no body*, but for now, this still works
         let res = self
             .client
-            .post_json(&format!("{BATCH_API_URL}/{batch_id}/cancel"), headers, &())
+            .post_empty(&format!("{BATCH_API_URL}/{batch_id}/cancel"), headers)
             .await?;
 
         body_or_status_error(res, &format!("Failed to cancel batch {batch_id}")).await?;
