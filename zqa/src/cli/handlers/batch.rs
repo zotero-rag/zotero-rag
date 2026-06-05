@@ -45,9 +45,7 @@
 //!   a new `batch_<id>.log` with its own sequence number. The original file is removed once its
 //!   successes have been applied and the retry has been submitted. Each file is a self-contained
 //!   record of one batch: `items`, `batch_id`, `provider`, `model`, and `seq_id` are immutable
-//!   once written. The `succeeded` / `failed` index fields are bookkeeping — they may be updated
-//!   in place to record what we've observed about that batch, but the classification is always a
-//!   snapshot of a single fetch, never a merge across runs.
+//!   once written.
 //! * Broadly, our semantics resemble a write-ahead log. The files are processed in sequence-number
 //!   order, and we scan a cache when inserting a batch into the backend to check conflicts (and
 //!   the newest one wins). Moreover, we maintain a cache of hashes (try saying that thrice
@@ -137,10 +135,6 @@ struct BatchEmbeddingMetadata {
     created_at: DateTime<Utc>,
     /// Items in this batch
     items: Vec<BatchItem>,
-    /// Optional indices to the items above if we know this information (by checking).
-    succeeded: Option<Vec<usize>>,
-    /// Optional indices to the items above if we know this information (by checking).
-    failed: Option<Vec<usize>>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -248,8 +242,6 @@ fn write_batch_metadata(
         model,
         created_at: Utc::now(),
         items,
-        succeeded: None,
-        failed: None,
     };
 
     let filename = format!("batch_{seq}.log");
@@ -791,6 +783,7 @@ where
     Ok(())
 }
 
+#[allow(clippy::too_many_lines)]
 async fn handle_batch_create_cmd<O, E>(ctx: &mut Context<O, E>) -> Result<(), CLIError>
 where
     O: Write,
@@ -895,8 +888,50 @@ where
             match read_char(&mut ctx.input, 'a', &['a', 'b']) {
                 'a' => retry_items(ctx, new_items).await,
                 'b' => {
+                    // It is possible to end up in this branch when there are pending batches, some
+                    // of which are proper subsets of the batch we are submitting. In this case, we
+                    // should let the user know and ask before deleting those.
+                    let new_hashes: HashSet<u64> = overlap
+                        .iter()
+                        .chain(new_items.iter())
+                        .map(|i| i.hash)
+                        .collect();
+                    let subsumed = pending_batches
+                        .iter()
+                        .filter(|b| {
+                            let batch_hashes: HashSet<u64> =
+                                b.items.iter().map(|bi| bi.hash).collect();
+
+                            // Second condition ensures proper subset
+                            batch_hashes.is_subset(&new_hashes)
+                                && batch_hashes.len() != new_hashes.len()
+                        })
+                        .collect::<Vec<_>>();
+
+                    // Always submit the new batch
                     overlap.append(&mut new_items);
-                    retry_items(ctx, overlap).await
+                    retry_items(ctx, overlap).await?;
+
+                    if !subsumed.is_empty() {
+                        writeln!(
+                            &mut ctx.out,
+                            "{} pending batch{} {} proper subset{} of this batch, and can be deleted. What do you want to do?",
+                            subsumed.len(),
+                            if subsumed.len() > 1 { "es" } else { "" },
+                            if subsumed.len() > 1 { "are" } else { "is a" },
+                            if subsumed.len() > 1 { "s" } else { "" }
+                        )?;
+                        writeln!(&mut ctx.out, "[a] Cancel batches that are subsets")?;
+                        writeln!(&mut ctx.out, "(b) Do not cancel subset batches.")?;
+
+                        if read_char(&mut ctx.input, 'a', &['a', 'b']) == 'a' {
+                            for batch in subsumed {
+                                handle_batch_cancel_cmd(batch.seq_id, ctx).await?;
+                            }
+                        }
+                    }
+
+                    Ok(())
                 }
                 _ => unreachable!("read_char guarantees valid input"),
             }
@@ -936,16 +971,16 @@ where
 
     let embedding_config = ctx
         .config
-        .get_embedding_config()
+        .get_embedding_provider_config(metadata.provider)
         .ok_or(CLIError::ConfigError(
             "In `handle_batch_cancel_cmd`, embedding config not set.".into(),
         ))?;
     let registry = provider_registry();
-    let embedder = match registry.create_batch_embedding(&embedding_config) {
-        Err(e) => {
-            return Err(CLIError::CommandError(e.to_string()));
-        }
-        Ok(embedder) => embedder,
+
+    let Ok(embedder) = registry.create_batch_embedding(&embedding_config) else {
+        return Err(CLIError::CommandError(
+            "Failed to create batch embedding client.".into(),
+        ));
     };
 
     embedder.cancel_batch(&metadata.batch_id).await?;
@@ -988,9 +1023,9 @@ mod tests {
     use zqa_rag::providers::ProviderId;
 
     use super::{
-        BatchEmbeddingMetadata, BatchItem, CacheEntry, HashCache, get_seq_id,
-        handle_batch_check_status_cmd, prompt_and_fetch_batch_results, update_hash_cache,
-        write_batch_metadata,
+        BatchEmbeddingMetadata, BatchItem, CacheEntry, HashCache, get_pending_batches, get_seq_id,
+        handle_batch_cancel_cmd, handle_batch_check_status_cmd, prompt_and_fetch_batch_results,
+        update_hash_cache, write_batch_metadata,
     };
     use crate::cli::app::tests::create_test_context;
     use crate::utils::library::{ZoteroItem, ZoteroItemMetadata};
@@ -1269,8 +1304,6 @@ mod tests {
             test_eq!(meta.items[0].hash, 1);
             test_eq!(meta.items[1].library_key, "KEY-B");
             test_eq!(meta.items[1].hash, 2);
-            assert!(meta.succeeded.is_none());
-            assert!(meta.failed.is_none());
         });
     }
 
@@ -1404,8 +1437,6 @@ mod tests {
             model: "voyage-3".into(),
             created_at: when,
             items,
-            succeeded: None,
-            failed: None,
         }
     }
 
@@ -1444,19 +1475,116 @@ mod tests {
     }
 
     #[test]
-    fn metadata_round_trips_with_indices_populated() {
-        let mut meta = make_metadata_at(Utc::now() - Duration::seconds(10), 4);
-        meta.succeeded = Some(vec![0, 2]);
-        meta.failed = Some(vec![1, 3]);
+    fn metadata_round_trips() {
+        let meta = make_metadata_at(Utc::now() - Duration::seconds(10), 4);
 
         let json = serde_json::to_string_pretty(&meta).unwrap();
         let round_tripped: BatchEmbeddingMetadata = serde_json::from_str(&json).unwrap();
 
-        test_eq!(round_tripped.succeeded.as_deref(), Some(&[0usize, 2][..]));
-        test_eq!(round_tripped.failed.as_deref(), Some(&[1usize, 3][..]));
         test_eq!(round_tripped.items.len(), 4);
         test_eq!(round_tripped.batch_id, "bid");
         test_eq!(round_tripped.provider, ProviderId::VoyageAI);
+        test_eq!(round_tripped.model, "voyage-3");
+        test_eq!(round_tripped.seq_id, 1);
+    }
+
+    /// Serialize a batch with the given sequence number to `batch_<seq>.log` under `dir`.
+    fn write_batch_file(dir: &std::path::Path, seq: usize) {
+        let mut meta = make_metadata_at(Utc::now(), 1);
+        meta.seq_id = seq;
+        meta.batch_id = format!("batch-{seq}");
+        fs::write(
+            dir.join(format!("batch_{seq}.log")),
+            serde_json::to_string(&meta).unwrap(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn get_pending_batches_empty_when_dir_absent() {
+        let tmp = tempdir().unwrap();
+        temp_env::with_var("ZQA_STATE_DIR", Some(tmp.path()), || {
+            test_eq!(get_pending_batches().unwrap().len(), 0);
+        });
+    }
+
+    #[test]
+    fn get_pending_batches_parses_sorted_descending_and_skips_invalid() {
+        let tmp = tempdir().unwrap();
+        let batch_dir = tmp.path().join("batches");
+        fs::create_dir_all(&batch_dir).unwrap();
+        write_batch_file(&batch_dir, 1);
+        write_batch_file(&batch_dir, 2);
+        // A correctly-named file with unparseable contents is silently skipped.
+        fs::write(batch_dir.join("batch_3.log"), "not json").unwrap();
+
+        temp_env::with_var("ZQA_STATE_DIR", Some(tmp.path()), || {
+            let batches = get_pending_batches().unwrap();
+            test_eq!(batches.len(), 2);
+            // Newest sequence number first.
+            test_eq!(batches[0].seq_id, 2);
+            test_eq!(batches[1].seq_id, 1);
+        });
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn cancel_reports_when_no_batch_dir() {
+        let tmp = tempdir().unwrap();
+        temp_env::async_with_vars(
+            [("ZQA_STATE_DIR", Some(tmp.path().to_str().unwrap()))],
+            async {
+                let mut ctx = create_test_context();
+                let result = handle_batch_cancel_cmd(1, &mut ctx).await;
+                assert!(result.is_ok());
+
+                let err = String::from_utf8(ctx.err.into_inner()).unwrap();
+                test_contains!(err, "batches directory does not exist");
+            },
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn cancel_reports_when_batch_file_absent() {
+        let tmp = tempdir().unwrap();
+        fs::create_dir_all(tmp.path().join("batches")).unwrap();
+        temp_env::async_with_vars(
+            [("ZQA_STATE_DIR", Some(tmp.path().to_str().unwrap()))],
+            async {
+                let mut ctx = create_test_context();
+                let result = handle_batch_cancel_cmd(7, &mut ctx).await;
+                assert!(result.is_ok());
+
+                let err = String::from_utf8(ctx.err.into_inner()).unwrap();
+                test_contains!(err, "batch file does not exist");
+            },
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn cancel_errors_on_corrupt_batch_file() {
+        let tmp = tempdir().unwrap();
+        let batch_dir = tmp.path().join("batches");
+        fs::create_dir_all(&batch_dir).unwrap();
+        // Present but unparseable: cancel must fail with a CommandError before any provider call.
+        fs::write(batch_dir.join("batch_1.log"), "not valid json").unwrap();
+
+        temp_env::async_with_vars(
+            [("ZQA_STATE_DIR", Some(tmp.path().to_str().unwrap()))],
+            async {
+                let mut ctx = create_test_context();
+                let result = handle_batch_cancel_cmd(1, &mut ctx).await;
+                assert!(matches!(
+                    result,
+                    Err(crate::cli::errors::CLIError::CommandError(_))
+                ));
+            },
+        )
+        .await;
     }
 
     #[tokio::test]
