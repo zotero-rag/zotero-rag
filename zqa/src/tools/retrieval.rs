@@ -1,4 +1,5 @@
 use std::{
+    pin::Pin,
     sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
@@ -89,8 +90,7 @@ where
     fn call(
         &self,
         args: serde_json::Value,
-    ) -> std::pin::Pin<Box<dyn Future<Output = Result<serde_json::Value, String>> + Send + '_>>
-    {
+    ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, String>> + Send + '_>> {
         let start = Instant::now();
         let reranker_config = self.reranker_config.clone();
         let embedding_tokens = Arc::clone(&self.embedding_tokens);
