@@ -9,9 +9,7 @@ use std::{
 
 use zqa_rag::{
     llm::{
-        base::{
-            ApiClient, ChatHistoryContent, ChatHistoryItem, ChatRequest, MessageRole, ToolUseStats,
-        },
+        base::{ApiClient, ChatHistoryContent, ChatHistoryItem, ChatRequest, MessageRole},
         factory::get_client_with_config,
         tools::{CallbackFn, Tool},
     },
@@ -27,7 +25,7 @@ use crate::{
         prompts::{get_summarize_prompt, get_title_prompt},
     },
     common::Context,
-    tools::{retrieval::RetrievalTool, summarization::SummarizationTool},
+    tools::{mixins::ToolExt, retrieval::RetrievalTool, summarization::SummarizationTool},
     utils::{
         library::get_authors,
         rag::ModelResponse,
@@ -216,17 +214,16 @@ where
 
     let summarization_tool = SummarizationTool::new(llm_client.clone(), store_arc);
     let summarization_tool_clone = summarization_tool.clone();
-    let mut tools: Vec<Box<dyn Tool>> =
-        vec![Box::new(retrieval_tool), Box::new(summarization_tool)];
+    let mut tools: Vec<Box<dyn Tool>> = vec![
+        Box::new(retrieval_tool.verbose().timed()),
+        Box::new(summarization_tool.verbose().timed()),
+    ];
     let document_tools = get_user_document_tools(ctx)?;
     tools.extend(document_tools);
 
     let chat_history = Arc::clone(&ctx.state.chat_history);
 
     // TODO: avoid bypassing context I/O
-    let on_tool_call: Arc<CallbackFn<ToolUseStats>> = Arc::new(move |stats: &ToolUseStats| {
-        let _ = writeln!(io::stderr(), "{}🗸 {}{}", DIM_TEXT, stats.tool_name, RESET);
-    });
     let on_text: Arc<CallbackFn<str>> = Arc::new(move |text: &str| {
         let _ = writeln!(io::stdout(), "{text}");
     });
@@ -241,7 +238,7 @@ where
             message: get_summarize_prompt(&query),
             reasoning: ctx.config.get_reasoning_config(),
             tools: Some(&tools),
-            on_tool_call: Some(on_tool_call),
+            on_tool_call: None,
             on_text: Some(on_text),
         }
     };
