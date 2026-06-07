@@ -4,7 +4,6 @@ use std::{
         Arc,
         atomic::{AtomicU64, Ordering},
     },
-    time::Instant,
 };
 
 use schemars::{JsonSchema, schema_for};
@@ -13,10 +12,7 @@ use serde_json::json;
 use zqa_rag::{llm::tools::Tool, reranking::common::RerankProviderConfig};
 
 use crate::store::common::ZoteroStore;
-use crate::utils::{
-    library::get_authors,
-    terminal::{DIM_TEXT, RESET},
-};
+use crate::utils::library::get_authors;
 
 pub(crate) const RETRIEVAL_TOOL_NAME: &str = "retrieval_tool";
 
@@ -91,7 +87,6 @@ where
         &self,
         args: serde_json::Value,
     ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, String>> + Send + '_>> {
-        let start = Instant::now();
         let reranker_config = self.reranker_config.clone();
         let embedding_tokens = Arc::clone(&self.embedding_tokens);
         let rerank_tokens = Arc::clone(&self.rerank_tokens);
@@ -108,10 +103,6 @@ where
             rerank_tokens.fetch_add(stats.rerank_tokens as u64, Ordering::Relaxed);
 
             get_authors(&mut results).map_err(|e| format!("Failed to get authors: {e}"))?;
-            log::info!(
-                "{DIM_TEXT}Vector search took {}ms{RESET}.",
-                start.elapsed().as_millis()
-            );
 
             let tool_results = results
                 .iter()

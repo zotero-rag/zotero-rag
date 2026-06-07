@@ -35,7 +35,7 @@ impl<T: Tool> Tool for Verbose<T> {
         Box::pin(async move {
             let printed_args = serde_json::to_string(&args).unwrap_or_default();
 
-            println!("{DIM_TEXT}{} ({}){RESET}", self.inner.name(), printed_args);
+            eprintln!("{DIM_TEXT}{} ({}){RESET}", self.inner.name(), printed_args);
             self.inner.call(args).await
         })
     }
@@ -74,7 +74,7 @@ impl<T: Tool> Tool for Timed<T> {
             let result = self.inner.call(args).await;
             let elapsed = start.elapsed();
 
-            println!(
+            eprintln!(
                 "{DIM_TEXT}{}{RESET} completed in {:.2}s",
                 self.inner.name(),
                 elapsed.as_secs_f64()
