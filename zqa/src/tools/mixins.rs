@@ -74,11 +74,18 @@ impl<T: Tool> Tool for Timed<T> {
             let result = self.inner.call(args).await;
             let elapsed = start.elapsed();
 
-            eprintln!(
-                "{DIM_TEXT}{}{RESET} completed in {:.2}s",
-                self.inner.name(),
-                elapsed.as_secs_f64()
-            );
+            match result {
+                Ok(_) => eprintln!(
+                    "{DIM_TEXT}{}{RESET} completed in {:.2}s",
+                    self.inner.name(),
+                    elapsed.as_secs_f64()
+                ),
+                Err(_) => eprintln!(
+                    "{DIM_TEXT}{}{RESET} failed after {:.2}s",
+                    self.inner.name(),
+                    elapsed.as_secs_f64()
+                ),
+            }
 
             result
         })

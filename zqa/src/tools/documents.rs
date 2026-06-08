@@ -110,6 +110,8 @@ impl DocumentsToolFactory {
     /// tools are effectively pure functions in that they do not modify anything in the context.
     pub(crate) fn build_tools(&self) -> Vec<Box<dyn Tool>> {
         vec![
+            // `ListDocumentsTool` doesn't take very long since it's just a listing, so it doesn't
+            // need to be `timed()`.
             Box::new(ListDocumentsTool::new(Arc::clone(&self.ctx)).verbose()),
             Box::new(
                 QueryDocumentsTool::new(Arc::clone(&self.ctx))
