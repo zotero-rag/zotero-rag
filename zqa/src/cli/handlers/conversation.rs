@@ -1,7 +1,7 @@
 //! Command handlers for conversation-related operations.
 
 use std::{
-    io::{self, BufRead, Write},
+    io::{BufRead, Write},
     sync::{Arc, Mutex, atomic},
 };
 
@@ -35,17 +35,6 @@ use crate::{
 pub(crate) fn handle_resume_cmd<O: Write, E: Write>(
     ctx: &mut Context<O, E>,
 ) -> Result<(), CLIError> {
-    let stdin = io::stdin();
-    let mut reader = stdin.lock();
-    resume_with_reader(ctx, &mut reader)
-}
-
-fn resume_with_reader<O, E, R>(ctx: &mut Context<O, E>, reader: &mut R) -> Result<(), CLIError>
-where
-    O: Write,
-    E: Write,
-    R: BufRead,
-{
     match get_conversation_history() {
         Err(e) => {
             writeln!(&mut ctx.err, "Failed to load conversations: {e}")?;
@@ -77,7 +66,7 @@ where
             ctx.out.flush()?;
 
             let mut input = String::new();
-            reader.read_line(&mut input)?;
+            ctx.input.read_line(&mut input)?;
             let input = input.trim();
 
             match input.parse::<usize>() {
@@ -153,7 +142,7 @@ mod tests {
     use zqa_macros::{test_contains, test_eq};
     use zqa_rag::llm::base::{ChatHistoryContent, ChatHistoryItem, MessageRole};
 
-    use super::resume_with_reader;
+    use super::handle_resume_cmd;
     use crate::{
         cli::app::tests::create_test_context,
         state::{SavedChatHistory, save_conversation},
@@ -164,8 +153,8 @@ mod tests {
         let temp_dir = tempfile::tempdir().unwrap();
         temp_env::with_var("ZQA_STATE_DIR", Some(temp_dir.path()), || {
             let mut ctx = create_test_context();
-            let mut reader = Cursor::new("");
-            resume_with_reader(&mut ctx, &mut reader).unwrap();
+            ctx.input = Box::new(Cursor::new(""));
+            handle_resume_cmd(&mut ctx).unwrap();
 
             let output = String::from_utf8(ctx.out.into_inner()).unwrap();
             test_contains!(output, "No saved conversations found.");
@@ -210,8 +199,8 @@ mod tests {
             .unwrap();
 
             let mut ctx = create_test_context();
-            let mut reader = Cursor::new("1\n");
-            resume_with_reader(&mut ctx, &mut reader).unwrap();
+            ctx.input = Box::new(Cursor::new("1\n"));
+            handle_resume_cmd(&mut ctx).unwrap();
 
             let out = String::from_utf8(ctx.out.into_inner()).unwrap();
             test_contains!(out, "Resumed:");
@@ -241,8 +230,8 @@ mod tests {
             .unwrap();
 
             let mut ctx = create_test_context();
-            let mut reader = Cursor::new("99\n");
-            resume_with_reader(&mut ctx, &mut reader).unwrap();
+            ctx.input = Box::new(Cursor::new("99\n"));
+            handle_resume_cmd(&mut ctx).unwrap();
 
             let err = String::from_utf8(ctx.err.into_inner()).unwrap();
             test_contains!(err, "Invalid selection.");
