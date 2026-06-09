@@ -12,8 +12,8 @@ on:
 jobs:
   coverage:
     if: github.event.pull_request.draft == false
-    runs-on: blacksmith-8vcpu-ubuntu-2404
-    timeout-minutes: 15
+    runs-on: runs-on=${{ github.run_id }}/cpu=8/ram=32
+    timeout-minutes: 20
     env:
       CARGO_TERM_COLOR: always
     steps:
