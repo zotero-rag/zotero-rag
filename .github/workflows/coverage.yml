@@ -12,7 +12,7 @@ on:
 jobs:
   coverage:
     if: github.event.pull_request.draft == false
-    runs-on: runs-on=${{ github.run_id }}/family=m8g/cpu=8/ram=32
+    runs-on: runs-on=${{ github.run_id }}/family=m8g.2xlarge/cpu=8/ram=32
     timeout-minutes: 20
     env:
       CARGO_TERM_COLOR: always
