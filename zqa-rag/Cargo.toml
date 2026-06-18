@@ -8,6 +8,12 @@ edition = "2024"
 rust-version = "1.91"
 license = "MIT"
 
+[features]
+# Exposes the in-crate mock LLM provider (`ModelProvider::Mock` and friends) to
+# downstream crates (e.g. `zqa`) for use in their tests. `zqa-rag`'s own tests
+# reach the same items via `cfg(test)` and don't need this feature.
+mock = []
+
 [dependencies]
 arrow-array = { version = "^57.2.0", default-features = false }
 arrow-schema = { version = "^57.2.0", default-features = false}

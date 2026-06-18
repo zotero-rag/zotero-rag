@@ -4,6 +4,12 @@
 //! instead of reading from environment variables or TOML files directly.
 //! This makes the rag crate more general and reusable.
 
+#[cfg(any(test, feature = "mock"))]
+use std::{
+    collections::VecDeque,
+    sync::{Arc, Mutex},
+};
+
 use crate::{
     constants::{
         DEFAULT_ANTHROPIC_MAX_TOKENS, DEFAULT_ANTHROPIC_MODEL, DEFAULT_GEMINI_EMBEDDING_DIM,
@@ -189,6 +195,14 @@ impl Default for OpenRouterConfig {
     }
 }
 
+/// Configuration for the mock LLM provider.
+#[cfg(any(test, feature = "mock"))]
+#[derive(Debug, Clone)]
+pub struct MockConfig {
+    /// Canned responses returned in order, one per request.
+    pub responses: Arc<Mutex<VecDeque<String>>>,
+}
+
 /// Configuration for LLM clients
 #[derive(Debug, Clone)]
 #[non_exhaustive]
@@ -203,6 +217,9 @@ pub enum LLMClientConfig {
     OpenRouter(crate::config::OpenRouterConfig),
     /// Gemini client configuration
     Gemini(crate::config::GeminiConfig),
+    /// Mock client configuration (enabled by the `mock` feature)
+    #[cfg(any(test, feature = "mock"))]
+    Mock(crate::config::MockConfig),
 }
 
 impl LLMClientConfig {
@@ -215,6 +232,8 @@ impl LLMClientConfig {
             Self::OpenAI(_) => ProviderId::OpenAI,
             Self::OpenRouter(_) => ProviderId::OpenRouter,
             Self::Gemini(_) => ProviderId::Gemini,
+            #[cfg(any(test, feature = "mock"))]
+            Self::Mock(_) => ProviderId::Mock,
         }
     }
 }

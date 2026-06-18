@@ -8,4 +8,6 @@ pub(crate) mod gemini;
 pub(crate) mod ollama;
 pub(crate) mod openai;
 pub(crate) mod openrouter;
+#[cfg(any(test, feature = "mock"))]
+pub(crate) mod test;
 pub mod tools;

@@ -6,6 +6,8 @@ use std::{
 
 use lancedb::embeddings::EmbeddingFunction;
 
+#[cfg(any(test, feature = "mock"))]
+use crate::providers::test::MockProvider;
 use crate::{
     capabilities::{BatchEmbeddingFactory, EmbeddingFactory, LlmFactory, RerankFactory},
     config::LLMClientConfig,
@@ -207,6 +209,11 @@ pub fn default_provider_registry() -> ProviderRegistry {
     registry.register_lance_embedding(Arc::new(ZeroEntropyProvider));
     registry.register_lance_embedding(Arc::new(GeminiProvider));
     registry.register_lance_embedding(Arc::new(OllamaProvider));
+
+    #[cfg(any(test, feature = "mock"))]
+    {
+        registry.register_llm(Arc::new(MockProvider));
+    }
 
     registry
 }

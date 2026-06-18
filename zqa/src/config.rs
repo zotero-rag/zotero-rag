@@ -786,7 +786,10 @@ impl Default for OpenRouterConfig {
 
 // Default value functions
 fn default_model_provider() -> ModelProvider {
-    ModelProvider::Anthropic
+    cfg_select! {
+        test => { ModelProvider::Mock }
+        _ => { ModelProvider::Anthropic }
+    }
 }
 
 fn default_embedding_provider() -> EmbeddingProvider {

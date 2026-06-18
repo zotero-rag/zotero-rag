@@ -3,7 +3,7 @@
 //! implementation is provided as a default implementation, but it can be easily replaced with a
 //! `MockHttpClient` implementation for testing.
 
-#[cfg(test)]
+#[cfg(any(test, feature = "mock"))]
 use std::{
     collections::VecDeque,
     sync::{Arc, Mutex},
@@ -177,14 +177,14 @@ where
 
 /// A mock HTTP client that returns responses from a pre-loaded queue, one per call. Useful for
 /// testing multi-turn interactions (e.g. a tool-call response followed by a final text response).
-#[cfg(test)]
+#[cfg(any(test, feature = "mock"))]
 #[derive(Debug, Clone)]
 pub(crate) struct SequentialMockHttpClient {
     /// The queue of JSON-serialized responses to return, in order.
     responses: Arc<Mutex<VecDeque<String>>>,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "mock"))]
 impl SequentialMockHttpClient {
     /// Create a new `SequentialMockHttpClient` from an iterator of serializable responses.
     ///
@@ -202,7 +202,7 @@ impl SequentialMockHttpClient {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "mock"))]
 impl HttpClient for SequentialMockHttpClient {
     fn post_json<'a, U: serde::Serialize + Send + Sync>(
         &'a self,
