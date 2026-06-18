@@ -5,6 +5,8 @@ use crate::clients::gemini::GeminiClient;
 use crate::clients::ollama::OllamaClient;
 use crate::clients::openai::OpenAIClient;
 use crate::clients::openrouter::OpenRouterClient;
+#[cfg(any(test, feature = "mock"))]
+use crate::clients::test::TestClient;
 use crate::config::LLMClientConfig;
 use crate::llm::base::{ApiClient, ChatRequest, ReasoningConfig};
 use crate::llm::errors::LLMError;
@@ -24,6 +26,9 @@ pub enum LLMClient {
     OpenRouter(OpenRouterClient),
     /// Gemini client
     Gemini(GeminiClient),
+    /// Mock client (enabled by the `mock` feature)
+    #[cfg(any(test, feature = "mock"))]
+    Mock(TestClient),
 }
 
 impl LLMClient {
@@ -36,6 +41,8 @@ impl LLMClient {
             LLMClient::OpenAI(client) => client.config.as_ref().map(|c| c.model.clone()),
             LLMClient::OpenRouter(client) => client.config.as_ref().map(|c| c.model.clone()),
             LLMClient::Gemini(client) => client.config.as_ref().map(|c| c.model.clone()),
+            #[cfg(any(test, feature = "mock"))]
+            LLMClient::Mock(_) => Some("mock_client".into()),
         }
     }
 
@@ -74,6 +81,8 @@ impl LLMClient {
                 effort: None,
                 summary: None,
             }),
+            #[cfg(any(test, feature = "mock"))]
+            LLMClient::Mock(_) => None,
         }
     }
 }
@@ -90,6 +99,8 @@ impl ApiClient for LLMClient {
             LLMClient::OpenAI(client) => client.send_message(message).await,
             LLMClient::OpenRouter(client) => client.send_message(message).await,
             LLMClient::Gemini(client) => client.send_message(message).await,
+            #[cfg(any(test, feature = "mock"))]
+            LLMClient::Mock(client) => client.send_message(message).await,
         }
     }
 }

@@ -33,6 +33,9 @@ pub enum ModelProvider {
     OpenRouter,
     /// Gemini model provider
     Gemini,
+    /// Mock model provider, used for testing (enabled by the `mock` feature)
+    #[cfg(any(test, feature = "mock"))]
+    Mock,
 }
 
 impl ModelProvider {
@@ -280,6 +283,7 @@ mod tests {
     use crate::clients::ollama::OllamaClient;
     use crate::clients::openai::OpenAIClient;
     use crate::clients::openrouter::OpenRouterClient;
+    use crate::clients::test::TestClient;
     use crate::embedding::cohere::CohereClient;
     use crate::embedding::voyage::VoyageAIClient;
     use crate::embedding::zeroentropy::ZeroEntropyClient;
@@ -302,6 +306,7 @@ mod tests {
         assert_api_client::<OpenAIClient<ReqwestClient>>();
         assert_api_client::<OpenRouterClient<ReqwestClient>>();
         assert_api_client::<GeminiClient<ReqwestClient>>();
+        assert_api_client::<TestClient>();
     }
 
     /// Verify that every [`super::EmbeddingProvider`] variant has a corresponding client that

@@ -18,6 +18,8 @@ pub enum ProviderId {
     VoyageAI,
     Cohere,
     ZeroEntropy,
+    #[cfg(any(test, feature = "mock"))]
+    Mock,
 }
 
 impl std::fmt::Display for ProviderId {
@@ -39,6 +41,8 @@ impl ProviderId {
             Self::VoyageAI => "voyageai",
             Self::Cohere => "cohere",
             Self::ZeroEntropy => "zeroentropy",
+            #[cfg(any(test, feature = "mock"))]
+            Self::Mock => "mock",
         }
     }
 }
@@ -56,6 +60,8 @@ impl FromStr for ProviderId {
             "voyageai" => Ok(Self::VoyageAI),
             "cohere" => Ok(Self::Cohere),
             "zeroentropy" => Ok(Self::ZeroEntropy),
+            #[cfg(any(test, feature = "mock"))]
+            "mock" => Ok(Self::Mock),
             _ => Err(format!("Invalid provider name: {s}")),
         }
     }
@@ -69,6 +75,8 @@ impl From<&ModelProvider> for ProviderId {
             ModelProvider::OpenAI => Self::OpenAI,
             ModelProvider::OpenRouter => Self::OpenRouter,
             ModelProvider::Gemini => Self::Gemini,
+            #[cfg(any(test, feature = "mock"))]
+            ModelProvider::Mock => Self::Mock,
         }
     }
 }
@@ -135,6 +143,8 @@ impl TryFrom<ProviderId> for ModelProvider {
             ProviderId::OpenAI => Ok(ModelProvider::OpenAI),
             ProviderId::Anthropic => Ok(ModelProvider::Anthropic),
             ProviderId::OpenRouter => Ok(ModelProvider::OpenRouter),
+            #[cfg(any(test, feature = "mock"))]
+            ProviderId::Mock => Ok(ModelProvider::Mock),
             _ => Err(format!("Provider {value} does not support generation.")),
         }
     }
@@ -163,6 +173,7 @@ mod tests {
             ProviderId::from_str("zeroentropy"),
             Ok(ProviderId::ZeroEntropy)
         );
+        assert_eq!(ProviderId::from_str("mock"), Ok(ProviderId::Mock));
     }
 
     #[test]
@@ -181,6 +192,7 @@ mod tests {
             ProviderId::from(&RerankerProvider::ZeroEntropy),
             ProviderId::ZeroEntropy
         );
+        assert_eq!(ProviderId::from(&ModelProvider::Mock), ProviderId::Mock);
     }
 
     #[test]
