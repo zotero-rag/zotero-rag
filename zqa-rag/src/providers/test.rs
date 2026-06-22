@@ -19,6 +19,6 @@ impl LlmFactory for MockProvider {
             return Err(LLMError::InvalidProviderError("mock".into()));
         };
 
-        Ok(LLMClient::Mock(TestClient::new(&cfg.responses)))
+        Ok(LLMClient::Mock(TestClient::new(cfg.responses.clone())))
     }
 }

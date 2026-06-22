@@ -22,7 +22,7 @@ jobs:
 
     steps:
     - name: Install Rust toolchain
-      uses: dtolnay/rust-toolchain@1.91.0
+      uses: dtolnay/rust-toolchain@1.95.0
 
     - name: Dependencies
       run: sudo apt-get update && sudo apt-get install protobuf-compiler
