@@ -11,6 +11,7 @@ use zqa_rag::constants::*;
 use zqa_rag::constants::{DEFAULT_OPENAI_EMBEDDING_DIM, DEFAULT_OPENAI_EMBEDDING_MODEL};
 use zqa_rag::embedding::common::EmbeddingProviderConfig;
 use zqa_rag::llm::base::ReasoningConfig;
+use zqa_rag::providers::ProviderId;
 use zqa_rag::reranking::common::RerankProviderConfig;
 
 /// TOML config. Below is an example config with most of the defaults. The TOML config is
@@ -286,36 +287,47 @@ impl Config {
         Ok(())
     }
 
-    /// Get the embedding configuration based on the `embedding_provider` value.
+    /// Get the embedding configuration for an arbitrary embedding provider.
+    ///
+    /// If the provider is not an embedding provider, this returns `None`.
     #[must_use]
-    pub fn get_embedding_config(&self) -> Option<EmbeddingProviderConfig> {
-        match self.embedding_provider {
-            EmbeddingProvider::OpenAI => self
-                .openai
-                .as_ref()
-                .map(|cfg| EmbeddingProviderConfig::OpenAI(cfg.clone().into())),
-            EmbeddingProvider::Gemini => self
-                .gemini
-                .as_ref()
-                .map(|cfg| EmbeddingProviderConfig::Gemini(cfg.clone().into())),
-            EmbeddingProvider::VoyageAI => self
-                .voyageai
-                .as_ref()
-                .map(|cfg| EmbeddingProviderConfig::VoyageAI(cfg.clone().into())),
+    pub fn get_embedding_provider_config(
+        &self,
+        provider: ProviderId,
+    ) -> Option<EmbeddingProviderConfig> {
+        match EmbeddingProvider::try_from(provider).ok()? {
             EmbeddingProvider::Cohere => self
                 .cohere
                 .as_ref()
-                .map(|cfg| EmbeddingProviderConfig::Cohere(cfg.clone().into())),
-            EmbeddingProvider::Ollama => self
-                .ollama
+                .map(|c| EmbeddingProviderConfig::Cohere(c.clone().into())),
+            EmbeddingProvider::OpenAI => self
+                .openai
                 .as_ref()
-                .map(|cfg| EmbeddingProviderConfig::Ollama(cfg.clone().into())),
+                .map(|c| EmbeddingProviderConfig::OpenAI(c.clone().into())),
+            EmbeddingProvider::VoyageAI => self
+                .voyageai
+                .as_ref()
+                .map(|c| EmbeddingProviderConfig::VoyageAI(c.clone().into())),
             EmbeddingProvider::ZeroEntropy => self
                 .zeroentropy
                 .as_ref()
-                .map(|cfg| EmbeddingProviderConfig::ZeroEntropy(cfg.clone().into())),
+                .map(|c| EmbeddingProviderConfig::ZeroEntropy(c.clone().into())),
+            EmbeddingProvider::Gemini => self
+                .gemini
+                .as_ref()
+                .map(|c| EmbeddingProviderConfig::Gemini(c.clone().into())),
+            EmbeddingProvider::Ollama => self
+                .ollama
+                .as_ref()
+                .map(|c| EmbeddingProviderConfig::Ollama(c.clone().into())),
             _ => None,
         }
+    }
+
+    /// Get the embedding configuration based on the `embedding_provider` value.
+    #[must_use]
+    pub fn get_embedding_config(&self) -> Option<EmbeddingProviderConfig> {
+        self.get_embedding_provider_config(ProviderId::from(&self.embedding_provider))
     }
 
     // NOTE: Maintainers: if you change this, you should also update zqa-rag/src/llm/factory.rs

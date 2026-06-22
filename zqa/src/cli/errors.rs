@@ -3,7 +3,7 @@ use std::{io, sync::PoisonError};
 use thiserror::Error;
 use zqa_rag::{llm::errors::LLMError, vector::backends::lance::LanceError};
 
-use crate::{config::ConfigError, utils};
+use crate::{config::ConfigError, state::StateError, utils};
 
 #[derive(Debug, Error)]
 pub enum CLIError {
@@ -11,20 +11,22 @@ pub enum CLIError {
     ArrowError(String),
     #[error("Command error: {0}")]
     CommandError(String),
-    #[error("IO Error: {0}")]
-    IOError(#[from] io::Error),
-    #[error("Error communicating with the LLM: {0}")]
-    LLMError(String),
-    #[error("Malformed batch in batch_iter.bin")]
-    MalformedBatchError,
-    #[error("Error from readline: {0}")]
-    ReadlineError(String),
-    #[error("LanceDB error: {0}")]
-    LanceError(String),
     #[error("Configuration error: {0}")]
     ConfigError(String),
+    #[error("IO Error: {0}")]
+    IOError(#[from] io::Error),
+    #[error("LanceDB error: {0}")]
+    LanceError(String),
+    #[error("Error communicating with the LLM: {0}")]
+    LLMError(String),
     #[error("Mutex poisoning error: {0}")]
     LockPoisoningError(String),
+    #[error("Error from readline: {0}")]
+    ReadlineError(String),
+    #[error("Serialization error: {0}")]
+    SerializationError(#[from] serde_json::Error),
+    #[error("Error accessing state directory: {0}")]
+    StateDirError(#[from] StateError),
 }
 
 impl From<ConfigError> for CLIError {

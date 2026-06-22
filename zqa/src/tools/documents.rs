@@ -26,6 +26,7 @@ use zqa_rag::{
 };
 
 use crate::common::UserDocument;
+use crate::tools::mixins::ToolExt;
 use crate::utils::rag::ModelResponse;
 
 // TODO: Tune this in a future story; possibly look at embedding provider
@@ -109,8 +110,14 @@ impl DocumentsToolFactory {
     /// tools are effectively pure functions in that they do not modify anything in the context.
     pub(crate) fn build_tools(&self) -> Vec<Box<dyn Tool>> {
         vec![
-            Box::new(ListDocumentsTool::new(Arc::clone(&self.ctx))),
-            Box::new(QueryDocumentsTool::new(Arc::clone(&self.ctx))),
+            // `ListDocumentsTool` doesn't take very long since it's just a listing, so it doesn't
+            // need to be `timed()`.
+            Box::new(ListDocumentsTool::new(Arc::clone(&self.ctx)).verbose()),
+            Box::new(
+                QueryDocumentsTool::new(Arc::clone(&self.ctx))
+                    .verbose()
+                    .timed(),
+            ),
         ]
     }
 }

@@ -1,10 +1,13 @@
+use std::fs;
 use std::io::Write;
+use std::path::Path;
 use std::sync::Arc;
 
 use rustyline::error::ReadlineError;
 
 use crate::cli::commands::{Command, parse_command};
 use crate::cli::errors::CLIError;
+use crate::cli::handlers::batch::handle_batch_cmd;
 use crate::cli::handlers::cli::{
     handle_config_cmd, handle_help_cmd, handle_new_conversation_cmd, handle_quit_cmd,
 };
@@ -18,6 +21,7 @@ use crate::cli::handlers::query::{handle_query_cmd, handle_search_cmd};
 use crate::cli::placeholder::PlaceholderText;
 use crate::cli::readline::get_readline_config;
 use crate::common::Context;
+use crate::state::get_state_dir;
 
 /// A file that contains parsed PDF texts from the user's Zotero library. In case the
 /// embedding generation fails, the user does not need to rerun the full PDF parsing,
@@ -44,26 +48,27 @@ pub(crate) async fn dispatch_command<O: Write, E: Write>(
         parse_command(command.trim()).map_err(|e| CLIError::CommandError(e.to_string()))?;
 
     match command {
+        Command::Batch(subcmd) => handle_batch_cmd(subcmd, ctx).await,
+        Command::CheckHealth => handle_checkhealth_cmd(ctx).await,
+        Command::Config => handle_config_cmd(ctx),
+        Command::Dedup => handle_dedup_cmd(ctx).await,
+        Command::Docs(subcmd) => handle_docs_cmd(subcmd, ctx),
+        Command::Doctor => handle_doctor_cmd(ctx).await,
         Command::DoNothing => {
             return Ok(true);
         }
-        Command::Process => handle_process_cmd(ctx).await,
         Command::Embed { fix } => handle_embed_cmd(fix, ctx).await,
-        Command::Dedup => handle_dedup_cmd(ctx).await,
-        Command::Index => handle_index_cmd(ctx).await,
-        Command::Resume => handle_resume_cmd(ctx),
         Command::Help => handle_help_cmd(ctx),
+        Command::Index => handle_index_cmd(ctx).await,
+        Command::NewConversation => handle_new_conversation_cmd(ctx),
+        Command::Process => handle_process_cmd(ctx).await,
         Command::Quit => {
             return handle_quit_cmd(ctx).and(Ok(false));
         }
-        Command::CheckHealth => handle_checkhealth_cmd(ctx).await,
         Command::Query { text } => handle_query_cmd(text, ctx).await,
-        Command::Doctor => handle_doctor_cmd(ctx).await,
-        Command::NewConversation => handle_new_conversation_cmd(ctx),
-        Command::Config => handle_config_cmd(ctx),
-        Command::Stats => handle_stats_cmd(ctx).await,
+        Command::Resume => handle_resume_cmd(ctx),
         Command::Search { query } => handle_search_cmd(query, ctx).await,
-        Command::Docs(subcmd) => handle_docs_cmd(subcmd, ctx),
+        Command::Stats => handle_stats_cmd(ctx).await,
     }
     .and(Ok(true))
 }
@@ -80,12 +85,39 @@ pub(crate) async fn dispatch_command<O: Write, E: Write>(
 /// * `CLIError::ReadlineError` - If we could not get the history file path, a `readline` editor could not be created,
 ///   or the history could not be saved.
 /// * `CLIError::IOError` - If `writeln!` fails.
-///
-/// # Panics
-///
-/// Cannot happen; `unwrap()` is called on `strip_prefix` result after checking that the prefix exists.
+/// * `CLIError::StateDirError` - If the state dir could not be obtained.
 #[allow(clippy::needless_continue)]
 pub(crate) async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<(), CLIError> {
+    // At startup, we should check if there are pending embedding batches and notify the user if so.
+    // [`crate::cli::handlers::batch`] has more details about the semantics of interacting with
+    // batch APIs. We don't do the check itself since we have two bad options:
+    //
+    // * If we `await` the check, we risk a longer startup time
+    // * If we use a task, we need to be careful about not messing with the CLI output/readline.
+    let batch_dir = get_state_dir()?.join("batches");
+
+    // `batch_dir` is created lazily on the first batch
+    if batch_dir.exists() {
+        let batch_files: Vec<String> = fs::read_dir(&batch_dir)?
+            .filter_map(|x| x.ok()?.file_name().into_string().ok())
+            .filter(|f| {
+                f.starts_with("batch_")
+                    && Path::new(f)
+                        .extension()
+                        .is_some_and(|ext| ext.eq_ignore_ascii_case("log"))
+            })
+            .collect();
+
+        if !batch_files.is_empty() {
+            writeln!(
+                &mut ctx.out,
+                "You have {} embedding batch{} pending. Use /batch check to check their status.\n",
+                batch_files.len(),
+                if batch_files.len() > 1 { "es" } else { "" }
+            )?;
+        }
+    }
+
     // First, get the path to the history file used by the `readline` implementation.
     let user_dirs = directories::UserDirs::new().ok_or(CLIError::ReadlineError(
         "Could not get user directories".into(),
@@ -153,17 +185,18 @@ pub(crate) async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<()
 #[cfg(test)]
 pub(crate) mod tests {
     use std::io::Cursor;
-    use std::sync::Arc;
+    use std::sync::{Arc, atomic};
 
     use serde_json::json;
     use serial_test::serial;
     use temp_env;
-    use zqa_macros::test_ok;
+    use zqa_macros::{test_contains, test_eq, test_ok};
     use zqa_macros_proc::retry;
     use zqa_rag::constants::{
         DEFAULT_VOYAGE_EMBEDDING_DIM, DEFAULT_VOYAGE_EMBEDDING_MODEL, DEFAULT_VOYAGE_RERANK_MODEL,
     };
     use zqa_rag::embedding::common::EmbeddingProviderConfig;
+    use zqa_rag::llm::base::{ChatHistoryContent, ChatHistoryItem, MessageRole};
     use zqa_rag::llm::tools::Tool;
     use zqa_rag::reranking::common::RerankProviderConfig;
 
@@ -213,6 +246,8 @@ pub(crate) mod tests {
             state: State::default(),
             store: LanceZoteroStore::from_schema(embedding_config, schema.into()),
             config,
+            // Default to empty input (EOF); tests that drive prompts overwrite `ctx.input`.
+            input: Box::new(Cursor::new(Vec::new())),
             out,
             err,
         }
@@ -240,6 +275,89 @@ pub(crate) mod tests {
             Arc::new(store),
             Some(RerankProviderConfig::VoyageAI(config)),
         )
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_dispatch_new_command_resets_conversation_state() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let state_dir = temp_dir.path().to_str().unwrap().to_string();
+
+        temp_env::async_with_vars([("ZQA_STATE_DIR", Some(state_dir.as_str()))], async {
+            let mut ctx = create_test_context();
+            *ctx.state.title.lock().unwrap() = Some("Existing conversation".to_string());
+            ctx.state
+                .chat_history
+                .lock()
+                .unwrap()
+                .push(ChatHistoryItem {
+                    role: MessageRole::User,
+                    content: vec![ChatHistoryContent::Text("Summarize this paper".into())],
+                });
+            ctx.state.dirty.store(true, atomic::Ordering::Relaxed);
+
+            let result = dispatch_command("/new", &mut ctx).await;
+            test_ok!(result);
+            assert!(result.unwrap());
+
+            assert!(!ctx.state.dirty.load(atomic::Ordering::Relaxed));
+            assert!(ctx.state.chat_history.lock().unwrap().is_empty());
+            test_eq!(*ctx.state.title.lock().unwrap(), None);
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_dispatch_resume_command_handles_no_saved_conversations() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let state_dir = temp_dir.path().to_str().unwrap().to_string();
+
+        temp_env::async_with_vars([("ZQA_STATE_DIR", Some(state_dir.as_str()))], async {
+            let mut ctx = create_test_context();
+
+            let result = dispatch_command("/resume", &mut ctx).await;
+            test_ok!(result);
+            assert!(result.unwrap());
+
+            let output = String::from_utf8(ctx.out.into_inner()).unwrap();
+            test_contains!(output, "No saved conversations found.");
+        })
+        .await;
+    }
+
+    #[retry(3)]
+    #[tokio::test(flavor = "multi_thread")]
+    #[serial]
+    async fn test_dispatch_dedup_command() {
+        dotenv::dotenv().ok();
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_uri = temp_dir
+            .path()
+            .join("lancedb-table")
+            .to_str()
+            .unwrap()
+            .to_string();
+
+        temp_env::async_with_vars(
+            [("CI", Some("true")), ("LANCEDB_URI", Some(db_uri.as_str()))],
+            async {
+                let mut ctx = create_test_context();
+
+                let process_result = dispatch_command("/process", &mut ctx).await;
+                test_ok!(process_result);
+                assert!(process_result.unwrap());
+
+                let dedup_result = dispatch_command("/dedup", &mut ctx).await;
+                test_ok!(dedup_result);
+                assert!(dedup_result.unwrap());
+
+                let output = String::from_utf8(ctx.out.into_inner()).unwrap();
+                test_contains!(output, "Deduped ");
+            },
+        )
+        .await;
     }
 
     #[retry(3)]

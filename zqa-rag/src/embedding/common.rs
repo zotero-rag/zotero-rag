@@ -152,6 +152,19 @@ impl EmbeddingProviderConfig {
             Self::ZeroEntropy(c) => &c.embedding_model,
         }
     }
+
+    /// Returns the embedding dimensions.
+    #[must_use]
+    pub fn dims(&self) -> usize {
+        match self {
+            Self::OpenAI(c) => c.embedding_dims,
+            Self::VoyageAI(c) => c.embedding_dims,
+            Self::Gemini(c) => c.embedding_dims,
+            Self::Cohere(c) => c.embedding_dims,
+            Self::Ollama(c) => c.embedding_dims,
+            Self::ZeroEntropy(c) => c.embedding_dims,
+        }
+    }
 }
 
 /// A trait intended to be used for responses from embedding provider APIs. Typically, these APIs
@@ -391,4 +404,65 @@ where
     .map_err(|e| LLMError::GenericLLMError(format!("Failed to create FixedSizeListArray: {e}")))?;
 
     Ok(Arc::new(list_array) as Arc<dyn arrow_array::Array>)
+}
+
+/// Public-facing embedding request struct for batch embedding providers. Each
+/// [`BatchEmbeddingProvider`] is expected to convert these to their native formats.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct BatchEmbeddingRequest {
+    /// Embedding inputs
+    pub inputs: Vec<BatchEmbeddingInput>,
+    /// The model to use
+    pub model: String,
+    /// The output dimensions
+    pub dims: usize,
+}
+
+/// Input to the batch API. This struct corresponds to one of the batch's inputs. Usually, providers
+/// expose such functionality by requiring one JSONL line per [`BatchEmbeddingInput`].
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct BatchEmbeddingInput {
+    /// A unique ID for this input.
+    pub id: String,
+    /// The text to embed.
+    pub text: String,
+}
+
+/// A result of a successful embedding batch submission. The contained ID is used to check on the
+/// status of batches.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct BatchSubmission {
+    /// The batch's unique ID.
+    pub batch_id: String,
+    /// The ID of the uploaded file. This is useful to correctly reference batches when actually
+    /// submitting a batch request.
+    pub file_id: String,
+}
+
+/// Results of a completed batch embedding job.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct BatchEmbeddingResults {
+    /// The results for successfully embedded inputs
+    pub succeeded: Vec<BatchEmbeddingResult>,
+    /// Errors for failed inputs
+    pub failed: Vec<BatchEmbeddingError>,
+}
+
+/// A response part containing the result of a successful embedding, when a batch embedding provider
+/// is used.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct BatchEmbeddingResult {
+    /// The ID for this input. Corresponds to the `id` in [`BatchEmbeddingInput`].
+    pub id: String,
+    /// The embedding result
+    pub embedding: Vec<f32>,
+}
+
+/// Description for a failed batch embedding input.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct BatchEmbeddingError {
+    /// The ID for this input. Corresponds to the `id` in [`BatchEmbeddingInput`].
+    pub id: String,
+    /// The error message
+    pub error: String,
 }

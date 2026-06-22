@@ -1,5 +1,8 @@
 //! Factory methods for creating clients based on the provider name.
 
+use std::sync::Arc;
+
+use crate::capabilities::{BatchAPIProvider, BatchJobState};
 use crate::clients::anthropic::AnthropicClient;
 use crate::clients::gemini::GeminiClient;
 use crate::clients::ollama::OllamaClient;
@@ -8,6 +11,9 @@ use crate::clients::openrouter::OpenRouterClient;
 #[cfg(any(test, feature = "mock"))]
 use crate::clients::test::TestClient;
 use crate::config::LLMClientConfig;
+use crate::embedding::common::{BatchEmbeddingRequest, BatchEmbeddingResults, BatchSubmission};
+use crate::embedding::voyage::VoyageAIClient;
+use crate::http_client::ReqwestClient;
 use crate::llm::base::{ApiClient, ChatRequest, ReasoningConfig};
 use crate::llm::errors::LLMError;
 use crate::providers::registry::provider_registry;
@@ -112,4 +118,116 @@ impl ApiClient for LLMClient {
 /// * `LLMError::InvalidProviderError` if the provider is not supported
 pub fn get_client_with_config(config: &LLMClientConfig) -> Result<LLMClient, LLMError> {
     provider_registry().create_llm(config)
+}
+
+/// Enum representing different batch embedding client implementations
+///
+/// `BatchAPIProvider` is not dyn-compatible, so this acts as a hand-rolled vtable.
+#[non_exhaustive]
+pub enum BatchEmbeddingClient {
+    /// Voyage AI batch embedding client
+    VoyageAI(Arc<VoyageAIClient<ReqwestClient>>),
+}
+
+impl BatchAPIProvider for BatchEmbeddingClient {
+    /// Submit a request to the batch embedding API.
+    ///
+    /// # Arguments
+    ///
+    /// * `request` - A [`BatchEmbeddingRequest`] object containing all the texts.
+    ///
+    /// # Returns
+    ///
+    /// Details of the submitted batch if succeeded, or an [`LLMError`].
+    ///
+    /// # Errors
+    ///
+    /// * `LLMError::EnvError` - If the API key is not set, and no config is provided
+    /// * `LLMError::InvalidHeaderError` - If the API key cannot be parsed as a header value
+    /// * `LLMError::TimeoutError` - If the HTTP request times out
+    /// * `LLMError::CredentialError` - If the API returns 401 or 403
+    /// * `LLMError::HttpStatusError` - If the API returns another unsuccessful status code
+    /// * `LLMError::NetworkError` - If a network connectivity error occurs
+    /// * `LLMError::DeserializationError` - If either API response cannot be parsed
+    /// * `LLMError::GenericLLMError` - If the temporary JSONL file cannot be written
+    async fn submit_batch(
+        &self,
+        request: BatchEmbeddingRequest,
+    ) -> Result<BatchSubmission, LLMError> {
+        match self {
+            Self::VoyageAI(client) => client.submit_batch(request).await,
+        }
+    }
+
+    /// Check the status of a submitted batch.
+    ///
+    /// # Arguments
+    ///
+    /// * `batch_id` - The ID of the submitted batch, returned by the provider during submission.
+    ///
+    /// # Returns
+    ///
+    /// The state of the batch job
+    ///
+    /// # Errors
+    ///
+    /// * `LLMError::EnvError` - If no API key was supplied.
+    /// * `LLMError::InvalidHeaderError` - If the API key cannot be parsed as a header value
+    /// * `LLMError::TimeoutError` - If the HTTP request times out
+    /// * `LLMError::CredentialError` - If the API returns 401 or 403
+    /// * `LLMError::HttpStatusError` - If the API returns another unsuccessful status code
+    /// * `LLMError::NetworkError` - If a network connectivity error occurs
+    /// * `LLMError::DeserializationError` - If the response cannot be parsed
+    async fn get_batch_status(&self, batch_id: &str) -> Result<BatchJobState, LLMError> {
+        match self {
+            Self::VoyageAI(client) => client.get_batch_status(batch_id).await,
+        }
+    }
+
+    /// Attempt to fetch the results of a submitted batch job.
+    ///
+    /// # Arguments
+    ///
+    /// * `batch_id` - The ID of the submitted batch, returned by the provider during submission.
+    ///
+    /// # Returns
+    ///
+    /// The results of the batch, including successes and failures.
+    ///
+    /// # Errors
+    ///
+    /// * `LLMError::BatchNotCompleted` - If the batch has not yet reached [`BatchJobState::Completed`] or [`BatchJobState::Failed`]
+    /// * `LLMError::EnvError` - If an API key is not set up
+    /// * `LLMError::InvalidHeaderError` - If the API key cannot be parsed as a header value
+    /// * `LLMError::TimeoutError` - If the HTTP request times out
+    /// * `LLMError::CredentialError` - If the API returns 401 or 403
+    /// * `LLMError::HttpStatusError` - If the API returns another unsuccessful status code
+    /// * `LLMError::NetworkError` - If a network connectivity error occurs
+    /// * `LLMError::DeserializationError` - If the response cannot be parsed
+    /// * `LLMError::GenericLLMError` - If a temporary file cannot be written
+    async fn get_batch_results(&self, batch_id: &str) -> Result<BatchEmbeddingResults, LLMError> {
+        match self {
+            Self::VoyageAI(client) => client.get_batch_results(batch_id).await,
+        }
+    }
+
+    /// Cancel the batch job given its (provider) id.
+    ///
+    /// # Arguments
+    ///
+    /// * `batch_id` - The batch id from the provider
+    ///
+    /// # Errors
+    ///
+    /// * `LLMError::EnvError` - If an API key is not set up
+    /// * `LLMError::InvalidHeaderError` - If the API key cannot be parsed as a header value
+    /// * `LLMError::TimeoutError` - If the HTTP request times out
+    /// * `LLMError::CredentialError` - If the API returns 401 or 403
+    /// * `LLMError::HttpStatusError` - If the API returns another unsuccessful status code
+    /// * `LLMError::NetworkError` - If a network connectivity error occurs
+    async fn cancel_batch(&self, batch_id: &str) -> Result<(), LLMError> {
+        match self {
+            Self::VoyageAI(client) => client.cancel_batch(batch_id).await,
+        }
+    }
 }

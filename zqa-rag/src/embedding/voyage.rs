@@ -10,6 +10,10 @@ use reqwest::multipart::Form;
 use serde::{Deserialize, Serialize};
 use serde_jsonlines::{json_lines, write_json_lines};
 
+use crate::embedding::common::{
+    BatchEmbeddingError, BatchEmbeddingRequest, BatchEmbeddingResult, BatchEmbeddingResults,
+    BatchSubmission,
+};
 use crate::http_client::{HttpClient, ReqwestClient};
 use crate::llm::errors::LLMError;
 use crate::{
@@ -20,7 +24,7 @@ use crate::{
 
 /// A client for Voyage AI's embedding API.
 #[derive(Debug, Clone)]
-pub(crate) struct VoyageAIClient<T: HttpClient = ReqwestClient> {
+pub struct VoyageAIClient<T: HttpClient = ReqwestClient> {
     /// The HTTP client. The generic parameter allows for mocking in tests.
     pub(crate) client: T,
     /// Optional configuration for the VoyageAI client.
@@ -128,8 +132,8 @@ where
 /// A request to Voyage AI's embedding endpoint.
 #[derive(Serialize, Debug, Deserialize)]
 struct VoyageAIRequest {
-    pub input: Vec<String>,
-    pub model: String,
+    input: Vec<String>,
+    model: String,
     input_type: Option<String>,
     truncation: bool,
     output_dimension: u32,
@@ -171,7 +175,7 @@ struct VoyageAISuccess {
 #[derive(Serialize, Deserialize, Debug)]
 struct VoyageAIError {
     /// Error detail. This has the same format as Pydantic validation errors.
-    pub detail: String,
+    detail: String,
 }
 
 /// A response from the Voyage AI API
@@ -292,7 +296,6 @@ pub(crate) struct VoyageAIFilesRequest {
 
 /// A response from the Voyage AI Files API.
 #[derive(Deserialize, Serialize, Clone)]
-#[allow(dead_code)]
 pub(crate) struct VoyageAIFilesResponse {
     /// The file ID, used to refer to input, output, and error files. This starts with "file-".
     pub(crate) id: String,
@@ -313,6 +316,16 @@ pub(crate) struct VoyageAIBatchRequestParams<'a> {
     output_dimension: usize,
 }
 
+impl From<BatchEmbeddingRequest> for VoyageAIBatchRequestParams<'_> {
+    fn from(value: BatchEmbeddingRequest) -> Self {
+        Self {
+            model: value.model,
+            input_type: "document",
+            output_dimension: value.dims,
+        }
+    }
+}
+
 impl Default for VoyageAIBatchRequestParams<'_> {
     fn default() -> Self {
         Self {
@@ -326,23 +339,13 @@ impl Default for VoyageAIBatchRequestParams<'_> {
 /// A response from the Voyage AI Batch API (POST /v1/batches). This is distinct from
 /// [`VoyageAIFilesResponse`], which is returned by the Files API.
 #[derive(Deserialize, Serialize, Clone)]
-#[allow(dead_code)]
 pub(crate) struct VoyageAIBatchCreateResponse {
     /// The batch ID, used to check status and retrieve results.
     pub(crate) id: String,
 }
 
-/// A request to the Voyage AI Batch API. This assumes a call to the Files API has been made,
-/// uploading the JSONL file in the right format.
-///
-/// # Construction example
-///
-/// ```ignore
-/// # use zqa_rag::embedding::voyage::VoyageAIBatchRequest;
-///
-/// let request = VoyageAIBatchRequest::default()
-///     .with_file_id("file-123");
-/// ```
+/// A batch creation request to the Voyage AI Batch API. This assumes a call to the Files API
+/// has been made, uploading the JSONL file in the right format.
 #[derive(Serialize)]
 pub(crate) struct VoyageAIBatchRequest<'a> {
     /// The Voyage AI embedding endpoint. Defaults to "/v1/embeddings".
@@ -353,29 +356,6 @@ pub(crate) struct VoyageAIBatchRequest<'a> {
     request_params: VoyageAIBatchRequestParams<'a>,
     /// The file ID of the uploaded file.
     input_file_id: String,
-}
-
-impl VoyageAIBatchRequest<'_> {
-    /// Add a file ID to the current batch request.
-    #[must_use]
-    pub(crate) fn with_file_id(mut self, file_id: &str) -> Self {
-        self.input_file_id = file_id.into();
-
-        self
-    }
-
-    /// Build a batch request using values from the provided config.
-    #[must_use]
-    pub(crate) fn from_config(config: &crate::config::VoyageAIConfig) -> Self {
-        Self {
-            request_params: VoyageAIBatchRequestParams {
-                model: config.embedding_model.clone(),
-                output_dimension: config.embedding_dims,
-                ..VoyageAIBatchRequestParams::default()
-            },
-            ..Default::default()
-        }
-    }
 }
 
 impl<'a> Default for VoyageAIBatchRequest<'a> {
@@ -421,7 +401,6 @@ impl From<VoyageAIBatchStatus> for BatchJobState {
 
 /// A response to a request checking the status of a batch.
 #[derive(Deserialize, Serialize, Clone)]
-#[allow(dead_code)]
 pub(crate) struct VoyageAIBatchStatusResponse {
     /// The batch ID.
     id: String,
@@ -447,25 +426,61 @@ pub(crate) struct VoyageAIBatchStatusResponse {
 
 /// The `response` field of the response from the Batch API.
 #[derive(Debug, Deserialize)]
-#[allow(dead_code)]
 pub(crate) struct VoyageAIBatchResultResponse {
-    /// The HTTP status code from the embedding endpoint
-    status_code: u16,
-    /// The embeddings
+    /// The embeddings.
     body: VoyageAISuccess,
 }
 
 /// The response from the Batch API. This is not to be confused as the *raw* output from the Batch
 /// API, but the result of calling the *Files API* using the `file_id` obtained from the Batch API.
+/// Moreover, this JSONL structure is only contained in the output file, and not errors. For the
+/// structure of the lines in the error file, see [`VoyageAIBatchError`].
 #[derive(Debug, Deserialize)]
-#[allow(dead_code)]
 pub(crate) struct VoyageAIBatchResult {
-    /// The ID of the batch containing this result
-    batch_id: String,
     /// The `custom_id` field of this result
     custom_id: String,
     /// Embeddings and metadata
     response: VoyageAIBatchResultResponse,
+}
+
+/// Error details in the JSONL returned by the Files API, when checking the batch status.
+///
+/// See: [https://docs.voyageai.com/docs/batch-inference#batch-errors]
+#[derive(Debug, Deserialize)]
+pub(crate) struct VoyageAIBatchErrorDetails {
+    /// An error message
+    message: String,
+}
+
+/// The contents of the file containing error details if some batches fail. This is not the return
+/// type of the Batch API itself; it is the response from the Files API.
+///
+/// See: [https://docs.voyageai.com/docs/batch-inference#batch-errors]
+#[derive(Debug, Deserialize)]
+pub(crate) struct VoyageAIBatchError {
+    custom_id: String,
+    error: VoyageAIBatchErrorDetails,
+}
+
+impl From<VoyageAIBatchError> for BatchEmbeddingError {
+    fn from(value: VoyageAIBatchError) -> Self {
+        Self {
+            id: value.custom_id,
+            error: value.error.message,
+        }
+    }
+}
+
+/// Returns the response body as text, or an [`LLMError::HttpStatusError`] carrying the body if the
+/// HTTP status is not a success. The Voyage batch methods below don't use reqwest's
+/// `error_for_status`, so we check explicitly here to surface clear failures instead of an opaque
+/// deserialization error when the API returns a non-2xx response.
+async fn body_or_status_error(res: reqwest::Response, context: &str) -> Result<String, LLMError> {
+    if !res.status().is_success() {
+        let body = res.text().await.unwrap_or_default();
+        return Err(LLMError::HttpStatusError(format!("{context}: {body}")));
+    }
+    Ok(res.text().await?)
 }
 
 impl<T> VoyageAIClient<T>
@@ -500,7 +515,8 @@ where
         headers.insert("Content-Type", "application/json".parse()?);
 
         let res = self.client.get_json(files_api_url, headers).await?;
-        let body = res.text().await?;
+        let body = body_or_status_error(res, &format!("Failed to get status for batch {batch_id}"))
+            .await?;
         let response: VoyageAIBatchStatusResponse = serde_json::from_str(&body).map_err(|e| {
             log::warn!("Error deserializing Voyage AI batch status response: {e}");
             LLMError::DeserializationError(e.to_string())
@@ -523,7 +539,10 @@ where
     /// * `LLMError::HttpStatusError` - If the API returns another unsuccessful status code
     /// * `LLMError::NetworkError` - If a network connectivity error occurs
     /// * `LLMError::GenericLLMError` - If the temporary file cannot be written
-    async fn get_file(&self, file_id: &str) -> Result<Vec<VoyageAIBatchResult>, LLMError> {
+    async fn get_file<U>(&self, file_id: &str) -> Result<Vec<U>, LLMError>
+    where
+        U: for<'a> Deserialize<'a> + Send + 'static,
+    {
         let files_api_url = &format!("https://api.voyageai.com/v1/files/{file_id}");
 
         let api_key = if let Some(ref config) = self.config {
@@ -537,14 +556,14 @@ where
         headers.insert("Content-Type", "application/json".parse()?);
 
         let res = self.client.get_json(files_api_url, headers).await?;
-        let body = res.text().await?;
+        let body = body_or_status_error(res, &format!("Failed to download file {file_id}")).await?;
 
         let tmp_file = tempfile::NamedTempFile::new()?;
         tokio::fs::write(tmp_file.path(), body).await?;
 
         tokio::task::spawn_blocking(move || {
             Ok::<_, LLMError>(
-                json_lines::<VoyageAIBatchResult, _>(tmp_file)?
+                json_lines::<U, _>(tmp_file)?
                     .filter_map(std::result::Result::ok)
                     .collect::<Vec<_>>(),
             )
@@ -558,13 +577,6 @@ impl<T> BatchAPIProvider for VoyageAIClient<T>
 where
     T: HttpClient,
 {
-    type BatchInput = Vec<VoyageAIFilesRequest>;
-    type BatchSubmitResponse = VoyageAIBatchCreateResponse;
-    type BatchResults = (
-        Option<Vec<VoyageAIBatchResult>>,
-        Option<Vec<VoyageAIBatchResult>>,
-    );
-
     /// Submits a batch embedding job to the Voyage AI Batch API.
     ///
     /// This is a two-step process:
@@ -586,13 +598,24 @@ where
     /// * `LLMError::GenericLLMError` - If the temporary JSONL file cannot be written
     async fn submit_batch(
         &self,
-        request: Self::BatchInput,
-    ) -> Result<Self::BatchSubmitResponse, LLMError> {
+        request: BatchEmbeddingRequest,
+    ) -> Result<BatchSubmission, LLMError> {
         // Part 1 - use the Files API to upload a JSONL file
         const FILES_API_URL: &str = "https://api.voyageai.com/v1/files";
 
+        let inputs = request
+            .inputs
+            .iter()
+            .map(|v| VoyageAIFilesRequest {
+                custom_id: v.id.clone(),
+                body: VoyageAIFilesRequestBody {
+                    input: vec![v.text.clone()],
+                },
+            })
+            .collect::<Vec<_>>();
+
         let tmp_file = tempfile::NamedTempFile::new()?;
-        write_json_lines(&tmp_file, &request)?;
+        write_json_lines(&tmp_file, &inputs)?;
 
         let api_key = if let Some(ref config) = self.config {
             config.api_key.clone()
@@ -613,7 +636,7 @@ where
             .post_form(FILES_API_URL, headers.clone(), form_data)
             .await?;
 
-        let response = res.text().await?;
+        let response = body_or_status_error(res, "Failed to upload batch input file").await?;
         let response: VoyageAIFilesResponse = serde_json::from_str(&response).map_err(|e| {
             log::warn!("Error deserializing Voyage AI Files API response: {e}");
             LLMError::DeserializationError(e.to_string())
@@ -623,10 +646,11 @@ where
         const BATCH_API_URL: &str = "https://api.voyageai.com/v1/batches";
 
         let file_id = &response.id;
-        let batch_request = if let Some(ref config) = self.config {
-            VoyageAIBatchRequest::from_config(config).with_file_id(file_id)
-        } else {
-            VoyageAIBatchRequest::default().with_file_id(file_id)
+        let params = VoyageAIBatchRequestParams::from(request);
+        let batch_request = VoyageAIBatchRequest {
+            input_file_id: file_id.clone(),
+            request_params: params,
+            ..Default::default()
         };
 
         let res = self
@@ -634,14 +658,17 @@ where
             .post_json(BATCH_API_URL, headers, &batch_request)
             .await?;
 
-        let response = res.text().await?;
+        let response = body_or_status_error(res, "Failed to create batch").await?;
         let response: VoyageAIBatchCreateResponse =
             serde_json::from_str(&response).map_err(|e| {
                 log::warn!("Error deserializing Voyage AI Batch API response: {e}");
                 LLMError::DeserializationError(e.to_string())
             })?;
 
-        Ok(response)
+        Ok(BatchSubmission {
+            batch_id: response.id,
+            file_id: file_id.clone(),
+        })
     }
 
     /// Returns the current [`BatchJobState`] for the given batch ID.
@@ -654,6 +681,42 @@ where
         Ok(response.status.into())
     }
 
+    /// Cancel the batch job given its (provider) id.
+    ///
+    /// # Arguments
+    ///
+    /// * `batch_id` - The batch id from the provider
+    ///
+    /// # Errors
+    ///
+    /// * `LLMError::EnvError` - If an API key is not set up
+    /// * `LLMError::InvalidHeaderError` - If the API key cannot be parsed as a header value
+    /// * `LLMError::TimeoutError` - If the HTTP request times out
+    /// * `LLMError::CredentialError` - If the API returns 401 or 403
+    /// * `LLMError::HttpStatusError` - If the API returns another unsuccessful status code
+    /// * `LLMError::NetworkError` - If a network connectivity error occurs
+    async fn cancel_batch(&self, batch_id: &str) -> Result<(), LLMError> {
+        const BATCH_API_URL: &str = "https://api.voyageai.com/v1/batches";
+
+        let api_key = if let Some(ref config) = self.config {
+            config.api_key.clone()
+        } else {
+            env::var("VOYAGE_AI_API_KEY")?
+        };
+
+        let mut headers = HeaderMap::new();
+        headers.insert("Authorization", format!("Bearer {api_key}").parse()?);
+
+        let res = self
+            .client
+            .post_empty(&format!("{BATCH_API_URL}/{batch_id}/cancel"), headers)
+            .await?;
+
+        body_or_status_error(res, &format!("Failed to cancel batch {batch_id}")).await?;
+
+        Ok(())
+    }
+
     /// Retrieves the results of a completed or failed batch job.
     ///
     /// Returns a tuple of `(successful_results, error_results)`. Each element is `None` if the
@@ -664,24 +727,53 @@ where
     ///
     /// * `LLMError::BatchNotCompleted` - If the batch has not yet reached `Completed` or `Failed`
     /// * All errors from [`VoyageAIClient::get_batch_status`] and [`VoyageAIClient::get_file`]
-    async fn get_batch_results(&self, batch_id: &str) -> Result<Self::BatchResults, LLMError> {
+    async fn get_batch_results(&self, batch_id: &str) -> Result<BatchEmbeddingResults, LLMError> {
         let response = self.get_batch_status(batch_id).await?;
 
         match response.status {
             VoyageAIBatchStatus::Completed | VoyageAIBatchStatus::Failed => {
                 let results = if let Some(output_file_id) = response.output_file_id {
-                    Some(self.get_file(&output_file_id).await?)
+                    self.get_file::<VoyageAIBatchResult>(&output_file_id)
+                        .await?
                 } else {
-                    None
+                    Vec::new()
                 };
 
                 let errors = if let Some(err_file_id) = response.error_file_id {
-                    Some(self.get_file(&err_file_id).await?)
+                    self.get_file::<VoyageAIBatchError>(&err_file_id).await?
                 } else {
-                    None
+                    Vec::new()
                 };
 
-                Ok((results, errors))
+                let success = results
+                    .into_iter()
+                    .map(|line| {
+                        // `line` corresponds to the results for each JSONL input line. The inputs
+                        // look like this:
+                        //
+                        // ```json
+                        // {"custom_id": "request_1", "body": {"input": ["Sample text 1", "Sample text 2"]}}
+                        // ```
+                        BatchEmbeddingResult {
+                            id: line.custom_id,
+                            // Strictly speaking, this isn't true to the API spec; but callers of
+                            // this crate can only access [`super::common::BatchEmbeddingInput`],
+                            // which has a 1:1 relationship between each input line and input texts.
+                            embedding: line
+                                .response
+                                .body
+                                .data
+                                .first()
+                                .map(|v| v.embedding.clone())
+                                .unwrap_or_default(),
+                        }
+                    })
+                    .collect();
+
+                Ok(BatchEmbeddingResults {
+                    succeeded: success,
+                    failed: errors.into_iter().map(Into::into).collect(),
+                })
             }
             _ => Err(LLMError::BatchNotCompleted(batch_id.into())),
         }
@@ -698,7 +790,9 @@ mod tests {
 
     use super::*;
     use crate::capabilities::{BatchAPIProvider, BatchJobState};
+    use crate::config::VoyageAIConfig;
     use crate::constants::{DEFAULT_VOYAGE_EMBEDDING_DIM, DEFAULT_VOYAGE_EMBEDDING_MODEL};
+    use crate::embedding::common::BatchEmbeddingInput;
     use crate::http_client::{MockHttpClient, ReqwestClient};
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
@@ -766,6 +860,23 @@ mod tests {
     fn test_batch_status_cancelled_maps_to_canceled() {
         let state: BatchJobState = VoyageAIBatchStatus::Cancelled.into();
         test_eq!(state, BatchJobState::Canceled);
+    }
+
+    #[tokio::test]
+    async fn test_cancel_batch_success() {
+        let config = VoyageAIConfig {
+            api_key: "test-key".into(),
+            embedding_model: DEFAULT_VOYAGE_EMBEDDING_MODEL.into(),
+            embedding_dims: DEFAULT_VOYAGE_EMBEDDING_DIM as usize,
+            reranker: "rerank-2.5".into(),
+        };
+        let client = VoyageAIClient {
+            client: MockHttpClient::new(()),
+            config: Some(config),
+        };
+
+        let result = client.cancel_batch("batch-xyz").await;
+        test_ok!(result);
     }
 
     /// `get_batch_status` deserializes a `VoyageAIBatchStatusResponse` and converts the status
@@ -872,25 +983,25 @@ mod tests {
 
         let client = VoyageAIClient::<ReqwestClient>::default();
 
-        let request = vec![
-            VoyageAIFilesRequest {
-                custom_id: "live-req-1".to_string(),
-                body: VoyageAIFilesRequestBody {
-                    input: vec!["Hello, World!".to_string(), "A second string".to_string()],
+        let request = BatchEmbeddingRequest {
+            inputs: vec![
+                BatchEmbeddingInput {
+                    id: "live-req-1".into(),
+                    text: "Hello, World!".into(),
                 },
-            },
-            VoyageAIFilesRequest {
-                custom_id: "live-req-2".to_string(),
-                body: VoyageAIFilesRequestBody {
-                    input: vec!["A third string".to_string()],
+                BatchEmbeddingInput {
+                    id: "live-req-2".into(),
+                    text: "A second string".into(),
                 },
-            },
-        ];
+            ],
+            model: DEFAULT_VOYAGE_EMBEDDING_MODEL.into(),
+            dims: DEFAULT_VOYAGE_EMBEDDING_DIM as usize,
+        };
 
         let submit_result = client.submit_batch(request).await;
         test_ok!(submit_result);
 
-        let batch_id = submit_result.unwrap().id;
+        let batch_id = submit_result.unwrap().batch_id;
 
         let status_result = BatchAPIProvider::get_batch_status(&client, &batch_id).await;
         test_ok!(status_result);

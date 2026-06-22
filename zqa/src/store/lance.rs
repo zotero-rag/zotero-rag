@@ -59,8 +59,9 @@ impl LanceZoteroStore {
     }
 
     /// Create a Lance-backed Zotero store from an embedding configuration.
-    pub async fn from_embedding_config(embedding_config: EmbeddingProviderConfig) -> Self {
-        let schema = Arc::new(get_schema(embedding_config.provider(), true).await);
+    #[must_use]
+    pub fn from_embedding_config(embedding_config: EmbeddingProviderConfig) -> Self {
+        let schema = Arc::new(get_schema(embedding_config.provider(), true));
         Self::from_schema(embedding_config, schema)
     }
 
@@ -69,12 +70,12 @@ impl LanceZoteroStore {
     /// # Errors
     ///
     /// Returns a [`CLIError`] if no embedding configuration is available.
-    pub(crate) async fn from_config(config: &Config) -> Result<Self, CLIError> {
+    pub(crate) fn from_config(config: &Config) -> Result<Self, CLIError> {
         let embedding_config = config.get_embedding_config().ok_or(CLIError::ConfigError(
             "Could not get embedding config".into(),
         ))?;
 
-        Ok(Self::from_embedding_config(embedding_config).await)
+        Ok(Self::from_embedding_config(embedding_config))
     }
 
     /// Upsert Arrow record batches into the LanceDB table by Zotero library key.
@@ -236,8 +237,7 @@ impl ZoteroStore for LanceZoteroStore {
     /// Returns a [`CLIError`] if the upsert fails.
     async fn upsert_items(&self, items: Vec<ZoteroItem>) -> Result<(), Self::StoreError> {
         let include_embeddings = self.exists().await;
-        let batch =
-            library_to_arrow(items, self.embedding_config.clone(), include_embeddings).await?;
+        let batch = library_to_arrow(&items, &self.embedding_config, include_embeddings)?;
         self.upsert_batches(vec![batch]).await
     }
 

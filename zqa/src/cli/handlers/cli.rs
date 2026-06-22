@@ -103,54 +103,90 @@ where
     O: Write,
     E: Write,
 {
+    writeln!(&mut ctx.out, "Basic usage:")?;
+    writeln!(
+        &mut ctx.out,
+        "- If you haven't already done so, you should run `/process` or `/batch create` to set up an embedding database."
+    )?;
+    writeln!(
+        &mut ctx.out,
+        "- Type in a question to ask your configured model, grounded in your Zotero library."
+    )?;
+    writeln!(
+        &mut ctx.out,
+        "- Use @ to include a PDF file in your current directory in the conversation."
+    )?;
     writeln!(&mut ctx.out)?;
     writeln!(&mut ctx.out, "Available commands:\n")?;
-    writeln!(&mut ctx.out, "/help\t\tShow this help message")?;
+    writeln!(&mut ctx.out, "/help\t\t\tShow this help message")?;
+    writeln!(&mut ctx.out)?;
+    writeln!(&mut ctx.out, "Common commands:")?;
     writeln!(
         &mut ctx.out,
-        "/process\tPre-process Zotero library. Use to update the database."
+        "/process\t\tPre-process Zotero library. Use this to update the database."
     )?;
     writeln!(
         &mut ctx.out,
-        "/docs clear\tClear all documents in this session."
+        "/search\t\t\tSearch for papers without summarizing them. Usage: /search <query>"
     )?;
     writeln!(
         &mut ctx.out,
-        "/docs list\tList all documents in this session."
+        "/config\t\t\tShow the currently used configuration."
+    )?;
+    writeln!(
+        &mut ctx.out,
+        "/new\t\t\tSave the current conversation and switch to a new one."
+    )?;
+    writeln!(&mut ctx.out, "/resume\t\t\tResume a previous conversation.")?;
+    writeln!(&mut ctx.out, "/index\t\t\tCreate or update indices.")?;
+    writeln!(
+        &mut ctx.out,
+        "/quit\t\t\tExit the program. You can also use Ctrl+C or just type 'quit'."
+    )?;
+    writeln!(&mut ctx.out)?;
+    writeln!(&mut ctx.out, "Batch API commands:")?;
+    writeln!(
+        &mut ctx.out,
+        "/batch create\t\tPre-process Zotero library, but use a batch embedding API instead."
+    )?;
+    writeln!(
+        &mut ctx.out,
+        "/batch check\t\tCheck on the status of a submitted batch."
+    )?;
+    writeln!(
+        &mut ctx.out,
+        "/batch cancel <id>\t\tCancel a pending batch."
+    )?;
+    writeln!(&mut ctx.out)?;
+    writeln!(&mut ctx.out, "Session document commands:")?;
+    writeln!(
+        &mut ctx.out,
+        "/docs clear\t\tClear all documents in this session."
+    )?;
+    writeln!(
+        &mut ctx.out,
+        "/docs list\t\tList all documents in this session."
     )?;
     writeln!(
         &mut ctx.out,
         "/docs remove <key>\tRemove a document with a specified key from the session."
     )?;
+    writeln!(&mut ctx.out)?;
+    writeln!(&mut ctx.out, "Repair and troubleshooting commands:")?;
     writeln!(
         &mut ctx.out,
-        "/embed\t\tRepair failed DB creation by re-adding embeddings."
+        "/embed\t\t\tRepair failed DB creation by re-adding embeddings."
     )?;
     writeln!(
         &mut ctx.out,
-        "/search\t\tSearch for papers without summarizing them. Usage: /search <query>"
+        "/checkhealth\t\tRun health checks on your LanceDB."
     )?;
     writeln!(
         &mut ctx.out,
-        "/config\t\tShow the currently used configuration."
+        "/doctor\t\t\tAttempt to fix issues spotted by /checkhealth."
     )?;
-    writeln!(
-        &mut ctx.out,
-        "/new\t\tSave the current conversation and switch to a new one."
-    )?;
-    writeln!(&mut ctx.out, "/resume\t\tResume a previous conversation.")?;
-    writeln!(&mut ctx.out, "/index\t\tCreate or update indices.")?;
-    writeln!(
-        &mut ctx.out,
-        "/checkhealth\tRun health checks on your LanceDB."
-    )?;
-    writeln!(
-        &mut ctx.out,
-        "/doctor\t\tAttempt to fix issues spotted by /checkhealth."
-    )?;
-    writeln!(&mut ctx.out, "/stats\t\tShow table statistics.")?;
-    writeln!(&mut ctx.out, "/dedup\t\tRemove duplicate items.")?;
-    writeln!(&mut ctx.out, "/quit\t\tExit the program")?;
+    writeln!(&mut ctx.out, "/stats\t\t\tShow table statistics.")?;
+    writeln!(&mut ctx.out, "/dedup\t\t\tRemove duplicate items.")?;
     writeln!(&mut ctx.out)?;
     Ok(())
 }
@@ -180,5 +216,10 @@ mod tests {
         test_contains!(output, "/config");
         test_contains!(output, "/new");
         test_contains!(output, "/quit");
+        test_contains!(output, "/docs clear");
+        test_contains!(output, "/docs remove");
+        test_contains!(output, "/docs list");
+        test_contains!(output, "/batch check");
+        test_contains!(output, "/batch create");
     }
 }

@@ -1,0 +1,111 @@
+# cargo-deny configuration for zotero-rag-rs.
+#
+# Run locally with `cargo deny check`. See
+# https://embarkstudios.github.io/cargo-deny/ for the full reference.
+
+# This is inspired by https://github.com/lancedb/lancedb/blob/main/deny.toml
+
+# The set of target triples we care about. cargo-deny will only consider
+# dependencies that are used on at least one of these targets. These mirror
+# the platforms built and tested in CI (.github/workflows/build.yml), so the
+# check stays in sync with what we actually ship. Keeping this explicit
+# avoids noise from platform-specific crates (e.g. wasm, android, ios) that
+# we never build for.
+[graph]
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "aarch64-apple-darwin",
+]
+all-features = true
+
+[output]
+feature-depth = 1
+
+[advisories]
+# Fail the check if any crate in the lockfile has been yanked from crates.io.
+# Yanked crates are a signal the author retracted the release (often due to
+# bugs or security issues) and should not be depended on.
+yanked = "deny"
+
+# Advisory IDs we have explicitly reviewed and chosen to accept. Every entry
+# must include a rationale. None of these are exploitable vulnerabilities —
+# they are all "unmaintained" notices for transitive crates we don't control.
+# Revisit this list whenever dependencies are updated.
+ignore = [
+    # dotenv: unmaintained (author archived the repo). We use it directly in
+    # zqa / zqa-rag to load API keys from a local .env during development.
+    # No security impact; the maintained drop-in replacement is `dotenvy` if
+    # we choose to migrate later.
+    # https://rustsec.org/advisories/RUSTSEC-2021-0141
+    { id = "RUSTSEC-2021-0141", reason = "dotenv unmaintained; used only to load a local .env in dev, no security impact" },
+
+    # paste: unmaintained (author archived the repo). Pulled in transitively
+    # by datafusion-common via the lance / lancedb stack; widespread in the
+    # arrow ecosystem with no drop-in replacement.
+    # https://rustsec.org/advisories/RUSTSEC-2024-0436
+    { id = "RUSTSEC-2024-0436", reason = "transitive via datafusion/lance; awaiting ecosystem migration" },
+]
+
+[licenses]
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    # Unicode-3.0 covers the ICU / unicode-* crates pulled in via the idna
+    # and tokenization stacks.
+    "Unicode-3.0",
+    # 0BSD ("BSD Zero Clause") is effectively public domain — no attribution
+    # required.
+    "0BSD",
+    # Boost Software License — permissive, MIT-compatible.
+    "BSL-1.0",
+    # MPL-2.0 is file-level copyleft; safe to depend on as an unmodified
+    # upstream crate.
+    "MPL-2.0",
+    "Zlib",
+]
+confidence-threshold = 0.8
+
+[bans]
+# Warn (not deny) on duplicate versions of the same crate. The datafusion /
+# lance / arrow stack legitimately pulls in many duplicates transitively, so
+# we surface them to discourage growth but don't fail CI.
+multiple-versions = "warn"
+
+# Wildcard version requirements (`foo = "*"`) are a footgun — they let any
+# future release in without review. Ban them outright.
+wildcards = "deny"
+
+# Internal workspace crates reference each other via `path = "..."`, which
+# cargo-deny sees as a wildcard version. That's fine for private workspace
+# members, so allow it specifically for paths.
+allow-wildcard-paths = true
+
+# Crates we refuse to depend on directly. We use `thiserror` for typed,
+# explicit error handling throughout the workspace; `anyhow`'s type-erased
+# errors are not appropriate for a library. `anyhow` is still allowed when it
+# arrives transitively through `prost-derive` (a build-time proc-macro in the
+# lance protobuf stack), which we don't control.
+deny = [
+    { crate = "anyhow", wrappers = ["prost-derive"], reason = "prefer thiserror for typed errors; anyhow only tolerated transitively via prost-derive" },
+]
+
+# Crates to skip when checking for duplicate versions.
+skip = []
+
+# Similar to `skip`, but also skips the entire transitive subtree.
+skip-tree = []
+
+[sources]
+# Deny any registry other than the ones explicitly listed below.
+unknown-registry = "deny"
+
+# Deny any git dependency whose host isn't in the allow-list below. We
+# currently have no git dependencies, so any that appear should be reviewed.
+unknown-git = "deny"
+
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

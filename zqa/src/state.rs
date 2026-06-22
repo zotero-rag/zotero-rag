@@ -15,6 +15,7 @@ use zqa_rag::{
 };
 
 use crate::config::{BaseDirError, Config, get_config_dir};
+use crate::utils::terminal::{read_char, read_number, read_password};
 
 /// ANSI escape code for dimming text
 const DIM_TEXT: &str = "\x1b[2m";
@@ -24,7 +25,7 @@ const RESET: &str = "\x1b[0m";
 
 /// Errors that can occur when interacting with the state directory.
 #[derive(PartialEq, Debug, Error)]
-pub(crate) enum StateError {
+pub enum StateError {
     #[error("Failed to get home directory.")]
     DirectoryError,
     #[error("Failed to save first run information.")]
@@ -182,78 +183,6 @@ pub(crate) fn check_or_create_first_run_file() -> Result<bool, StateError> {
     }
 }
 
-/// Read a line of input.
-fn read_line<R: BufRead>(reader: &mut R) -> String {
-    let mut input = String::new();
-    reader.read_line(&mut input).expect("Failed to read input");
-
-    input
-}
-
-/// Read a password from standard input.
-fn read_password<R: BufRead>(reader: &mut R, is_terminal: bool) -> Result<String, StateError> {
-    if is_terminal {
-        rpassword::read_password().map_err(|e| StateError::PasswordReadError(e.to_string()))
-    } else {
-        Ok(read_line(reader))
-    }
-}
-
-/// Read a character from standard input and return it, handling Enter as a default.
-///
-/// # Arguments:
-///
-/// * `reader` - The input reader.
-/// * `default` - The default if Enter is pressed.
-/// * `valid_set` - The valid set of characters.
-fn read_char<R: BufRead>(reader: &mut R, default: char, valid_set: &[char]) -> char {
-    loop {
-        print!("> ");
-        let input = read_line(reader);
-        let choice = input.chars().next().unwrap_or(default).to_ascii_lowercase();
-
-        if valid_set.contains(&choice) {
-            return choice;
-        }
-
-        if choice == '\n' {
-            return default;
-        }
-    }
-}
-
-/// Read an integer from standard input, and validate that it is within bounds.
-///
-/// # Arguments:
-///
-/// * `reader` - The input reader.
-/// * `default` - The default value if Enter is pressed.
-/// * `bounds` - Lower and upper bounds to accept. Lower bound is inclusive, upper is exclusive.
-fn read_number<R: BufRead>(reader: &mut R, default: u8, bounds: (u8, u8)) -> u8 {
-    loop {
-        print!("> ");
-        let input = read_line(reader);
-        let input = input.trim();
-        if input.is_empty() {
-            return default;
-        }
-
-        let choice = input.parse::<u8>();
-
-        match choice {
-            Ok(num) => {
-                if bounds.0 <= num && num < bounds.1 {
-                    return num;
-                }
-                println!("Choice must be in [{}, {}).", bounds.0, bounds.1);
-            }
-            Err(_) => {
-                println!("Choice must be in [{}, {}).", bounds.0, bounds.1);
-            }
-        }
-    }
-}
-
 /// Set up the out-of-box experience (OOBE) for the application.
 ///
 /// This function uses reasonable defaults for most config attributes. The goal here is not to be meticulous, but
@@ -375,7 +304,11 @@ pub(crate) fn oobe<R: BufRead>(reader: &mut R, is_terminal: bool) -> Result<(), 
         }
     }
     println!();
-    let reranker_provider = read_char(reader, embedding_provider, &['c', 'v', 'z']);
+    let reranker_default = match embedding_provider {
+        'c' | 'g' | 'o' => 'c', // UI shows [C]ohere as the default for this group
+        other => other,
+    };
+    let reranker_provider = read_char(reader, reranker_default, &['c', 'v', 'z']);
     config.reranker_provider = match reranker_provider {
         'c' => Some(RerankerProvider::Cohere),
         'v' => Some(RerankerProvider::VoyageAI),
@@ -402,7 +335,7 @@ pub(crate) fn oobe<R: BufRead>(reader: &mut R, is_terminal: bool) -> Result<(), 
         "{DIM_TEXT}A higher number can yield faster results, but can also result in being rate-limited. You should check what tier of API you have access to and check the TPM (tokens per minute) limit to make a choice here. As a rough estimate, your TPM limit divided by 150,000 is a somewhat reasonable estimate.{RESET}"
     );
     let max_concurrent_requests = read_number(reader, 5, (1, 20));
-    config.max_concurrent_requests = max_concurrent_requests as usize;
+    config.max_concurrent_requests = max_concurrent_requests;
 
     // We can unwrap the provider configs since we initialized via `Default`, which sets them to a `Some(..)`.
     match model_provider {
@@ -605,16 +538,7 @@ mod tests {
                 // 3. "sk-test-model" (Model API key)
                 // 4. "v" (Embedding provider: Voyage AI)
                 // 5. "sk-test-embedding" (Embedding API key)
-                // 6. "v" (Reranker provider: Voyage AI - same as embedding default choice logic but we pick explicitly or default?)
-                //    Wait, logic says:
-                //    if reranker_provider != embedding_provider { ... }
-                //    We need to select reranker provider.
-                //    "println!("[C]ohere"); println!("[V]oyage AI");"
-                //    read_char(embedding_provider, &['c', 'v'])
-                //    Since embedding is 'v', default is 'v'.
-                //    So we can just press enter (empty line) to accept default 'v'.
-                //    But read_char handles newline as default.
-                //    So let's send "\n".
+                // 6. "\n" (Reranker provider: Voyage AI - same as embedding default choice)
                 // 7. Max concurrent requests: "10"
                 let input_data = "y\na\nsk-test-model\nv\nsk-test-embedding\n\n10\n";
                 let mut cursor = Cursor::new(input_data);

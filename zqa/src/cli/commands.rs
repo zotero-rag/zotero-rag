@@ -1,22 +1,29 @@
 use thiserror::Error;
 
+pub(crate) enum BatchCommand {
+    Cancel(usize),
+    CheckStatus,
+    Create,
+}
+
 pub(crate) enum Command {
-    Help,
+    Batch(BatchCommand),
     CheckHealth,
-    DoNothing,
-    Doctor,
-    Embed { fix: bool },
-    Process,
-    Index,
-    Stats,
-    Dedup,
-    Resume,
     Config,
-    NewConversation,
-    Quit,
+    Dedup,
     Docs(DocsCommand),
-    Search { query: String },
+    Doctor,
+    DoNothing,
+    Embed { fix: bool },
+    Help,
+    Index,
+    NewConversation,
+    Process,
     Query { text: String },
+    Quit,
+    Resume,
+    Search { query: String },
+    Stats,
 }
 
 pub(crate) enum DocsCommand {
@@ -34,19 +41,20 @@ pub(crate) enum CommandParseError {
 pub(crate) fn parse_command(command: &str) -> Result<Command, CommandParseError> {
     match command {
         "" => Ok(Command::DoNothing),
-        "/new" => Ok(Command::NewConversation),
-        "/help" | "help" | "?" => Ok(Command::Help),
         "/checkhealth" => Ok(Command::CheckHealth),
+        "/config" => Ok(Command::Config),
+        "/dedup" => Ok(Command::Dedup),
         "/doctor" => Ok(Command::Doctor),
         "/embed" => Ok(Command::Embed { fix: false }),
-        "/process" => Ok(Command::Process),
+        "/help" | "help" | "?" => Ok(Command::Help),
         "/index" => Ok(Command::Index),
-        "/stats" => Ok(Command::Stats),
-        "/dedup" => Ok(Command::Dedup),
+        "/new" => Ok(Command::NewConversation),
+        "/process" => Ok(Command::Process),
         "/resume" => Ok(Command::Resume),
-        "/config" => Ok(Command::Config),
+        "/stats" => Ok(Command::Stats),
         "/quit" | "/exit" | "quit" | "exit" => Ok(Command::Quit),
         query if query.starts_with('/') => {
+            // Handle commands that take subcommands
             if let Some(search_term) = query.strip_prefix("/search") {
                 let search_term = search_term.trim();
                 if search_term.is_empty() {
@@ -69,6 +77,32 @@ pub(crate) fn parse_command(command: &str) -> Result<Command, CommandParseError>
                 }
 
                 return Ok(Command::Embed { fix: true });
+            }
+
+            if let Some(subcmd) = query.strip_prefix("/batch") {
+                let subcmd = subcmd.trim();
+                let parts: Vec<&str> = subcmd.splitn(2, ' ').collect();
+
+                return match parts[0] {
+                    "cancel" => {
+                        let id = parts
+                            .get(1)
+                            .and_then(|key| key.trim().parse::<usize>().ok());
+
+                        match id {
+                            None => Err(CommandParseError::InvalidCommand(format!(
+                                "Invalid parameter to /batch cancel: '{}', expected a number.",
+                                parts.get(1).copied().unwrap_or("")
+                            ))),
+                            Some(id) => Ok(Command::Batch(BatchCommand::Cancel(id))),
+                        }
+                    }
+                    "check" => Ok(Command::Batch(BatchCommand::CheckStatus)),
+                    "create" => Ok(Command::Batch(BatchCommand::Create)),
+                    _ => Err(CommandParseError::InvalidCommand(format!(
+                        "Invalid subcommand to /batch: {subcmd}"
+                    ))),
+                };
             }
 
             if let Some(subcmd) = query.strip_prefix("/docs") {

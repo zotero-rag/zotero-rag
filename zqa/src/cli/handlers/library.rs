@@ -1,6 +1,5 @@
 //! Command handlers for library-related tasks
 
-use std::io;
 use std::{fs::File, io::Write};
 
 use arrow_array::RecordBatch;
@@ -8,7 +7,7 @@ use arrow_ipc::{reader::FileReader, writer::FileWriter};
 use zqa_rag::vector::checkhealth::lancedb_health_check;
 use zqa_rag::vector::doctor::doctor as rag_doctor;
 
-use crate::utils::terminal::{DIM_TEXT, RESET};
+use crate::utils::terminal::{DIM_TEXT, RESET, read_line};
 use crate::{
     cli::{app::BATCH_ITER_FILE, errors::CLIError},
     common::Context,
@@ -97,9 +96,7 @@ where
         write!(&mut ctx.out, "(/process) >>> ")?;
         ctx.out.flush()?;
 
-        let mut option = String::new();
-        io::stdin().read_line(&mut option)?;
-
+        let option = read_line(&mut ctx.input);
         let option = option.trim().to_lowercase();
         if ["n", "no", "false", "0"].contains(&option.as_str()) {
             return Ok(());
@@ -413,12 +410,8 @@ async fn fix_zero_embeddings<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Res
     }
 
     let include_embeddings = ctx.store.exists().await;
-    let nonempty_zero_subset_batch = library_to_arrow(
-        nonempty_zero_subset,
-        embedding_config.clone(),
-        include_embeddings,
-    )
-    .await?;
+    let nonempty_zero_subset_batch =
+        library_to_arrow(&nonempty_zero_subset, &embedding_config, include_embeddings)?;
 
     let batches = vec![nonempty_zero_subset_batch.clone()];
 

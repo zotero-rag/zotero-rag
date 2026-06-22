@@ -173,8 +173,8 @@ pub(crate) fn get_owned_tools<'a>(
     })
 }
 
-/// A callback function that is passed a reference to a `T`, and is thread-safe and has a `'static`
-/// lifetime.
+/// A callback function that is passed a reference to a passed argument, and is thread-safe and
+/// has a `'static` lifetime.
 pub type CallbackFn<T> = dyn Fn(&T) + Send + Sync + 'static;
 
 /// Process tool calls in a single model response (provider‑agnostic).

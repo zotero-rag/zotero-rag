@@ -4,10 +4,10 @@ use std::sync::Arc;
 use lancedb::embeddings::EmbeddingFunction;
 
 use crate::{
-    capabilities::{EmbeddingFactory, RerankFactory},
+    capabilities::{BatchEmbeddingFactory, EmbeddingFactory, RerankFactory},
     embedding::{common::EmbeddingProviderConfig, voyage::VoyageAIClient},
     http_client::ReqwestClient,
-    llm::errors::LLMError,
+    llm::{errors::LLMError, factory::BatchEmbeddingClient},
     providers::provider_id::ProviderId,
     reranking::common::{Rerank, RerankProviderConfig},
     vector::backends::{
@@ -50,6 +50,25 @@ impl RerankFactory for VoyageAIProvider {
 
         Ok(Arc::new(VoyageAIClient::<ReqwestClient>::with_config(
             cfg.clone(),
+        )))
+    }
+}
+
+impl BatchEmbeddingFactory for VoyageAIProvider {
+    fn provider_id(&self) -> ProviderId {
+        ProviderId::VoyageAI
+    }
+
+    fn create_batch_embedding(
+        &self,
+        config: &EmbeddingProviderConfig,
+    ) -> Result<BatchEmbeddingClient, LLMError> {
+        let EmbeddingProviderConfig::VoyageAI(cfg) = config else {
+            return Err(LLMError::InvalidProviderError("voyageai".into()));
+        };
+
+        Ok(BatchEmbeddingClient::VoyageAI(Arc::new(
+            VoyageAIClient::with_config(cfg.clone()),
         )))
     }
 }
