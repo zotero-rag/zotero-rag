@@ -1,8 +1,3 @@
-use std::{
-    collections::VecDeque,
-    sync::{Arc, Mutex},
-};
-
 use crate::http_client::SequentialMockHttpClient;
 
 #[derive(Debug, Clone)]
@@ -12,12 +7,9 @@ pub struct TestClient {
 
 impl TestClient {
     #[must_use]
-    pub fn new(responses: &Arc<Mutex<VecDeque<String>>>) -> Self {
-        let responses = Arc::clone(responses);
-        let raw_responses = responses.lock().unwrap();
-
+    pub fn new(responses: impl IntoIterator<Item = String>) -> Self {
         Self {
-            client: SequentialMockHttpClient::new(raw_responses.iter()),
+            client: SequentialMockHttpClient::new(responses),
         }
     }
 }

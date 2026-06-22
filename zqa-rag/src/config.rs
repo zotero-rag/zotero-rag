@@ -5,10 +5,7 @@
 //! This makes the rag crate more general and reusable.
 
 #[cfg(any(test, feature = "mock"))]
-use std::{
-    collections::VecDeque,
-    sync::{Arc, Mutex},
-};
+use std::collections::VecDeque;
 
 use crate::{
     constants::{
@@ -200,7 +197,7 @@ impl Default for OpenRouterConfig {
 #[derive(Debug, Clone)]
 pub struct MockConfig {
     /// Canned responses returned in order, one per request.
-    pub responses: Arc<Mutex<VecDeque<String>>>,
+    pub responses: VecDeque<String>,
 }
 
 /// Configuration for LLM clients

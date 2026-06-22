@@ -7,6 +7,22 @@ use crate::{
 };
 
 impl ApiClient for TestClient {
+    /// Mock implementation for the trait's `send_message`.
+    ///
+    /// # Arguments
+    ///
+    /// Takes one `&ChatRequest` argument, but it is ignored.
+    ///
+    /// # Returns
+    ///
+    /// Always returns `Ok` with the next element in the provided deque. Token counts
+    /// returned are always 0.
+    ///
+    /// # Panics
+    ///
+    /// * If a lock could not be obtained on the client's underlying mutex
+    /// * If the deque has been exhausted
+    /// * If the body in the next element is not UTF-8 (though this is unlikely)
     async fn send_message(
         &self,
         _: &ChatRequest<'_>,
@@ -16,13 +32,11 @@ impl ApiClient for TestClient {
             .post_json("", HeaderMap::new(), &None::<usize>)
             .await;
 
-        match result {
-            Err(_) => unreachable!("`SequentialMockHttpClient` does not propagate errors."),
-            Ok(res) => Ok(CompletionApiResponse {
-                content: vec![ContentType::Text(res.text().await.unwrap())],
-                input_tokens: 100,
-                output_tokens: 100,
-            }),
-        }
+        let result = result.expect("mock http client should not propagate errors");
+        Ok(CompletionApiResponse {
+            content: vec![ContentType::Text(result.text().await.unwrap())],
+            input_tokens: 0,
+            output_tokens: 0,
+        })
     }
 }
