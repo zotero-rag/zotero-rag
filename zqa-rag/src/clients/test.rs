@@ -9,7 +9,7 @@ impl TestClient {
     #[must_use]
     pub fn new(responses: impl IntoIterator<Item = String>) -> Self {
         Self {
-            client: SequentialMockHttpClient::new(responses),
+            client: SequentialMockHttpClient::from_bodies(responses),
         }
     }
 }

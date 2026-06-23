@@ -188,9 +188,14 @@ pub(crate) struct SequentialMockHttpClient {
 impl SequentialMockHttpClient {
     /// Create a new `SequentialMockHttpClient` from an iterator of serializable responses.
     ///
+    /// Each response is serialized to JSON via `serde_json::to_string` and used as the body of
+    /// a successful HTTP response, one per call. For callers that already hold the exact body
+    /// bytes to return, use [`SequentialMockHttpClient::from_bodies`] to avoid re-serializing.
+    ///
     /// # Panics
     ///
     /// * If `serde_json::to_string` returns an `Err`.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn new<T: serde::Serialize>(responses: impl IntoIterator<Item = T>) -> Self {
         let queue = responses
             .into_iter()
@@ -198,6 +203,16 @@ impl SequentialMockHttpClient {
             .collect();
         Self {
             responses: Arc::new(Mutex::new(queue)),
+        }
+    }
+
+    /// Create a new `SequentialMockHttpClient` from raw, pre-serialized response bodies.
+    ///
+    /// Unlike [`SequentialMockHttpClient::new`], the strings are used verbatim as the response
+    /// bodies, so callers that already have the exact bytes to return aren't double-serialized.
+    pub(crate) fn from_bodies(responses: impl IntoIterator<Item = String>) -> Self {
+        Self {
+            responses: Arc::new(Mutex::new(responses.into_iter().collect())),
         }
     }
 }
