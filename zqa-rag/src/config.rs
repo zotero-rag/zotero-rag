@@ -4,7 +4,6 @@
 //! instead of reading from environment variables or TOML files directly.
 //! This makes the rag crate more general and reusable.
 
-#[cfg(any(test, feature = "mock"))]
 use crate::{
     constants::{
         DEFAULT_ANTHROPIC_MAX_TOKENS, DEFAULT_ANTHROPIC_MODEL, DEFAULT_GEMINI_EMBEDDING_DIM,
