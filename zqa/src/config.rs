@@ -6,8 +6,6 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use zqa_rag::capabilities::{EmbeddingProvider, ModelProvider, RerankerProvider};
 use zqa_rag::config::LLMClientConfig;
-#[cfg(test)]
-use zqa_rag::config::MockConfig as RAGMockConfig;
 #[allow(clippy::wildcard_imports)]
 use zqa_rag::constants::*;
 use zqa_rag::constants::{DEFAULT_OPENAI_EMBEDDING_DIM, DEFAULT_OPENAI_EMBEDDING_MODEL};
@@ -775,14 +773,6 @@ pub struct MockConfig {
     pub responses: Vec<String>,
 }
 
-#[cfg(test)]
-impl MockConfig {
-    #[must_use]
-    pub fn new(responses: Vec<String>) -> Self {
-        Self { responses }
-    }
-}
-
 /// `OpenRouter` configuration
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct OpenRouterConfig {
@@ -984,7 +974,7 @@ impl From<GeminiConfig> for zqa_rag::config::GeminiConfig {
 impl From<MockConfig> for zqa_rag::config::MockConfig {
     fn from(value: MockConfig) -> Self {
         Self {
-            responses: value.responses.into_iter().collect(),
+            responses: value.responses,
         }
     }
 }
@@ -1078,15 +1068,6 @@ impl From<OpenRouterConfig> for zqa_rag::config::OpenRouterConfig {
             model: config.model.unwrap_or(DEFAULT_OPENROUTER_MODEL.into()),
             reasoning_effort: config.reasoning_effort,
             reasoning_budget: config.reasoning_budget,
-        }
-    }
-}
-
-#[cfg(test)]
-impl From<RAGMockConfig> for MockConfig {
-    fn from(value: RAGMockConfig) -> Self {
-        Self {
-            responses: value.responses.into_iter().collect(),
         }
     }
 }

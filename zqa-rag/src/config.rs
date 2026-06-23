@@ -5,8 +5,6 @@
 //! This makes the rag crate more general and reusable.
 
 #[cfg(any(test, feature = "mock"))]
-use std::collections::VecDeque;
-
 use crate::{
     constants::{
         DEFAULT_ANTHROPIC_MAX_TOKENS, DEFAULT_ANTHROPIC_MODEL, DEFAULT_GEMINI_EMBEDDING_DIM,
@@ -197,7 +195,7 @@ impl Default for OpenRouterConfig {
 #[derive(Debug, Clone)]
 pub struct MockConfig {
     /// Canned responses returned in order, one per request.
-    pub responses: VecDeque<String>,
+    pub responses: Vec<String>,
 }
 
 /// Configuration for LLM clients
