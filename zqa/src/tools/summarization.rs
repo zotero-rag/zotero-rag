@@ -164,36 +164,28 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::env;
     use std::sync::Arc;
 
     use serde_json::json;
     use temp_env;
     use tempfile;
     use zqa_macros::{test_contains, test_eq, test_ok};
-    use zqa_rag::{
-        config::{AnthropicConfig, LLMClientConfig},
-        constants::DEFAULT_ANTHROPIC_MODEL_SMALL,
-        llm::factory::get_client_with_config,
-    };
+    use zqa_rag::providers::registry::provider_registry;
 
     use super::*;
-    use crate::cli::handlers::library::handle_process_cmd;
     use crate::{
         cli::app::tests::{create_test_context, get_config},
         store::lance::LanceZoteroStore,
     };
+    use crate::{cli::handlers::library::handle_process_cmd, config::MockConfig};
 
-    fn make_tool() -> SummarizationTool<LanceZoteroStore> {
-        let client = get_client_with_config(&LLMClientConfig::Anthropic(AnthropicConfig {
-            api_key: env::var("ANTHROPIC_API_KEY").unwrap(),
-            model: DEFAULT_ANTHROPIC_MODEL_SMALL.into(),
-            max_tokens: 8192,
-            reasoning_budget: None,
-        }))
-        .unwrap();
-
-        let config = get_config();
+    fn make_tool(llm_responses: Vec<String>) -> SummarizationTool<LanceZoteroStore> {
+        let config = get_config(MockConfig {
+            responses: llm_responses,
+        });
+        let client = provider_registry()
+            .create_llm(&config.get_generation_config().unwrap())
+            .unwrap();
         let embedding_config = config.get_embedding_config().unwrap();
         let schema = Arc::new(arrow_schema::Schema::new(vec![
             arrow_schema::Field::new("library_key", arrow_schema::DataType::Utf8, false),
@@ -207,13 +199,13 @@ mod tests {
 
     #[test]
     fn test_name() {
-        let tool = make_tool();
+        let tool = make_tool(vec![]);
         test_eq!(tool.name(), SUMMARIZATION_TOOL_NAME);
     }
 
     #[test]
     fn test_description() {
-        let tool = make_tool();
+        let tool = make_tool(vec![]);
         test_eq!(
             tool.description(),
             "A tool to summarize Zotero papers with a specified ID."
@@ -222,7 +214,7 @@ mod tests {
 
     #[test]
     fn test_parameters_schema() {
-        let tool = make_tool();
+        let tool = make_tool(vec![]);
         let schema = tool.parameters();
 
         // The schema should be a valid JSON schema for SummarizationToolInput
@@ -277,7 +269,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_call_invalid_args() {
-        let tool = make_tool();
+        let tool = make_tool(vec![]);
 
         // Test with invalid JSON
         let invalid_args = json!({
@@ -291,7 +283,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_call_with_empty_ids() {
-        let tool = make_tool();
+        let tool = make_tool(vec![]);
 
         // Test with empty IDs array
         let args = json!({
@@ -324,7 +316,7 @@ mod tests {
             .unwrap()
             .to_string();
 
-        let mut setup_ctx = create_test_context();
+        let mut setup_ctx = create_test_context(vec![]);
 
         // Create test database with assets data
         let setup_result = temp_env::async_with_vars(
@@ -335,7 +327,14 @@ mod tests {
 
         assert!(setup_result.is_ok(), "Failed to set up test database");
 
-        let tool = make_tool();
+        let tool = make_tool(vec![
+            r"<title>Some title</title>
+            <authors>Last, Name</authors>
+            <reference>Some reference</reference>
+            <excerpt>foobar</excerpt>
+            "
+            .into(),
+        ]);
 
         let args = json!({
             "query": "What is the main contribution of this paper?",

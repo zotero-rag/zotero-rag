@@ -457,7 +457,7 @@ mod tests {
             .unwrap()
             .to_string();
 
-        let mut ctx = create_test_context();
+        let mut ctx = create_test_context(vec![]);
         let schema = arrow_schema::Schema::new(vec![arrow_schema::Field::new(
             "pdf_text",
             arrow_schema::DataType::Utf8,
@@ -505,7 +505,7 @@ mod tests {
             .unwrap()
             .to_string();
 
-        let mut ctx = create_test_context();
+        let mut ctx = create_test_context(vec![]);
         let result = temp_env::async_with_vars(
             [("CI", Some("true")), ("LANCEDB_URI", Some(&db_uri))],
             handle_process_cmd(&mut ctx),
@@ -543,7 +543,7 @@ mod tests {
             .unwrap()
             .to_string();
 
-        let mut ctx = create_test_context();
+        let mut ctx = create_test_context(vec![]);
         let output = temp_env::async_with_vars([("LANCEDB_URI", Some(&db_uri))], async move {
             handle_checkhealth_cmd(&mut ctx).await.unwrap();
             String::from_utf8(ctx.out.into_inner()).unwrap()
@@ -567,7 +567,7 @@ mod tests {
             .unwrap()
             .to_string();
 
-        let mut setup_ctx = create_test_context();
+        let mut setup_ctx = create_test_context(vec![]);
         let result = temp_env::async_with_vars(
             [("CI", Some("true")), ("LANCEDB_URI", Some(&db_uri))],
             handle_process_cmd(&mut setup_ctx),
@@ -575,7 +575,7 @@ mod tests {
         .await;
         test_ok!(result);
 
-        let mut ctx = create_test_context();
+        let mut ctx = create_test_context(vec![]);
         let output = temp_env::async_with_vars([("LANCEDB_URI", Some(&db_uri))], async move {
             handle_checkhealth_cmd(&mut ctx).await.unwrap();
             String::from_utf8(ctx.out.into_inner()).unwrap()
@@ -660,7 +660,7 @@ mod tests {
             .unwrap()
             .to_string();
 
-        let mut setup_ctx = create_test_context();
+        let mut setup_ctx = create_test_context(vec![]);
         let setup_result = temp_env::async_with_vars(
             [("CI", Some("true")), ("LANCEDB_URI", Some(&db_uri))],
             handle_process_cmd(&mut setup_ctx),
@@ -668,7 +668,7 @@ mod tests {
         .await;
         test_ok!(setup_result);
 
-        let mut first_ctx = create_test_context();
+        let mut first_ctx = create_test_context(vec![]);
         let first_result = temp_env::async_with_vars(
             [("LANCEDB_URI", Some(&db_uri))],
             handle_embed_cmd(true, &mut first_ctx),
@@ -677,7 +677,7 @@ mod tests {
         test_ok!(first_result);
         assert!(first_result.is_ok());
 
-        let mut ctx = create_test_context();
+        let mut ctx = create_test_context(vec![]);
         let result = temp_env::async_with_vars(
             [("LANCEDB_URI", Some(&db_uri))],
             handle_embed_cmd(true, &mut ctx),
@@ -704,7 +704,7 @@ mod tests {
             .unwrap()
             .to_string();
 
-        let mut setup_ctx = create_test_context();
+        let mut setup_ctx = create_test_context(vec![]);
         let setup_result = temp_env::async_with_vars(
             [("CI", Some("true")), ("LANCEDB_URI", Some(&db_uri))],
             handle_process_cmd(&mut setup_ctx),
@@ -714,7 +714,7 @@ mod tests {
 
         insert_zero_embedding_row(&db_uri).await;
 
-        let mut ctx = create_test_context();
+        let mut ctx = create_test_context(vec![]);
         let result = temp_env::async_with_vars(
             [("LANCEDB_URI", Some(&db_uri))],
             handle_embed_cmd(true, &mut ctx),

@@ -1330,7 +1330,7 @@ mod tests {
         temp_env::async_with_vars(
             [("ZQA_STATE_DIR", Some(tmp.path().to_str().unwrap()))],
             async {
-                let mut ctx = create_test_context();
+                let mut ctx = create_test_context(vec![]);
                 // Strip the (only) embedding provider config so `get_embedding_config` returns
                 // `None`, which should short-circuit before any provider/network interaction.
                 ctx.config.voyageai = None;
@@ -1352,7 +1352,7 @@ mod tests {
         temp_env::async_with_vars(
             [("ZQA_STATE_DIR", Some(tmp.path().to_str().unwrap()))],
             async {
-                let mut ctx = create_test_context();
+                let mut ctx = create_test_context(vec![]);
 
                 let result = handle_batch_check_status_cmd(&mut ctx).await;
                 assert!(result.is_ok());
@@ -1524,7 +1524,7 @@ mod tests {
         temp_env::async_with_vars(
             [("ZQA_STATE_DIR", Some(tmp.path().to_str().unwrap()))],
             async {
-                let mut ctx = create_test_context();
+                let mut ctx = create_test_context(vec![]);
                 let result = handle_batch_cancel_cmd(1, &mut ctx).await;
                 assert!(result.is_ok());
 
@@ -1543,7 +1543,7 @@ mod tests {
         temp_env::async_with_vars(
             [("ZQA_STATE_DIR", Some(tmp.path().to_str().unwrap()))],
             async {
-                let mut ctx = create_test_context();
+                let mut ctx = create_test_context(vec![]);
                 let result = handle_batch_cancel_cmd(7, &mut ctx).await;
                 assert!(result.is_ok());
 
@@ -1566,7 +1566,7 @@ mod tests {
         temp_env::async_with_vars(
             [("ZQA_STATE_DIR", Some(tmp.path().to_str().unwrap()))],
             async {
-                let mut ctx = create_test_context();
+                let mut ctx = create_test_context(vec![]);
                 let result = handle_batch_cancel_cmd(1, &mut ctx).await;
                 assert!(matches!(
                     result,
@@ -1596,7 +1596,7 @@ mod tests {
         temp_env::async_with_vars(
             [("ZQA_STATE_DIR", Some(tmp.path().to_str().unwrap()))],
             async {
-                let mut ctx = create_test_context();
+                let mut ctx = create_test_context(vec![]);
                 let result = handle_batch_create_cmd(&mut ctx).await;
                 assert!(result.is_ok());
 
@@ -1616,7 +1616,7 @@ mod tests {
         temp_env::async_with_vars(
             [("ZQA_STATE_DIR", Some(tmp.path().to_str().unwrap()))],
             async {
-                let mut ctx = create_test_context();
+                let mut ctx = create_test_context(vec![]);
                 // Decline the very first "Fetch results now?" prompt.
                 ctx.input = Box::new(Cursor::new(b"n\n".to_vec()));
 
@@ -1644,7 +1644,7 @@ mod tests {
         temp_env::async_with_vars(
             [("ZQA_STATE_DIR", Some(tmp.path().to_str().unwrap()))],
             async {
-                let mut ctx = create_test_context();
+                let mut ctx = create_test_context(vec![]);
                 ctx.input = Box::new(Cursor::new(b"y\n".to_vec()));
 
                 // The batch has 3 items, but the provider returns results for only 2. The
@@ -1671,7 +1671,7 @@ mod tests {
         temp_env::async_with_vars(
             [("ZQA_STATE_DIR", Some(tmp.path().to_str().unwrap()))],
             async {
-                let mut ctx = create_test_context();
+                let mut ctx = create_test_context(vec![]);
                 ctx.input = Box::new(Cursor::new(b"y\n".to_vec()));
 
                 // 0 items + 0 results passes the length check (0 == 0) but trips the empty-batch
@@ -1703,7 +1703,7 @@ mod tests {
         temp_env::async_with_vars(
             [("ZQA_STATE_DIR", Some(tmp.path().to_str().unwrap()))],
             async {
-                let mut ctx = create_test_context();
+                let mut ctx = create_test_context(vec![]);
                 // 'y' to fetch, then 'n' to decline retrying the whole batch.
                 ctx.input = Box::new(Cursor::new(b"y\nn\n".to_vec()));
 
@@ -1736,7 +1736,7 @@ mod tests {
         temp_env::async_with_vars(
             [("ZQA_STATE_DIR", Some(tmp.path().to_str().unwrap()))],
             async {
-                let mut ctx = create_test_context();
+                let mut ctx = create_test_context(vec![]);
                 // 'y' to fetch, then 'd' to decide later (no import, no retry, no network/DB).
                 ctx.input = Box::new(Cursor::new(b"y\nd\n".to_vec()));
 
@@ -1772,7 +1772,7 @@ mod tests {
         temp_env::async_with_vars(
             [("ZQA_STATE_DIR", Some(tmp.path().to_str().unwrap()))],
             async {
-                let mut ctx = create_test_context();
+                let mut ctx = create_test_context(vec![]);
 
                 let result = handle_batch_check_status_cmd(&mut ctx).await;
                 assert!(result.is_ok());

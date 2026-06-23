@@ -152,7 +152,7 @@ mod tests {
     fn test_resume_no_conversations() {
         let temp_dir = tempfile::tempdir().unwrap();
         temp_env::with_var("ZQA_STATE_DIR", Some(temp_dir.path()), || {
-            let mut ctx = create_test_context();
+            let mut ctx = create_test_context(vec![]);
             ctx.input = Box::new(Cursor::new(""));
             handle_resume_cmd(&mut ctx).unwrap();
 
@@ -198,7 +198,7 @@ mod tests {
             })
             .unwrap();
 
-            let mut ctx = create_test_context();
+            let mut ctx = create_test_context(vec![]);
             ctx.input = Box::new(Cursor::new("1\n"));
             handle_resume_cmd(&mut ctx).unwrap();
 
@@ -229,7 +229,7 @@ mod tests {
             })
             .unwrap();
 
-            let mut ctx = create_test_context();
+            let mut ctx = create_test_context(vec![]);
             ctx.input = Box::new(Cursor::new("99\n"));
             handle_resume_cmd(&mut ctx).unwrap();
 

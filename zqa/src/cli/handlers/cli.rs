@@ -200,7 +200,7 @@ mod tests {
 
     #[test]
     fn test_handle_help_cmd() {
-        let mut ctx = create_test_context();
+        let mut ctx = create_test_context(vec![]);
         handle_help_cmd(&mut ctx).unwrap();
         let output = String::from_utf8(ctx.out.into_inner()).unwrap();
         test_contains!(output, "Available commands:");

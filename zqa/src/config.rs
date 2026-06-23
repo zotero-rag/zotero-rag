@@ -6,6 +6,8 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use zqa_rag::capabilities::{EmbeddingProvider, ModelProvider, RerankerProvider};
 use zqa_rag::config::LLMClientConfig;
+#[cfg(test)]
+use zqa_rag::config::MockConfig as RAGMockConfig;
 #[allow(clippy::wildcard_imports)]
 use zqa_rag::constants::*;
 use zqa_rag::constants::{DEFAULT_OPENAI_EMBEDDING_DIM, DEFAULT_OPENAI_EMBEDDING_MODEL};
@@ -139,6 +141,11 @@ pub struct Config {
     /// ZeroEntropy-specific configuration
     #[serde(default)]
     pub zeroentropy: Option<ZeroEntropyConfig>,
+
+    /// Mock client config (used for testing)
+    #[cfg(test)]
+    #[serde(default)]
+    pub mock: Option<MockConfig>,
 }
 
 impl Display for Config {
@@ -451,6 +458,8 @@ impl Config {
             LLMClientConfig::OpenAI(cfg) => cfg.model,
             LLMClientConfig::Gemini(cfg) => cfg.model,
             LLMClientConfig::OpenRouter(cfg) => cfg.model,
+            #[cfg(test)]
+            LLMClientConfig::Mock(_) => String::new(),
             _ => unimplemented!("unsupported generation provider: {}", config.provider_id()),
         })
     }
@@ -514,6 +523,11 @@ impl Config {
                 .openrouter
                 .as_ref()
                 .map(|cfg| LLMClientConfig::OpenRouter(cfg.clone().into())),
+            #[cfg(test)]
+            ModelProvider::Mock => self
+                .mock
+                .as_ref()
+                .map(|cfg| LLMClientConfig::Mock(cfg.clone().into())),
             _ => None,
         }
     }
@@ -753,6 +767,22 @@ impl Default for ZeroEntropyConfig {
     }
 }
 
+/// `TestClient` configuration
+#[cfg(test)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct MockConfig {
+    /// Preset responses
+    pub responses: Vec<String>,
+}
+
+#[cfg(test)]
+impl MockConfig {
+    #[must_use]
+    pub fn new(responses: Vec<String>) -> Self {
+        Self { responses }
+    }
+}
+
 /// `OpenRouter` configuration
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct OpenRouterConfig {
@@ -871,6 +901,8 @@ impl Default for Config {
             cohere: Some(CohereConfig::default()),
             openrouter: Some(OpenRouterConfig::default()),
             zeroentropy: Some(ZeroEntropyConfig::default()),
+            #[cfg(test)]
+            mock: None,
         }
     }
 }
@@ -944,6 +976,15 @@ impl From<GeminiConfig> for zqa_rag::config::GeminiConfig {
                 .embedding_dims
                 .unwrap_or(DEFAULT_GEMINI_EMBEDDING_DIM as usize),
             reasoning_budget: config.reasoning_budget,
+        }
+    }
+}
+
+#[cfg(test)]
+impl From<MockConfig> for zqa_rag::config::MockConfig {
+    fn from(value: MockConfig) -> Self {
+        Self {
+            responses: value.responses.into_iter().collect(),
         }
     }
 }
@@ -1037,6 +1078,15 @@ impl From<OpenRouterConfig> for zqa_rag::config::OpenRouterConfig {
             model: config.model.unwrap_or(DEFAULT_OPENROUTER_MODEL.into()),
             reasoning_effort: config.reasoning_effort,
             reasoning_budget: config.reasoning_budget,
+        }
+    }
+}
+
+#[cfg(test)]
+impl From<RAGMockConfig> for MockConfig {
+    fn from(value: RAGMockConfig) -> Self {
+        Self {
+            responses: value.responses.into_iter().collect(),
         }
     }
 }

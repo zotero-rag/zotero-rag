@@ -421,7 +421,7 @@ mod tests {
             .unwrap()
             .to_string();
 
-        let mut setup_ctx = create_test_context();
+        let mut setup_ctx = create_test_context(vec![]);
         let result = temp_env::async_with_vars(
             [("CI", Some("true")), ("LANCEDB_URI", Some(&db_uri))],
             handle_process_cmd(&mut setup_ctx),
@@ -429,7 +429,7 @@ mod tests {
         .await;
         test_ok!(result);
 
-        let mut ctx = create_test_context();
+        let mut ctx = create_test_context(vec![]); // search doesn't use LLMs
         let result = temp_env::async_with_vars(
             [("CI", Some("true")), ("LANCEDB_URI", Some(&db_uri))],
             handle_search_cmd(
@@ -458,14 +458,16 @@ mod tests {
             .unwrap()
             .to_string();
 
-        let mut setup_ctx = create_test_context();
+        let mut setup_ctx = create_test_context(vec![]);
         let _ = temp_env::async_with_vars(
             [("CI", Some("true")), ("LANCEDB_URI", Some(&db_uri))],
             handle_process_cmd(&mut setup_ctx),
         )
         .await;
 
-        let mut ctx = create_test_context();
+        // TODO: At some point, we'll want to add support for tool calls on these. Right now, the
+        // underlying `TestClient` doesn't call `process_tool_calls
+        let mut ctx = create_test_context(vec!["You have papers X, Y, and Z.".into()]);
         let result = temp_env::async_with_vars(
             [("CI", Some("true")), ("LANCEDB_URI", Some(&db_uri))],
             handle_query_cmd(

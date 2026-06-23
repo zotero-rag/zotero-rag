@@ -203,11 +203,11 @@ pub(crate) mod tests {
     use super::dispatch_command;
     use crate::common::Context;
     use crate::common::State;
-    use crate::config::{Config, VoyageAIConfig};
+    use crate::config::{Config, MockConfig, VoyageAIConfig};
     use crate::store::lance::LanceZoteroStore;
     use crate::tools::retrieval::RetrievalTool;
 
-    pub(crate) fn get_config() -> Config {
+    pub(crate) fn get_config(mock_config: MockConfig) -> Config {
         let mut config = Config {
             voyageai: Some(VoyageAIConfig {
                 reranker: Some(DEFAULT_VOYAGE_RERANK_MODEL.into()),
@@ -215,6 +215,7 @@ pub(crate) mod tests {
                 embedding_dims: Some(DEFAULT_VOYAGE_EMBEDDING_DIM as usize),
                 api_key: Some(String::new()),
             }),
+            mock: Some(mock_config),
             ..Default::default()
         };
 
@@ -224,7 +225,9 @@ pub(crate) mod tests {
 
     /// Create a default `Context` object where the output and error streams are buffers that can
     /// be written into. This allows for the output to be easily inspected in tests.
-    pub(crate) fn create_test_context() -> Context<Cursor<Vec<u8>>, Cursor<Vec<u8>>> {
+    pub(crate) fn create_test_context(
+        llm_responses: Vec<String>,
+    ) -> Context<Cursor<Vec<u8>>, Cursor<Vec<u8>>> {
         let out_buf: Vec<u8> = Vec::new();
         let out = Cursor::new(out_buf);
 
@@ -238,7 +241,9 @@ pub(crate) mod tests {
             arrow_schema::Field::new("pdf_text", arrow_schema::DataType::Utf8, false),
         ]);
 
-        let config = get_config();
+        let config = get_config(MockConfig {
+            responses: llm_responses,
+        });
 
         let embedding_config = config.get_embedding_config().unwrap();
 
@@ -284,7 +289,7 @@ pub(crate) mod tests {
         let state_dir = temp_dir.path().to_str().unwrap().to_string();
 
         temp_env::async_with_vars([("ZQA_STATE_DIR", Some(state_dir.as_str()))], async {
-            let mut ctx = create_test_context();
+            let mut ctx = create_test_context(vec![]);
             *ctx.state.title.lock().unwrap() = Some("Existing conversation".to_string());
             ctx.state
                 .chat_history
@@ -314,7 +319,7 @@ pub(crate) mod tests {
         let state_dir = temp_dir.path().to_str().unwrap().to_string();
 
         temp_env::async_with_vars([("ZQA_STATE_DIR", Some(state_dir.as_str()))], async {
-            let mut ctx = create_test_context();
+            let mut ctx = create_test_context(vec![]);
 
             let result = dispatch_command("/resume", &mut ctx).await;
             test_ok!(result);
@@ -343,7 +348,7 @@ pub(crate) mod tests {
         temp_env::async_with_vars(
             [("CI", Some("true")), ("LANCEDB_URI", Some(db_uri.as_str()))],
             async {
-                let mut ctx = create_test_context();
+                let mut ctx = create_test_context(vec![]);
 
                 let process_result = dispatch_command("/process", &mut ctx).await;
                 test_ok!(process_result);
@@ -365,7 +370,6 @@ pub(crate) mod tests {
     #[serial]
     async fn test_call_returns_results_key() {
         dotenv::dotenv().ok();
-        let _ = crate::common::setup_logger(log::LevelFilter::Info);
 
         let temp_dir = tempfile::tempdir().unwrap();
         let db_uri = temp_dir
@@ -375,7 +379,7 @@ pub(crate) mod tests {
             .unwrap()
             .to_string();
 
-        let mut setup_ctx = create_test_context();
+        let mut setup_ctx = create_test_context(vec![]);
 
         // Create test database with assets data
         let setup_result = temp_env::async_with_vars(
