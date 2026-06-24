@@ -11,7 +11,7 @@ use zqa_rag::{
         EmbeddingProviderConfig, get_embedding_dims_by_provider, get_embedding_provider_with_config,
     },
     llm::errors::LLMError,
-    vector::backends::lance::{LANCE_TABLE_NAME, LanceError, get_db_uri},
+    vector::backends::lance::{LANCE_DATA_TABLE_NAME, LanceError, get_db_uri},
 };
 
 use super::library::{LibraryParsingError, parse_library};
@@ -98,7 +98,7 @@ pub(crate) async fn lancedb_exists() -> bool {
     }
 
     if let Ok(db) = lancedb::connect(&uri).execute().await {
-        db.open_table(LANCE_TABLE_NAME).execute().await.is_ok()
+        db.open_table(LANCE_DATA_TABLE_NAME).execute().await.is_ok()
     } else {
         false
     }

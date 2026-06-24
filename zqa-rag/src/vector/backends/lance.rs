@@ -3,21 +3,24 @@
 use core::fmt;
 use std::collections::HashSet;
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Instant;
 
 use arrow_array::cast::AsArray;
 use arrow_array::types::Float32Type;
-use arrow_array::{RecordBatch, RecordBatchIterator, StringArray};
+use arrow_array::{RecordBatch, RecordBatchIterator, StringArray, record_batch};
 use arrow_schema::{ArrowError, Schema};
 use async_trait::async_trait;
 use futures::TryStreamExt;
+use lancedb::Connection;
 use lancedb::database::CreateTableMode;
 use lancedb::embeddings::EmbeddingDefinition;
 use lancedb::query::{ExecutableQuery, QueryBase};
 use lancedb::{Error as LanceDbError, connect, index::scalar::FtsIndexBuilder};
 use thiserror::Error;
 
+use crate::providers::ProviderId;
 use crate::{
     embedding::common::EmbeddingProviderConfig, providers::registry::provider_registry,
     vector::backends::backend::VectorBackend,
@@ -29,8 +32,47 @@ use crate::{
 /// be changed.
 pub const LANCEDB_URI: &str = "data/lancedb-table";
 
-/// The name of the table. This is the default table name, and for now cannot be changed.
-pub const LANCE_TABLE_NAME: &str = "data";
+/// The name of the table containing data (passages, embeddings, etc.) This is the default table
+/// name, and for now cannot be changed.
+pub const LANCE_DATA_TABLE_NAME: &str = "data";
+/// The name of the table containing metadata (model provider, model string, etc.). Like
+/// [`LANCE_DATA_TABLE_NAME`], this also cannot be changed for now.
+pub const LANCE_META_TABLE_NAME: &str = "data";
+
+/// Enum of columns maintained in the LanceDB metadata table.
+enum MetadataTableColumns {
+    LibVersion,
+    DataTableVersion,
+    EmbeddingProvider,
+    EmbeddingModel,
+}
+
+impl MetadataTableColumns {
+    /// Return the in-table column name for this enum variant.
+    fn as_str(&self) -> &'static str {
+        match self {
+            Self::LibVersion => "zqa_rag_version",
+            Self::DataTableVersion => "data_table_version",
+            Self::EmbeddingProvider => "embedding_provider",
+            Self::EmbeddingModel => "embedding_model",
+        }
+    }
+
+    fn column_number(&self) -> usize {
+        match self {
+            Self::LibVersion => 0,
+            Self::DataTableVersion => 1,
+            Self::EmbeddingProvider => 2,
+            Self::EmbeddingModel => 3,
+        }
+    }
+}
+
+impl From<MetadataTableColumns> for String {
+    fn from(val: MetadataTableColumns) -> Self {
+        val.as_str().into()
+    }
+}
 
 /// Errors that can occur when working with LanceDB
 #[derive(Debug, Error)]
@@ -69,14 +111,14 @@ pub fn get_db_uri() -> String {
 }
 
 /// Checks whether the configured LanceDB database exists and contains the expected table.
-pub async fn db_exists() -> bool {
+async fn db_exists() -> bool {
     let uri = get_db_uri();
     if !PathBuf::from(&uri).exists() {
         return false;
     }
 
     if let Ok(db) = connect(&uri).execute().await {
-        db.open_table(LANCE_TABLE_NAME).execute().await.is_ok()
+        db.open_table(LANCE_DATA_TABLE_NAME).execute().await.is_ok()
     } else {
         false
     }
@@ -102,14 +144,29 @@ pub struct LanceMetadata {
     embedding_table_version: u64,
     /// Number of rows in the table
     num_rows: usize,
+    /// Embedding provider used
+    embedding_provider: ProviderId,
+    /// Embedding model
+    embedding_model: String,
 }
 
 impl fmt::Display for LanceMetadata {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "LanceDB Statistics:\n\tNumber of tables: {}\n\tNumber of rows: {}\n\tEmbedding table version: {}",
-            self.num_tables, self.num_rows, self.embedding_table_version
+            concat!(
+                "LanceDB metadata:\n",
+                "\tNumber of tables: {}\n",
+                "\tNumber of rows: {}\n",
+                "\tEmbedding table version: {}",
+                "\tModel provider: {}\n",
+                "\tModel: {}\n",
+            ),
+            self.num_tables,
+            self.num_rows,
+            self.embedding_table_version,
+            self.embedding_provider.as_str(),
+            self.embedding_model
         )
     }
 }
@@ -144,13 +201,34 @@ impl LanceBackend {
 ///
 /// A `Vec<String>` containing all the items in the specified column of the `RecordBatch`.
 #[must_use]
-pub fn get_column_from_batch(batch: &RecordBatch, column: usize) -> Vec<String> {
+fn get_column_from_batch(batch: &RecordBatch, column: usize) -> Vec<String> {
     let results = batch.column(column).as_string::<i32>();
 
     results
         .iter()
         .filter_map(|s| Some(s?.to_string()))
         .collect()
+}
+
+// TODO: Implement a `migrate` function to migrate to a new DB version
+
+/// Sync the version stored in the metadata table with the data table version. This should be called
+/// after each DB update, including inserts/upserts, version restores, and schema updates.
+async fn sync_table_version(db: &Connection) -> Result<(), LanceError> {
+    let data_tbl = db.open_table(LANCE_DATA_TABLE_NAME).execute().await?;
+    let meta_tbl = db.open_table(LANCE_META_TABLE_NAME).execute().await?;
+
+    let new_version = data_tbl.version().await?;
+    meta_tbl
+        .update()
+        .column(
+            MetadataTableColumns::DataTableVersion,
+            format!("{new_version} + 1"),
+        )
+        .execute()
+        .await?;
+
+    Ok(())
 }
 
 #[async_trait]
@@ -175,18 +253,18 @@ impl VectorBackend for LanceBackend {
             .map_err(|e| LanceError::ConnectionError(e.to_string()))?;
 
         let tbl = db
-            .open_table(LANCE_TABLE_NAME)
+            .open_table(LANCE_DATA_TABLE_NAME)
             .execute()
             .await
             .map_err(|_| {
                 LanceError::InvalidStateError(format!(
-                    "The table {LANCE_TABLE_NAME} does not exist"
+                    "The table {LANCE_DATA_TABLE_NAME} does not exist"
                 ))
             })?;
 
         let table_version = tbl.version().await.map_err(|e| {
             LanceError::InvalidStateError(format!(
-                "Failed to get version of table {LANCE_TABLE_NAME}: {e}"
+                "Failed to get version of table {LANCE_DATA_TABLE_NAME}: {e}"
             ))
         })?;
 
@@ -199,15 +277,51 @@ impl VectorBackend for LanceBackend {
 
         let num_rows = tbl.count_rows(None).await.map_err(|e| {
             LanceError::InvalidStateError(format!(
-                "Failed to count rows in table {LANCE_TABLE_NAME}: {e}"
+                "Failed to count rows in table {LANCE_DATA_TABLE_NAME}: {e}"
             ))
         })?;
 
-        Ok(LanceMetadata {
-            num_tables,
-            num_rows,
-            embedding_table_version: table_version,
-        })
+        let meta_tbl = db
+            .open_table(LANCE_META_TABLE_NAME)
+            .execute()
+            .await
+            .map_err(|_| {
+                LanceError::InvalidStateError(format!(
+                    "The table {LANCE_DATA_TABLE_NAME} does not exist"
+                ))
+            })?;
+        let mut stream = meta_tbl.query().execute().await?;
+        let Some(batch) = stream.try_next().await? else {
+            return Err(LanceError::InvalidStateError(format!(
+                "The query to {LANCE_META_TABLE_NAME} was successful, but it returned no results."
+            )));
+        };
+
+        let embedding_provider = get_column_from_batch(
+            &batch,
+            MetadataTableColumns::EmbeddingProvider.column_number(),
+        );
+        let embedding_model =
+            get_column_from_batch(&batch, MetadataTableColumns::EmbeddingModel.column_number());
+
+        if let Some(provider_string) = embedding_provider.into_iter().next()
+            && let Ok(provider) = ProviderId::from_str(&provider_string)
+            && let Some(model) = embedding_model.into_iter().next()
+        {
+            Ok(LanceMetadata {
+                num_tables,
+                num_rows,
+                embedding_table_version: table_version,
+                embedding_provider: provider,
+                embedding_model: model,
+            })
+        } else {
+            // TODO: This isn't a useful error message for *users*, it tells them nothing about what
+            // to do; although, there isn't much they can...
+            return Err(LanceError::InvalidStateError(format!(
+                "We got a batch from {LANCE_META_TABLE_NAME}, but the metadata columns were empty."
+            )));
+        }
     }
 
     /// Checks if an existing LanceDB exists and has a valid table
@@ -233,7 +347,7 @@ impl VectorBackend for LanceBackend {
         embedding_col: &str,
     ) -> Result<(), Self::Error> {
         let db = self.connect().await?;
-        let tbl = db.open_table(LANCE_TABLE_NAME).execute().await?;
+        let tbl = db.open_table(LANCE_DATA_TABLE_NAME).execute().await?;
 
         let indices = tbl.list_indices().await?;
         let has_vector_index = indices
@@ -256,6 +370,8 @@ impl VectorBackend for LanceBackend {
             .execute()
             .await?;
         }
+
+        sync_table_version(&db).await?;
 
         // If both indices already existed before this run, they could be optimized here
         // but optimization is optional and can be done separately.
@@ -296,12 +412,12 @@ impl VectorBackend for LanceBackend {
 
         let db = self.connect().await?;
         let table = db
-            .open_table(LANCE_TABLE_NAME)
+            .open_table(LANCE_DATA_TABLE_NAME)
             .execute()
             .await
             .map_err(|_| {
                 LanceError::InvalidStateError(format!(
-                    "The table {LANCE_TABLE_NAME} does not exist"
+                    "The table {LANCE_DATA_TABLE_NAME} does not exist"
                 ))
             })?;
 
@@ -314,6 +430,8 @@ impl VectorBackend for LanceBackend {
 
             table.delete(&delete_pred).await?;
         }
+
+        sync_table_version(&db).await?;
 
         Ok(())
     }
@@ -340,12 +458,12 @@ impl VectorBackend for LanceBackend {
     async fn dedup_rows(&self, by: &str, key: &str) -> Result<usize, Self::Error> {
         let db = self.connect().await?;
         let table = db
-            .open_table(LANCE_TABLE_NAME)
+            .open_table(LANCE_DATA_TABLE_NAME)
             .execute()
             .await
             .map_err(|_| {
                 LanceError::InvalidStateError(format!(
-                    "The table {LANCE_TABLE_NAME} does not exist"
+                    "The table {LANCE_DATA_TABLE_NAME} does not exist"
                 ))
             })?;
 
@@ -385,6 +503,8 @@ impl VectorBackend for LanceBackend {
             self.delete_rows(key, &duplicate_keys).await?;
         }
 
+        sync_table_version(&db).await?;
+
         Ok(deleted_count)
     }
 
@@ -411,12 +531,12 @@ impl VectorBackend for LanceBackend {
         let db = self.connect().await?;
 
         let tbl = db
-            .open_table(LANCE_TABLE_NAME)
+            .open_table(LANCE_DATA_TABLE_NAME)
             .execute()
             .await
             .map_err(|_| {
                 LanceError::InvalidStateError(format!(
-                    "The table {LANCE_TABLE_NAME} does not exist"
+                    "The table {LANCE_DATA_TABLE_NAME} does not exist"
                 ))
             })?;
 
@@ -463,12 +583,12 @@ impl VectorBackend for LanceBackend {
         let db = self.connect().await?;
 
         let tbl = db
-            .open_table(LANCE_TABLE_NAME)
+            .open_table(LANCE_DATA_TABLE_NAME)
             .execute()
             .await
             .map_err(|_| {
                 LanceError::InvalidStateError(format!(
-                    "The table {LANCE_TABLE_NAME} does not exist"
+                    "The table {LANCE_DATA_TABLE_NAME} does not exist"
                 ))
             })?;
         log::debug!("Opening the DB and table took {:.1?}", start_time.elapsed());
@@ -541,12 +661,12 @@ impl VectorBackend for LanceBackend {
 
         let db = self.connect().await?;
         let tbl = db
-            .open_table(LANCE_TABLE_NAME)
+            .open_table(LANCE_DATA_TABLE_NAME)
             .execute()
             .await
             .map_err(|_| {
                 LanceError::InvalidStateError(format!(
-                    "The table {LANCE_TABLE_NAME} does not exist"
+                    "The table {LANCE_DATA_TABLE_NAME} does not exist"
                 ))
             })?;
 
@@ -597,12 +717,12 @@ impl VectorBackend for LanceBackend {
 
         let db = self.connect().await?;
         let tbl = db
-            .open_table(LANCE_TABLE_NAME)
+            .open_table(LANCE_DATA_TABLE_NAME)
             .execute()
             .await
             .map_err(|_| {
                 LanceError::InvalidStateError(format!(
-                    "The table {LANCE_TABLE_NAME} does not exist"
+                    "The table {LANCE_DATA_TABLE_NAME} does not exist"
                 ))
             })?;
 
@@ -653,7 +773,7 @@ impl VectorBackend for LanceBackend {
         {
             // Add rows if they don't already exist
             let tbl = db
-                .open_table(LANCE_TABLE_NAME)
+                .open_table(LANCE_DATA_TABLE_NAME)
                 .execute()
                 .await
                 .map_err(|e| LanceError::TableUpdateError(e.to_string()))?;
@@ -677,14 +797,58 @@ impl VectorBackend for LanceBackend {
                 Some("embeddings"),
             );
 
+            // LanceDB allows useful operations such as schema updates, and each of those is
+            // associated with a new table version. In the future, we might switch to a different
+            // schema, such as with different types (which LanceDB also supports); in this case,
+            // recording a minimum supported lib version is necessary.
+            let lib_version = env!("CARGO_PKG_VERSION");
+            let metadata_record = record_batch!(
+                (
+                    MetadataTableColumns::LibVersion.as_str(),
+                    Utf8,
+                    [lib_version]
+                ),
+                // This lets us allow switching models, which is on the roadmap anyway
+                (
+                    MetadataTableColumns::DataTableVersion.as_str(),
+                    Int32,
+                    [1] // LanceDB tables start at version 1
+                ),
+                (
+                    MetadataTableColumns::EmbeddingProvider.as_str(),
+                    Utf8,
+                    [self.config.provider_id().as_str()]
+                ),
+                (
+                    MetadataTableColumns::EmbeddingModel.as_str(),
+                    Utf8,
+                    [self.config.model_name()]
+                )
+            )?;
+
+            // Create the metadata table first. This order guarantees that in the worst case, we
+            // end up with a DB that knows which provider is being used and has no data; the
+            // alternative would be a DB that has data but does not "know" what model/provider were
+            // used to generate those embeddings.
+            //
+            // If the metadata is stored and creating the data table fails,
+            // [`CreateTableMode::Overwrite`] overwrites it on the next attempt anyway.
+            db.create_table(LANCE_META_TABLE_NAME, metadata_record)
+                .mode(CreateTableMode::Overwrite)
+                .execute()
+                .await
+                .map_err(|e| LanceError::TableUpdateError(e.to_string()))?;
+
             // Create a new table and add rows
-            db.create_table(LANCE_TABLE_NAME, items)
+            db.create_table(LANCE_DATA_TABLE_NAME, items)
                 .mode(CreateTableMode::Overwrite)
                 .add_embedding(embedding_params)?
                 .execute()
                 .await
                 .map_err(|e| LanceError::TableUpdateError(e.to_string()))?;
         }
+
+        sync_table_version(&db).await?;
 
         Ok(())
     }
@@ -788,9 +952,9 @@ mod tests {
 
         let tbl_names = conn.table_names().execute().await;
         test_ok!(tbl_names);
-        test_eq!(tbl_names.unwrap(), vec![LANCE_TABLE_NAME]);
+        test_eq!(tbl_names.unwrap(), vec![LANCE_DATA_TABLE_NAME]);
 
-        let tbl = conn.open_table(LANCE_TABLE_NAME).execute().await;
+        let tbl = conn.open_table(LANCE_DATA_TABLE_NAME).execute().await;
         test_ok!(tbl);
 
         let tbl = tbl.unwrap();
