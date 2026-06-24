@@ -5,7 +5,7 @@ use std::future::Future;
 
 use thiserror::Error;
 
-use crate::vector::backends::lance::{LANCE_TABLE_NAME as TABLE_NAME, get_db_uri};
+use crate::vector::backends::lance::{LANCE_DATA_TABLE_NAME as TABLE_NAME, get_db_uri};
 
 /// Errors that can occur during backup operations
 #[derive(Debug, Error)]
