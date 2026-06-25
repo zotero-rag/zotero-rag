@@ -101,20 +101,6 @@ pub fn get_db_uri() -> String {
     std::env::var("LANCEDB_URI").unwrap_or_else(|_| LANCEDB_URI.to_string())
 }
 
-/// Checks whether the configured LanceDB database exists and contains the expected table.
-async fn db_exists() -> bool {
-    let uri = get_db_uri();
-    if !PathBuf::from(&uri).exists() {
-        return false;
-    }
-
-    if let Ok(db) = connect(&uri).execute().await {
-        db.open_table(LANCE_DATA_TABLE_NAME).execute().await.is_ok()
-    } else {
-        false
-    }
-}
-
 /// Backend for LanceDB vector store.
 #[derive(Debug, Clone)]
 pub struct LanceBackend {
@@ -124,6 +110,9 @@ pub struct LanceBackend {
     schema: Arc<Schema>,
     /// Column name containing the source text used to generate embeddings.
     source_col: String,
+    /// Override for the database URI. When `None`, the URI falls back to the `LANCEDB_URI`
+    /// environment variable (or the [`LANCEDB_URI`] default) via [`get_db_uri`].
+    uri: Option<String>,
 }
 
 /// Metadata about the LanceDB database.
@@ -206,7 +195,17 @@ impl LanceBackend {
             config,
             schema,
             source_col,
+            uri: None,
         }
+    }
+
+    /// Overrides the database URI for this backend instance. When unset, the URI falls back to the
+    /// `LANCEDB_URI` environment variable (or the [`LANCEDB_URI`] default). This is primarily useful
+    /// for pointing a backend at an isolated location, such as a temporary directory in tests.
+    #[must_use]
+    pub fn with_uri(mut self, uri: impl Into<String>) -> Self {
+        self.uri = Some(uri.into());
+        self
     }
 
     /// Returns a reference to the embedding provider configuration.
@@ -287,9 +286,11 @@ impl VectorBackend for LanceBackend {
     type Connection = lancedb::Connection;
     type Metadata = LanceMetadata;
 
-    /// Returns the database URI, allowing override via `LANCEDB_URI` environment variable.
+    /// Returns the database URI for this backend, preferring an instance override (see
+    /// [`LanceBackend::with_uri`]) and otherwise falling back to the `LANCEDB_URI` environment
+    /// variable.
     fn get_db_path(&self) -> String {
-        get_db_uri()
+        self.uri.clone().unwrap_or_else(get_db_uri)
     }
 
     async fn get_metadata(&self) -> Result<Self::Metadata, Self::Error> {
@@ -370,7 +371,16 @@ impl VectorBackend for LanceBackend {
 
     /// Checks if an existing LanceDB exists and has a valid table
     async fn db_exists(&self) -> bool {
-        db_exists().await
+        let uri = self.get_db_path();
+        if !PathBuf::from(&uri).exists() {
+            return false;
+        }
+
+        if let Ok(db) = connect(&uri).execute().await {
+            db.open_table(LANCE_DATA_TABLE_NAME).execute().await.is_ok()
+        } else {
+            false
+        }
     }
 
     /// Create indices for the database. This function creates two indices: an IVF-PQ index on the
@@ -871,7 +881,6 @@ mod tests {
     use futures::StreamExt;
     use lancedb::embeddings::EmbeddingFunction;
     use lancedb::query::ExecutableQuery;
-    use serial_test::serial;
     use zqa_macros::{test_eq, test_ok};
     use zqa_pdftools::chunk::Chunker;
 
@@ -904,18 +913,33 @@ mod tests {
         )])
     }
 
-    fn get_backend(source_col: &str, config: EmbeddingProviderConfig) -> LanceBackend {
+    /// Creates an isolated, uniquely-named temporary database location. The returned [`TempDir`]
+    /// guard must be kept alive for the duration of the test; dropping it deletes the database.
+    /// Because each backend is pointed at its own directory via [`LanceBackend::with_uri`], these
+    /// tests are fully isolated and need no shared-state serialization (no `#[serial]`).
+    fn temp_db() -> (tempfile::TempDir, String) {
+        let dir = tempfile::tempdir().unwrap();
+        let uri = dir
+            .path()
+            .join("lancedb-table")
+            .to_str()
+            .unwrap()
+            .to_string();
+        (dir, uri)
+    }
+
+    fn get_backend(source_col: &str, config: EmbeddingProviderConfig, uri: &str) -> LanceBackend {
         let schema = get_schema(source_col);
 
-        LanceBackend::new(config, Arc::new(schema), source_col.into())
+        LanceBackend::new(config, Arc::new(schema), source_col.into()).with_uri(uri)
     }
 
     #[tokio::test]
-    #[serial]
     async fn test_create_initial_table_with_openai() {
         dotenv().ok();
 
-        let backend = get_backend("data_openai", get_test_openai_embedding_config());
+        let (_db_dir, uri) = temp_db();
+        let backend = get_backend("data_openai", get_test_openai_embedding_config(), &uri);
         let data = StringArray::from(vec!["Hello", "World"]);
 
         let record_batch =
@@ -928,11 +952,11 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial]
     async fn test_create_initial_table_with_voyage() {
         dotenv().ok();
 
         let schema = get_schema("data_voyage");
+        let (_db_dir, uri) = temp_db();
         let backend = get_backend(
             "data_voyage",
             EmbeddingProviderConfig::VoyageAI(VoyageAIConfig {
@@ -941,6 +965,7 @@ mod tests {
                 api_key: env::var("VOYAGE_AI_API_KEY").unwrap(),
                 reranker: DEFAULT_VOYAGE_RERANK_MODEL.into(),
             }),
+            &uri,
         );
         let data = StringArray::from(vec!["Hello", "World"]);
         let record_batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(data)]).unwrap();
@@ -979,8 +1004,56 @@ mod tests {
         }
     }
 
+    /// Locks in the canonical metadata-table schema: a freshly-created DB must have a metadata
+    /// table whose columns are exactly these, in exactly this order. Changing the metadata
+    /// schema is a deliberate act; maintainers should update `get_initial_metadata` and the
+    /// canonical order below together.
     #[tokio::test]
-    #[serial]
+    async fn test_metadata_table_has_canonical_columns() {
+        dotenv().ok();
+
+        let (_db_dir, uri) = temp_db();
+        let backend = get_backend("data_openai", get_test_openai_embedding_config(), &uri);
+        let data = StringArray::from(vec!["Hello", "World"]);
+        let record_batch =
+            RecordBatch::try_new(Arc::new(get_schema("data_openai")), vec![Arc::new(data)])
+                .unwrap();
+        backend
+            .insert_items(vec![record_batch], None)
+            .await
+            .expect("Failed to create new DB");
+
+        let db = backend.connect().await.expect("Failed to connect");
+        let meta_tbl = db
+            .open_table(LANCE_META_TABLE_NAME)
+            .execute()
+            .await
+            .expect("Metadata table should exist after DB creation");
+        let schema = meta_tbl
+            .schema()
+            .await
+            .expect("Failed to read metadata table schema");
+
+        let columns = schema
+            .fields()
+            .iter()
+            .map(|f| f.name().clone())
+            .collect::<Vec<_>>();
+
+        let expected: Vec<String> = [
+            MetadataTableColumns::LibVersion,
+            MetadataTableColumns::DataTableVersion,
+            MetadataTableColumns::EmbeddingProvider,
+            MetadataTableColumns::EmbeddingModel,
+        ]
+        .iter()
+        .map(|col| col.as_str().to_string())
+        .collect();
+
+        test_eq!(columns, expected);
+    }
+
+    #[tokio::test]
     async fn test_search_by_key() {
         dotenv().ok();
 
@@ -999,7 +1072,9 @@ mod tests {
         let batches = vec![record_batch];
 
         let embedding_config = get_test_openai_embedding_config();
-        let backend = LanceBackend::new(embedding_config, schema, "content".into());
+        let (_db_dir, uri) = temp_db();
+        let backend =
+            LanceBackend::new(embedding_config, schema, "content".into()).with_uri(uri.as_str());
 
         backend.insert_items(batches, None).await.unwrap();
 
@@ -1026,7 +1101,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial]
     async fn test_search_by_column() {
         dotenv().ok();
 
@@ -1044,7 +1118,9 @@ mod tests {
         .unwrap();
 
         let embedding_config = get_test_openai_embedding_config();
-        let backend = LanceBackend::new(embedding_config, schema, "item".into());
+        let (_db_dir, uri) = temp_db();
+        let backend =
+            LanceBackend::new(embedding_config, schema, "item".into()).with_uri(uri.as_str());
         backend
             .insert_items(vec![record_batch], None)
             .await
@@ -1089,7 +1165,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial]
     async fn test_create_or_update_indexes() {
         dotenv().ok();
 
@@ -1108,7 +1183,9 @@ mod tests {
                 .unwrap();
 
         let embedding_config = get_test_openai_embedding_config();
-        let backend = LanceBackend::new(embedding_config, schema, "text".into());
+        let (_db_dir, uri) = temp_db();
+        let backend =
+            LanceBackend::new(embedding_config, schema, "text".into()).with_uri(uri.as_str());
         backend
             .insert_items(vec![record_batch], None)
             .await
@@ -1124,7 +1201,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial]
     async fn test_dedup_rows_removes_duplicates() {
         dotenv().ok();
 
@@ -1142,7 +1218,9 @@ mod tests {
         .unwrap();
 
         let embedding_config = get_test_openai_embedding_config();
-        let backend = LanceBackend::new(embedding_config, schema, "title".into());
+        let (_db_dir, uri) = temp_db();
+        let backend =
+            LanceBackend::new(embedding_config, schema, "title".into()).with_uri(uri.as_str());
         backend
             .insert_items(vec![record_batch], None)
             .await
@@ -1159,7 +1237,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial]
     async fn test_dedup_rows_no_duplicates() {
         dotenv().ok();
 
@@ -1176,7 +1253,9 @@ mod tests {
         .unwrap();
 
         let embedding_config = get_test_openai_embedding_config();
-        let backend = LanceBackend::new(embedding_config, schema, "title".into());
+        let (_db_dir, uri) = temp_db();
+        let backend =
+            LanceBackend::new(embedding_config, schema, "title".into()).with_uri(uri.as_str());
         backend
             .insert_items(vec![record_batch], None)
             .await
@@ -1188,7 +1267,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial]
     async fn test_dedup_rows_missing_columns_returns_zero() {
         dotenv().ok();
 
@@ -1205,7 +1283,9 @@ mod tests {
         .unwrap();
 
         let embedding_config = get_test_openai_embedding_config();
-        let insert_backend = LanceBackend::new(embedding_config.clone(), schema, "title".into());
+        let (_db_dir, uri) = temp_db();
+        let insert_backend = LanceBackend::new(embedding_config.clone(), schema, "title".into())
+            .with_uri(uri.as_str());
         insert_backend
             .insert_items(vec![record_batch], None)
             .await
@@ -1217,7 +1297,8 @@ mod tests {
             arrow_schema::Field::new("nonexistent_by", arrow_schema::DataType::Utf8, false),
             arrow_schema::Field::new("nonexistent_key", arrow_schema::DataType::Utf8, false),
         ]));
-        let backend = LanceBackend::new(embedding_config, missing_schema, "nonexistent_by".into());
+        let backend = LanceBackend::new(embedding_config, missing_schema, "nonexistent_by".into())
+            .with_uri(uri.as_str());
         let deleted = backend
             .dedup_rows("nonexistent_by", "nonexistent_key")
             .await;
@@ -1232,7 +1313,6 @@ mod tests {
     /// Verify that a real PDF is chunked into non-empty, well-formed chunks using the
     /// OpenAI-recommended strategy.
     #[tokio::test]
-    #[serial]
     async fn test_pdf_chunking_with_openai_strategy() {
         let extracted =
             zqa_pdftools::parse::extract_text(&pdf_asset_path()).expect("Failed to parse PDF");
@@ -1274,7 +1354,6 @@ mod tests {
     /// Verify that chunks from a real PDF can be embedded with OpenAI and that the resulting
     /// vectors are non-zero.
     #[tokio::test(flavor = "multi_thread")]
-    #[serial]
     async fn test_pdf_chunk_embeddings_are_non_zero() {
         dotenv().ok();
 
@@ -1328,7 +1407,6 @@ mod tests {
     /// document, then verify that a query matching the sentinel retrieves it as the top result
     /// rather than a PDF chunk.
     #[tokio::test(flavor = "multi_thread")]
-    #[serial]
     async fn test_retrieval_ranks_relevant_content_higher() {
         dotenv().ok();
 
@@ -1369,6 +1447,7 @@ mod tests {
         .unwrap();
 
         let embedding_config = get_test_openai_embedding_config();
+        let (_db_dir, uri) = temp_db();
         let backend = LanceBackend::new(
             embedding_config,
             Arc::new(arrow_schema::Schema::new(vec![
@@ -1376,7 +1455,8 @@ mod tests {
                 arrow_schema::Field::new("text", arrow_schema::DataType::Utf8, false),
             ])),
             "text".into(),
-        );
+        )
+        .with_uri(uri.as_str());
         backend
             .insert_items(vec![record_batch], None)
             .await
