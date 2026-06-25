@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use arrow_array::cast::AsArray;
-use arrow_array::types::Float32Type;
+use arrow_array::types::{Float32Type, Int64Type};
 use arrow_array::{RecordBatch, RecordBatchIterator, StringArray, record_batch};
 use arrow_schema::{ArrowError, Schema};
 use async_trait::async_trait;
@@ -120,8 +120,14 @@ pub struct LanceBackend {
 pub struct LanceMetadata {
     /// Number of tables in the database.
     num_tables: usize,
-    /// The embedding table version. Each update to a table creates a new version.
+    /// The live data table version, read from the data table itself. Each update to a table
+    /// creates a new version, so this is the source of truth for the table's current state.
     embedding_table_version: u64,
+    /// The data table version recorded in the metadata table, i.e. the version the metadata was
+    /// last synced to. Under normal operation this equals [`Self::embedding_table_version`];
+    /// a difference signals that a write bypassed the metadata sync (or the DB was modified out
+    /// of band). See [`LanceBackend::sync_table_version`].
+    stored_data_table_version: u64,
     /// Number of rows in the table
     num_rows: usize,
     /// Embedding provider used
@@ -132,22 +138,23 @@ pub struct LanceMetadata {
 
 impl fmt::Display for LanceMetadata {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
+        writeln!(f, "LanceDB metadata:")?;
+        writeln!(f, "\tNumber of tables: {}", self.num_tables)?;
+        writeln!(f, "\tNumber of rows: {}", self.num_rows)?;
+        writeln!(
             f,
-            concat!(
-                "LanceDB metadata:\n",
-                "\tNumber of tables: {}\n",
-                "\tNumber of rows: {}\n",
-                "\tEmbedding table version: {}\n",
-                "\tModel provider: {}\n",
-                "\tModel: {}\n",
-            ),
-            self.num_tables,
-            self.num_rows,
-            self.embedding_table_version,
-            self.embedding_provider.as_str(),
-            self.embedding_model
-        )
+            "\tEmbedding table version: {}",
+            self.embedding_table_version
+        )?;
+        if self.stored_data_table_version != self.embedding_table_version {
+            writeln!(
+                f,
+                "\t⚠ metadata last synced at v{} (data table is at v{})",
+                self.stored_data_table_version, self.embedding_table_version
+            )?;
+        }
+        writeln!(f, "\tModel provider: {}", self.embedding_provider.as_str())?;
+        writeln!(f, "\tModel: {}", self.embedding_model)
     }
 }
 
@@ -276,6 +283,60 @@ fn get_column_from_batch(batch: &RecordBatch, column: &str) -> Vec<String> {
         .collect()
 }
 
+/// Reads the data table version recorded in the metadata table from a metadata `RecordBatch`.
+///
+/// This is the version the metadata was last synced to (see [`LanceBackend::sync_table_version`]),
+/// not the live data table version.
+///
+/// # Errors
+///
+/// Returns [`LanceError::InvalidStateError`] if the batch is empty, the
+/// [`MetadataTableColumns::DataTableVersion`] column is missing or not `Int64`, or the stored value
+/// is negative.
+fn stored_version_from_batch(batch: &RecordBatch) -> Result<u64, LanceError> {
+    let column = MetadataTableColumns::DataTableVersion.as_str();
+    let values = batch
+        .column_by_name(column)
+        .and_then(|array| array.as_primitive_opt::<Int64Type>())
+        .ok_or_else(|| {
+            LanceError::InvalidStateError(format!(
+                "The metadata table is missing a valid Int64 `{column}` column"
+            ))
+        })?;
+
+    if values.is_empty() {
+        return Err(LanceError::InvalidStateError(format!(
+            "The metadata table `{column}` column has no rows"
+        )));
+    }
+
+    u64::try_from(values.value(0)).map_err(|_| {
+        LanceError::InvalidStateError(format!(
+            "The stored data table version ({}) is negative",
+            values.value(0)
+        ))
+    })
+}
+
+/// Reads the data table version recorded in the metadata table (the version the metadata was
+/// last synced to). Compare against the live data table version (`Table::version`) to detect drift.
+///
+/// # Errors
+///
+/// Returns a [`LanceError`] if the metadata table cannot be opened or queried, or if its
+/// `data_table_version` column is missing, empty, or holds an unexpected value.
+pub(crate) async fn read_stored_data_table_version(db: &Connection) -> Result<u64, LanceError> {
+    let meta_tbl = db.open_table(LANCE_META_TABLE_NAME).execute().await?;
+    let mut stream = meta_tbl.query().execute().await?;
+    let Some(batch) = stream.try_next().await? else {
+        return Err(LanceError::InvalidStateError(format!(
+            "The query to {LANCE_META_TABLE_NAME} was successful, but it returned no results."
+        )));
+    };
+
+    stored_version_from_batch(&batch)
+}
+
 #[async_trait]
 impl VectorBackend for LanceBackend {
     type Record = RecordBatch;
@@ -344,6 +405,7 @@ impl VectorBackend for LanceBackend {
             )));
         };
 
+        let stored_data_table_version = stored_version_from_batch(&batch)?;
         let embedding_provider =
             get_column_from_batch(&batch, MetadataTableColumns::EmbeddingProvider.as_str());
         let embedding_model =
@@ -357,6 +419,7 @@ impl VectorBackend for LanceBackend {
                 num_tables,
                 num_rows,
                 embedding_table_version: table_version,
+                stored_data_table_version,
                 embedding_provider: provider,
                 embedding_model: model,
             })
@@ -1051,6 +1114,61 @@ mod tests {
         .collect();
 
         test_eq!(columns, expected);
+    }
+
+    /// A freshly-created DB is in sync (stored == live, no warning); mutating the data table out
+    /// of band (bypassing `sync_table_version`) advances the live version past the stored one, and
+    /// that drift is both detectable on [`LanceMetadata`] and surfaced in its `Display`.
+    #[tokio::test]
+    async fn test_metadata_version_drift_detection() {
+        dotenv().ok();
+
+        let (_db_dir, uri) = temp_db();
+        let schema = Arc::new(arrow_schema::Schema::new(vec![
+            arrow_schema::Field::new("id", arrow_schema::DataType::Utf8, false),
+            arrow_schema::Field::new("text", arrow_schema::DataType::Utf8, false),
+        ]));
+        let rb = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(StringArray::from(vec!["a", "b", "c"])),
+                Arc::new(StringArray::from(vec!["one", "two", "three"])),
+            ],
+        )
+        .unwrap();
+        let backend = LanceBackend::new(get_test_openai_embedding_config(), schema, "text".into())
+            .with_uri(uri.as_str());
+        backend.insert_items(vec![rb], None).await.unwrap();
+
+        // Freshly created: metadata is in sync with the live data table version, no warning shown.
+        let meta = backend.get_metadata().await.unwrap();
+        test_eq!(meta.stored_data_table_version, meta.embedding_table_version);
+        assert!(
+            !format!("{meta}").contains("metadata last synced at"),
+            "in-sync metadata should not render a drift warning"
+        );
+
+        // Mutate the data table out of band — `tbl.delete` bumps the data table version, but
+        // bypasses `sync_table_version`, so the stored version lags behind.
+        let db = backend.connect().await.unwrap();
+        let tbl = db
+            .open_table(LANCE_DATA_TABLE_NAME)
+            .execute()
+            .await
+            .unwrap();
+        tbl.delete("id = 'a'").await.unwrap();
+
+        let meta = backend.get_metadata().await.unwrap();
+        assert!(
+            meta.embedding_table_version > meta.stored_data_table_version,
+            "expected live version {} to exceed stored {}",
+            meta.embedding_table_version,
+            meta.stored_data_table_version
+        );
+        assert!(
+            format!("{meta}").contains("metadata last synced at"),
+            "drifted metadata should render a drift warning"
+        );
     }
 
     #[tokio::test]
