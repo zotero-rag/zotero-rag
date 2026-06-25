@@ -26,7 +26,7 @@ use crate::{
     vector::backends::backend::VectorBackend,
 };
 
-// NOTE: Maintainers: ensure that `LANCEDB_URI` begins with `LANCE_TABLE_NAME`
+// NOTE: Maintainers: ensure that `LANCEDB_URI` begins with `LANCE_DATA_TABLE_NAME`
 
 /// The URI for the LanceDB table. This is the default location for the table, and for now cannot
 /// be changed.
@@ -37,7 +37,7 @@ pub const LANCEDB_URI: &str = "data/lancedb-table";
 pub const LANCE_DATA_TABLE_NAME: &str = "data";
 /// The name of the table containing metadata (model provider, model string, etc.). Like
 /// [`LANCE_DATA_TABLE_NAME`], this also cannot be changed for now.
-pub const LANCE_META_TABLE_NAME: &str = "data";
+pub const LANCE_META_TABLE_NAME: &str = "metadata";
 
 /// Enum of columns maintained in the LanceDB metadata table.
 enum MetadataTableColumns {
@@ -55,15 +55,6 @@ impl MetadataTableColumns {
             Self::DataTableVersion => "data_table_version",
             Self::EmbeddingProvider => "embedding_provider",
             Self::EmbeddingModel => "embedding_model",
-        }
-    }
-
-    fn column_number(&self) -> usize {
-        match self {
-            Self::LibVersion => 0,
-            Self::DataTableVersion => 1,
-            Self::EmbeddingProvider => 2,
-            Self::EmbeddingModel => 3,
         }
     }
 }
@@ -158,7 +149,7 @@ impl fmt::Display for LanceMetadata {
                 "LanceDB metadata:\n",
                 "\tNumber of tables: {}\n",
                 "\tNumber of rows: {}\n",
-                "\tEmbedding table version: {}",
+                "\tEmbedding table version: {}\n",
                 "\tModel provider: {}\n",
                 "\tModel: {}\n",
             ),
@@ -189,7 +180,7 @@ fn get_initial_metadata(config: &EmbeddingProviderConfig) -> Result<RecordBatch,
         // This lets us allow switching models, which is on the roadmap anyway
         (
             MetadataTableColumns::DataTableVersion.as_str(),
-            Int32,
+            Int64,
             [1] // LanceDB tables start at version 1
         ),
         (
@@ -227,7 +218,6 @@ impl LanceBackend {
     /// Sync the version stored in the metadata table with the data table version. This should be called
     /// after each DB update, including inserts/upserts, version restores, and schema updates.
     async fn sync_table_version(&self, db: &Connection) -> Result<(), LanceError> {
-        let data_tbl = db.open_table(LANCE_DATA_TABLE_NAME).execute().await?;
         if !db
             .table_names()
             .execute()
@@ -244,6 +234,7 @@ impl LanceBackend {
             return Ok(());
         }
 
+        let data_tbl = db.open_table(LANCE_DATA_TABLE_NAME).execute().await?;
         let meta_tbl = db.open_table(LANCE_META_TABLE_NAME).execute().await?;
 
         let new_version = data_tbl.version().await?;
@@ -251,7 +242,7 @@ impl LanceBackend {
             .update()
             .column(
                 MetadataTableColumns::DataTableVersion,
-                format!("{new_version} + 1"),
+                new_version.to_string(),
             )
             .execute()
             .await?;
@@ -260,19 +251,25 @@ impl LanceBackend {
     }
 }
 
-/// From a `RecordBatch`, return all values from a specified column as a `Vec<String>`.
+/// From a `RecordBatch`, return all values from the named column as a `Vec<String>`.
 ///
 /// # Arguments
 ///
 /// * `batch`: A reference to a `RecordBatch`.
-/// * `column`: The index of the column to use.
+/// * `column`: The name of the column to use.
 ///
 /// # Returns
 ///
-/// A `Vec<String>` containing all the items in the specified column of the `RecordBatch`.
+/// A `Vec<String>` containing all the items in the named column of the `RecordBatch`. Returns an
+/// empty `Vec` if the column does not exist or is not a UTF-8 string column.
 #[must_use]
-fn get_column_from_batch(batch: &RecordBatch, column: usize) -> Vec<String> {
-    let results = batch.column(column).as_string::<i32>();
+fn get_column_from_batch(batch: &RecordBatch, column: &str) -> Vec<String> {
+    let Some(array) = batch.column_by_name(column) else {
+        return Vec::new();
+    };
+    let Some(results) = array.as_string_opt::<i32>() else {
+        return Vec::new();
+    };
 
     results
         .iter()
@@ -336,7 +333,7 @@ impl VectorBackend for LanceBackend {
             .await
             .map_err(|_| {
                 LanceError::InvalidStateError(format!(
-                    "The table {LANCE_DATA_TABLE_NAME} does not exist"
+                    "The table {LANCE_META_TABLE_NAME} does not exist"
                 ))
             })?;
         let mut stream = meta_tbl.query().execute().await?;
@@ -346,12 +343,10 @@ impl VectorBackend for LanceBackend {
             )));
         };
 
-        let embedding_provider = get_column_from_batch(
-            &batch,
-            MetadataTableColumns::EmbeddingProvider.column_number(),
-        );
+        let embedding_provider =
+            get_column_from_batch(&batch, MetadataTableColumns::EmbeddingProvider.as_str());
         let embedding_model =
-            get_column_from_batch(&batch, MetadataTableColumns::EmbeddingModel.column_number());
+            get_column_from_batch(&batch, MetadataTableColumns::EmbeddingModel.as_str());
 
         if let Some(provider_string) = embedding_provider.into_iter().next()
             && let Ok(provider) = ProviderId::from_str(&provider_string)
@@ -528,16 +523,8 @@ impl VectorBackend for LanceBackend {
         let mut duplicate_keys = Vec::new();
 
         while let Some(batch) = stream.try_next().await? {
-            let batch_schema = batch.schema();
-            let Some((by_idx, _)) = batch_schema.column_with_name(by) else {
-                continue;
-            };
-            let Some((key_idx, _)) = batch_schema.column_with_name(key) else {
-                continue;
-            };
-
-            let by_values = get_column_from_batch(&batch, by_idx);
-            let key_values = get_column_from_batch(&batch, key_idx);
+            let by_values = get_column_from_batch(&batch, by);
+            let key_values = get_column_from_batch(&batch, key);
 
             for (by_val, key_val) in by_values.into_iter().zip(key_values) {
                 if !seen_by_values.insert(by_val) {
@@ -839,6 +826,8 @@ impl VectorBackend for LanceBackend {
                 .execute(Box::new(reader))
                 .await
                 .map_err(|e| LanceError::TableUpdateError(e.to_string()))?;
+
+            self.sync_table_version(&db).await?;
         } else {
             let embedding_params = EmbeddingDefinition::new(
                 self.source_col.as_str(),
