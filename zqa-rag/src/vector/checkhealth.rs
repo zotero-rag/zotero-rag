@@ -12,7 +12,9 @@ use lancedb::query::{ExecutableQuery, QueryBase};
 use lancedb::{Table, connect};
 
 use super::backends::lance::LanceError;
-use super::backends::lance::{LANCE_DATA_TABLE_NAME as TABLE_NAME, get_db_uri};
+use super::backends::lance::{
+    LANCE_DATA_TABLE_NAME as TABLE_NAME, get_db_uri, read_stored_data_table_version,
+};
 use crate::capabilities::EmbeddingProvider;
 use crate::embedding::common::get_embedding_dims_by_provider;
 use crate::providers::ProviderId;
@@ -48,6 +50,11 @@ pub struct HealthCheckResult {
     /// `Some(Ok(index_info))` if we successfully got the index information, and `Some(Err(...))`
     /// when there was an error connecting to the DB or opening the table.
     pub index_info: Option<Result<Vec<(String, String)>, LanceError>>,
+    /// Metadata version drift, as `(stored, live)`: the data table version recorded in the
+    /// metadata table versus the live data table version. `None` when the check hasn't run,
+    /// `Some(Ok((stored, live)))` with the two versions (equal means in sync), and `Some(Err(...))`
+    /// when the versions could not be read.
+    pub version_drift: Option<Result<(u64, u64), LanceError>>,
 }
 
 /// Format file size in a human-readable format
@@ -187,6 +194,31 @@ impl fmt::Display for HealthCheckResult {
                 writeln!(f, "{YELLOW}⚠ Index information check was skipped{RESET}")?;
             }
         }
+        writeln!(f)?;
+
+        // Check 7: Metadata version sync
+        match &self.version_drift {
+            Some(Ok((stored, live))) => {
+                if stored == live {
+                    writeln!(f, "{GREEN}✓ Metadata version is in sync (v{live}){RESET}")?;
+                } else {
+                    writeln!(
+                        f,
+                        "{YELLOW}⚠ Metadata version drift: metadata last synced at v{stored}, but the data table is at v{live}{RESET}"
+                    )?;
+                    writeln!(
+                        f,
+                        "{YELLOW}  → A write may have bypassed metadata sync, or the database was modified out of band{RESET}"
+                    )?;
+                }
+            }
+            Some(Err(e)) => {
+                writeln!(f, "{RED}✗ Failed to check metadata version: {e}{RESET}")?;
+            }
+            None => {
+                writeln!(f, "{YELLOW}⚠ Metadata version check was skipped{RESET}")?;
+            }
+        }
 
         Ok(())
     }
@@ -312,6 +344,7 @@ pub async fn lancedb_health_check(
         num_rows: None,
         zero_embedding_items: None,
         index_info: None,
+        version_drift: None,
     };
 
     // Check 1: Directory existence and size
@@ -376,6 +409,15 @@ pub async fn lancedb_health_check(
             Err(e) => Some(Err(LanceError::QueryError(e.to_string()))),
         }
     }
+
+    // Check 7: Metadata version drift (stored vs live data table version)
+    result.version_drift = Some(match read_stored_data_table_version(&db).await {
+        Ok(stored) => match tbl.version().await {
+            Ok(live) => Ok((stored, live)),
+            Err(e) => Err(LanceError::QueryError(e.to_string())),
+        },
+        Err(e) => Err(e),
+    });
 
     Ok(result)
 }

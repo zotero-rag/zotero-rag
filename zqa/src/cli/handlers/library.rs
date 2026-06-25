@@ -522,7 +522,7 @@ mod tests {
                 .await;
         let output = String::from_utf8(ctx.out.into_inner()).unwrap();
         test_ok!(stats);
-        test_contains!(output, "LanceDB Statistics:");
+        test_contains!(output, "LanceDB metadata:");
         test_contains!(output, "Number of rows: 8");
 
         if fs::metadata(BATCH_ITER_FILE).is_ok() {
