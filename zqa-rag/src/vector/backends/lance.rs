@@ -171,6 +171,41 @@ impl fmt::Display for LanceMetadata {
     }
 }
 
+/// Get the database metadata for a newly-created DB. This data is stored in
+/// [`LANCE_META_TABLE_NAME`] and updated on operations that modify the data table version.
+fn get_initial_metadata(config: &EmbeddingProviderConfig) -> Result<RecordBatch, LanceError> {
+    // LanceDB allows useful operations such as schema updates, and each of those is
+    // associated with a new table version. In the future, we might switch to a different
+    // schema, such as with different types (which LanceDB also supports); in this case,
+    // recording a minimum supported lib version is necessary.
+    let lib_version = env!("CARGO_PKG_VERSION");
+
+    record_batch!(
+        (
+            MetadataTableColumns::LibVersion.as_str(),
+            Utf8,
+            [lib_version]
+        ),
+        // This lets us allow switching models, which is on the roadmap anyway
+        (
+            MetadataTableColumns::DataTableVersion.as_str(),
+            Int32,
+            [1] // LanceDB tables start at version 1
+        ),
+        (
+            MetadataTableColumns::EmbeddingProvider.as_str(),
+            Utf8,
+            [config.provider_id().as_str()]
+        ),
+        (
+            MetadataTableColumns::EmbeddingModel.as_str(),
+            Utf8,
+            [config.model_name()]
+        )
+    )
+    .map_err(LanceError::ArrowError)
+}
+
 impl LanceBackend {
     /// Creates a new `LanceBackend` with the given embedding provider config, Arrow schema, and
     /// source column name.
@@ -187,6 +222,41 @@ impl LanceBackend {
     #[must_use]
     pub fn embedding_config(&self) -> &EmbeddingProviderConfig {
         &self.config
+    }
+
+    /// Sync the version stored in the metadata table with the data table version. This should be called
+    /// after each DB update, including inserts/upserts, version restores, and schema updates.
+    async fn sync_table_version(&self, db: &Connection) -> Result<(), LanceError> {
+        let data_tbl = db.open_table(LANCE_DATA_TABLE_NAME).execute().await?;
+        if !db
+            .table_names()
+            .execute()
+            .await?
+            .contains(&LANCE_META_TABLE_NAME.to_string())
+        {
+            let metadata_record = get_initial_metadata(&self.config)?;
+            db.create_table(LANCE_META_TABLE_NAME, metadata_record)
+                .mode(CreateTableMode::Overwrite)
+                .execute()
+                .await
+                .map_err(|e| LanceError::TableUpdateError(e.to_string()))?;
+
+            return Ok(());
+        }
+
+        let meta_tbl = db.open_table(LANCE_META_TABLE_NAME).execute().await?;
+
+        let new_version = data_tbl.version().await?;
+        meta_tbl
+            .update()
+            .column(
+                MetadataTableColumns::DataTableVersion,
+                format!("{new_version} + 1"),
+            )
+            .execute()
+            .await?;
+
+        Ok(())
     }
 }
 
@@ -208,27 +278,6 @@ fn get_column_from_batch(batch: &RecordBatch, column: usize) -> Vec<String> {
         .iter()
         .filter_map(|s| Some(s?.to_string()))
         .collect()
-}
-
-// TODO: Implement a `migrate` function to migrate to a new DB version
-
-/// Sync the version stored in the metadata table with the data table version. This should be called
-/// after each DB update, including inserts/upserts, version restores, and schema updates.
-async fn sync_table_version(db: &Connection) -> Result<(), LanceError> {
-    let data_tbl = db.open_table(LANCE_DATA_TABLE_NAME).execute().await?;
-    let meta_tbl = db.open_table(LANCE_META_TABLE_NAME).execute().await?;
-
-    let new_version = data_tbl.version().await?;
-    meta_tbl
-        .update()
-        .column(
-            MetadataTableColumns::DataTableVersion,
-            format!("{new_version} + 1"),
-        )
-        .execute()
-        .await?;
-
-    Ok(())
 }
 
 #[async_trait]
@@ -371,7 +420,7 @@ impl VectorBackend for LanceBackend {
             .await?;
         }
 
-        sync_table_version(&db).await?;
+        self.sync_table_version(&db).await?;
 
         // If both indices already existed before this run, they could be optimized here
         // but optimization is optional and can be done separately.
@@ -431,7 +480,7 @@ impl VectorBackend for LanceBackend {
             table.delete(&delete_pred).await?;
         }
 
-        sync_table_version(&db).await?;
+        self.sync_table_version(&db).await?;
 
         Ok(())
     }
@@ -503,7 +552,7 @@ impl VectorBackend for LanceBackend {
             self.delete_rows(key, &duplicate_keys).await?;
         }
 
-        sync_table_version(&db).await?;
+        self.sync_table_version(&db).await?;
 
         Ok(deleted_count)
     }
@@ -797,35 +846,6 @@ impl VectorBackend for LanceBackend {
                 Some("embeddings"),
             );
 
-            // LanceDB allows useful operations such as schema updates, and each of those is
-            // associated with a new table version. In the future, we might switch to a different
-            // schema, such as with different types (which LanceDB also supports); in this case,
-            // recording a minimum supported lib version is necessary.
-            let lib_version = env!("CARGO_PKG_VERSION");
-            let metadata_record = record_batch!(
-                (
-                    MetadataTableColumns::LibVersion.as_str(),
-                    Utf8,
-                    [lib_version]
-                ),
-                // This lets us allow switching models, which is on the roadmap anyway
-                (
-                    MetadataTableColumns::DataTableVersion.as_str(),
-                    Int32,
-                    [1] // LanceDB tables start at version 1
-                ),
-                (
-                    MetadataTableColumns::EmbeddingProvider.as_str(),
-                    Utf8,
-                    [self.config.provider_id().as_str()]
-                ),
-                (
-                    MetadataTableColumns::EmbeddingModel.as_str(),
-                    Utf8,
-                    [self.config.model_name()]
-                )
-            )?;
-
             // Create the metadata table first. This order guarantees that in the worst case, we
             // end up with a DB that knows which provider is being used and has no data; the
             // alternative would be a DB that has data but does not "know" what model/provider were
@@ -833,11 +853,7 @@ impl VectorBackend for LanceBackend {
             //
             // If the metadata is stored and creating the data table fails,
             // [`CreateTableMode::Overwrite`] overwrites it on the next attempt anyway.
-            db.create_table(LANCE_META_TABLE_NAME, metadata_record)
-                .mode(CreateTableMode::Overwrite)
-                .execute()
-                .await
-                .map_err(|e| LanceError::TableUpdateError(e.to_string()))?;
+            self.sync_table_version(&db).await?;
 
             // Create a new table and add rows
             db.create_table(LANCE_DATA_TABLE_NAME, items)
@@ -847,8 +863,6 @@ impl VectorBackend for LanceBackend {
                 .await
                 .map_err(|e| LanceError::TableUpdateError(e.to_string()))?;
         }
-
-        sync_table_version(&db).await?;
 
         Ok(())
     }
