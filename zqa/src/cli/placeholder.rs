@@ -53,6 +53,8 @@ struct MentionSpan<'a> {
 }
 
 const SLASH_COMMANDS: &[&str] = &[
+    "/batch check",
+    "/batch create",
     "/checkhealth",
     "/config",
     "/docs clear",
@@ -71,7 +73,6 @@ const SLASH_COMMANDS: &[&str] = &[
     "/resume",
     "/search",
     "/stats",
-    "/sync",
 ];
 
 /// Returns the name of the best-match PDF file in the current directory, if any exist.
