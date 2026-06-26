@@ -4,6 +4,10 @@ name: CD
 permissions:
   contents: read
 
+concurrency: 
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   CICD_INTERMEDIATES_DIR: "_cicd-intermediates"
 
