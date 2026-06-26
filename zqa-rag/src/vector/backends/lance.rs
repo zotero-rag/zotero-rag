@@ -253,6 +253,10 @@ impl LanceBackend {
         let meta_tbl = db.open_table(LANCE_META_TABLE_NAME).execute().await?;
 
         let new_version = data_tbl.version().await?;
+
+        // NOTE: If we migrate to a design where we use multiple rows (e.g., if we want to allow
+        // different versions with different models/providers/etc.), then an `only_if` should be
+        // added here.
         meta_tbl
             .update()
             .column(
@@ -319,7 +323,7 @@ fn stored_version_from_batch(batch: &RecordBatch) -> Result<u64, LanceError> {
         )));
     }
 
-    u64::try_from(values.value(0)).map_err(|_| {
+    u64::try_from(values.value(values.len() - 1)).map_err(|_| {
         LanceError::InvalidStateError(format!(
             "The stored data table version ({}) is negative",
             values.value(0)
