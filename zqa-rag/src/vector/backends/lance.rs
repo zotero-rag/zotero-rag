@@ -127,7 +127,7 @@ pub struct LanceMetadata {
     /// last synced to. Under normal operation this equals [`Self::embedding_table_version`];
     /// a difference signals that a write bypassed the metadata sync (or the DB was modified out
     /// of band). See [`LanceBackend::sync_table_version`].
-    stored_data_table_version: u64,
+    data_table_version: u64,
     /// Number of rows in the table
     num_rows: usize,
     /// Embedding provider used
@@ -146,11 +146,11 @@ impl fmt::Display for LanceMetadata {
             "\tEmbedding table version: {}",
             self.embedding_table_version
         )?;
-        if self.stored_data_table_version != self.embedding_table_version {
+        if self.data_table_version != self.embedding_table_version {
             writeln!(
                 f,
                 "\t⚠ metadata last synced at v{} (data table is at v{})",
-                self.stored_data_table_version, self.embedding_table_version
+                self.data_table_version, self.embedding_table_version
             )?;
         }
         writeln!(f, "\tModel provider: {}", self.embedding_provider.as_str())?;
@@ -193,6 +193,29 @@ fn get_initial_metadata(config: &EmbeddingProviderConfig) -> Result<RecordBatch,
     .map_err(LanceError::ArrowError)
 }
 
+/// Ensure that [`LANCE_META_TABLE_NAME`] exists in the database. If it does, no
+/// operation is performed.
+async fn ensure_metadata_table(
+    db: &Connection,
+    config: &EmbeddingProviderConfig,
+) -> Result<(), LanceError> {
+    if !db
+        .table_names()
+        .execute()
+        .await?
+        .contains(&LANCE_META_TABLE_NAME.to_string())
+    {
+        let metadata_record = get_initial_metadata(config)?;
+        db.create_table(LANCE_META_TABLE_NAME, metadata_record)
+            .mode(CreateTableMode::Overwrite)
+            .execute()
+            .await
+            .map_err(|e| LanceError::TableUpdateError(e.to_string()))?;
+    }
+
+    Ok(())
+}
+
 impl LanceBackend {
     /// Creates a new `LanceBackend` with the given embedding provider config, Arrow schema, and
     /// source column name.
@@ -224,21 +247,7 @@ impl LanceBackend {
     /// Sync the version stored in the metadata table with the data table version. This should be called
     /// after each DB update, including inserts/upserts, version restores, and schema updates.
     async fn sync_table_version(&self, db: &Connection) -> Result<(), LanceError> {
-        if !db
-            .table_names()
-            .execute()
-            .await?
-            .contains(&LANCE_META_TABLE_NAME.to_string())
-        {
-            let metadata_record = get_initial_metadata(&self.config)?;
-            db.create_table(LANCE_META_TABLE_NAME, metadata_record)
-                .mode(CreateTableMode::Overwrite)
-                .execute()
-                .await
-                .map_err(|e| LanceError::TableUpdateError(e.to_string()))?;
-
-            return Ok(());
-        }
+        ensure_metadata_table(db, &self.config).await?;
 
         let data_tbl = db.open_table(LANCE_DATA_TABLE_NAME).execute().await?;
         let meta_tbl = db.open_table(LANCE_META_TABLE_NAME).execute().await?;
@@ -411,25 +420,38 @@ impl VectorBackend for LanceBackend {
         let embedding_model =
             get_column_from_batch(&batch, MetadataTableColumns::EmbeddingModel.as_str());
 
-        if let Some(provider_string) = embedding_provider.into_iter().next()
-            && let Ok(provider) = ProviderId::from_str(&provider_string)
-            && let Some(model) = embedding_model.into_iter().next()
-        {
-            Ok(LanceMetadata {
-                num_tables,
-                num_rows,
-                embedding_table_version: table_version,
-                stored_data_table_version,
-                embedding_provider: provider,
-                embedding_model: model,
-            })
-        } else {
-            // TODO: This isn't a useful error message for *users*, it tells them nothing about what
-            // to do; although, there isn't much they can...
+        let Some(provider_string) = embedding_provider.into_iter().last() else {
             return Err(LanceError::InvalidStateError(format!(
-                "We got a batch from {LANCE_META_TABLE_NAME}, but the metadata columns were empty."
+                "We got a batch from {LANCE_META_TABLE_NAME}, but the {} column was empty.",
+                MetadataTableColumns::EmbeddingProvider.as_str()
             )));
-        }
+        };
+
+        let Ok(provider) = ProviderId::from_str(&provider_string) else {
+            return Err(LanceError::InvalidStateError(format!(
+                concat!(
+                    "The provider in the metadata table '{}' is not valid. ",
+                    "Either the database is corrupted, or the database was created with a newer version."
+                ),
+                provider_string
+            )));
+        };
+
+        let Some(model) = embedding_model.into_iter().next() else {
+            return Err(LanceError::InvalidStateError(format!(
+                "We got a batch from {LANCE_META_TABLE_NAME}, but the {} column was empty.",
+                MetadataTableColumns::EmbeddingModel.as_str()
+            )));
+        };
+
+        Ok(LanceMetadata {
+            num_tables,
+            num_rows,
+            embedding_table_version: table_version,
+            data_table_version,
+            embedding_provider: provider,
+            embedding_model: model,
+        })
     }
 
     /// Checks if an existing LanceDB exists and has a valid table
@@ -611,8 +633,6 @@ impl VectorBackend for LanceBackend {
         if !duplicate_keys.is_empty() {
             self.delete_rows(key, &duplicate_keys).await?;
         }
-
-        self.sync_table_version(&db).await?;
 
         Ok(deleted_count)
     }
@@ -915,7 +935,7 @@ impl VectorBackend for LanceBackend {
             //
             // If the metadata is stored and creating the data table fails,
             // [`CreateTableMode::Overwrite`] overwrites it on the next attempt anyway.
-            self.sync_table_version(&db).await?;
+            ensure_metadata_table(&db, &self.config).await?;
 
             // Create a new table and add rows
             db.create_table(LANCE_DATA_TABLE_NAME, items)
@@ -924,6 +944,8 @@ impl VectorBackend for LanceBackend {
                 .execute()
                 .await
                 .map_err(|e| LanceError::TableUpdateError(e.to_string()))?;
+
+            self.sync_table_version(&db).await?;
         }
 
         Ok(())
@@ -1043,7 +1065,10 @@ mod tests {
 
         let tbl_names = conn.table_names().execute().await;
         test_ok!(tbl_names);
-        test_eq!(tbl_names.unwrap(), vec![LANCE_DATA_TABLE_NAME]);
+        test_eq!(
+            tbl_names.unwrap(),
+            vec![LANCE_DATA_TABLE_NAME, LANCE_META_TABLE_NAME]
+        );
 
         let tbl = conn.open_table(LANCE_DATA_TABLE_NAME).execute().await;
         test_ok!(tbl);
@@ -1142,7 +1167,7 @@ mod tests {
 
         // Freshly created: metadata is in sync with the live data table version, no warning shown.
         let meta = backend.get_metadata().await.unwrap();
-        test_eq!(meta.stored_data_table_version, meta.embedding_table_version);
+        test_eq!(meta.data_table_version, meta.embedding_table_version);
         assert!(
             !format!("{meta}").contains("metadata last synced at"),
             "in-sync metadata should not render a drift warning"
@@ -1160,10 +1185,10 @@ mod tests {
 
         let meta = backend.get_metadata().await.unwrap();
         assert!(
-            meta.embedding_table_version > meta.stored_data_table_version,
+            meta.embedding_table_version > meta.data_table_version,
             "expected live version {} to exceed stored {}",
             meta.embedding_table_version,
-            meta.stored_data_table_version
+            meta.data_table_version
         );
         assert!(
             format!("{meta}").contains("metadata last synced at"),
