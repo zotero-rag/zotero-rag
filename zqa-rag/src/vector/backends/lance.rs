@@ -437,7 +437,7 @@ impl VectorBackend for LanceBackend {
             )));
         };
 
-        let Some(model) = embedding_model.into_iter().next() else {
+        let Some(model) = embedding_model.into_iter().last() else {
             return Err(LanceError::InvalidStateError(format!(
                 "We got a batch from {LANCE_META_TABLE_NAME}, but the {} column was empty.",
                 MetadataTableColumns::EmbeddingModel.as_str()
