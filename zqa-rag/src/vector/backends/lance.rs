@@ -414,7 +414,7 @@ impl VectorBackend for LanceBackend {
             )));
         };
 
-        let stored_data_table_version = stored_version_from_batch(&batch)?;
+        let data_table_version = stored_version_from_batch(&batch)?;
         let embedding_provider =
             get_column_from_batch(&batch, MetadataTableColumns::EmbeddingProvider.as_str());
         let embedding_model =
