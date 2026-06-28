@@ -1,5 +1,8 @@
 [package]
 name = "zqa-macros"
+authors = ["Rahul Yedida <hello@ryedida.me>"]
+homepage = "https://github.com/zotero-rag/zotero-rag"
+description = "Macros for the `zqa` application"
 version = "0.1.0"
 edition = "2024"
 license = "MIT"
