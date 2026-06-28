@@ -10,6 +10,8 @@ use crate::{
     common::Context,
 };
 
+use crate::utils::terminal::{BOLD, RESET};
+
 /// Save the current conversation, if needed, and prepare to exit the CLI.
 ///
 /// # Arguments
@@ -103,7 +105,7 @@ where
     O: Write,
     E: Write,
 {
-    writeln!(&mut ctx.out, "Basic usage:")?;
+    writeln!(&mut ctx.out, "{BOLD}Basic usage:{RESET}")?;
     writeln!(
         &mut ctx.out,
         "- If you haven't already done so, you should run `/process` or `/batch create` to set up an embedding database."
@@ -117,10 +119,10 @@ where
         "- Use @ to include a PDF file in your current directory in the conversation."
     )?;
     writeln!(&mut ctx.out)?;
-    writeln!(&mut ctx.out, "Available commands:\n")?;
+    writeln!(&mut ctx.out, "{BOLD}Available commands:\n{RESET}")?;
     writeln!(&mut ctx.out, "/help\t\t\tShow this help message")?;
     writeln!(&mut ctx.out)?;
-    writeln!(&mut ctx.out, "Common commands:")?;
+    writeln!(&mut ctx.out, "{BOLD}Common commands:{RESET}")?;
     writeln!(
         &mut ctx.out,
         "/process\t\tPre-process Zotero library. Use this to update the database."
@@ -144,7 +146,7 @@ where
         "/quit\t\t\tExit the program. You can also use Ctrl+C or just type 'quit'."
     )?;
     writeln!(&mut ctx.out)?;
-    writeln!(&mut ctx.out, "Batch API commands:")?;
+    writeln!(&mut ctx.out, "{BOLD}Batch API commands:{RESET}")?;
     writeln!(
         &mut ctx.out,
         "/batch create\t\tPre-process Zotero library, but use a batch embedding API instead."
@@ -153,12 +155,9 @@ where
         &mut ctx.out,
         "/batch check\t\tCheck on the status of a submitted batch."
     )?;
-    writeln!(
-        &mut ctx.out,
-        "/batch cancel <id>\t\tCancel a pending batch."
-    )?;
+    writeln!(&mut ctx.out, "/batch cancel <id>\tCancel a pending batch.")?;
     writeln!(&mut ctx.out)?;
-    writeln!(&mut ctx.out, "Session document commands:")?;
+    writeln!(&mut ctx.out, "{BOLD}Session document commands:{RESET}")?;
     writeln!(
         &mut ctx.out,
         "/docs clear\t\tClear all documents in this session."
@@ -172,7 +171,10 @@ where
         "/docs remove <key>\tRemove a document with a specified key from the session."
     )?;
     writeln!(&mut ctx.out)?;
-    writeln!(&mut ctx.out, "Repair and troubleshooting commands:")?;
+    writeln!(
+        &mut ctx.out,
+        "{BOLD}Repair and troubleshooting commands:{RESET}"
+    )?;
     writeln!(
         &mut ctx.out,
         "/embed\t\t\tRepair failed DB creation by re-adding embeddings."

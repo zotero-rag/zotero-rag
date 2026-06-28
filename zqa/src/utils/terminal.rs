@@ -20,6 +20,9 @@ pub const RED: &str = "\x1b[31m";
 /// ANSI escape code for red, bold text
 pub const RED_BOLD: &str = "\x1b[31;1m";
 
+/// ANSI escape code for bold text
+pub const BOLD: &str = "\x1b[1m";
+
 /// Read a line of input.
 pub(crate) fn read_line<R: BufRead>(reader: &mut R) -> String {
     let mut input = String::new();
