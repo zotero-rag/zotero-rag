@@ -479,3 +479,67 @@ pub(crate) fn compute_font_encoding(
         Ok(FontEncoding::Simple)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_cmap_ranged() {
+        // A range that walks from CID 000B to 000C, mapping the last code unit upward from
+        // U+0028 ('('). So 000B -> '(' and 000C -> ')'.
+        let cmap = "\
+1 beginbfrange
+<000b> <000c> <0028>
+endbfrange";
+
+        let mappings = parse_cmap(cmap, "F1").expect("ranged CMap should parse");
+
+        assert_eq!(mappings.len(), 2);
+        assert_eq!(mappings.get("000b"), Some(&"(".to_string()));
+        assert_eq!(mappings.get("000c"), Some(&")".to_string()));
+    }
+
+    #[test]
+    fn test_parse_cmap_ranged_multi_entry() {
+        // Two ranges in a single block, with the start CID and Unicode code points not aligned.
+        // The first range maps 0041..=0043 onto 'a'..='c'; the second maps a single CID 0050 to 'Z'.
+        let cmap = "\
+2 beginbfrange
+<0041> <0043> <0061>
+<0050> <0050> <005a>
+endbfrange";
+
+        let mappings = parse_cmap(cmap, "F2").expect("ranged CMap should parse");
+
+        assert_eq!(mappings.len(), 4);
+        assert_eq!(mappings.get("0041"), Some(&"a".to_string()));
+        assert_eq!(mappings.get("0042"), Some(&"b".to_string()));
+        assert_eq!(mappings.get("0043"), Some(&"c".to_string()));
+        assert_eq!(mappings.get("0050"), Some(&"Z".to_string()));
+    }
+
+    #[test]
+    fn test_parse_cmap_ranged_rejects_arrays() {
+        // Array destinations in a `bfrange` are not yet supported and must surface an error
+        // rather than silently dropping the line.
+        let cmap = "\
+1 beginbfrange
+<0001> <0003> [<0041> <0042> <0043>]
+endbfrange";
+
+        let err = parse_cmap(cmap, "F3").expect_err("array ranges are unsupported");
+        assert!(matches!(err, PdfError::EncodingError(_)));
+    }
+
+    #[test]
+    fn test_parse_cmap_ranged_missing_end_marker() {
+        // A `beginbfrange` without its matching `endbfrange` is an error.
+        let cmap = "\
+1 beginbfrange
+<000b> <000c> <0028>";
+
+        let err = parse_cmap(cmap, "F4").expect_err("missing endbfrange should error");
+        assert!(matches!(err, PdfError::EncodingError(_)));
+    }
+}
