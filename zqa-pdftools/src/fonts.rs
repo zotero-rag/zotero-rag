@@ -198,28 +198,24 @@ pub(crate) fn get_font<'a>(
 /// more complex use cases such as those involving `begincidrange`..`endcidrange`. Note that per
 /// ISO 32000-1:2008, §9.7.5.4(e), `beginrearrangedfont`..`endrearrangedfont` should not be used in
 /// embedded CMaps; moreover, `usefont`s should only specify a font number of 0.
-pub(crate) fn parse_cmap(
-    cmap: String,
-    font_key: &str,
-) -> Result<HashMap<String, String>, PdfError> {
+#[allow(clippy::too_many_lines)]
+pub(crate) fn parse_cmap(cmap: &str, font_key: &str) -> Result<HashMap<String, String>, PdfError> {
     // TODO: (ZOT-202) Technically, the number of entries in each block is limited to 100,
     // so a CID mapping can have multiple blocks. We should parse all such blocks, not just
     // the first.
 
     let cmap_kind = if cmap.contains("beginbfchar") {
         CMapKind::Individual
-    } else if cmap.contains("beginbfranged") {
+    } else if cmap.contains("beginbfrange") {
         CMapKind::Ranged
     } else {
         CMapKind::Unknown
     };
 
     match cmap_kind {
-        CMapKind::Unknown => {
-            return Err(PdfError::EncodingError(format!(
-                "CMap type for {font_key} could not be determined."
-            )));
-        }
+        CMapKind::Unknown => Err(PdfError::EncodingError(format!(
+            "CMap type for {font_key} could not be determined."
+        ))),
         CMapKind::Individual => {
             let csrange_begin = cmap.find("beginbfchar").unwrap() + "beginbfchar".len();
             let csrange_end = cmap
@@ -330,18 +326,18 @@ pub(crate) fn parse_cmap(
                     .collect::<Result<_, _>>()
                     .map_err(|_| PdfError::InvalidUtf8)?;
 
-                for i in start_cid_u16..end_cid_u16 + 1 {
+                for i in start_cid_u16..=end_cid_u16 {
                     let mut cur_char_units = code_units.clone();
-                    cur_char_units.last_mut().and_then(|&mut ref mut c| {
-                        *c += 1;
-                        Some(())
-                    });
+
+                    if let Some(c) = cur_char_units.last_mut() {
+                        *c += i - start_cid_u16;
+                    }
                     let unicode: String = std::char::decode_utf16(cur_char_units)
                         .map(|r| {
                             r.map_err(|e| PdfError::EncodingError(format!("Invalid UTF-16: {e}")))
                         })
                         .collect::<Result<_, _>>()?;
-                    mappings.insert(i.to_string().to_lowercase(), unicode);
+                    mappings.insert(format!("{i:04x}"), unicode);
                 }
             }
 
@@ -434,7 +430,7 @@ pub(crate) fn compute_font_encoding(
     })?;
 
     if ["WinAnsiEncoding", "MacRomanEncoding"].contains(&font_encoding) {
-        return Ok(FontEncoding::Simple);
+        Ok(FontEncoding::Simple)
     } else if ["Identity-H", "Identity-V"].contains(&font_encoding) || font_encoding == "Type0" {
         // Test 3: if the font has:
         //   /Subtype /Type0
@@ -472,14 +468,14 @@ pub(crate) fn compute_font_encoding(
             })?;
 
         let cmap = String::from_utf8(decompressed).map_err(|_| PdfError::InvalidUtf8)?;
-        let mappings = parse_cmap(cmap, font_key)?;
+        let mappings = parse_cmap(&cmap, font_key)?;
 
-        return Ok(FontEncoding::CIDKeyed(mappings));
+        Ok(FontEncoding::CIDKeyed(mappings))
     } else {
         // If we got here, then we don't have a good idea; emit a warning and assume Simple.
         log::warn!(
             "No heuristic matched for font {font_key}; assuming simple. This is likely wrong."
         );
-        return Ok(FontEncoding::Simple);
+        Ok(FontEncoding::Simple)
     }
 }
