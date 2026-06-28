@@ -329,7 +329,13 @@ pub(crate) fn parse_cmap(cmap: &str, font_key: &str) -> Result<HashMap<String, S
                 let original_last = code_units.last().copied();
                 for i in start_cid_u16..=end_cid_u16 {
                     if let (Some(c), Some(orig)) = (code_units.last_mut(), original_last) {
-                        *c = orig + (i - start_cid_u16);
+                        // Technically, this is supposed to be *byte* addition, so it's not
+                        // to-spec, but this is good enough.
+                        *c = orig.checked_add(i - start_cid_u16).ok_or_else(|| {
+                            PdfError::EncodingError(format!(
+                                "In CMap for {font_key}, ranged destination overflowed u16"
+                            ))
+                        })?;
                     }
                     let unicode: String = std::char::decode_utf16(code_units.iter().copied())
                         .map(|r| {
