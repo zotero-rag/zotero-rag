@@ -3,7 +3,6 @@
 //! later. The parser also handles common math symbols and converts them to their corresponding
 //! LaTeX equivalents.
 
-use std::char::decode_utf16;
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::f32;
@@ -13,11 +12,13 @@ use std::{error::Error, str};
 
 use itertools::Itertools;
 use log;
-use lopdf::{Document, Object};
+use lopdf::Document;
 use ordered_float::OrderedFloat;
 
 use crate::edits::{Edit, EditType, apply_edits};
-use crate::fonts::{FONT_TRANSFORMS, FontEncoding, FontSizeMarker, font_transform};
+use crate::fonts::{
+    FONT_TRANSFORMS, FontEncoding, FontSizeMarker, compute_font_encoding, font_transform, get_font,
+};
 use crate::tokenizer::{Token, tokenize};
 
 const ASCII_PLUS: u8 = b'+';
@@ -33,7 +34,7 @@ pub const DEFAULT_TBL_TD_THRESHOLD: usize = 5;
 
 /// A wrapper for all PDF parsing errors
 #[derive(Debug, thiserror::Error)]
-enum PdfError {
+pub(crate) enum PdfError {
     #[error("Failed to get page content")]
     ContentError,
     #[error("Font key \"{0}\" not found in dictionary")]
@@ -173,7 +174,7 @@ struct PdfParser {
 
 /// `lopdf` references individual pages by a tuple of unsigned integers. Usually, the specific
 /// values are irrelevant, and it is more useful to think about the page ID itself as one "thing".
-type PageID = (u32, u16);
+pub(crate) type PageID = (u32, u16);
 
 /// Having collected all the positions where the y position was changed, collect the edits
 /// necessary to add sub/superscript markers. The core idea here is that when we "come back"
@@ -330,170 +331,7 @@ impl PdfParser {
         match self.font_type.entry((page_id, font_key.to_string())) {
             Entry::Occupied(entry) => Ok(entry.into_mut()),
             Entry::Vacant(entry) => {
-                let font_obj = get_font(doc, page_id, font_key)?;
-
-                // Determine the font encoding type
-                let font_encoding_type = {
-                    // Test 1: if the font has:
-                    //   /Subtype /Type1
-                    //   /Subtype /TrueType
-                    // then it is likely a "simple" font.
-                    let font_subtype = str::from_utf8(
-                        font_obj
-                            .get("Subtype")
-                            .ok_or(PdfError::MissingSubtype)?
-                            .as_name()
-                            .map_err(|_| {
-                                PdfError::InternalError(format!(
-                                    "Expected font {font_key}'s Subtype key to be a `name`"
-                                ))
-                            })?,
-                    )
-                    .map_err(|e| {
-                        PdfError::InternalError(format!(
-                            "Font {font_key}'s Subtype value is not valid UTF-8: {e}"
-                        ))
-                    })?;
-
-                    if ["Type1", "TrueType"].contains(&font_subtype) {
-                        FontEncoding::Simple
-                    } else {
-                        // Test 2: if the font has:
-                        //   /Encoding /Identity-H
-                        //   /Encoding /Identity-V
-                        // then it is likely a CID-keyed font. However, if it has:
-                        //   /Encoding /WinAnsiEncoding
-                        //   /Encoding /MacRomanEncoding
-                        // it is likely a "simple" font.
-                        let encoding = font_obj.get("Encoding");
-                        if let Some(font_encoding) = encoding {
-                            let font_encoding =
-                                str::from_utf8(font_encoding.as_name().map_err(|_| {
-                                    PdfError::EncodingError(format!(
-                                        "Expected font {font_key}'s Encoding key to be a `name`"
-                                    ))
-                                })?)
-                                .map_err(|e| {
-                                    PdfError::EncodingError(format!(
-                                        "Font {font_key}'s Encoding name is not valid UTF-8: {e}"
-                                    ))
-                                })?;
-
-                            if ["WinAnsiEncoding", "MacRomanEncoding"].contains(&font_encoding) {
-                                FontEncoding::Simple
-                            } else if ["Identity-H", "Identity-V"].contains(&font_encoding)
-                                || font_encoding == "Type0"
-                            {
-                                // Test 3: if the font has:
-                                //   /Subtype /Type0
-                                // then it is likely a CID-keyed font.
-                                let cmap_ref = font_obj
-                            .get("ToUnicode")
-                            .ok_or(PdfError::EncodingError(format!(
-                                "CID-keyed font {font_key} does not have a ToUnicode CMap.",
-                            )))?
-                            .as_reference()
-                            .map_err(|_| {
-                                PdfError::EncodingError(format!(
-                                    "CID-keyed font {font_key}'s ToUnicode CMap could not be read."
-                                ))
-                            })?;
-
-                                let f = doc.get_object(cmap_ref);
-                                let decompressed = f
-                            .map_err(|_| {
-                                PdfError::InternalError(format!(
-                                    "Font {font_key}'s ToUnicode CMap points to invalid reference.",
-                                ))
-                            })?
-                            .as_stream()
-                            .map_err(|_| {
-                                PdfError::EncodingError(format!(
-                                    "CID-keyed font {font_key}'s ToUnicode CMap could not be read."
-                                ))
-                            })?
-                            .decompressed_content()
-                            .map_err(|_| {
-                                PdfError::EncodingError(format!(
-                                    "CID-keyed font {font_key}'s ToUnicode CMap could not be deflated."
-                                ))
-                            })?;
-
-                                let cmap = String::from_utf8(decompressed)
-                                    .map_err(|_| PdfError::InvalidUtf8)?;
-                                let csrange_begin = cmap.find("beginbfchar").ok_or(
-                            PdfError::EncodingError(format!(
-                                "Deflated ToUnicode CMap for font {font_key} has no `beginbfchar`."
-                            )),
-                        )? + "beginbfchar".len();
-                                let csrange_end = cmap.find("endbfchar").ok_or(PdfError::EncodingError(
-                            format!(
-                                "Deflated ToUnicode CMap for font {font_key} has no `endbfchar`."
-                            ),
-                        ))?;
-
-                                let csrange = cmap[csrange_begin..csrange_end].trim();
-                                let lines = csrange.split('\n');
-
-                                let mut mappings = HashMap::new();
-
-                                // Within the CMap, each line has the following form:
-                                //   <001B> <0041>
-                                // In this case, the 2-byte CID 001B maps to U+0041.
-                                for line in lines {
-                                    let parts: Vec<&str> = line.split_whitespace().collect();
-                                    if parts.len() == 2 {
-                                        let cid = parts[0].trim_matches(|c| c == '<' || c == '>');
-
-                                        // In some cases, `parts[1]` can have multiple Unicode code points. This is
-                                        // sometimes done to handle ligatures, among others. For example, the ligature
-                                        // `ff` is represented as two U+066 code points.
-                                        let code_units: Vec<u16> = parts[1]
-                                            .trim_matches(|c| c == '<' || c == '>')
-                                            .as_bytes()
-                                            .chunks_exact(4)
-                                            .map(|chunk| {
-                                                u16::from_str_radix(
-                                                    std::str::from_utf8(chunk).unwrap(),
-                                                    16,
-                                                )
-                                            })
-                                            .collect::<Result<_, _>>()
-                                            .map_err(|_| PdfError::InvalidUtf8)?;
-
-                                        let unicode: String = decode_utf16(code_units)
-                                            .map(|r| {
-                                                r.map_err(|e| {
-                                                    PdfError::EncodingError(format!(
-                                                        "Invalid UTF-16: {e}"
-                                                    ))
-                                                })
-                                            })
-                                            .collect::<Result<_, _>>()?;
-
-                                        mappings.insert(cid.to_string().to_lowercase(), unicode);
-                                    }
-                                }
-
-                                FontEncoding::CIDKeyed(mappings)
-                            } else {
-                                // If we got here, then we don't have a good idea; emit a warning and assume Simple.
-                                log::warn!(
-                                    "No heuristic matched for font {font_key}; assuming simple. This is likely wrong."
-                                );
-                                FontEncoding::Simple
-                            }
-                        } else {
-                            log::warn!(
-                                "Could not determine font type for {font_key}, assuming simple. This may be wrong."
-                            );
-                            FontEncoding::Simple
-                        }
-                    }
-                };
-
-                // Insert into cache via vacant entry and return reference
-                Ok(entry.insert(font_encoding_type))
+                Ok(entry.insert(compute_font_encoding(doc, page_id, font_key)?))
             }
         }
     }
@@ -1022,52 +860,6 @@ impl PdfParser {
             body_font_size,
         })
     }
-}
-
-/// Given a PDF `Document` reference, a page ID, and a font key (e.g., "F19"), return the font
-/// object.
-///
-/// # Arguments
-///
-/// * `doc` - The `lopdf::Document` object.
-/// * `page_id` - The `lopdf` page ID. Different pages can have different font dictionaries,
-///   otherwise operations such as joining PDFs would be more complicated than they already are.
-/// * `font_key` - The font key as used in the PDF content stream.
-///
-/// # Returns
-///
-/// A `HashMap` with string keys mapping to `lopdf::Object` references.
-///
-/// # Errors
-///
-/// * `PdfError::PageFontError` if getting page fonts failed.
-/// * `PdfError::FontNotFound` if the font key does not exist.
-///
-/// # Panics
-///
-/// * If any of the keys in the font dictionary are not valid UTF-8.
-fn get_font<'a>(
-    doc: &'a Document,
-    page_id: PageID,
-    font_key: &str,
-) -> Result<HashMap<&'a str, &'a Object>, PdfError> {
-    // Get the font dictionary for the page
-    let fonts = doc
-        .get_page_fonts(page_id)
-        .map_err(|_| PdfError::PageFontError)?;
-
-    let font_obj = fonts
-        .get(font_key.as_bytes())
-        .ok_or(PdfError::FontNotFound(font_key.into()))?;
-    let font_hash = font_obj.as_hashmap();
-
-    font_hash
-        .iter()
-        .map(|(k, v)| {
-            let key_str = std::str::from_utf8(k)?;
-            Ok((key_str, v))
-        })
-        .collect::<Result<_, _>>()
 }
 
 /// Given a PDF `Document` reference, a page ID, and a font key (e.g., "F19"), return the font

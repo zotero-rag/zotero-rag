@@ -3,9 +3,13 @@
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
+use lopdf::{Document, Object};
 use ordered_float::OrderedFloat;
 
-use crate::math::{from_cmex, from_cmmi, from_cmsy, from_msbm};
+use crate::{
+    math::{from_cmex, from_cmmi, from_cmsy, from_msbm},
+    parse::{PageID, PdfError},
+};
 
 /// A struct to keep track of font size changes. This includes all the metadata you might need
 /// about font changes. The primary purpose of this is to track sections, subsections, etc., but
@@ -128,4 +132,354 @@ pub(crate) enum FontEncoding {
     /// two-byte (or multi-byte, but we don't yet handle this) CIDs, custom glyph ID maps, and
     /// `ToUnicode` CMaps for real text extraction.
     CIDKeyed(CMap),
+}
+
+/// CMaps can take two main forms: individual, where `beginbfchar` and `endbfchar` wrap a set of
+/// lines, each with two tokens; and ranged, where `beginbfrange` and `endbfrange` wrap a set of
+/// triples. The first two tokens in the triples mark begin and end of a range, and the third token
+/// can be in hex form or an array (currently, not yet supported).
+#[derive(Debug, PartialEq)]
+enum CMapKind {
+    Individual,
+    Ranged,
+    Unknown,
+}
+
+/// Given a PDF `Document` reference, a page ID, and a font key (e.g., "F19"), return the font
+/// object.
+///
+/// # Arguments
+///
+/// * `doc` - The `lopdf::Document` object.
+/// * `page_id` - The `lopdf` page ID. Different pages can have different font dictionaries,
+///   otherwise operations such as joining PDFs would be more complicated than they already are.
+/// * `font_key` - The font key as used in the PDF content stream.
+///
+/// # Returns
+///
+/// A `HashMap` with string keys mapping to `lopdf::Object` references.
+///
+/// # Errors
+///
+/// * `PdfError::PageFontError` if getting page fonts failed.
+/// * `PdfError::FontNotFound` if the font key does not exist.
+///
+/// # Panics
+///
+/// * If any of the keys in the font dictionary are not valid UTF-8.
+pub(crate) fn get_font<'a>(
+    doc: &'a Document,
+    page_id: PageID,
+    font_key: &str,
+) -> Result<HashMap<&'a str, &'a Object>, PdfError> {
+    // Get the font dictionary for the page
+    let fonts = doc
+        .get_page_fonts(page_id)
+        .map_err(|_| PdfError::PageFontError)?;
+
+    let font_obj = fonts
+        .get(font_key.as_bytes())
+        .ok_or(PdfError::FontNotFound(font_key.into()))?;
+    let font_hash = font_obj.as_hashmap();
+
+    font_hash
+        .iter()
+        .map(|(k, v)| {
+            let key_str = std::str::from_utf8(k)?;
+            Ok((key_str, v))
+        })
+        .collect::<Result<_, _>>()
+}
+
+/// Parse a CMap string. A font key is taken as reference to provide more context in errors.
+///
+/// Currently, this CMap parser supports scenarios with one block of mappings per font, and only
+/// supports `beginbfchar`..`endbfchar` and `beginbfrange`..`endbfrange`s, i.e., it does not support
+/// more complex use cases such as those involving `begincidrange`..`endcidrange`. Note that per
+/// ISO 32000-1:2008, §9.7.5.4(e), `beginrearrangedfont`..`endrearrangedfont` should not be used in
+/// embedded CMaps; moreover, `usefont`s should only specify a font number of 0.
+pub(crate) fn parse_cmap(
+    cmap: String,
+    font_key: &str,
+) -> Result<HashMap<String, String>, PdfError> {
+    // TODO: (ZOT-202) Technically, the number of entries in each block is limited to 100,
+    // so a CID mapping can have multiple blocks. We should parse all such blocks, not just
+    // the first.
+
+    let cmap_kind = if cmap.contains("beginbfchar") {
+        CMapKind::Individual
+    } else if cmap.contains("beginbfranged") {
+        CMapKind::Ranged
+    } else {
+        CMapKind::Unknown
+    };
+
+    match cmap_kind {
+        CMapKind::Unknown => {
+            return Err(PdfError::EncodingError(format!(
+                "CMap type for {font_key} could not be determined."
+            )));
+        }
+        CMapKind::Individual => {
+            let csrange_begin = cmap.find("beginbfchar").unwrap() + "beginbfchar".len();
+            let csrange_end = cmap
+                .find("endbfchar")
+                .ok_or(PdfError::EncodingError(format!(
+                    "Deflated ToUnicode CMap for font {font_key} has no `endbfchar`."
+                )))?;
+
+            let csrange = cmap[csrange_begin..csrange_end].trim();
+            let lines = csrange.split('\n');
+
+            let mut mappings = HashMap::new();
+
+            // Within the CMap, each line has the following form:
+            //   <001B> <0041>
+            // In this case, the 2-byte CID 001B maps to U+0041.
+            for line in lines {
+                let parts: Vec<&str> = line.split_whitespace().collect();
+                if parts.len() != 2 {
+                    log::warn!(
+                        "In CMap for {font_key}, unexpected line with {} tokens.",
+                        parts.len()
+                    );
+                    continue;
+                }
+
+                let cid = parts[0].trim_matches(|c| c == '<' || c == '>');
+
+                // In some cases, `parts[1]` can have multiple Unicode code points. This is
+                // sometimes done to handle ligatures, among others. For example, the ligature
+                // `ff` is represented as two U+066 code points.
+                let code_units: Vec<u16> = parts[1]
+                    .trim_matches(|c| c == '<' || c == '>')
+                    .as_bytes()
+                    .chunks_exact(4)
+                    .map(|chunk| u16::from_str_radix(std::str::from_utf8(chunk).unwrap(), 16))
+                    .collect::<Result<_, _>>()
+                    .map_err(|_| PdfError::InvalidUtf8)?;
+
+                let unicode: String = std::char::decode_utf16(code_units)
+                    .map(|r| r.map_err(|e| PdfError::EncodingError(format!("Invalid UTF-16: {e}"))))
+                    .collect::<Result<_, _>>()?;
+
+                mappings.insert(cid.to_string().to_lowercase(), unicode);
+            }
+
+            Ok(mappings)
+        }
+        CMapKind::Ranged => {
+            let csrange_begin = cmap.find("beginbfrange").unwrap() + "beginbfrange".len();
+            let csrange_end = cmap
+                .find("endbfrange")
+                .ok_or(PdfError::EncodingError(format!(
+                    "Deflated ToUnicode CMap for font {font_key} has no `endbfrange`."
+                )))?;
+
+            let csrange = cmap[csrange_begin..csrange_end].trim();
+            let lines = csrange.split('\n');
+
+            let mut mappings = HashMap::new();
+
+            // Within the CMap, each line has the following form:
+            //   <000B> <000C> <0028>
+            // In this case, we have:
+            //   * CID 000B -> U+0028
+            //   * CID 000C -> U+0029
+            for line in lines {
+                if line.contains('[') {
+                    log::error!("CMaps with `bfrange`s that contain arrays are not yet supported.");
+                    return Err(PdfError::EncodingError(
+                        "Unsupported CID map with arrays in range.".into(),
+                    ));
+                }
+
+                let parts: Vec<&str> = line.split_whitespace().collect();
+                if parts.len() != 3 {
+                    log::warn!(
+                        "In CMap for {font_key}, unexpected line with {} tokens.",
+                        parts.len()
+                    );
+                    continue;
+                }
+
+                let start_cid = parts[0].trim_matches(|c| c == '<' || c == '>');
+                let end_cid = parts[1].trim_matches(|c| c == '<' || c == '>');
+
+                let start_cid_u16 = u16::from_str_radix(start_cid, 16).map_err(|_| {
+                    PdfError::EncodingError(format!(
+                        "In CMap for {font_key}, CID {start_cid} was not valid UTF-16"
+                    ))
+                })?;
+                let end_cid_u16 = u16::from_str_radix(end_cid, 16).map_err(|_| {
+                    PdfError::EncodingError(format!(
+                        "In CMap for {font_key}, CID {end_cid} was not valid UTF-16"
+                    ))
+                })?;
+
+                // Again, parts[2] can have multiple UTF-16BE code units. In this case, for each
+                // consecutive code in the source code range, we increment the last byte of the
+                // string, see the PDF standard, ISO 32000-1:2008, §9.10.3 ("ToUnicode CMaps").
+                // This means that we don't treat the hex string as one Big Endian integer, and only
+                // look at the last byte for the purposes of the range.
+                let code_units: Vec<u16> = parts[2]
+                    .trim_matches(|c| c == '<' || c == '>')
+                    .as_bytes()
+                    .chunks_exact(4)
+                    .map(|chunk| u16::from_str_radix(std::str::from_utf8(chunk).unwrap(), 16))
+                    .collect::<Result<_, _>>()
+                    .map_err(|_| PdfError::InvalidUtf8)?;
+
+                for i in start_cid_u16..end_cid_u16 + 1 {
+                    let mut cur_char_units = code_units.clone();
+                    cur_char_units.last_mut().and_then(|&mut ref mut c| {
+                        *c += 1;
+                        Some(())
+                    });
+                    let unicode: String = std::char::decode_utf16(cur_char_units)
+                        .map(|r| {
+                            r.map_err(|e| PdfError::EncodingError(format!("Invalid UTF-16: {e}")))
+                        })
+                        .collect::<Result<_, _>>()?;
+                    mappings.insert(i.to_string().to_lowercase(), unicode);
+                }
+            }
+
+            Ok(mappings)
+        }
+    }
+}
+
+/// Attempt to get the font encoding for a font key on a specific page.
+///
+/// This function uses heuristics to determine whether a font is likely to be "simple" (i.e.,
+/// can be parsed as plain-text), or needs to be translated via a corresponding CMap.
+///
+/// # Returns
+///
+/// If the specified font is a CID-keyed font, returns `FontEncoding::CIDKeyed` with a
+/// reference to the `ToUnicode` CMap. Otherwise, returns `FontEncoding::Simple`.
+///
+/// # Errors
+///
+/// * `PdfError::PageFontError` if getting page fonts failed.
+/// * `PdfError::FontNotFound` if the font key does not exist.
+/// * `PdfError::EncodingError` if the font dictionary:
+///      * Has an /Encoding that could not be read
+///      * Indicates a CID-keyed font but does not have a ToUnicode CMap.
+///      * Has a ToUnicode CMap that could not be read or deflated.
+///      * Has a ToUnicode CMap without a `beginbfchar` or `endbfchar` marker.
+/// * `PdfError::InternalError` if the font dictionary:
+///      * Does not have a /Subtype that could be read.
+///      * Has a /ToUnicode reference that is invalid.
+/// * `PdfError::InvalidUtf8` if the deflated ToUnicode CMap is not valid UTF-8.
+///
+/// # Panics
+///
+/// * If any of the keys in the font dictionary are not valid UTF-8.
+pub(crate) fn compute_font_encoding(
+    doc: &Document,
+    page_id: PageID,
+    font_key: &str,
+) -> Result<FontEncoding, PdfError> {
+    let font_obj = get_font(doc, page_id, font_key)?;
+
+    // Test 1: if the font has:
+    //   /Subtype /Type1
+    //   /Subtype /TrueType
+    // then it is likely a "simple" font.
+    let font_subtype = str::from_utf8(
+        font_obj
+            .get("Subtype")
+            .ok_or(PdfError::MissingSubtype)?
+            .as_name()
+            .map_err(|_| {
+                PdfError::InternalError(format!(
+                    "Expected font {font_key}'s Subtype key to be a `name`"
+                ))
+            })?,
+    )
+    .map_err(|e| {
+        PdfError::InternalError(format!(
+            "Font {font_key}'s Subtype value is not valid UTF-8: {e}"
+        ))
+    })?;
+
+    if ["Type1", "TrueType"].contains(&font_subtype) {
+        return Ok(FontEncoding::Simple);
+    }
+
+    // Test 2: if the font has:
+    //   /Encoding /Identity-H
+    //   /Encoding /Identity-V
+    // then it is likely a CID-keyed font. However, if it has:
+    //   /Encoding /WinAnsiEncoding
+    //   /Encoding /MacRomanEncoding
+    // it is likely a "simple" font.
+    let Some(font_encoding) = font_obj.get("Encoding") else {
+        log::warn!(
+            "Could not determine font type for {font_key}, assuming simple. This may be wrong."
+        );
+        return Ok(FontEncoding::Simple);
+    };
+    let font_encoding = str::from_utf8(font_encoding.as_name().map_err(|_| {
+        PdfError::EncodingError(format!(
+            "Expected font {font_key}'s Encoding key to be a `name`"
+        ))
+    })?)
+    .map_err(|e| {
+        PdfError::EncodingError(format!(
+            "Font {font_key}'s Encoding name is not valid UTF-8: {e}"
+        ))
+    })?;
+
+    if ["WinAnsiEncoding", "MacRomanEncoding"].contains(&font_encoding) {
+        return Ok(FontEncoding::Simple);
+    } else if ["Identity-H", "Identity-V"].contains(&font_encoding) || font_encoding == "Type0" {
+        // Test 3: if the font has:
+        //   /Subtype /Type0
+        // then it is likely a CID-keyed font.
+        let cmap_ref = font_obj
+            .get("ToUnicode")
+            .ok_or(PdfError::EncodingError(format!(
+                "CID-keyed font {font_key} does not have a ToUnicode CMap.",
+            )))?
+            .as_reference()
+            .map_err(|_| {
+                PdfError::EncodingError(format!(
+                    "CID-keyed font {font_key}'s ToUnicode CMap could not be read."
+                ))
+            })?;
+
+        let decompressed = doc
+            .get_object(cmap_ref)
+            .map_err(|_| {
+                PdfError::InternalError(format!(
+                    "Font {font_key}'s ToUnicode CMap points to invalid reference.",
+                ))
+            })?
+            .as_stream()
+            .map_err(|_| {
+                PdfError::EncodingError(format!(
+                    "CID-keyed font {font_key}'s ToUnicode CMap could not be read."
+                ))
+            })?
+            .decompressed_content()
+            .map_err(|_| {
+                PdfError::EncodingError(format!(
+                    "CID-keyed font {font_key}'s ToUnicode CMap could not be deflated."
+                ))
+            })?;
+
+        let cmap = String::from_utf8(decompressed).map_err(|_| PdfError::InvalidUtf8)?;
+        let mappings = parse_cmap(cmap, font_key)?;
+
+        return Ok(FontEncoding::CIDKeyed(mappings));
+    } else {
+        // If we got here, then we don't have a good idea; emit a warning and assume Simple.
+        log::warn!(
+            "No heuristic matched for font {font_key}; assuming simple. This is likely wrong."
+        );
+        return Ok(FontEncoding::Simple);
+    }
 }
