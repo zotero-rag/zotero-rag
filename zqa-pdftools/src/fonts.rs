@@ -318,7 +318,7 @@ pub(crate) fn parse_cmap(cmap: &str, font_key: &str) -> Result<HashMap<String, S
                 // string, see the PDF standard, ISO 32000-1:2008, §9.10.3 ("ToUnicode CMaps").
                 // This means that we don't treat the hex string as one Big Endian integer, and only
                 // look at the last byte for the purposes of the range.
-                let code_units: Vec<u16> = parts[2]
+                let mut code_units: Vec<u16> = parts[2]
                     .trim_matches(|c| c == '<' || c == '>')
                     .as_bytes()
                     .chunks_exact(4)
@@ -326,13 +326,12 @@ pub(crate) fn parse_cmap(cmap: &str, font_key: &str) -> Result<HashMap<String, S
                     .collect::<Result<_, _>>()
                     .map_err(|_| PdfError::InvalidUtf8)?;
 
+                let original_last = code_units.last().copied();
                 for i in start_cid_u16..=end_cid_u16 {
-                    let mut cur_char_units = code_units.clone();
-
-                    if let Some(c) = cur_char_units.last_mut() {
-                        *c += i - start_cid_u16;
+                    if let (Some(c), Some(orig)) = (code_units.last_mut(), original_last) {
+                        *c = orig + (i - start_cid_u16);
                     }
-                    let unicode: String = std::char::decode_utf16(cur_char_units)
+                    let unicode: String = std::char::decode_utf16(code_units.iter().copied())
                         .map(|r| {
                             r.map_err(|e| PdfError::EncodingError(format!("Invalid UTF-16: {e}")))
                         })
@@ -364,7 +363,8 @@ pub(crate) fn parse_cmap(cmap: &str, font_key: &str) -> Result<HashMap<String, S
 ///      * Has an /Encoding that could not be read
 ///      * Indicates a CID-keyed font but does not have a ToUnicode CMap.
 ///      * Has a ToUnicode CMap that could not be read or deflated.
-///      * Has a ToUnicode CMap without a `beginbfchar` or `endbfchar` marker.
+///      * Has a ToUnicode CMap without a `beginbfchar`, `endbfchar`, `beginbfrange`, or
+///        `endbfrange` marker.
 /// * `PdfError::InternalError` if the font dictionary:
 ///      * Does not have a /Subtype that could be read.
 ///      * Has a /ToUnicode reference that is invalid.
