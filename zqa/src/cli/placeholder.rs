@@ -52,7 +52,7 @@ struct MentionSpan<'a> {
     force_quotes: bool,
 }
 
-const SLASH_COMMANDS: &[&str] = &[
+pub(crate) const SLASH_COMMANDS: &[&str] = &[
     "/batch check",
     "/batch create",
     "/checkhealth",

@@ -31,6 +31,7 @@ indicatif = "^0.18.4"
 lancedb = { version = "^0.27.0", default-features = false  }
 log = "0.4.27"
 nucleo-matcher = "0.3.1"
+ratatui = "^0.29.0"
 rpassword = "7.4.0"
 rusqlite = "0.34.0"
 rustyline = "16.0.0"
@@ -39,7 +40,7 @@ serde = "^1.0.228"
 serde_json = "^1.0.149"
 temp-env = { version = "0.3.6", features = ["async_closure"] }
 thiserror = "2.0"
-tokio = "^1.50.0"
+tokio = { version = "^1.50.0", features = ["macros", "rt-multi-thread", "sync", "time"] }
 toml = "0.9.8"
 xxhash-rust = { version = "0.8.15", features = ["xxh3"] }
 zqa-pdftools = { workspace = true }

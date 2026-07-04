@@ -19,8 +19,8 @@ use crate::{config::Config, store::lance::LanceZoteroStore};
 #[derive(Parser, Clone, Debug)]
 #[command(version, about, long_about = None)]
 pub struct Args {
-    /// Whether to use the tui interface. This is very unstable and is not feature-complete, and it
-    /// should not be used for regular tasks.
+    /// Whether to use the TUI interface instead of the readline-based CLI. This is unstable and
+    /// not feature-complete, and it should not be used for regular tasks.
     #[arg(long, default_value_t = false)]
     pub tui: bool,
 
@@ -75,8 +75,8 @@ pub(crate) struct Context<OutStream: Write, ErrStream: Write> {
     /// Abstraction for `stdin()`. Boxed rather than generic because, unlike `out`/`err` (which
     /// tests substitute with an inspectable `Cursor` to assert on), input is only ever *supplied*:
     /// no caller needs the concrete reader type. Boxing also keeps the input concern off every
-    /// handler signature.
-    pub(crate) input: Box<dyn BufRead>,
+    /// handler signature. `Send` so the TUI can run commands on a runtime worker thread.
+    pub(crate) input: Box<dyn BufRead + Send>,
     /// Abstraction for `stdout()`
     pub(crate) out: OutStream,
     /// Abstraction for `stderr()`

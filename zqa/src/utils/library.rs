@@ -12,13 +12,14 @@ use std::time::Instant;
 
 use arrow_array::{RecordBatch, cast::AsArray};
 use directories::UserDirs;
-use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
+use indicatif::{MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle};
 use rusqlite::Connection;
 use serde::Serialize;
 use thiserror::Error;
 use zqa_pdftools::parse::extract_text;
 
 use crate::store::common::ZoteroStore;
+use crate::utils::terminal::progress_bars_enabled;
 use crate::{izip, utils::arrow::DbFields};
 
 /// Gets the Zotero library path. Works on Linux, macOS, and Windows systems.
@@ -453,7 +454,11 @@ pub async fn parse_library<T: ZoteroStore>(
     }
     drop(task_tx);
 
-    let mbar = Arc::new(MultiProgress::new());
+    let mbar = if progress_bars_enabled() {
+        Arc::new(MultiProgress::new())
+    } else {
+        Arc::new(MultiProgress::with_draw_target(ProgressDrawTarget::hidden()))
+    };
 
     let handles: Vec<_> = (0..n_threads)
         .map(|_| {

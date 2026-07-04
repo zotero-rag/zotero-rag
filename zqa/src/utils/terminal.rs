@@ -1,6 +1,22 @@
 use std::io::{BufRead, Write};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::state::StateError;
+
+/// Whether progress bars may draw on the terminal. Progress bars write straight to stderr,
+/// bypassing the context's output streams, so while the TUI owns the (alternate) screen they
+/// must be hidden or they draw over the interface.
+static PROGRESS_BARS_ENABLED: AtomicBool = AtomicBool::new(true);
+
+/// Returns whether progress bars may draw on the terminal.
+pub(crate) fn progress_bars_enabled() -> bool {
+    PROGRESS_BARS_ENABLED.load(Ordering::Relaxed)
+}
+
+/// Allow or forbid progress bars from drawing on the terminal (see [`progress_bars_enabled`]).
+pub(crate) fn set_progress_bars_enabled(enabled: bool) {
+    PROGRESS_BARS_ENABLED.store(enabled, Ordering::Relaxed);
+}
 
 /// ANSI escape code for dimming text
 pub const DIM_TEXT: &str = "\x1b[2m";

@@ -13,6 +13,7 @@ pub mod config;
 pub mod state;
 pub mod store;
 pub mod tools;
+mod tui;
 pub mod utils;
 
 // Re-export commonly used items
@@ -212,11 +213,34 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let store = LanceZoteroStore::from_config(&config)?;
+
+    if args.tui {
+        if args.log_level != log::LevelFilter::Off {
+            let warning = "Logs are written to stdout and will corrupt the TUI display.";
+            eprintln!("{YELLOW_BOLD}warn: {RESET}{YELLOW}{warning}{RESET}");
+        }
+
+        let (worker_tx, worker_rx) = tokio::sync::mpsc::unbounded_channel();
+        let context = Context {
+            state: State::default(),
+            config,
+            store,
+            // The TUI cannot answer interactive prompts; handlers that read input see EOF.
+            input: Box::new(io::empty()),
+            out: tui::ChannelWriter::stdout(worker_tx.clone()),
+            err: tui::ChannelWriter::stderr(worker_tx.clone()),
+        };
+
+        tui::run(context, worker_tx, worker_rx).await?;
+        return Ok(());
+    }
+
     let context = Context {
         state: State::default(),
         config,
         store,
-        input: Box::new(io::stdin().lock()),
+        // `BufReader<Stdin>` rather than `StdinLock`, which is not `Send`.
+        input: Box::new(io::BufReader::new(io::stdin())),
         out: stdout(),
         err: stderr(),
     };
