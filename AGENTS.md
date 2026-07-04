@@ -1,16 +1,16 @@
-# Project Overview
+# Information for Coding Agents (Claude Code, Codex, Pi, etc.)
 
 This is a Rust-based Zotero RAG QA System for answering questions from academic libraries.
 
-## Project Structure
+# Project Structure
 
 - **zqa-pdftools**: PDF parsing and text extraction utilities. Highly focused on zero-cost abstractions and zero-copy parsing.
 - **zqa-rag**: Core RAG implementation with vector database (LanceDB) and AI provider clients (LLMs, Embeddings, Reranking).
 - **zqa**: Command-line interface and query processing.
 
-## Development Commands
+# Development Commands
 
-### Building and Testing
+## Building and Testing
 
 - Build (release): `cargo build --release`
 - Run CLI: `cargo run --bin zqa`
@@ -21,9 +21,9 @@ This is a Rust-based Zotero RAG QA System for answering questions from academic 
 - Bench (zqa-pdftools): `cargo bench -p zqa-pdftools`
 - Faster Linux linking: uses `mold` via `.cargo/config.toml` (install or remove the flag).
 
-## Coding Standards
+# Coding Standards
 
-### Rust Conventions
+## Rust Conventions
 
 - Use standard Rust formatting: `cargo fmt`
 - Follow Rust naming conventions (snake_case for functions/variables, PascalCase for types)
@@ -31,7 +31,11 @@ This is a Rust-based Zotero RAG QA System for answering questions from academic 
 - Prefer explicit error handling with `Result<T, E>`. **The `anyhow` crate is strictly disallowed.**
 - As much as possible, use idiomatic Rust patterns. `cargo clippy` is helpful here
 
-### Project-Specific Patterns
+## Version Control
+
+- The owner/maintainer of this repo uses **jj**, not git. If you're unsure, check for a `.jj` directory before running version control commands. In general, you should not commit unless the user explicitly requests you to. In that case, follow the Conventional Commits format. If you're unsure of what scope to use, it is okay to omit it, but you must indicate breaking changes if you introduce one, using the `!` syntax.
+
+## Project-Specific Patterns
 
 - Error types defined in respective modules (e.g., `zqa-rag/src/llm/errors.rs`)
     - Prefer to inline error definitions if there are only a few, but if there are many kinds of errors, use a dedicated file like the above. Define domain-specific error enums via the `thiserror` crate.
@@ -54,16 +58,17 @@ This is a Rust-based Zotero RAG QA System for answering questions from academic 
 /// Description
 ```
 
-* See `STYLE.md` for the style guide.
+- For API functions or abstractions such as traits that are expected to be the idiomatic way to do something (such as the `Tool` trait in `zqa-rag`), a good docstring includes a code example that ends up as a doctest.
+- See `STYLE.md` for the style guide. In particular, there are specific instructions in a separate section in that file for coding agents.
 
-## Agent Skills
+# Agent Skills
 
 To maintain consistency and speed up development, leverage the available agent skills located in `.agents/skills/`. To invoke a skill, load the `SKILL.md` file in that directory.
 
 - **`new-provider`**: Use this when scaffolding a new AI provider (LLM, Embedding, or Reranking) in `zqa-rag`. It provides a step-by-step checklist of all required trait implementations, factory registrations, and configuration touch-points.
 - **`pdf-diagnostics`**: Use this when debugging PDF parsing issues in `zqa-pdftools`. It outlines a specific diagnostic workflow for introspecting PDF byte streams, font dictionaries, and text matrices without introducing regressions.
 
-### Debugging
+## Debugging
 
 A few tests are provided specifically to help debugging when working with PDFs:
 
@@ -74,7 +79,7 @@ A few tests are provided specifically to help debugging when working with PDFs:
 
 Run them via: `cargo test -p zqa-pdftools <test_name> -- --ignored --nocapture`
 
-## PR Review
+# PR Review
 
 - Assess that the PR code follows idiomatic Rust and the coding standards set above.
 - In general, bias heavily for performance, particularly in `zqa-pdftools`. Avoid heap allocations (`String`, `Vec`) where borrowed slices (`&str`, `&[u8]`) can be used. However, there may be cases where some efficiency is traded off for readability or better UX; but this should be limited. Performance (`perf`) PRs MUST include benchmark results. (Note: AI agents should generally avoid creating `perf` PRs for `zqa-pdftools`).
@@ -85,7 +90,7 @@ Run them via: `cargo test -p zqa-pdftools <test_name> -- --ignored --nocapture`
 - Keep your overall comment concise. In a paragraph or two, describe the overall PR quality and the recommendations in your comments.
 - If an inline comment you leave is pedantic or otherwise minor, prefix it with "nit: ", and keep it short, about one sentence.
 
-## Important Files
+# Important Files
 
 - `zqa-rag/src/llm/`: LLM client implementations
 - `zqa-rag/src/embedding/`: Embedding client implementations
@@ -93,18 +98,18 @@ Run them via: `cargo test -p zqa-pdftools <test_name> -- --ignored --nocapture`
 - `zqa-pdftools/src/`: PDF parsing utilities
 - `zqa/src/`: CLI interface (work in progress)
 
-## Testing Notes
+# Testing Notes
 
 - Integration tests in `zqa/tests/`--currently disabled
 - Use `cargo test` to run available tests. If you are debugging, use `RUST_BACKTRACE=1`.
 
-## Commit & Pull Request Guidelines
+# Commit & Pull Request Guidelines
 
 - Commits follow Conventional Commits, e.g.: `feat(rag): add checkhealth`, `fix(ci): ...`, `perf(pdftools): ...`, `lint: cargo clippy`.
 - PRs should include: concise description, rationale, linked issues, and test notes/output (use `--log-level debug` when relevant).
 - Ensure `cargo fmt`, `cargo clippy`, and `cargo test --workspace` pass.
 
-## Security & Configuration Tips
+# Security & Configuration Tips
 
 - Secrets: configure via `.env` (see `.env.tmpl`); never commit real keys.
 - Recommended defaults: Anthropic for generation, Voyage AI for embeddings.
