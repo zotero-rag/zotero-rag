@@ -2,6 +2,7 @@
 
 use std::{io::Write, path::Path, sync::Arc};
 
+use tokio::sync::mpsc::UnboundedSender;
 use zqa_rag::{llm::tools::Tool, providers::registry::provider_registry};
 
 use crate::{
@@ -54,6 +55,7 @@ pub(crate) fn get_document_session_key(path: &Path) -> Result<String, CLIError> 
 /// * `LLMError::InvalidProviderError` if the provider is not supported
 pub(super) fn get_user_document_tools<O: Write, E: Write>(
     ctx: &mut Context<O, E>,
+    status_tx: UnboundedSender<String>,
 ) -> Result<Vec<Box<dyn Tool>>, CLIError> {
     let imports = ctx.state.imports.clone();
     if imports.read()?.is_empty() {
@@ -75,7 +77,7 @@ pub(super) fn get_user_document_tools<O: Write, E: Write>(
 
     Ok(
         DocumentsToolFactory::new(&imports, embedding_config, reranker_config, client)
-            .build_tools(),
+            .build_tools(status_tx),
     )
 }
 
