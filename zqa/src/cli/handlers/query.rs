@@ -1,7 +1,7 @@
 //! Command handlers for query operations.
 
 use std::{
-    io::{self, Write},
+    io::Write,
     path::Path,
     sync::{Arc, atomic},
     time::Instant,
@@ -24,7 +24,7 @@ use crate::{
         handlers::documents::{get_document_mentions, get_user_document_tools, import_document},
         prompts::{get_summarize_prompt, get_title_prompt},
     },
-    common::Context,
+    common::{Context, InterfaceMode},
     tools::{mixins::ToolExt, retrieval::RetrievalTool, summarization::SummarizationTool},
     utils::{
         library::get_authors,
@@ -51,6 +51,15 @@ fn format_number(num: u32) -> String {
         .collect::<Result<Vec<&str>, _>>()
         .unwrap_or_default()
         .join(",")
+}
+
+fn record_token_usage(state: &crate::common::State, input_tokens: u32, output_tokens: u32) {
+    state
+        .input_tokens
+        .fetch_add(u64::from(input_tokens), atomic::Ordering::Relaxed);
+    state
+        .output_tokens
+        .fetch_add(u64::from(output_tokens), atomic::Ordering::Relaxed);
 }
 
 /// Perform a vector search for a user-provided search term.
@@ -171,12 +180,12 @@ where
     // Spawn a background title generation task from the query alone, in parallel with summarization.
     // Only generate a title if we don't already have one (i.e., first query in the conversation).
     let title_slot = Arc::clone(&ctx.state.title);
-    if title_slot.lock()?.is_none()
+    let title_task = if title_slot.lock()?.is_none()
         && let Some(small_config) = ctx.config.get_small_model_config()
         && let Ok(small_client) = get_client_with_config(&small_config)
     {
         let prompt = get_title_prompt(&query);
-        tokio::spawn(async move {
+        Some(tokio::spawn(async move {
             let request = ChatRequest {
                 chat_history: Vec::new(),
                 max_tokens: Some(20),
@@ -195,8 +204,10 @@ where
                     *slot = Some(title);
                 }
             }
-        });
-    }
+        }))
+    } else {
+        None
+    };
 
     let mut total_input_tokens: u32 = 0;
     let mut total_output_tokens: u32 = 0;
@@ -214,18 +225,38 @@ where
 
     let summarization_tool = SummarizationTool::new(llm_client.clone(), store_arc);
     let summarization_tool_clone = summarization_tool.clone();
-    let mut tools: Vec<Box<dyn Tool>> = vec![
-        Box::new(retrieval_tool.verbose().timed()),
-        Box::new(summarization_tool.verbose().timed()),
-    ];
+    let reporter = ctx.stream_output.clone();
+    let mut tools: Vec<Box<dyn Tool>> = if ctx.interface_mode == InterfaceMode::Tui {
+        vec![
+            Box::new(
+                retrieval_tool
+                    .reported(reporter.clone())
+                    .timed_with(reporter.clone()),
+            ),
+            Box::new(
+                summarization_tool
+                    .reported(reporter.clone())
+                    .timed_with(reporter.clone()),
+            ),
+        ]
+    } else {
+        vec![
+            Box::new(retrieval_tool.verbose().timed()),
+            Box::new(summarization_tool.verbose().timed()),
+        ]
+    };
     let document_tools = get_user_document_tools(ctx)?;
     tools.extend(document_tools);
 
     let chat_history = Arc::clone(&ctx.state.chat_history);
 
-    // TODO: avoid bypassing context I/O
+    let stream_output = ctx.stream_output.clone();
+    let streamed_text = Arc::new(atomic::AtomicBool::new(false));
+    let streamed_text_callback = Arc::clone(&streamed_text);
+    let callback_output = stream_output.clone();
     let on_text: Arc<CallbackFn<str>> = Arc::new(move |text: &str| {
-        let _ = writeln!(io::stdout(), "{text}");
+        streamed_text_callback.store(true, atomic::Ordering::Relaxed);
+        callback_output(text);
     });
 
     let request = {
@@ -257,6 +288,9 @@ where
             .ok()
             .flatten()
     };
+    if let Some(title_task) = title_task {
+        let _ = title_task.await;
+    }
 
     match result {
         Ok(response) => {
@@ -266,6 +300,9 @@ where
             )?;
 
             let model_response_text = ModelResponse::from(&response.content).to_string();
+            if !streamed_text.load(atomic::Ordering::Relaxed) {
+                stream_output(&model_response_text);
+            }
 
             total_input_tokens += response.input_tokens;
             if let Ok(summarization_input_tokens) = summarization_tool_clone.input_tokens.lock() {
@@ -276,6 +313,8 @@ where
             if let Ok(summarization_output_tokens) = summarization_tool_clone.output_tokens.lock() {
                 total_output_tokens += *summarization_output_tokens;
             }
+
+            record_token_usage(&ctx.state, total_input_tokens, total_output_tokens);
 
             // Update session cost
             if let Some(ref p) = pricing {
@@ -400,13 +439,34 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Arc, Mutex};
+
     use serial_test::serial;
     use temp_env;
     use zqa_macros::test_ok;
     use zqa_macros_proc::retry;
 
-    use super::{handle_query_cmd, handle_search_cmd};
+    use super::{handle_query_cmd, handle_search_cmd, record_token_usage};
     use crate::cli::{app::tests::create_test_context, handlers::library::handle_process_cmd};
+
+    #[test]
+    fn token_usage_is_cumulative() {
+        let state = crate::common::State::default();
+        record_token_usage(&state, 10, 4);
+        record_token_usage(&state, 7, 3);
+        assert_eq!(
+            state
+                .input_tokens
+                .load(std::sync::atomic::Ordering::Relaxed),
+            17
+        );
+        assert_eq!(
+            state
+                .output_tokens
+                .load(std::sync::atomic::Ordering::Relaxed),
+            7
+        );
+    }
 
     #[retry(3)]
     #[tokio::test(flavor = "multi_thread")]
@@ -468,6 +528,9 @@ mod tests {
         // TODO: At some point, we'll want to add support for tool calls on these. Right now, the
         // underlying `TestClient` doesn't call `process_tool_calls
         let mut ctx = create_test_context(vec!["You have papers X, Y, and Z.".into()]);
+        let streamed = Arc::new(Mutex::new(String::new()));
+        let streamed_callback = Arc::clone(&streamed);
+        ctx.stream_output = Arc::new(move |text| streamed_callback.lock().unwrap().push_str(text));
         let result = temp_env::async_with_vars(
             [("CI", Some("true")), ("LANCEDB_URI", Some(&db_uri))],
             handle_query_cmd(
@@ -482,5 +545,6 @@ mod tests {
 
         let output = String::from_utf8(ctx.out.into_inner()).unwrap();
         assert!(output.contains("Total token usage:"));
+        assert!(streamed.lock().unwrap().contains("papers X, Y, and Z"));
     }
 }

@@ -59,9 +59,26 @@ pub(crate) struct State {
     /// Accumulated session cost, in US cents (Money pattern)
     /// TODO: How do providers handle other currencies?
     pub(crate) session_cost: AtomicU64,
+    /// Cumulative generation input tokens for this session.
+    pub(crate) input_tokens: AtomicU64,
+    /// Cumulative generation output tokens for this session.
+    pub(crate) output_tokens: AtomicU64,
     /// Extracted content for imported documents
     pub(crate) imports: Arc<RwLock<HashMap<String, Arc<UserDocument>>>>,
 }
+
+/// Controls terminal-oriented side effects in command handlers.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum InterfaceMode {
+    /// The readline command-line interface.
+    #[default]
+    Cli,
+    /// The full-screen terminal interface.
+    Tui,
+}
+
+/// Cloneable destination used for streamed model text and tool reports.
+pub(crate) type OutputSink = Arc<dyn Fn(&str) + Send + Sync>;
 
 /// A structure that holds the application context, including CLI arguments and writers
 /// for `stdout` and `stderr`.
@@ -76,11 +93,15 @@ pub(crate) struct Context<OutStream: Write, ErrStream: Write> {
     /// tests substitute with an inspectable `Cursor` to assert on), input is only ever *supplied*:
     /// no caller needs the concrete reader type. Boxing also keeps the input concern off every
     /// handler signature.
-    pub(crate) input: Box<dyn BufRead>,
+    pub(crate) input: Box<dyn BufRead + Send>,
     /// Abstraction for `stdout()`
     pub(crate) out: OutStream,
     /// Abstraction for `stderr()`
     pub(crate) err: ErrStream,
+    /// Destination for incremental model output.
+    pub(crate) stream_output: OutputSink,
+    /// Controls direct terminal reporting by command helpers.
+    pub(crate) interface_mode: InterfaceMode,
 }
 
 /// Initialize the `fern` logger.

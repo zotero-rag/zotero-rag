@@ -2,7 +2,10 @@ use std::{pin::Pin, time::Instant};
 
 use zqa_rag::llm::tools::Tool;
 
-use crate::utils::terminal::{DIM_TEXT, RESET};
+use crate::{
+    common::OutputSink,
+    utils::terminal::{DIM_TEXT, RESET},
+};
 
 /// `Tool` wrapper that prints its arguments before delegating to the wrapped tool.
 pub struct Verbose<T: Tool> {
@@ -41,14 +44,63 @@ impl<T: Tool> Tool for Verbose<T> {
     }
 }
 
+/// `Tool` wrapper that reports its arguments through a supplied sink.
+pub struct Reported<T: Tool> {
+    inner: T,
+    reporter: OutputSink,
+}
+
+impl<T: Tool> Reported<T> {
+    fn new(inner: T, reporter: OutputSink) -> Self {
+        Self { inner, reporter }
+    }
+}
+
+impl<T: Tool> Tool for Reported<T> {
+    fn name(&self) -> String {
+        self.inner.name()
+    }
+    fn description(&self) -> String {
+        self.inner.description()
+    }
+    fn parameters(&self) -> schemars::Schema {
+        self.inner.parameters()
+    }
+
+    fn call<'a>(
+        &'a self,
+        args: serde_json::Value,
+    ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, String>> + Send + 'a>> {
+        Box::pin(async move {
+            (self.reporter)(&format!(
+                "{} ({})",
+                self.inner.name(),
+                serde_json::to_string(&args).unwrap_or_default()
+            ));
+            self.inner.call(args).await
+        })
+    }
+}
+
 /// `Tool` wrapper that prints how long the wrapped tool took to run
 pub struct Timed<T: Tool> {
     inner: T,
+    reporter: Option<OutputSink>,
 }
 
 impl<T: Tool> Timed<T> {
     pub fn new(inner: T) -> Self {
-        Self { inner }
+        Self {
+            inner,
+            reporter: None,
+        }
+    }
+
+    fn with_reporter(inner: T, reporter: OutputSink) -> Self {
+        Self {
+            inner,
+            reporter: Some(reporter),
+        }
     }
 }
 
@@ -74,19 +126,21 @@ impl<T: Tool> Tool for Timed<T> {
             let result = self.inner.call(args).await;
             let elapsed = start.elapsed();
 
-            match result {
-                Ok(_) => eprintln!(
-                    "{DIM_TEXT}{}{RESET} completed in {:.2}s",
-                    self.inner.name(),
-                    elapsed.as_secs_f64()
-                ),
-                Err(_) => eprintln!(
-                    "{DIM_TEXT}{}{RESET} failed after {:.2}s",
-                    self.inner.name(),
-                    elapsed.as_secs_f64()
-                ),
+            let status = if result.is_ok() {
+                "completed"
+            } else {
+                "failed"
+            };
+            let message = format!(
+                "{} {status} in {:.2}s",
+                self.inner.name(),
+                elapsed.as_secs_f64()
+            );
+            if let Some(reporter) = &self.reporter {
+                reporter(&message);
+            } else {
+                eprintln!("{DIM_TEXT}{message}{RESET}");
             }
-
             result
         })
     }
@@ -146,6 +200,14 @@ pub trait ToolExt: Tool + Sized {
 
     fn timed(self) -> Timed<Self> {
         Timed::new(self)
+    }
+
+    fn reported(self, reporter: OutputSink) -> Reported<Self> {
+        Reported::new(self, reporter)
+    }
+
+    fn timed_with(self, reporter: OutputSink) -> Timed<Self> {
+        Timed::with_reporter(self, reporter)
     }
 }
 

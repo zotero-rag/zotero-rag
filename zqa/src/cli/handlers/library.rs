@@ -1,13 +1,16 @@
 //! Command handlers for library-related tasks
 
-use std::{fs::File, io::Write};
+use std::{
+    fs::File,
+    io::{BufRead, Write},
+};
 
 use arrow_array::RecordBatch;
 use arrow_ipc::{reader::FileReader, writer::FileWriter};
 use zqa_rag::vector::checkhealth::lancedb_health_check;
 use zqa_rag::vector::doctor::doctor as rag_doctor;
 
-use crate::utils::terminal::{DIM_TEXT, RESET, read_line};
+use crate::utils::terminal::{DIM_TEXT, RESET};
 use crate::{
     cli::{app::BATCH_ITER_FILE, errors::CLIError},
     common::Context,
@@ -96,7 +99,8 @@ where
         write!(&mut ctx.out, "(/process) >>> ")?;
         ctx.out.flush()?;
 
-        let option = read_line(&mut ctx.input);
+        let mut option = String::new();
+        ctx.input.read_line(&mut option)?;
         let option = option.trim().to_lowercase();
         if ["n", "no", "false", "0"].contains(&option.as_str()) {
             return Ok(());

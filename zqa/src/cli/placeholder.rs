@@ -9,7 +9,7 @@ use rustyline::highlight::Highlighter;
 use rustyline::hint::Hinter;
 use rustyline::validate::{ValidationResult, Validator};
 
-use crate::common::UserDocument;
+use crate::{cli::commands::SLASH_COMMANDS, common::UserDocument};
 
 /// A struct that will implement placeholder text using readline. The placeholder text itself is
 /// configurable, and the various `impl`s necessary to interface with `rustyline` (the readline
@@ -51,29 +51,6 @@ struct MentionSpan<'a> {
     query: &'a str,
     force_quotes: bool,
 }
-
-const SLASH_COMMANDS: &[&str] = &[
-    "/batch check",
-    "/batch create",
-    "/checkhealth",
-    "/config",
-    "/docs clear",
-    "/docs list",
-    "/docs remove",
-    "/dedup",
-    "/doctor",
-    "/embed fix",
-    "/embed",
-    "/exit",
-    "/help",
-    "/index",
-    "/new",
-    "/process",
-    "/quit",
-    "/resume",
-    "/search",
-    "/stats",
-];
 
 /// Returns the name of the best-match PDF file in the current directory, if any exist.
 /// Matching is performed between `query` and files in the current directory using a fuzzy matcher.

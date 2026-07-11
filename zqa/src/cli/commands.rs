@@ -1,5 +1,30 @@
 use thiserror::Error;
 
+/// Slash commands offered by both interactive interfaces.
+pub(crate) const SLASH_COMMANDS: &[&str] = &[
+    "/batch cancel ",
+    "/batch check",
+    "/batch create",
+    "/checkhealth",
+    "/config",
+    "/dedup",
+    "/docs clear",
+    "/docs list",
+    "/docs remove ",
+    "/doctor",
+    "/embed",
+    "/embed fix",
+    "/exit",
+    "/help",
+    "/index",
+    "/new",
+    "/process",
+    "/quit",
+    "/resume",
+    "/search ",
+    "/stats",
+];
+
 pub(crate) enum BatchCommand {
     Cancel(usize),
     CheckStatus,

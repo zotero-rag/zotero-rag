@@ -30,13 +30,15 @@ The easiest way to get started is to run `/help`. This gives you a list of thing
 
 When asking questions, you can also use @ to select a file in your local directory, and that file will be parsed (but not added to either Zotero or to the vector database). You can then ask questions based on that file, and the model will perform searches to ground its answer.
 
-The CLI has a `readline` implementation, so it respects your `.inputrc`. You can use
+The default CLI has a `readline` implementation, so it respects your `.inputrc`. You can use
 
 ```
 set editing-mode vi
 ```
 
 in your `~/.inputrc` to use vim motions (the default is emacs bindings).
+
+Run `zqa --tui` for a basic full-screen terminal interface. It requires terminal stdin and stdout and uses the same commands and synchronous prompt flows as the CLI. Tab completes slash commands; Up and Down select suggestions when shown. Ctrl-U and Ctrl-D scroll the transcript by half a page, the mouse wheel scrolls while over the transcript, and Ctrl-C saves and exits after active work completes. Emacs and vi mode selection is read from `.inputrc`/`.editrc`, but custom mappings are not interpreted. Logging is disabled while the TUI is active.
 
 It is unlikely that you will run into a scenario where everything seems broken, but you can run `/checkhealth` to run health checks on your LanceDB database and `/doctor` to attempt to provide suggestions (but note that this does not actually apply the suggested fixes).
 

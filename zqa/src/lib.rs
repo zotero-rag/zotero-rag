@@ -3,7 +3,7 @@
 #![allow(clippy::cast_precision_loss)]
 #![allow(clippy::cast_possible_wrap)]
 
-use std::io::{self, IsTerminal, stderr, stdout};
+use std::io::{self, IsTerminal, Write, stderr, stdout};
 
 use clap::Parser;
 
@@ -13,11 +13,12 @@ pub mod config;
 pub mod state;
 pub mod store;
 pub mod tools;
+mod tui;
 pub mod utils;
 
 // Re-export commonly used items
 use cli::app::cli;
-use common::{Args, Context, setup_logger};
+use common::{Args, Context, InterfaceMode, setup_logger};
 use config::Config;
 use state::{check_or_create_first_run_file, oobe};
 pub use store::lance::LanceZoteroStore;
@@ -151,8 +152,14 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     check_api_keys_exist(&config, args.log_level);
 
-    // Avoid RUST_LOG from interfering by not instantiating the logger if it's disabled.
-    setup_logger(args.log_level).expect("Failed to set up logger.");
+    if args.tui && args.log_level != log::LevelFilter::Off {
+        eprintln!("Warning: logging is disabled while the TUI is active.");
+    }
+
+    // Avoid RUST_LOG from interfering by not instantiating the logger if it is disabled.
+    if !args.tui {
+        setup_logger(args.log_level).expect("Failed to set up logger.");
+    }
 
     log::debug!(
         "You are running {} version {}. Log level: {}",
@@ -212,15 +219,28 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let store = LanceZoteroStore::from_config(&config)?;
+    if args.tui && (!io::stdin().is_terminal() || !io::stdout().is_terminal()) {
+        return Err("--tui requires terminal stdin and stdout".into());
+    }
+
+    let stream_output = std::sync::Arc::new(|text: &str| {
+        let _ = writeln!(io::stdout(), "{text}");
+    });
     let context = Context {
         state: State::default(),
         config,
         store,
-        input: Box::new(io::stdin().lock()),
+        input: Box::new(io::BufReader::new(io::stdin())),
         out: stdout(),
         err: stderr(),
+        stream_output,
+        interface_mode: InterfaceMode::Cli,
     };
 
-    cli(context).await?;
+    if args.tui {
+        tui::run(context)?;
+    } else {
+        cli(context).await?;
+    }
     Ok(())
 }

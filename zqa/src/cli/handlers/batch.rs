@@ -91,7 +91,7 @@ use crate::{
     utils::{
         arrow::library_to_arrow_with_embeddings,
         library::ZoteroItem,
-        terminal::{read_char, read_number},
+        terminal::{read_char_with_writer, read_number_with_writer},
     },
 };
 use crate::{state::get_state_dir, utils::library::parse_library};
@@ -543,7 +543,7 @@ where
     E: Write,
 {
     writeln!(&mut ctx.out, "Fetch results now? ([y]/n)")?;
-    if read_char(&mut ctx.input, 'y', &['y', 'n']) != 'y' {
+    if read_char_with_writer(&mut *ctx.input, &mut ctx.out, 'y', &['y', 'n'])? != 'y' {
         return Ok(());
     }
 
@@ -581,7 +581,7 @@ where
             }
 
             writeln!(&mut ctx.out, "Retry the entire batch? ([y]/n)")?;
-            if read_char(&mut ctx.input, 'y', &['y', 'n']) == 'y' {
+            if read_char_with_writer(&mut *ctx.input, &mut ctx.out, 'y', &['y', 'n'])? == 'y' {
                 retry_items(ctx, batch.items.clone()).await?;
                 fs::remove_file(batch_dir.join(format!("batch_{}.log", batch.seq_id)))?;
             }
@@ -627,7 +627,8 @@ where
 
             let log_file = batch_dir.join(format!("batch_{}.log", batch.seq_id));
 
-            match read_char(&mut ctx.input, 'a', &['a', 'b', 'c', 'd']) {
+            match read_char_with_writer(&mut *ctx.input, &mut ctx.out, 'a', &['a', 'b', 'c', 'd'])?
+            {
                 'a' => {
                     handle_successful_batch_results(ctx, batch, results.succeeded).await?;
 
@@ -748,7 +749,12 @@ where
                 }
             }
 
-            let choice = read_number(&mut ctx.input, 1, (1, pending_batches.len() + 1));
+            let choice = read_number_with_writer(
+                &mut *ctx.input,
+                &mut ctx.out,
+                1,
+                (1, pending_batches.len() + 1),
+            )?;
             pending_batches.get(choice.saturating_sub(1)).unwrap()
         }
     };
@@ -873,7 +879,7 @@ where
             )?;
             writeln!(&mut ctx.out, "  (b) Process all items anyway")?;
 
-            match read_char(&mut ctx.input, 'a', &['a', 'b']) {
+            match read_char_with_writer(&mut *ctx.input, &mut ctx.out, 'a', &['a', 'b'])? {
                 'a' => retry_items(ctx, new_items).await,
                 'b' => {
                     // It is possible to end up in this branch when there are pending batches, some
@@ -914,7 +920,9 @@ where
                         writeln!(&mut ctx.out, "[a] Cancel batches that are subsets")?;
                         writeln!(&mut ctx.out, "(b) Do not cancel subset batches.")?;
 
-                        if read_char(&mut ctx.input, 'a', &['a', 'b']) == 'a' {
+                        if read_char_with_writer(&mut *ctx.input, &mut ctx.out, 'a', &['a', 'b'])?
+                            == 'a'
+                        {
                             for batch in subsumed {
                                 handle_batch_cancel_cmd(batch.seq_id, ctx).await?;
                             }

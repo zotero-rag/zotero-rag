@@ -12,7 +12,7 @@ use std::time::Instant;
 
 use arrow_array::{RecordBatch, cast::AsArray};
 use directories::UserDirs;
-use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
+use indicatif::{MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle};
 use rusqlite::Connection;
 use serde::Serialize;
 use thiserror::Error;
@@ -20,6 +20,13 @@ use zqa_pdftools::parse::extract_text;
 
 use crate::store::common::ZoteroStore;
 use crate::{izip, utils::arrow::DbFields};
+
+static IS_TERMINAL_OUTPUT_HIDDEN: atomic::AtomicBool = atomic::AtomicBool::new(false);
+
+/// Hide parser progress that would interfere with a full-screen interface.
+pub(crate) fn set_terminal_output_hidden(is_hidden: bool) {
+    IS_TERMINAL_OUTPUT_HIDDEN.store(is_hidden, atomic::Ordering::Relaxed);
+}
 
 /// Gets the Zotero library path. Works on Linux, macOS, and Windows systems.
 /// On CI environments, returns a location to a toy library in assets/ instead.
@@ -453,7 +460,13 @@ pub async fn parse_library<T: ZoteroStore>(
     }
     drop(task_tx);
 
-    let mbar = Arc::new(MultiProgress::new());
+    let mbar = Arc::new(
+        if IS_TERMINAL_OUTPUT_HIDDEN.load(atomic::Ordering::Relaxed) {
+            MultiProgress::with_draw_target(ProgressDrawTarget::hidden())
+        } else {
+            MultiProgress::new()
+        },
+    );
 
     let handles: Vec<_> = (0..n_threads)
         .map(|_| {
@@ -576,6 +589,9 @@ pub async fn parse_library<T: ZoteroStore>(
         log::info!("There were no errors during parsing.");
     } else {
         log::warn!("{fail_count} items could not be parsed.");
+        if IS_TERMINAL_OUTPUT_HIDDEN.load(atomic::Ordering::Relaxed) {
+            return Ok(results);
+        }
         println!("{fail_count} items could not be parsed:");
 
         let not_pdf_count = not_pdf_counts.load(atomic::Ordering::Relaxed);

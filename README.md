@@ -50,13 +50,15 @@ The easiest way to get started is to run `/help`. This gives you a list of thing
 
 When asking questions, you can also use @ to select a file in your local directory, and that file will be parsed (but not added to either Zotero or to the vector database). You can then ask questions based on that file, and the model will perform searches to ground its answer.
 
-The CLI has a `readline` implementation, so it respects your `.inputrc`. You can use
+The default CLI has a `readline` implementation, so it respects your `.inputrc`. You can use
 
 ```
 set editing-mode vi
 ```
 
 in your `~/.inputrc` to use vim motions (the default is emacs bindings).
+
+Run `zqa --tui` for the basic full-screen terminal interface. It requires terminal stdin and stdout. The TUI supports the same commands and prompt flows, shared slash-command completion with Tab, mouse-wheel transcript scrolling, and Emacs or vi editing selected from `.inputrc`/`.editrc`. Ctrl-U and Ctrl-D scroll the transcript by half a page, and Ctrl-C saves and exits after any active command completes. Custom key mappings in readline configuration are not interpreted by the TUI. Logging is disabled in this mode to protect the screen.
 
 It is unlikely that you will run into a scenario where everything seems broken, but you can run `/checkhealth` to run health checks on your LanceDB database and `/doctor` to attempt to provide suggestions (but note that this does not actually apply the suggested fixes).
 
@@ -240,7 +242,7 @@ To report a bug, please re-run using `--log-level debug` and add the logs to you
 
 **I'm getting a 400 Forbidden!** Check that you set an API key in your `config.toml`, `.env`, or in your environment variables. Then, check that the API key has access to the API and is valid. Finally, check that your account has credits loaded.
 
-**What does the `--tui` option do?** Right now, nothing; it's disabled. A TUI is planned, but it's relatively low on priorities.
+**What does the `--tui` option do?** It starts a basic full-screen terminal interface. See Usage for controls and current limitations.
 
 **How do I write a config file for this?** Read [the docs](./README.md).
 

@@ -201,8 +201,7 @@ pub(crate) mod tests {
     use zqa_rag::reranking::common::RerankProviderConfig;
 
     use super::dispatch_command;
-    use crate::common::Context;
-    use crate::common::State;
+    use crate::common::{Context, InterfaceMode, State};
     use crate::config::{Config, MockConfig, VoyageAIConfig};
     use crate::store::lance::LanceZoteroStore;
     use crate::tools::retrieval::RetrievalTool;
@@ -255,6 +254,8 @@ pub(crate) mod tests {
             input: Box::new(Cursor::new(Vec::new())),
             out,
             err,
+            stream_output: Arc::new(|_| {}),
+            interface_mode: InterfaceMode::Cli,
         }
     }
 
