@@ -42,7 +42,7 @@ impl fmt::Display for ModelResponse<'_> {
                     // Log details in DEBUG mode
                     log::debug!(
                         "Tool call:\n\tname: {}\n\targuments: {}\n\tresponse{}",
-                        &stats.tool_name,
+                        stats.tool_name,
                         serde_json::to_string_pretty(&stats.tool_args).or(Err(fmt::Error {}))?,
                         serde_json::to_string_pretty(&stats.tool_result).or(Err(fmt::Error {}))?
                     );

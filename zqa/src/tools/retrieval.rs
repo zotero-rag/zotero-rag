@@ -115,7 +115,7 @@ where
 
                     format!(
                         "Title: {}\nAuthors: {}\nItem ID: {}",
-                        &item.metadata.title, authors, &item.metadata.library_key
+                        item.metadata.title, authors, item.metadata.library_key
                     )
                 })
                 .collect::<Vec<_>>();

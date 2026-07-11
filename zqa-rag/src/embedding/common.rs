@@ -35,7 +35,7 @@ impl std::fmt::Display for FailedTexts {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_fmt(format_args!(
             "Embedding provider: {}\n\nTexts that failed:\n",
-            &self.embedding_provider
+            self.embedding_provider
         ))?;
 
         for text in &self.texts {

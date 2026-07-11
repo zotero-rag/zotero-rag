@@ -444,8 +444,8 @@ mod tests {
         let state_dir = state_dir.unwrap();
 
         let mut components = state_dir.components();
-        assert!(components.next_back() == Some(Component::Normal(&OsStr::from("zqa"))));
-        assert!(components.next_back() == Some(Component::Normal(&OsStr::from("state"))));
+        assert_eq!(components.next_back(), Some(Component::Normal(&OsStr::from("zqa"))));
+        assert_eq!(components.next_back(), Some(Component::Normal(&OsStr::from("state"))));
     }
 
     #[test]
