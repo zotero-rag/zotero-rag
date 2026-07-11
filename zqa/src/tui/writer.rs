@@ -15,7 +15,8 @@ pub(crate) enum WorkerEvent {
     Stdout(Vec<u8>),
     /// Bytes a command handler wrote to the context's stderr stream.
     Stderr(Vec<u8>),
-    /// A chat history item added while the last command ran (e.g., a model answer).
+    /// A chat history item replayed from a conversation that was loaded without being
+    /// printed (e.g., via `/resume`).
     HistoryItem { is_user: bool, text: String },
     /// Fresh sidebar data, sent once at startup and after every command.
     Sidebar(SidebarSnapshot),

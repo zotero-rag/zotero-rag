@@ -2,9 +2,10 @@
 //!
 //! The TUI reuses the CLI command handlers unchanged: a worker task owns the
 //! [`crate::common::Context`] and runs [`crate::cli::app::dispatch_command`], with the context's
-//! output streams replaced by [`ChannelWriter`]s so all handler output flows to the UI event
-//! loop as [`WorkerEvent`]s. Model answers, which handlers record in the chat history rather
-//! than writing to stdout, are synced into the transcript after each command.
+//! output streams replaced by [`ChannelWriter`]s so all handler output, including streamed model
+//! answers, flows to the UI event loop as [`WorkerEvent`]s. The one exception is `/resume`,
+//! which swaps in a saved conversation without printing it; the worker detects the swap and
+//! replays the loaded history into the transcript.
 //!
 //! The layout is a borderless scrollable transcript, a bordered query box with command
 //! suggestions below it, and a sidebar with session information (cost, message count, and
@@ -17,6 +18,7 @@ mod editor;
 mod writer;
 
 use std::io::{Write, stdout};
+use std::sync::Arc;
 use std::time::Duration;
 
 use ratatui::DefaultTerminal;
@@ -60,11 +62,11 @@ pub(crate) async fn run(
 
     let mut terminal = ratatui::try_init()?;
     let _ = execute!(stdout(), EnableMouseCapture);
-    crate::utils::terminal::set_progress_bars_enabled(false);
+    crate::utils::terminal::set_cli_mode(false);
 
     let result = event_loop(&mut terminal, ctx, worker_tx, worker_rx, vi).await;
 
-    crate::utils::terminal::set_progress_bars_enabled(true);
+    crate::utils::terminal::set_cli_mode(true);
     let _ = execute!(stdout(), DisableMouseCapture);
     ratatui::restore();
     result
@@ -147,18 +149,20 @@ async fn worker(
     mut cmd_rx: UnboundedReceiver<String>,
     tx: UnboundedSender<WorkerEvent>,
 ) {
-    let mut seen_history_items = history_len(&ctx);
     let _ = tx.send(WorkerEvent::Sidebar(snapshot(&ctx)));
 
     while let Some(command) = cmd_rx.recv().await {
+        let history_before = Arc::clone(&ctx.state.chat_history);
         let result = dispatch_command(&command, &mut ctx).await;
 
-        // These commands replace the chat history wholesale, so the whole (new) history is
-        // fresh from the transcript's point of view.
-        if matches!(command.trim(), "/new" | "/resume") {
-            seen_history_items = 0;
+        // Handlers stream all output, including model answers, through the context's
+        // writers, so the transcript is already up to date. The exception is a swapped-in
+        // conversation (`/resume` replaces the chat history `Arc` wholesale): its contents
+        // were never printed, so replay them. `/new` also swaps the `Arc`, but to an empty
+        // history, making the replay a no-op.
+        if !Arc::ptr_eq(&history_before, &ctx.state.chat_history) {
+            replay_history(&ctx, &tx);
         }
-        seen_history_items = sync_history(&ctx, &tx, seen_history_items, &command);
 
         let (should_continue, error) = match result {
             Ok(cont) => (cont, None),
@@ -179,22 +183,13 @@ async fn worker(
     }
 }
 
-/// Send chat history items past `seen` to the UI, returning the new high-water mark.
-///
-/// The user message for the command just dispatched is skipped, since the UI already echoed
-/// it; other user messages (e.g., from a resumed conversation) are forwarded.
-fn sync_history<O: Write, E: Write>(
-    ctx: &Context<O, E>,
-    tx: &UnboundedSender<WorkerEvent>,
-    seen: usize,
-    command: &str,
-) -> usize {
+/// Send the whole chat history to the UI, e.g. after `/resume` loads a saved conversation.
+fn replay_history<O: Write, E: Write>(ctx: &Context<O, E>, tx: &UnboundedSender<WorkerEvent>) {
     let Ok(history) = ctx.state.chat_history.lock() else {
-        return seen;
+        return;
     };
 
-    let seen = seen.min(history.len());
-    for item in history.iter().skip(seen) {
+    for item in history.iter() {
         let text = item
             .content
             .iter()
@@ -214,14 +209,9 @@ fn sync_history<O: Write, E: Write>(
             MessageRole::Assistant => false,
             MessageRole::Tool => continue,
         };
-        if is_user && text == command.trim() {
-            continue;
-        }
 
         let _ = tx.send(WorkerEvent::HistoryItem { is_user, text });
     }
-
-    history.len()
 }
 
 /// The current chat history length, or 0 if the lock is poisoned.
@@ -248,5 +238,54 @@ fn snapshot<O: Write, E: Write>(ctx: &Context<O, E>) -> SidebarSnapshot {
             .read()
             .map(|imports| imports.keys().cloned().collect())
             .unwrap_or_default(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use zqa_rag::llm::base::{ChatHistoryContent, ChatHistoryItem, MessageRole};
+
+    use super::{WorkerEvent, replay_history};
+    use crate::cli::app::tests::create_test_context;
+
+    #[test]
+    fn test_replay_history_forwards_conversation() {
+        let ctx = create_test_context(vec![]);
+        {
+            let mut history = ctx.state.chat_history.lock().unwrap();
+            history.push(ChatHistoryItem {
+                role: MessageRole::User,
+                content: vec![ChatHistoryContent::Text("What is attention?".into())],
+            });
+            history.push(ChatHistoryItem {
+                role: MessageRole::Assistant,
+                content: vec![ChatHistoryContent::Text("A weighting mechanism.".into())],
+            });
+            // Items with no text content should not produce transcript lines.
+            history.push(ChatHistoryItem {
+                role: MessageRole::Assistant,
+                content: vec![],
+            });
+        }
+
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        replay_history(&ctx, &tx);
+        drop(tx);
+
+        let mut received = Vec::new();
+        while let Ok(event) = rx.try_recv() {
+            match event {
+                WorkerEvent::HistoryItem { is_user, text } => received.push((is_user, text)),
+                _ => panic!("unexpected worker event"),
+            }
+        }
+
+        assert_eq!(
+            received,
+            vec![
+                (true, "What is attention?".to_string()),
+                (false, "A weighting mechanism.".to_string()),
+            ]
+        );
     }
 }

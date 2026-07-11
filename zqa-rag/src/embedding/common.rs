@@ -7,7 +7,6 @@ use std::time::{Duration, Instant};
 
 use arrow_schema::{DataType, Field};
 use futures::{StreamExt, stream};
-use indicatif::ProgressBar;
 use lancedb::embeddings::EmbeddingFunction;
 use reqwest::header::HeaderMap;
 use serde::{Deserialize, Serialize};
@@ -255,7 +254,6 @@ where
     let texts: Vec<Option<String>> = source_array.iter().map(|s| s.map(str::to_owned)).collect();
 
     log::info!("Processing {} input texts.", texts.len());
-    let bar = ProgressBar::new(texts.len() as u64);
 
     let max_concurrent = env::var("MAX_CONCURRENT_REQUESTS")
         .ok()
@@ -275,7 +273,6 @@ where
         let api_client = api_client.clone();
         let make_request = make_request.clone();
         let embedding_provider = embedding_provider.clone();
-        let bar = bar.clone();
 
         async move {
             // Build a mask of "real" vs "empty" slots to handle providers that reject empty strings.
@@ -349,8 +346,6 @@ where
             if wait_after_request_s > 0 && i < num_batches - 1 {
                 tokio::time::sleep(Duration::from_secs(wait_after_request_s)).await;
             }
-
-            bar.inc(batch.len() as u64);
 
             Ok::<BatchResult, LLMError>(result)
         }

@@ -19,7 +19,7 @@ use thiserror::Error;
 use zqa_pdftools::parse::extract_text;
 
 use crate::store::common::ZoteroStore;
-use crate::utils::terminal::progress_bars_enabled;
+use crate::utils::terminal::in_cli_mode;
 use crate::{izip, utils::arrow::DbFields};
 
 /// Gets the Zotero library path. Works on Linux, macOS, and Windows systems.
@@ -454,7 +454,7 @@ pub async fn parse_library<T: ZoteroStore>(
     }
     drop(task_tx);
 
-    let mbar = if progress_bars_enabled() {
+    let mbar = if in_cli_mode() {
         Arc::new(MultiProgress::new())
     } else {
         Arc::new(MultiProgress::with_draw_target(ProgressDrawTarget::hidden()))

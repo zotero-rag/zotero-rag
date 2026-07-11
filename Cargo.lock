@@ -6909,7 +6909,6 @@ dependencies = [
  "dotenv",
  "futures",
  "http",
- "indicatif",
  "lancedb",
  "log",
  "rand 0.9.4",

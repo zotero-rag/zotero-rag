@@ -13,6 +13,7 @@ use schemars::{JsonSchema, schema_for};
 use serde::Deserialize;
 use serde_json::json;
 use thiserror::Error;
+use tokio::sync::mpsc::UnboundedSender;
 use zqa_pdftools::{
     chunk::{Chunker, ChunkingStrategy},
     parse::{ExtractedContent, extract_text},
@@ -108,15 +109,19 @@ impl DocumentsToolFactory {
 
     /// Return a list of tools to interact with the user-imported documents. As of now, all the
     /// tools are effectively pure functions in that they do not modify anything in the context.
-    pub(crate) fn build_tools(&self) -> Vec<Box<dyn Tool>> {
+    ///
+    /// # Arguments
+    ///
+    /// * `status_tx` - The channel on which the tool wrappers report their status lines.
+    pub(crate) fn build_tools(&self, status_tx: UnboundedSender<String>) -> Vec<Box<dyn Tool>> {
         vec![
             // `ListDocumentsTool` doesn't take very long since it's just a listing, so it doesn't
             // need to be `timed()`.
-            Box::new(ListDocumentsTool::new(Arc::clone(&self.ctx)).verbose()),
+            Box::new(ListDocumentsTool::new(Arc::clone(&self.ctx)).verbose(status_tx.clone())),
             Box::new(
                 QueryDocumentsTool::new(Arc::clone(&self.ctx))
-                    .verbose()
-                    .timed(),
+                    .verbose(status_tx.clone())
+                    .timed(status_tx),
             ),
         ]
     }

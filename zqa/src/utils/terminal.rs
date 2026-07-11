@@ -3,19 +3,21 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::state::StateError;
 
-/// Whether progress bars may draw on the terminal. Progress bars write straight to stderr,
-/// bypassing the context's output streams, so while the TUI owns the (alternate) screen they
-/// must be hidden or they draw over the interface.
-static PROGRESS_BARS_ENABLED: AtomicBool = AtomicBool::new(true);
+/// Whether the process is in CLI mode, i.e. the terminal may be written to directly. Some
+/// output (progress bars, the verbose tool announcements) bypasses the context's output
+/// streams and draws straight on the terminal; while the TUI owns the (alternate) screen,
+/// such output must be suppressed or it draws over the interface.
+static CLI_MODE: AtomicBool = AtomicBool::new(true);
 
-/// Returns whether progress bars may draw on the terminal.
-pub(crate) fn progress_bars_enabled() -> bool {
-    PROGRESS_BARS_ENABLED.load(Ordering::Relaxed)
+/// Returns whether the terminal may be written to directly (see [`CLI_MODE`]).
+pub(crate) fn in_cli_mode() -> bool {
+    CLI_MODE.load(Ordering::Relaxed)
 }
 
-/// Allow or forbid progress bars from drawing on the terminal (see [`progress_bars_enabled`]).
-pub(crate) fn set_progress_bars_enabled(enabled: bool) {
-    PROGRESS_BARS_ENABLED.store(enabled, Ordering::Relaxed);
+/// Enter or leave CLI mode (see [`in_cli_mode`]). The TUI clears this while it owns the
+/// screen and restores it on exit.
+pub(crate) fn set_cli_mode(enabled: bool) {
+    CLI_MODE.store(enabled, Ordering::Relaxed);
 }
 
 /// ANSI escape code for dimming text
