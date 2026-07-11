@@ -29,29 +29,9 @@ use crate::{
     utils::{
         library::get_authors,
         rag::ModelResponse,
-        terminal::{DIM_TEXT, RESET},
+        terminal::{DIM_TEXT, RESET, format_number},
     },
 };
-
-/// Given a positive number, returns a thousands separator-formatted string representation
-///
-/// # Arguments:
-///
-/// * `num` - The number to format
-///
-/// # Returns
-///
-/// The thousands-separated string
-fn format_number(num: u32) -> String {
-    num.to_string()
-        .as_bytes()
-        .rchunks(3)
-        .rev()
-        .map(std::str::from_utf8)
-        .collect::<Result<Vec<&str>, _>>()
-        .unwrap_or_default()
-        .join(",")
-}
 
 /// Perform a vector search for a user-provided search term.
 ///
@@ -214,18 +194,36 @@ where
 
     let summarization_tool = SummarizationTool::new(llm_client.clone(), store_arc);
     let summarization_tool_clone = summarization_tool.clone();
-    let mut tools: Vec<Box<dyn Tool>> = vec![
-        Box::new(retrieval_tool.verbose().timed()),
-        Box::new(summarization_tool.verbose().timed()),
-    ];
+    let mut tools: Vec<Box<dyn Tool>> = match ctx.on_tool_trace.clone() {
+        Some(trace) => vec![
+            Box::new(
+                retrieval_tool
+                    .verbose_to(Arc::clone(&trace))
+                    .timed_to(Arc::clone(&trace)),
+            ),
+            Box::new(
+                summarization_tool
+                    .verbose_to(Arc::clone(&trace))
+                    .timed_to(trace),
+            ),
+        ],
+        None => vec![
+            Box::new(retrieval_tool.verbose().timed()),
+            Box::new(summarization_tool.verbose().timed()),
+        ],
+    };
     let document_tools = get_user_document_tools(ctx)?;
     tools.extend(document_tools);
 
     let chat_history = Arc::clone(&ctx.state.chat_history);
 
-    // TODO: avoid bypassing context I/O
-    let on_text: Arc<CallbackFn<str>> = Arc::new(move |text: &str| {
-        let _ = writeln!(io::stdout(), "{text}");
+    // Streamed text goes to the frontend's sink if one is registered (e.g. the TUI transcript);
+    // otherwise directly to stdout. It cannot go through `ctx.out` because the callback outlives
+    // any borrow of `ctx`.
+    let on_text: Arc<CallbackFn<str>> = ctx.on_stream_text.clone().unwrap_or_else(|| {
+        Arc::new(move |text: &str| {
+            let _ = writeln!(io::stdout(), "{text}");
+        })
     });
 
     let request = {
@@ -276,6 +274,13 @@ where
             if let Ok(summarization_output_tokens) = summarization_tool_clone.output_tokens.lock() {
                 total_output_tokens += *summarization_output_tokens;
             }
+
+            ctx.state
+                .session_input_tokens
+                .fetch_add(u64::from(total_input_tokens), atomic::Ordering::Relaxed);
+            ctx.state
+                .session_output_tokens
+                .fetch_add(u64::from(total_output_tokens), atomic::Ordering::Relaxed);
 
             // Update session cost
             if let Some(ref p) = pricing {
@@ -368,12 +373,12 @@ where
     writeln!(
         &mut ctx.out,
         "\t{DIM_TEXT}Input tokens: {}{RESET}",
-        format_number(total_input_tokens)
+        format_number(u64::from(total_input_tokens))
     )?;
     writeln!(
         &mut ctx.out,
         "\t{DIM_TEXT}Output tokens: {}{RESET}\n",
-        format_number(total_output_tokens)
+        format_number(u64::from(total_output_tokens))
     )?;
 
     if let Some(p) = &pricing {

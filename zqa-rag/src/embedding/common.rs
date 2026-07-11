@@ -255,7 +255,11 @@ where
     let texts: Vec<Option<String>> = source_array.iter().map(|s| s.map(str::to_owned)).collect();
 
     log::info!("Processing {} input texts.", texts.len());
-    let bar = ProgressBar::new(texts.len() as u64);
+    let bar = if crate::progress::progress_bars_enabled() {
+        ProgressBar::new(texts.len() as u64)
+    } else {
+        ProgressBar::hidden()
+    };
 
     let max_concurrent = env::var("MAX_CONCURRENT_REQUESTS")
         .ok()

@@ -453,7 +453,13 @@ pub async fn parse_library<T: ZoteroStore>(
     }
     drop(task_tx);
 
-    let mbar = Arc::new(MultiProgress::new());
+    let mbar = if zqa_rag::progress::progress_bars_enabled() {
+        Arc::new(MultiProgress::new())
+    } else {
+        Arc::new(MultiProgress::with_draw_target(
+            indicatif::ProgressDrawTarget::hidden(),
+        ))
+    };
 
     let handles: Vec<_> = (0..n_threads)
         .map(|_| {
@@ -688,7 +694,7 @@ mod tests {
         ];
 
         dotenv().ok();
-        let _ = setup_logger(log::LevelFilter::Info);
+        let _ = setup_logger(log::LevelFilter::Info, std::io::stdout().into());
 
         let tmp = tempfile::tempdir().unwrap();
         let db_uri = tmp

@@ -6,12 +6,43 @@ use std::{
 };
 
 use chrono::Local;
+use zqa_rag::llm::base::{ChatHistoryContent, ChatHistoryItem, MessageRole};
 
 use crate::{
     cli::errors::CLIError,
     common::Context,
     state::{SavedChatHistory, get_conversation_history, save_conversation},
 };
+
+/// Write a conversation's messages to `out` so the user can see what they resumed.
+///
+/// User turns are prefixed with `> `; tool calls and their results are omitted.
+///
+/// # Arguments
+///
+/// * `out` - The writer the conversation is written to.
+/// * `history` - The conversation's messages.
+///
+/// # Errors
+///
+/// * `CLIError::IOError` - If writing to `out` fails.
+fn write_conversation<O: Write>(out: &mut O, history: &[ChatHistoryItem]) -> Result<(), CLIError> {
+    for item in history {
+        for content in &item.content {
+            let ChatHistoryContent::Text(text) = content else {
+                continue;
+            };
+
+            match item.role {
+                MessageRole::User => writeln!(out, "\n> {text}")?,
+                MessageRole::Assistant => writeln!(out, "\n{text}")?,
+                MessageRole::Tool => {}
+            }
+        }
+    }
+
+    Ok(())
+}
 
 /// Resume a previous conversation selected by the user.
 ///
@@ -92,10 +123,11 @@ pub(crate) fn handle_resume_cmd<O: Write, E: Write>(
 
                     let selected = histories.swap_remove(n - 1);
                     let title = selected.title.clone();
+                    writeln!(&mut ctx.out, "Resumed: {title}")?;
+                    write_conversation(&mut ctx.out, &selected.history)?;
                     ctx.state.chat_history = Arc::new(Mutex::new(selected.history));
                     *ctx.state.title.lock()? = Some(title.clone());
                     ctx.state.dirty.store(false, atomic::Ordering::Relaxed);
-                    writeln!(&mut ctx.out, "Resumed: {title}")?;
                 }
                 _ => {
                     writeln!(&mut ctx.err, "Invalid selection.")?;
@@ -142,11 +174,39 @@ mod tests {
     use zqa_macros::{test_contains, test_eq};
     use zqa_rag::llm::base::{ChatHistoryContent, ChatHistoryItem, MessageRole};
 
-    use super::handle_resume_cmd;
+    use super::{handle_resume_cmd, write_conversation};
     use crate::{
         cli::app::tests::create_test_context,
         state::{SavedChatHistory, save_conversation},
     };
+
+    #[test]
+    fn test_write_conversation_formats_roles() {
+        let history = vec![
+            ChatHistoryItem {
+                role: MessageRole::User,
+                content: vec![ChatHistoryContent::Text("What is attention?".into())],
+            },
+            ChatHistoryItem {
+                role: MessageRole::Assistant,
+                content: vec![ChatHistoryContent::Text(
+                    "Attention is a mechanism...".into(),
+                )],
+            },
+            ChatHistoryItem {
+                role: MessageRole::Tool,
+                content: vec![ChatHistoryContent::Text("tool output".into())],
+            },
+        ];
+
+        let mut out = Vec::new();
+        write_conversation(&mut out, &history).unwrap();
+        let out = String::from_utf8(out).unwrap();
+
+        test_contains!(out, "> What is attention?");
+        test_contains!(out, "\nAttention is a mechanism...");
+        assert!(!out.contains("tool output"));
+    }
 
     #[test]
     fn test_resume_no_conversations() {
@@ -204,6 +264,8 @@ mod tests {
 
             let out = String::from_utf8(ctx.out.into_inner()).unwrap();
             test_contains!(out, "Resumed:");
+            // The resumed conversation's messages are shown, with user turns marked.
+            test_contains!(out, "> Tell me about transformers.");
 
             let loaded = ctx.state.chat_history.lock().unwrap();
             test_eq!(loaded.len(), history_b.len());

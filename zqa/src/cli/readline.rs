@@ -16,7 +16,7 @@ pub fn get_readline_config() -> Config {
 /// # Returns
 ///
 /// The current edit mode (emacs or vi)
-fn get_edit_mode() -> EditMode {
+pub(crate) fn get_edit_mode() -> EditMode {
     match env::consts::OS {
         "macos" => match get_editrc_edit_mode() {
             Some(mode) => mode,

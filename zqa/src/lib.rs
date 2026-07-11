@@ -13,6 +13,7 @@ pub mod config;
 pub mod state;
 pub mod store;
 pub mod tools;
+pub mod tui;
 pub mod utils;
 
 // Re-export commonly used items
@@ -152,7 +153,20 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     check_api_keys_exist(&config, args.log_level);
 
     // Avoid RUST_LOG from interfering by not instantiating the logger if it's disabled.
-    setup_logger(args.log_level).expect("Failed to set up logger.");
+    // The TUI owns the terminal, so logs go to a file in the state directory instead.
+    let log_output: fern::Output = if args.tui {
+        let log_file = state::get_state_dir()
+            .ok()
+            .and_then(|dir| fern::log_file(dir.join("zqa.log")).ok());
+
+        match log_file {
+            Some(file) => file.into(),
+            None => fern::Output::writer(Box::new(io::sink()), "\n"),
+        }
+    } else {
+        stdout().into()
+    };
+    setup_logger(args.log_level, log_output).expect("Failed to set up logger.");
 
     log::debug!(
         "You are running {} version {}. Log level: {}",
@@ -212,6 +226,12 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let store = LanceZoteroStore::from_config(&config)?;
+
+    if args.tui {
+        tui::run_tui(config, store).await?;
+        return Ok(());
+    }
+
     let context = Context {
         state: State::default(),
         config,
@@ -219,6 +239,8 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         input: Box::new(io::stdin().lock()),
         out: stdout(),
         err: stderr(),
+        on_stream_text: None,
+        on_tool_trace: None,
     };
 
     cli(context).await?;

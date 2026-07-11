@@ -1,5 +1,98 @@
 use thiserror::Error;
 
+/// A slash command completion, along with a short description for suggestion lists.
+pub(crate) struct SlashCommandSpec {
+    /// The text inserted when the command is completed.
+    pub(crate) name: &'static str,
+    /// A one-line summary of what the command does.
+    pub(crate) description: &'static str,
+}
+
+/// All slash-command completions, used by the CLI's readline completer and the TUI's
+/// suggestion list.
+pub(crate) const SLASH_COMMANDS: &[SlashCommandSpec] = &[
+    SlashCommandSpec {
+        name: "/batch check",
+        description: "Check on the status of a submitted batch",
+    },
+    SlashCommandSpec {
+        name: "/batch create",
+        description: "Pre-process Zotero library with a batch embedding API",
+    },
+    SlashCommandSpec {
+        name: "/checkhealth",
+        description: "Run health checks on your LanceDB",
+    },
+    SlashCommandSpec {
+        name: "/config",
+        description: "Show the currently used configuration",
+    },
+    SlashCommandSpec {
+        name: "/docs clear",
+        description: "Clear all documents in this session",
+    },
+    SlashCommandSpec {
+        name: "/docs list",
+        description: "List all documents in this session",
+    },
+    SlashCommandSpec {
+        name: "/docs remove",
+        description: "Remove a document from the session",
+    },
+    SlashCommandSpec {
+        name: "/dedup",
+        description: "Remove duplicate items",
+    },
+    SlashCommandSpec {
+        name: "/doctor",
+        description: "Attempt to fix issues spotted by /checkhealth",
+    },
+    SlashCommandSpec {
+        name: "/embed fix",
+        description: "Repair rows with zero embeddings",
+    },
+    SlashCommandSpec {
+        name: "/embed",
+        description: "Repair failed DB creation by re-adding embeddings",
+    },
+    SlashCommandSpec {
+        name: "/exit",
+        description: "Exit the program",
+    },
+    SlashCommandSpec {
+        name: "/help",
+        description: "Show the help message",
+    },
+    SlashCommandSpec {
+        name: "/index",
+        description: "Create or update indices",
+    },
+    SlashCommandSpec {
+        name: "/new",
+        description: "Save the current conversation and start a new one",
+    },
+    SlashCommandSpec {
+        name: "/process",
+        description: "Pre-process Zotero library to update the database",
+    },
+    SlashCommandSpec {
+        name: "/quit",
+        description: "Exit the program",
+    },
+    SlashCommandSpec {
+        name: "/resume",
+        description: "Resume a previous conversation",
+    },
+    SlashCommandSpec {
+        name: "/search",
+        description: "Search for papers without summarizing them",
+    },
+    SlashCommandSpec {
+        name: "/stats",
+        description: "Show table statistics",
+    },
+];
+
 pub(crate) enum BatchCommand {
     Cancel(usize),
     CheckStatus,

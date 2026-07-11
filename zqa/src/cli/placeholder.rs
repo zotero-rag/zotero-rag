@@ -9,6 +9,7 @@ use rustyline::highlight::Highlighter;
 use rustyline::hint::Hinter;
 use rustyline::validate::{ValidationResult, Validator};
 
+use crate::cli::commands::SLASH_COMMANDS;
 use crate::common::UserDocument;
 
 /// A struct that will implement placeholder text using readline. The placeholder text itself is
@@ -45,35 +46,16 @@ impl PlaceholderText {
     }
 }
 
+/// An in-progress `@` file mention in the input line.
 #[derive(Clone, Copy)]
-struct MentionSpan<'a> {
-    start: usize,
-    query: &'a str,
-    force_quotes: bool,
+pub(crate) struct MentionSpan<'a> {
+    /// Byte offset just past the `@` (and opening quote, if any) where the mention text begins.
+    pub(crate) start: usize,
+    /// The mention text typed so far.
+    pub(crate) query: &'a str,
+    /// Whether the mention was opened with a quote, forcing quoted completion.
+    pub(crate) force_quotes: bool,
 }
-
-const SLASH_COMMANDS: &[&str] = &[
-    "/batch check",
-    "/batch create",
-    "/checkhealth",
-    "/config",
-    "/docs clear",
-    "/docs list",
-    "/docs remove",
-    "/dedup",
-    "/doctor",
-    "/embed fix",
-    "/embed",
-    "/exit",
-    "/help",
-    "/index",
-    "/new",
-    "/process",
-    "/quit",
-    "/resume",
-    "/search",
-    "/stats",
-];
 
 /// Returns the name of the best-match PDF file in the current directory, if any exist.
 /// Matching is performed between `query` and files in the current directory using a fuzzy matcher.
@@ -116,7 +98,8 @@ fn get_best_file_match(query: &str, matcher: &mut nucleo_matcher::Matcher) -> Op
     }
 }
 
-fn format_mention_completion(path: &str, force_quotes: bool) -> String {
+/// Quote a completed mention path if needed so it survives whitespace splitting.
+pub(crate) fn format_mention_completion(path: &str, force_quotes: bool) -> String {
     if force_quotes || path.contains(char::is_whitespace) {
         format!("\"{path}\"")
     } else {
@@ -124,7 +107,8 @@ fn format_mention_completion(path: &str, force_quotes: bool) -> String {
     }
 }
 
-fn get_active_mention(line: &str, pos: usize) -> Option<MentionSpan<'_>> {
+/// Find the `@` file mention being typed at `pos` in `line`, if any.
+pub(crate) fn get_active_mention(line: &str, pos: usize) -> Option<MentionSpan<'_>> {
     let prefix = &line[..pos];
     let at_pos = prefix.rfind('@')?;
 
@@ -159,7 +143,8 @@ fn get_active_mention(line: &str, pos: usize) -> Option<MentionSpan<'_>> {
     }
 }
 
-fn get_file_completion_candidates(prefix: &str) -> Option<Vec<String>> {
+/// List PDF files in the current directory whose names start with `prefix`, sorted by name.
+pub(crate) fn get_file_completion_candidates(prefix: &str) -> Option<Vec<String>> {
     let cwd = std::env::current_dir().ok()?;
     let mut candidates = std::fs::read_dir(cwd)
         .ok()?
@@ -207,8 +192,8 @@ impl Completer for PlaceholderText {
         if line.starts_with('/') {
             let candidates: Vec<String> = SLASH_COMMANDS
                 .iter()
-                .filter(|cmd| cmd.starts_with(line))
-                .map(std::string::ToString::to_string)
+                .filter(|cmd| cmd.name.starts_with(line))
+                .map(|cmd| cmd.name.to_string())
                 .collect();
             return Ok((0, candidates));
         }
@@ -250,8 +235,8 @@ impl Hinter for PlaceholderText {
             self.shown_hint.replace(None);
             return SLASH_COMMANDS
                 .iter()
-                .find(|cmd| cmd.starts_with(line) && **cmd != line)
-                .map(|cmd| cmd[pos..].to_string());
+                .find(|cmd| cmd.name.starts_with(line) && cmd.name != line)
+                .map(|cmd| cmd.name[pos..].to_string());
         }
 
         if let Some(mention) = get_active_mention(line, pos) {

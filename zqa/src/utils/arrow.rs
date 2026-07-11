@@ -383,7 +383,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn test_library_to_arrow_works() {
         dotenv().ok();
-        let _ = setup_logger(log::LevelFilter::Info);
+        let _ = setup_logger(log::LevelFilter::Info, std::io::stdout().into());
 
         let temp_dir = tempfile::tempdir().unwrap();
         let db_uri = temp_dir

@@ -240,7 +240,7 @@ To report a bug, please re-run using `--log-level debug` and add the logs to you
 
 **I'm getting a 400 Forbidden!** Check that you set an API key in your `config.toml`, `.env`, or in your environment variables. Then, check that the API key has access to the API and is valid. Finally, check that your account has credits loaded.
 
-**What does the `--tui` option do?** Right now, nothing; it's disabled. A TUI is planned, but it's relatively low on priorities.
+**What does the `--tui` option do?** It launches a full-screen terminal UI instead of the line-based CLI: a scrollable conversation view (mouse wheel or `Ctrl-U`/`Ctrl-D`), a query box with command suggestions, and a sidebar showing token usage, session cost, and imported documents. It supports the same commands as the CLI and respects your `.inputrc`/`.editrc` for emacs/vi keybindings.
 
 **How do I write a config file for this?** Read [the docs](./README.md).
 

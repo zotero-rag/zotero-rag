@@ -23,6 +23,26 @@ pub const RED_BOLD: &str = "\x1b[31;1m";
 /// ANSI escape code for bold text
 pub const BOLD: &str = "\x1b[1m";
 
+/// Given a positive number, returns a thousands separator-formatted string representation
+///
+/// # Arguments:
+///
+/// * `num` - The number to format
+///
+/// # Returns
+///
+/// The thousands-separated string
+pub(crate) fn format_number(num: u64) -> String {
+    num.to_string()
+        .as_bytes()
+        .rchunks(3)
+        .rev()
+        .map(std::str::from_utf8)
+        .collect::<Result<Vec<&str>, _>>()
+        .unwrap_or_default()
+        .join(",")
+}
+
 /// Read a line of input.
 pub(crate) fn read_line<R: BufRead>(reader: &mut R) -> String {
     let mut input = String::new();
@@ -43,7 +63,7 @@ pub(crate) fn read_password<R: BufRead>(
     }
 }
 
-/// Read a character from standard input and return it, handling Enter as a default.
+/// Read a character from the input reader and return it, handling Enter as a default.
 ///
 /// This function does not distinguish between lower- and uppercase options, and returns the
 /// lowercase version of the character.
@@ -51,16 +71,24 @@ pub(crate) fn read_password<R: BufRead>(
 /// # Arguments:
 ///
 /// * `reader` - The input reader.
+/// * `out` - The writer the prompt is written to.
 /// * `default` - The default if Enter is pressed.
 /// * `valid_set` - The valid set of characters, in lowercase.
-pub(crate) fn read_char<R: BufRead>(reader: &mut R, default: char, valid_set: &[char]) -> char {
+pub(crate) fn read_char<R: BufRead, W: Write>(
+    reader: &mut R,
+    out: &mut W,
+    default: char,
+    valid_set: &[char],
+) -> char {
     debug_assert!(
         valid_set.contains(&default),
         "`default` must be a member of `valid_set`"
     );
 
     loop {
-        print!("> ");
+        let _ = write!(out, "> ");
+        let _ = out.flush();
+
         let input = read_line(reader);
         let choice = input.chars().next().unwrap_or(default).to_ascii_lowercase();
 
@@ -74,21 +102,23 @@ pub(crate) fn read_char<R: BufRead>(reader: &mut R, default: char, valid_set: &[
     }
 }
 
-/// Read an integer from standard input, and validate that it is within bounds.
+/// Read an integer from the input reader, and validate that it is within bounds.
 ///
 /// # Arguments:
 ///
 /// * `reader` - The input reader.
+/// * `out` - The writer the prompt is written to.
 /// * `default` - The default value if Enter is pressed.
 /// * `bounds` - Lower and upper bounds to accept. Lower bound is inclusive, upper is exclusive.
-pub(crate) fn read_number<R: BufRead>(
+pub(crate) fn read_number<R: BufRead, W: Write>(
     reader: &mut R,
+    out: &mut W,
     default: usize,
     bounds: (usize, usize),
 ) -> usize {
     loop {
-        print!("> ");
-        let _ = std::io::stdout().flush();
+        let _ = write!(out, "> ");
+        let _ = out.flush();
 
         let input = read_line(reader);
         let input = input.trim();
@@ -102,6 +132,6 @@ pub(crate) fn read_number<R: BufRead>(
         {
             return num;
         }
-        println!("Choice must be in [{}, {}).", bounds.0, bounds.1);
+        let _ = writeln!(out, "Choice must be in [{}, {}).", bounds.0, bounds.1);
     }
 }

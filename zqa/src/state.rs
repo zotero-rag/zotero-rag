@@ -213,7 +213,7 @@ pub(crate) fn oobe<R: BufRead>(reader: &mut R, is_terminal: bool) -> Result<(), 
     println!("Would you like to set up your configuration?");
     println!("[Y]es");
     println!("(N)o");
-    let choice = read_char(reader, 'y', &['y', 'n']);
+    let choice = read_char(reader, &mut io::stdout(), 'y', &['y', 'n']);
 
     if choice == 'n' {
         return Ok(());
@@ -226,7 +226,7 @@ pub(crate) fn oobe<R: BufRead>(reader: &mut R, is_terminal: bool) -> Result<(), 
     println!("(G)emini");
     println!("Open(R)outer");
     println!();
-    let model_provider = read_char(reader, 'a', &['a', 'l', 'o', 'g', 'r']);
+    let model_provider = read_char(reader, &mut io::stdout(), 'a', &['a', 'l', 'o', 'g', 'r']);
 
     let model_api_key = if model_provider == 'l' {
         String::new()
@@ -259,7 +259,7 @@ pub(crate) fn oobe<R: BufRead>(reader: &mut R, is_terminal: bool) -> Result<(), 
     println!("[V]oyage AI");
     println!("(Z)eroEntropy");
     println!();
-    let embedding_provider = read_char(reader, 'v', &['c', 'g', 'o', 'v', 'z']);
+    let embedding_provider = read_char(reader, &mut io::stdout(), 'v', &['c', 'g', 'o', 'v', 'z']);
 
     config.embedding_provider = match embedding_provider {
         'c' => EmbeddingProvider::Cohere,
@@ -308,7 +308,12 @@ pub(crate) fn oobe<R: BufRead>(reader: &mut R, is_terminal: bool) -> Result<(), 
         'c' | 'g' | 'o' => 'c', // UI shows [C]ohere as the default for this group
         other => other,
     };
-    let reranker_provider = read_char(reader, reranker_default, &['c', 'v', 'z']);
+    let reranker_provider = read_char(
+        reader,
+        &mut io::stdout(),
+        reranker_default,
+        &['c', 'v', 'z'],
+    );
     config.reranker_provider = match reranker_provider {
         'c' => Some(RerankerProvider::Cohere),
         'v' => Some(RerankerProvider::VoyageAI),
@@ -334,7 +339,7 @@ pub(crate) fn oobe<R: BufRead>(reader: &mut R, is_terminal: bool) -> Result<(), 
     println!(
         "{DIM_TEXT}A higher number can yield faster results, but can also result in being rate-limited. You should check what tier of API you have access to and check the TPM (tokens per minute) limit to make a choice here. As a rough estimate, your TPM limit divided by 150,000 is a somewhat reasonable estimate.{RESET}"
     );
-    let max_concurrent_requests = read_number(reader, 5, (1, 20));
+    let max_concurrent_requests = read_number(reader, &mut io::stdout(), 5, (1, 20));
     config.max_concurrent_requests = max_concurrent_requests;
 
     // We can unwrap the provider configs since we initialized via `Default`, which sets them to a `Some(..)`.

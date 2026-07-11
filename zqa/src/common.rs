@@ -12,15 +12,15 @@ use fern;
 use humantime;
 use log::LevelFilter;
 use zqa_pdftools::parse::ExtractedContent;
-use zqa_rag::llm::base::ChatHistoryItem;
+use zqa_rag::llm::{base::ChatHistoryItem, tools::CallbackFn};
 
 use crate::{config::Config, store::lance::LanceZoteroStore};
 
 #[derive(Parser, Clone, Debug)]
 #[command(version, about, long_about = None)]
 pub struct Args {
-    /// Whether to use the tui interface. This is very unstable and is not feature-complete, and it
-    /// should not be used for regular tasks.
+    /// Use the full-screen terminal UI instead of the line-based CLI. The TUI shows the
+    /// conversation, a query box, and a sidebar with session statistics.
     #[arg(long, default_value_t = false)]
     pub tui: bool,
 
@@ -59,6 +59,10 @@ pub(crate) struct State {
     /// Accumulated session cost, in US cents (Money pattern)
     /// TODO: How do providers handle other currencies?
     pub(crate) session_cost: AtomicU64,
+    /// Accumulated input tokens across all queries in this session
+    pub(crate) session_input_tokens: AtomicU64,
+    /// Accumulated output tokens across all queries in this session
+    pub(crate) session_output_tokens: AtomicU64,
     /// Extracted content for imported documents
     pub(crate) imports: Arc<RwLock<HashMap<String, Arc<UserDocument>>>>,
 }
@@ -81,6 +85,14 @@ pub(crate) struct Context<OutStream: Write, ErrStream: Write> {
     pub(crate) out: OutStream,
     /// Abstraction for `stderr()`
     pub(crate) err: ErrStream,
+    /// Callback for text streamed from the model as it arrives. Handlers fall back to printing
+    /// on `stdout` when this is `None`; the TUI routes streamed text into its transcript.
+    /// A callback (rather than a `Write` handle) because it is shared with `'static` tasks
+    /// that outlive any borrow of `out`.
+    pub(crate) on_stream_text: Option<Arc<CallbackFn<str>>>,
+    /// Callback for tool trace lines (tool invocations and timings). Tool wrappers fall back to
+    /// printing dimmed text on `stderr` when this is `None`.
+    pub(crate) on_tool_trace: Option<Arc<CallbackFn<str>>>,
 }
 
 /// Initialize the `fern` logger.
@@ -88,11 +100,16 @@ pub(crate) struct Context<OutStream: Write, ErrStream: Write> {
 /// # Arguments
 ///
 /// * `log_level` - The log level to use.
+/// * `output` - Where log lines are written. The CLI logs to `stdout`; the TUI logs to a file
+///   since it owns the terminal.
 ///
 /// # Errors
 ///
-/// `log::SetLoggerError` if the logger could not be initialized.
-pub fn setup_logger(log_level: LevelFilter) -> Result<(), log::SetLoggerError> {
+/// * `log::SetLoggerError` if the logger could not be initialized.
+pub fn setup_logger(
+    log_level: LevelFilter,
+    output: fern::Output,
+) -> Result<(), log::SetLoggerError> {
     // Set up logging via fern
     fern::Dispatch::new()
         // Perform allocation-free log formatting
@@ -107,6 +124,6 @@ pub fn setup_logger(log_level: LevelFilter) -> Result<(), log::SetLoggerError> {
         })
         .level(log_level)
         .level_for("rustyline", log::LevelFilter::Off)
-        .chain(std::io::stdout())
+        .chain(output)
         .apply()
 }

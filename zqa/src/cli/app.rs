@@ -73,6 +73,51 @@ pub(crate) async fn dispatch_command<O: Write, E: Write>(
     .and(Ok(true))
 }
 
+/// Check for pending embedding batches and return a user-facing notice if any exist.
+///
+/// [`crate::cli::handlers::batch`] has more details about the semantics of interacting with
+/// batch APIs. We don't check the batches' statuses themselves since we have two bad options:
+///
+/// * If we `await` the check, we risk a longer startup time
+/// * If we use a task, we need to be careful about not messing with the frontend's output.
+///
+/// # Returns
+///
+/// A message describing how many batches are pending, or `None` if there are none.
+///
+/// # Errors
+///
+/// * `CLIError::StateDirError` - If the state dir could not be obtained.
+/// * `CLIError::IOError` - If the batch directory could not be read.
+pub(crate) fn pending_batches_notice() -> Result<Option<String>, CLIError> {
+    let batch_dir = get_state_dir()?.join("batches");
+
+    // `batch_dir` is created lazily on the first batch
+    if !batch_dir.exists() {
+        return Ok(None);
+    }
+
+    let batch_files: Vec<String> = fs::read_dir(&batch_dir)?
+        .filter_map(|x| x.ok()?.file_name().into_string().ok())
+        .filter(|f| {
+            f.starts_with("batch_")
+                && Path::new(f)
+                    .extension()
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("log"))
+        })
+        .collect();
+
+    if batch_files.is_empty() {
+        return Ok(None);
+    }
+
+    Ok(Some(format!(
+        "You have {} embedding batch{} pending. Use /batch check to check their status.",
+        batch_files.len(),
+        if batch_files.len() > 1 { "es" } else { "" }
+    )))
+}
+
 /// The core CLI implementation that implements a REPL for user commands.
 ///
 /// # Arguments
@@ -88,34 +133,8 @@ pub(crate) async fn dispatch_command<O: Write, E: Write>(
 /// * `CLIError::StateDirError` - If the state dir could not be obtained.
 #[allow(clippy::needless_continue)]
 pub(crate) async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<(), CLIError> {
-    // At startup, we should check if there are pending embedding batches and notify the user if so.
-    // [`crate::cli::handlers::batch`] has more details about the semantics of interacting with
-    // batch APIs. We don't do the check itself since we have two bad options:
-    //
-    // * If we `await` the check, we risk a longer startup time
-    // * If we use a task, we need to be careful about not messing with the CLI output/readline.
-    let batch_dir = get_state_dir()?.join("batches");
-
-    // `batch_dir` is created lazily on the first batch
-    if batch_dir.exists() {
-        let batch_files: Vec<String> = fs::read_dir(&batch_dir)?
-            .filter_map(|x| x.ok()?.file_name().into_string().ok())
-            .filter(|f| {
-                f.starts_with("batch_")
-                    && Path::new(f)
-                        .extension()
-                        .is_some_and(|ext| ext.eq_ignore_ascii_case("log"))
-            })
-            .collect();
-
-        if !batch_files.is_empty() {
-            writeln!(
-                &mut ctx.out,
-                "You have {} embedding batch{} pending. Use /batch check to check their status.\n",
-                batch_files.len(),
-                if batch_files.len() > 1 { "es" } else { "" }
-            )?;
-        }
+    if let Some(notice) = pending_batches_notice()? {
+        writeln!(&mut ctx.out, "{notice}\n")?;
     }
 
     // First, get the path to the history file used by the `readline` implementation.
@@ -255,6 +274,8 @@ pub(crate) mod tests {
             input: Box::new(Cursor::new(Vec::new())),
             out,
             err,
+            on_stream_text: None,
+            on_tool_trace: None,
         }
     }
 

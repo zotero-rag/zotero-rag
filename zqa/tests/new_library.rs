@@ -14,7 +14,7 @@ use zqa_rag::constants::{
 #[tokio::test]
 async fn test_integration_works() {
     dotenv().ok();
-    setup_logger(LevelFilter::Info).unwrap();
+    setup_logger(LevelFilter::Info, std::io::stdout().into()).unwrap();
 
     if env::var("INTEGRATION_TESTS").is_err() {
         // Only enable if integration testing is desired

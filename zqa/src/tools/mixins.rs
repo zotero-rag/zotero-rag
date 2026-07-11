@@ -1,17 +1,24 @@
-use std::{pin::Pin, time::Instant};
+use std::{pin::Pin, sync::Arc, time::Instant};
 
-use zqa_rag::llm::tools::Tool;
+use zqa_rag::llm::tools::{CallbackFn, Tool};
 
 use crate::utils::terminal::{DIM_TEXT, RESET};
 
-/// `Tool` wrapper that prints its arguments before delegating to the wrapped tool.
+/// The default trace sink: dimmed lines on `stderr`, matching the CLI's look.
+fn stderr_trace_sink() -> Arc<CallbackFn<str>> {
+    Arc::new(|line: &str| eprintln!("{DIM_TEXT}{line}{RESET}"))
+}
+
+/// `Tool` wrapper that reports its arguments to a trace sink before delegating to the wrapped
+/// tool.
 pub struct Verbose<T: Tool> {
     inner: T,
+    trace: Arc<CallbackFn<str>>,
 }
 
 impl<T: Tool> Verbose<T> {
-    pub fn new(inner: T) -> Self {
-        Self { inner }
+    pub fn new(inner: T, trace: Arc<CallbackFn<str>>) -> Self {
+        Self { inner, trace }
     }
 }
 
@@ -35,20 +42,21 @@ impl<T: Tool> Tool for Verbose<T> {
         Box::pin(async move {
             let printed_args = serde_json::to_string(&args).unwrap_or_default();
 
-            eprintln!("{DIM_TEXT}{} ({}){RESET}", self.inner.name(), printed_args);
+            (self.trace)(&format!("{} ({})", self.inner.name(), printed_args));
             self.inner.call(args).await
         })
     }
 }
 
-/// `Tool` wrapper that prints how long the wrapped tool took to run
+/// `Tool` wrapper that reports how long the wrapped tool took to run to a trace sink.
 pub struct Timed<T: Tool> {
     inner: T,
+    trace: Arc<CallbackFn<str>>,
 }
 
 impl<T: Tool> Timed<T> {
-    pub fn new(inner: T) -> Self {
-        Self { inner }
+    pub fn new(inner: T, trace: Arc<CallbackFn<str>>) -> Self {
+        Self { inner, trace }
     }
 }
 
@@ -74,18 +82,16 @@ impl<T: Tool> Tool for Timed<T> {
             let result = self.inner.call(args).await;
             let elapsed = start.elapsed();
 
-            match result {
-                Ok(_) => eprintln!(
-                    "{DIM_TEXT}{}{RESET} completed in {:.2}s",
-                    self.inner.name(),
-                    elapsed.as_secs_f64()
-                ),
-                Err(_) => eprintln!(
-                    "{DIM_TEXT}{}{RESET} failed after {:.2}s",
-                    self.inner.name(),
-                    elapsed.as_secs_f64()
-                ),
-            }
+            let status = if result.is_ok() {
+                "completed in"
+            } else {
+                "failed after"
+            };
+            (self.trace)(&format!(
+                "{} {status} {:.2}s",
+                self.inner.name(),
+                elapsed.as_secs_f64()
+            ));
 
             result
         })
@@ -140,12 +146,24 @@ impl<T: Tool> Tool for Timed<T> {
 ///    let _future = tool.call(serde_json::Value::Null);
 /// ```
 pub trait ToolExt: Tool + Sized {
+    /// Wrap this tool so its arguments are printed as dimmed text on `stderr`.
     fn verbose(self) -> Verbose<Self> {
-        Verbose::new(self)
+        self.verbose_to(stderr_trace_sink())
     }
 
+    /// Wrap this tool so its arguments are reported to `trace`.
+    fn verbose_to(self, trace: Arc<CallbackFn<str>>) -> Verbose<Self> {
+        Verbose::new(self, trace)
+    }
+
+    /// Wrap this tool so its run time is printed as dimmed text on `stderr`.
     fn timed(self) -> Timed<Self> {
-        Timed::new(self)
+        self.timed_to(stderr_trace_sink())
+    }
+
+    /// Wrap this tool so its run time is reported to `trace`.
+    fn timed_to(self, trace: Arc<CallbackFn<str>>) -> Timed<Self> {
+        Timed::new(self, trace)
     }
 }
 
