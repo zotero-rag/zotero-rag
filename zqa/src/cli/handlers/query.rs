@@ -1,12 +1,14 @@
 //! Command handlers for query operations.
 
 use std::{
-    io::{self, Write},
+    io::Write,
     path::Path,
+    pin::pin,
     sync::{Arc, atomic},
     time::Instant,
 };
 
+use tokio::sync::mpsc;
 use zqa_rag::{
     llm::{
         base::{ApiClient, ChatHistoryContent, ChatHistoryItem, ChatRequest, MessageRole},
@@ -212,21 +214,30 @@ where
     let retrieval_embedding_tokens = std::sync::Arc::clone(&retrieval_tool.embedding_tokens);
     let retrieval_rerank_tokens = std::sync::Arc::clone(&retrieval_tool.rerank_tokens);
 
+    let (text_tx, mut text_rx) = mpsc::unbounded_channel::<String>();
+    let (status_tx, mut status_rx) = mpsc::unbounded_channel::<String>();
+    let on_text: Arc<CallbackFn<str>> = Arc::new(move |text: &str| {
+        let _ = text_tx.send(text.to_string());
+    });
+
     let summarization_tool = SummarizationTool::new(llm_client.clone(), store_arc);
     let summarization_tool_clone = summarization_tool.clone();
     let mut tools: Vec<Box<dyn Tool>> = vec![
-        Box::new(retrieval_tool.verbose().timed()),
-        Box::new(summarization_tool.verbose().timed()),
+        Box::new(
+            retrieval_tool
+                .verbose(status_tx.clone())
+                .timed(status_tx.clone()),
+        ),
+        Box::new(
+            summarization_tool
+                .verbose(status_tx.clone())
+                .timed(status_tx.clone()),
+        ),
     ];
-    let document_tools = get_user_document_tools(ctx)?;
+    let document_tools = get_user_document_tools(ctx, status_tx)?;
     tools.extend(document_tools);
 
     let chat_history = Arc::clone(&ctx.state.chat_history);
-
-    // TODO: avoid bypassing context I/O
-    let on_text: Arc<CallbackFn<str>> = Arc::new(move |text: &str| {
-        let _ = writeln!(io::stdout(), "{text}");
-    });
 
     let request = {
         let history = chat_history
@@ -244,7 +255,22 @@ where
     };
 
     let final_draft_start = Instant::now();
-    let result = llm_client.send_message(&request).await;
+    let mut send_message = pin!(llm_client.send_message(&request));
+    let result = loop {
+        tokio::select! {
+            Some(segment) = text_rx.recv() => writeln!(ctx.out, "{segment}")?,
+            Some(line) = status_rx.recv() => writeln!(ctx.err, "{line}")?,
+            result = &mut send_message => break result,
+        }
+    };
+    // Both producers can race the response's completion; drain the leftovers.
+    while let Ok(segment) = text_rx.try_recv() {
+        writeln!(ctx.out, "{segment}")?;
+    }
+    while let Ok(line) = status_rx.try_recv() {
+        writeln!(ctx.err, "{line}")?;
+    }
+
     let final_draft_duration = final_draft_start.elapsed();
 
     // Invariant: by this point, `generation_model_name` cannot be `None`.

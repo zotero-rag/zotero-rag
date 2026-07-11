@@ -5,12 +5,11 @@ use std::{
     sync::{Arc, Mutex, atomic},
 };
 
+use crate::utils::terminal::{BOLD, RESET};
 use crate::{
     cli::{errors::CLIError, handlers::conversation::save_current_conversation},
     common::Context,
 };
-
-use crate::utils::terminal::{BOLD, RESET};
 
 /// Save the current conversation, if needed, and prepare to exit the CLI.
 ///
