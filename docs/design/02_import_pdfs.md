@@ -1,9 +1,10 @@
 # Design: Importing PDFs
 
-Linear issue: ZOT-128  
-GitHub issue: [#166](https://github.com/zotero-rag/zotero-rag/issues/166)
+**Linear issue:** ZOT-128  
+**GitHub issue:** [#166](https://github.com/zotero-rag/zotero-rag/issues/166)  
+**Status:** Implemented
 
-Author: Rahul Yedida
+**Author:** Rahul Yedida
 
 ## Background
 

@@ -2,7 +2,7 @@
 
 **Author(s):** Rahul Yedida + Claude Code
 **Date:** 2026-03-07
-**Status:** Draft
+**Status:** Planned
 
 ## Glossary
 
