@@ -1,0 +1,53 @@
+name: PR size gate
+
+on:
+  pull_request_target:
+    types: [opened, synchronize]
+
+permissions:
+  pull-requests: write
+  issues: write
+  actions: write # needed to cancel other workflow runs
+
+jobs:
+  size-gate:
+    runs-on: ubuntu-latest
+    if: "!contains(github.event.pull_request.labels.*.name, 'size-exempt')"
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const net = pr.additions - pr.deletions;
+            if (net < 1000) return;
+
+            await github.rest.issues.createComment({
+              ...context.repo,
+              issue_number: pr.number,
+              body: [
+                `This PR has a net size of **+${net} lines** (${pr.additions} added, ${pr.deletions} deleted), which exceeds the limit of 1000.`,
+                '',
+                'Please split it into smaller PRs. A maintainer can reopen this and apply the `size-exempt` label if the size is justified.',
+              ].join('\n'),
+            });
+
+            await github.rest.pulls.update({
+              ...context.repo,
+              pull_number: pr.number,
+              state: 'closed',
+            });
+
+            // Cancel any CI already running for this commit
+            const runs = await github.paginate(github.rest.actions.listWorkflowRunsForRepo, {
+              ...context.repo,
+              head_sha: pr.head.sha,
+              per_page: 100,
+            });
+            for (const run of runs) {
+              if (run.id === context.runId) continue;
+              if (['queued', 'in_progress', 'waiting', 'pending'].includes(run.status)) {
+                await github.rest.actions
+                  .cancelWorkflowRun({ ...context.repo, run_id: run.id })
+                  .catch(() => {});
+              }
+            }
