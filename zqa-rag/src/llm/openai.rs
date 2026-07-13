@@ -19,7 +19,6 @@ use serde_json::{Map, Value};
 use super::base::{ApiClient, ChatHistoryItem, ChatRequest, CompletionApiResponse};
 use super::errors::LLMError;
 use crate::clients::openai::OpenAIClient;
-use crate::common::request_with_backoff;
 use crate::constants::{
     DEFAULT_MAX_RETRIES, DEFAULT_OPENAI_EMBEDDING_DIM, DEFAULT_OPENAI_MODEL,
     DEFAULT_OPENAI_REASONING_EFFORT,
@@ -29,6 +28,8 @@ use crate::llm::base::{
     ChatHistoryContent, ContentType, MessageRole, ReasoningConfig, ToolUseStats,
 };
 use crate::llm::tools::{CallbackFn, OPENAI_SCHEMA_KEY, SerializedTool, get_owned_tools};
+use crate::pricing::ModelUsage;
+use crate::requests::request_with_backoff;
 
 /// OpenAI-specific tool wrapper that adds the `type` and `strict` fields
 /// required by OpenAI's API.
@@ -230,15 +231,45 @@ fn build_openai_messages_and_tools<'a>(
     (messages, owned_tools)
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, Copy)]
+struct OpenAIInputTokensDetails {
+    /// The number of input tokens that were written to the cache.
+    cache_write_tokens: u32,
+    /// The number of tokens that were retrieved from the cache.
+    cached_tokens: u32,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Copy)]
+struct OpenAIOutputTokensDetails {
+    /// The number of reasoning tokens
+    reasoning_tokens: u32,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Copy)]
 #[allow(clippy::struct_field_names)]
 struct OpenAIUsage {
     /// Number of tokens in the input prompt.
     input_tokens: u32,
+    /// Breakdown of the input tokens.
+    input_tokens_details: OpenAIInputTokensDetails,
     /// Number of tokens in the generated response.
     output_tokens: u32,
+    /// Breakdown of the output tokens.
+    output_tokens_details: OpenAIOutputTokensDetails,
     /// Total token usage.
     total_tokens: u32,
+}
+
+impl Into<ModelUsage> for OpenAIUsage {
+    fn into(self) -> ModelUsage {
+        ModelUsage {
+            input_tokens: self.input_tokens,
+            input_cache_written: self.input_tokens_details.cache_write_tokens,
+            input_cache_read: self.input_tokens_details.cached_tokens,
+            output_tokens: self.output_tokens,
+            reasoning_tokens: self.output_tokens_details.reasoning_tokens,
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -617,8 +648,7 @@ impl<T: HttpClient> ApiClient for OpenAIClient<T> {
 
         Ok(CompletionApiResponse {
             content: contents,
-            input_tokens: response.usage.input_tokens,
-            output_tokens: response.usage.output_tokens,
+            usage: response.usage.into(),
         })
     }
 }
@@ -689,6 +719,7 @@ mod tests {
     use crate::llm::base::{
         ApiClient, ChatHistoryContent, ChatHistoryItem, ChatRequest, ContentType, MessageRole,
     };
+    use crate::llm::openai::{OpenAIInputTokensDetails, OpenAIOutputTokensDetails};
     use crate::llm::tools::OPENAI_SCHEMA_KEY;
     use crate::llm::tools::test_utils::MockTool;
 
@@ -726,6 +757,13 @@ mod tests {
                 input_tokens: 5,
                 output_tokens: 10,
                 total_tokens: 15,
+                input_tokens_details: OpenAIInputTokensDetails {
+                    cache_write_tokens: 0,
+                    cached_tokens: 0,
+                },
+                output_tokens_details: OpenAIOutputTokensDetails {
+                    reasoning_tokens: 0,
+                },
             },
             output: vec![OpenAIOutput::Message {
                 id: "msg_id".into(),
@@ -763,8 +801,8 @@ mod tests {
         } else {
             panic!("Expected Text content type");
         }
-        test_eq!(res.input_tokens, 5);
-        test_eq!(res.output_tokens, 10);
+        test_eq!(res.usage.input_tokens, 5);
+        test_eq!(res.usage.output_tokens, 10);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
@@ -911,6 +949,13 @@ mod tests {
                 input_tokens: 10,
                 output_tokens: 5,
                 total_tokens: 15,
+                input_tokens_details: OpenAIInputTokensDetails {
+                    cache_write_tokens: 0,
+                    cached_tokens: 0,
+                },
+                output_tokens_details: OpenAIOutputTokensDetails {
+                    reasoning_tokens: 0,
+                },
             },
             output: vec![OpenAIOutput::FunctionCall {
                 call_id: "call-1".into(),
@@ -926,6 +971,13 @@ mod tests {
                 input_tokens: 20,
                 output_tokens: 8,
                 total_tokens: 28,
+                input_tokens_details: OpenAIInputTokensDetails {
+                    cache_write_tokens: 0,
+                    cached_tokens: 0,
+                },
+                output_tokens_details: OpenAIOutputTokensDetails {
+                    reasoning_tokens: 0,
+                },
             },
             output: vec![OpenAIOutput::Message {
                 id: "msg-1".into(),

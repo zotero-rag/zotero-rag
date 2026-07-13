@@ -8,11 +8,14 @@ use schemars::{JsonSchema, schema_for};
 use serde::Deserialize;
 use serde_json::json;
 use tokio::task::JoinSet;
-use zqa_rag::llm::{
-    base::{ApiClient, ChatRequest, CompletionApiResponse},
-    errors::LLMError,
-    factory::LLMClient,
-    tools::Tool,
+use zqa_rag::{
+    llm::{
+        base::{ApiClient, ChatRequest, CompletionApiResponse},
+        errors::LLMError,
+        factory::LLMClient,
+        tools::Tool,
+    },
+    pricing::ModelUsage,
 };
 
 use crate::{
@@ -29,10 +32,8 @@ pub(crate) struct SummarizationTool<T: ZoteroStore> {
     pub(crate) llm_client: LLMClient,
     /// Backend for searching stored Zotero papers.
     pub(crate) store: Arc<T>,
-    /// The input tokens used
-    pub(crate) input_tokens: Arc<Mutex<u32>>,
-    /// The output tokens used
-    pub(crate) output_tokens: Arc<Mutex<u32>>,
+    /// The tool's token usage
+    pub(crate) usage: Arc<Mutex<ModelUsage>>,
 }
 
 impl<T> SummarizationTool<T>
@@ -40,12 +41,11 @@ where
     T: ZoteroStore,
 {
     /// Create a new [`SummarizationTool`] instance, given an LLM client and a backend.
-    pub fn new(llm_client: LLMClient, store: Arc<T>) -> Self {
+    pub fn new(llm_client: LLMClient, store: Arc<T>, usage: Arc<Mutex<ModelUsage>>) -> Self {
         Self {
             llm_client,
             store,
-            input_tokens: Arc::new(Mutex::new(0)),
-            output_tokens: Arc::new(Mutex::new(0)),
+            usage: Arc::clone(&usage),
         }
     }
 }
@@ -93,8 +93,6 @@ where
         args: serde_json::Value,
     ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, String>> + Send + '_>> {
         let store = Arc::clone(&self.store);
-        let input_tokens = Arc::clone(&self.input_tokens);
-        let output_tokens = Arc::clone(&self.output_tokens);
         let llm_client = self.llm_client.clone();
         Box::pin(async move {
             let input: SummarizationToolInput =
@@ -139,12 +137,8 @@ where
                         let summary = ModelResponse::from(&response.content).to_string();
                         summaries.push(summary);
 
-                        // Update token counts (with error handling for mutex poisoning)
-                        if let Ok(mut toks) = input_tokens.lock() {
-                            *toks += response.input_tokens;
-                        }
-                        if let Ok(mut toks) = output_tokens.lock() {
-                            *toks += response.output_tokens;
+                        if let Ok(mut usage) = self.usage.lock() {
+                            *usage += response.usage;
                         }
                     }
                     Err(e) => {
@@ -194,7 +188,11 @@ mod tests {
             arrow_schema::Field::new("pdf_text", arrow_schema::DataType::Utf8, false),
         ]));
         let store = LanceZoteroStore::from_schema(embedding_config, schema);
-        SummarizationTool::new(client, Arc::new(store))
+        SummarizationTool::new(
+            client,
+            Arc::new(store),
+            Arc::new(Mutex::new(ModelUsage::default())),
+        )
     }
 
     #[test]

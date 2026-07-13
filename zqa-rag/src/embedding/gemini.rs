@@ -8,13 +8,13 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     clients::gemini::{GeminiClient, get_gemini_api_key},
-    common::request_with_backoff,
     constants::{
         DEFAULT_GEMINI_EMBEDDING_DIM, DEFAULT_GEMINI_EMBEDDING_MODEL,
         DEFAULT_MAX_CONCURRENT_REQUESTS, DEFAULT_MAX_RETRIES,
     },
     http_client::HttpClient,
     llm::{errors::LLMError, gemini::GeminiPart},
+    requests::request_with_backoff,
 };
 
 impl<T> GeminiClient<T>

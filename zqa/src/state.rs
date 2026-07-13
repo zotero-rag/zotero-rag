@@ -3,6 +3,7 @@
 use std::{
     fs,
     io::{self, BufRead},
+    ops::{Add, AddAssign},
     path::PathBuf,
 };
 
@@ -12,6 +13,7 @@ use thiserror::Error;
 use zqa_rag::{
     capabilities::{EmbeddingProvider, ModelProvider, RerankerProvider},
     llm::base::ChatHistoryItem,
+    pricing::{ModelUsage, PricingCacheOptions, get_model_pricing},
 };
 
 use crate::config::{BaseDirError, Config, get_config_dir};
@@ -66,7 +68,7 @@ impl From<io::Error> for StateError {
 }
 
 /// Returns the state directory inside `XDG_STATE_HOME`. On *nix systems, this returns
-/// ~/.local/state/zqa. On Windows, this also returns ~/.local/state/zqa, except that `$HOME` is
+/// `~/.local/state/zqa`. On Windows, this also returns `~/.local/state/zqa`, except that `$HOME` is
 /// typically C:\Users\<username>.
 ///
 /// # Errors
@@ -86,6 +88,73 @@ pub(crate) fn get_state_dir() -> Result<PathBuf, StateError> {
     Ok(state_dir.join("zqa"))
 }
 
+/// Metadata in a saved conversation.
+#[derive(Copy, Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub(crate) struct UsageMetadata {
+    /// Input tokens used
+    pub(crate) input_tokens: u32,
+    /// Input tokens read from
+    pub(crate) input_cache_read: u32,
+    /// Input tokens written to cache
+    pub(crate) input_cache_written: u32,
+    /// Output tokens used
+    pub(crate) output_tokens: u32,
+    /// Reasoning tokens used
+    pub(crate) reasoning_tokens: u32,
+    /// Estimated cost so far, in U.S. cents
+    pub(crate) estimated_cost: u32,
+}
+
+impl Add<UsageMetadata> for UsageMetadata {
+    type Output = UsageMetadata;
+
+    fn add(self, rhs: UsageMetadata) -> Self::Output {
+        Self {
+            input_tokens: self.input_tokens + rhs.input_tokens,
+            input_cache_read: self.input_cache_read + rhs.input_cache_read,
+            input_cache_written: self.input_cache_written + rhs.input_cache_written,
+            output_tokens: self.output_tokens + rhs.output_tokens,
+            estimated_cost: self.estimated_cost + rhs.estimated_cost,
+            reasoning_tokens: self.reasoning_tokens + rhs.reasoning_tokens,
+        }
+    }
+}
+
+impl AddAssign<UsageMetadata> for UsageMetadata {
+    fn add_assign(&mut self, rhs: UsageMetadata) {
+        *self = *self + rhs;
+    }
+}
+
+impl UsageMetadata {
+    pub(crate) fn from_rag_usage(value: ModelUsage, config: &Config) -> Self {
+        let model_pricing = get_state_dir().ok().and_then(|dir| {
+            if !dir.exists() {
+                fs::create_dir_all(&dir).ok()?;
+            }
+
+            let generation_config = config.get_generation_config()?;
+            get_model_pricing(
+                generation_config.provider_id().as_str(),
+                config.get_generation_model_name()?.as_str(),
+                Some(PricingCacheOptions {
+                    cache_path: dir.join("pricing_cache.json"),
+                    ttl: Some(60 * 60 * 24), // 1 day
+                }),
+            )
+        });
+
+        Self {
+            input_tokens: value.input_tokens,
+            input_cache_read: value.input_cache_read,
+            input_cache_written: value.input_cache_written,
+            output_tokens: value.output_tokens,
+            reasoning_tokens: value.reasoning_tokens,
+            estimated_cost: model_pricing.map_or(0, |p| (p.estimate_cost(value) * 100.0) as u32),
+        }
+    }
+}
+
 /// A chat history that is stored in the user's state directory. This wraps a
 /// `Vec<ChatHistoryItem>` under the hood, but also includes some metadata such as when the chat
 /// occurred.
@@ -97,6 +166,9 @@ pub(crate) struct SavedChatHistory {
     pub(crate) date: DateTime<Local>,
     /// A brief title
     pub(crate) title: String,
+    /// Tracked usage metadata so far
+    #[serde(default)]
+    pub(crate) usage: UsageMetadata,
 }
 
 /// Attempt to get all previous conversations if they exist.
@@ -433,7 +505,8 @@ mod tests {
     use zqa_rag::llm::base::{ChatHistoryContent, ChatHistoryItem, MessageRole};
 
     use crate::state::{
-        SavedChatHistory, get_conversation_history, get_state_dir, oobe, save_conversation,
+        SavedChatHistory, UsageMetadata, get_conversation_history, get_state_dir, oobe,
+        save_conversation,
     };
 
     #[test]
@@ -444,8 +517,14 @@ mod tests {
         let state_dir = state_dir.unwrap();
 
         let mut components = state_dir.components();
-        assert_eq!(components.next_back(), Some(Component::Normal(&OsStr::from("zqa"))));
-        assert_eq!(components.next_back(), Some(Component::Normal(&OsStr::from("state"))));
+        assert_eq!(
+            components.next_back(),
+            Some(Component::Normal(&OsStr::from("zqa")))
+        );
+        assert_eq!(
+            components.next_back(),
+            Some(Component::Normal(&OsStr::from("state")))
+        );
     }
 
     #[test]
@@ -473,6 +552,7 @@ mod tests {
                     role: MessageRole::User,
                     content: vec![ChatHistoryContent::Text("Hello!".into())],
                 }],
+                usage: UsageMetadata::default(),
             };
 
             let result = save_conversation(&conversation);
@@ -493,6 +573,14 @@ mod tests {
                     role: MessageRole::User,
                     content: vec![ChatHistoryContent::Text("Hello!".into())],
                 }],
+                usage: UsageMetadata {
+                    input_tokens: 500,
+                    input_cache_written: 0,
+                    input_cache_read: 100,
+                    output_tokens: 1000,
+                    reasoning_tokens: 0,
+                    estimated_cost: 5,
+                },
             };
 
             let result = save_conversation(&conversation);
@@ -514,6 +602,10 @@ mod tests {
                 conversations[0].history[0].content[0],
                 ChatHistoryContent::Text("Hello!".into())
             );
+            assert_eq!(conversations[0].usage.input_tokens, 500);
+            assert_eq!(conversations[0].usage.input_cache_read, 100);
+            assert_eq!(conversations[0].usage.output_tokens, 1000);
+            assert_eq!(conversations[0].usage.estimated_cost, 5);
         });
     }
 

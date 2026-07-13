@@ -81,6 +81,7 @@ pub(crate) fn handle_resume_cmd<O: Write, E: Write>(
                             title: ctx.state.title.lock()?.clone().unwrap_or_else(|| {
                                 format!("Conversation on {}", date.format("%Y-%m-%d %H:%M"))
                             }),
+                            usage: ctx.state.usage,
                         };
                         if let Err(e) = save_conversation(&conversation)
                             && let Err(write_err) =
@@ -124,6 +125,7 @@ where
                 title: ctx.state.title.lock()?.clone().unwrap_or_else(|| {
                     format!("Conversation on {}", date.format("%Y-%m-%d %H:%M"))
                 }),
+                usage: ctx.state.usage,
             };
 
         if let Err(e) = save_conversation(&conversation) {
@@ -145,7 +147,7 @@ mod tests {
     use super::handle_resume_cmd;
     use crate::{
         cli::app::tests::create_test_context,
-        state::{SavedChatHistory, save_conversation},
+        state::{SavedChatHistory, UsageMetadata, save_conversation},
     };
 
     #[test]
@@ -188,6 +190,14 @@ mod tests {
                 history: history_a.clone(),
                 date: Local::now(),
                 title: "Conversation A".into(),
+                usage: UsageMetadata {
+                    input_tokens: 1000,
+                    input_cache_read: 0,
+                    input_cache_written: 0,
+                    output_tokens: 1000,
+                    reasoning_tokens: 100,
+                    estimated_cost: 5,
+                },
             })
             .unwrap();
 
@@ -195,6 +205,14 @@ mod tests {
                 history: history_b.clone(),
                 date: Local::now() + chrono::Duration::seconds(1),
                 title: "Conversation B".into(),
+                usage: UsageMetadata {
+                    input_tokens: 2000,
+                    input_cache_read: 0,
+                    input_cache_written: 0,
+                    output_tokens: 1000,
+                    reasoning_tokens: 100,
+                    estimated_cost: 5,
+                },
             })
             .unwrap();
 
@@ -205,8 +223,10 @@ mod tests {
             let out = String::from_utf8(ctx.out.into_inner()).unwrap();
             test_contains!(out, "Resumed:");
 
-            let loaded = ctx.state.chat_history.lock().unwrap();
-            test_eq!(loaded.len(), history_b.len());
+            let loaded_history = ctx.state.chat_history.lock().unwrap();
+            let loaded_usage = ctx.state.usage;
+            test_eq!(loaded_history.len(), history_b.len());
+            test_eq!(loaded_usage.input_tokens, 1000);
             test_eq!(
                 *ctx.state.title.lock().unwrap(),
                 Some("Conversation B".to_string())
@@ -224,6 +244,7 @@ mod tests {
                     role: MessageRole::User,
                     content: vec![ChatHistoryContent::Text("Hello".into())],
                 }],
+                usage: UsageMetadata::default(),
                 date: Local::now(),
                 title: "Only Conversation".into(),
             })

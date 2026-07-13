@@ -96,8 +96,8 @@ mod tests {
     use zqa_macros::{test_eq, test_ok};
 
     use crate::{
-        common::{calculate_backoff_delay, request_with_backoff},
         http_client::HttpClient,
+        requests::{calculate_backoff_delay, request_with_backoff},
     };
 
     struct MockRateLimitClient {

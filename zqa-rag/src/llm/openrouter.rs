@@ -10,7 +10,6 @@ use serde::{Deserialize, Serialize};
 use super::base::{ApiClient, ChatHistoryItem, ChatRequest, CompletionApiResponse};
 use super::errors::LLMError;
 use crate::clients::openrouter::OpenRouterClient;
-use crate::common::request_with_backoff;
 use crate::http_client::HttpClient;
 use crate::llm::base::{
     ChatHistoryContent, ContentType, MessageRole, ReasoningConfig, ToolCallRequest,
@@ -18,6 +17,8 @@ use crate::llm::base::{
 use crate::llm::tools::{
     OPENROUTER_SCHEMA_KEY, SerializedTool, get_owned_tools, process_tool_calls,
 };
+use crate::pricing::ModelUsage;
+use crate::requests::request_with_backoff;
 
 const DEFAULT_MODEL: &str = "anthropic/claude-sonnet-4.5";
 
@@ -176,16 +177,52 @@ fn build_openrouter_messages_and_tools<'a>(
     (messages, owned_tools)
 }
 
+#[derive(Copy, Clone, Serialize, Deserialize)]
+struct OpenRouterCompletionTokensDetails {
+    /// Number of tokens used for reasoning
+    reasoning_tokens: Option<u32>,
+}
+
+#[derive(Copy, Clone, Serialize, Deserialize)]
+struct OpenRouterPromptTokensDetails {
+    /// Tokens written to cache. Only returned for models with explicit caching and cache write pricing.
+    cache_write_tokens: u32,
+    /// Cached prompt tokens
+    cached_tokens: u32,
+}
+
 /// Token usage statistics returned by the OpenRouter API
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Copy, Clone, Serialize, Deserialize)]
 #[allow(clippy::struct_field_names)]
 struct OpenRouterUsageStats {
     /// Number of tokens in the input prompt
     prompt_tokens: u32,
+    /// Detailed prompt token usage
+    prompt_tokens_details: Option<OpenRouterPromptTokensDetails>,
     /// Number of tokens in the generated response
     completion_tokens: u32,
+    /// Detailed completion token usage
+    completion_tokens_details: Option<OpenRouterCompletionTokensDetails>,
     /// Total token usage. Includes reasoning tokens
     total_tokens: u32,
+    cost: Option<f32>,
+}
+
+impl Into<ModelUsage> for OpenRouterUsageStats {
+    fn into(self) -> ModelUsage {
+        ModelUsage {
+            input_tokens: self.prompt_tokens,
+            input_cache_written: self
+                .prompt_tokens_details
+                .map_or(0, |p| p.cache_write_tokens),
+            input_cache_read: self.prompt_tokens_details.map_or(0, |p| p.cached_tokens),
+            reasoning_tokens: self
+                .completion_tokens_details
+                .and_then(|p| p.reasoning_tokens)
+                .unwrap_or_default(),
+            output_tokens: self.completion_tokens,
+        }
+    }
 }
 
 /// Represents a tool call in the OpenRouter API format
@@ -322,6 +359,7 @@ fn map_response_to_chat_contents(message: &OpenRouterResponseMessage) -> Vec<Cha
 impl<T: HttpClient> ApiClient for OpenRouterClient<T> {
     /// Send a request to the OpenRouter API, processing tool calls as necessary. Returns a final
     /// response after all tool calls are processed and sent back to the API.
+    #[allow(clippy::too_many_lines)]
     async fn send_message(
         &self,
         request: &ChatRequest<'_>,
@@ -445,8 +483,7 @@ impl<T: HttpClient> ApiClient for OpenRouterClient<T> {
 
         Ok(CompletionApiResponse {
             content: contents,
-            input_tokens: response.usage.prompt_tokens,
-            output_tokens: response.usage.completion_tokens,
+            usage: response.usage.into(),
         })
     }
 }
@@ -500,6 +537,9 @@ mod tests {
                 prompt_tokens: 14,
                 completion_tokens: 163,
                 total_tokens: 177,
+                completion_tokens_details: None,
+                prompt_tokens_details: None,
+                cost: None,
             },
             choices: vec![OpenRouterResponseChoices {
                 message: OpenRouterResponseMessage {
@@ -535,8 +575,8 @@ mod tests {
         test_ok!(res);
 
         let res = res.unwrap();
-        test_eq!(res.input_tokens, 14);
-        test_eq!(res.output_tokens, 163);
+        test_eq!(res.usage.input_tokens, 14);
+        test_eq!(res.usage.output_tokens, 163);
         test_eq!(res.content.len(), 1);
         if let ContentType::Text(text) = &res.content[0] {
             test_eq!(text, "Hi there! How can I help you today?");
@@ -586,6 +626,9 @@ mod tests {
                 prompt_tokens: 10,
                 completion_tokens: 5,
                 total_tokens: 15,
+                completion_tokens_details: None,
+                prompt_tokens_details: None,
+                cost: None,
             },
             choices: vec![OpenRouterResponseChoices {
                 message: OpenRouterResponseMessage {
@@ -616,6 +659,9 @@ mod tests {
                 prompt_tokens: 20,
                 completion_tokens: 8,
                 total_tokens: 28,
+                completion_tokens_details: None,
+                prompt_tokens_details: None,
+                cost: None,
             },
             choices: vec![OpenRouterResponseChoices {
                 message: OpenRouterResponseMessage {

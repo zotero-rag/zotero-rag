@@ -13,11 +13,13 @@ use lancedb::arrow::arrow_schema::{DataType, Field};
 use serde::{Deserialize, Serialize};
 
 use crate::clients::openai::OpenAIClient;
-use crate::common::request_with_backoff;
-use crate::constants::{DEFAULT_MAX_CONCURRENT_REQUESTS, DEFAULT_OPENAI_EMBEDDING_DIM};
-use crate::constants::{DEFAULT_MAX_RETRIES, DEFAULT_OPENAI_EMBEDDING_MODEL};
+use crate::constants::{
+    DEFAULT_MAX_CONCURRENT_REQUESTS, DEFAULT_MAX_RETRIES, DEFAULT_OPENAI_EMBEDDING_DIM,
+    DEFAULT_OPENAI_EMBEDDING_MODEL,
+};
 use crate::http_client::HttpClient;
 use crate::llm::errors::LLMError;
+use crate::requests::request_with_backoff;
 
 impl<T> OpenAIClient<T>
 where

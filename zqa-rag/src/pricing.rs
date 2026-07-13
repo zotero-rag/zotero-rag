@@ -13,21 +13,75 @@
 //! only time pricing matters is if the user already has an Internet connection, so we can also
 //! grab this file.
 
-use std::path::PathBuf;
+use std::{
+    ops::{Add, AddAssign},
+    path::PathBuf,
+    time::Duration,
+};
 
+use serde::{Deserialize, Serialize};
 use tempfile::NamedTempFile;
 
 const LITELLM_PRICING_URL: &str =
     "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json";
+
+/// Usage information for a model. This does not include pricing estimates; for that information,
+/// use [`ModelPricing::estimate_cost`].
+///
+/// One thing to note is that the Gemini API doesn't distinguish between cache reads and writes in
+/// its response, see [docs]. For that case, we arbitrarily populate this value in
+/// `input_cache_read` and set `input_cache_written` to 0.
+///
+/// [docs]: https://ai.google.dev/api/generate-content#UsageMetadata
+#[derive(Debug, Default, Copy, Clone, Serialize, Deserialize)]
+pub struct ModelUsage {
+    /// Total input tokens used, including cache writes and reads. See
+    /// the [OTel semantic
+    /// conventions](https://github.com/open-telemetry/semantic-conventions-genai/blob/63f8200eee093730ce845d26ce2aafb621b0807e/docs/gen-ai/gen-ai-spans.md).
+    pub input_tokens: u32,
+    /// Input tokens written to cache
+    pub input_cache_written: u32,
+    /// Input tokens read from the cache
+    pub input_cache_read: u32,
+    /// Output tokens
+    pub output_tokens: u32,
+    /// Reasoning tokens generated
+    pub reasoning_tokens: u32,
+}
+
+impl Add<ModelUsage> for ModelUsage {
+    type Output = ModelUsage;
+
+    fn add(self, rhs: ModelUsage) -> Self::Output {
+        Self {
+            input_tokens: self.input_tokens + rhs.input_tokens,
+            input_cache_read: self.input_cache_read + rhs.input_cache_read,
+            input_cache_written: self.input_cache_written + rhs.input_cache_written,
+            output_tokens: self.output_tokens + rhs.output_tokens,
+            reasoning_tokens: self.reasoning_tokens + rhs.reasoning_tokens,
+        }
+    }
+}
+
+impl AddAssign<ModelUsage> for ModelUsage {
+    fn add_assign(&mut self, rhs: ModelUsage) {
+        *self = *self + rhs;
+    }
+}
 
 /// Per-token pricing for an AI model, in USD per token.
 ///
 /// Pricing values sourced from official provider pages; see
 /// <https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json>
 /// for a regularly updated cross-provider reference.
+#[derive(Debug, Copy, Clone)]
 pub struct ModelPricing {
     /// Cost per one input (prompt) token, in USD.
     pub input_cost_per_token: f64,
+    /// Cost per one input (prompt) token written to a cache with a 5m ttl.
+    pub cache_write_cost_per_token: f64,
+    /// Cost per one cached input (prompt) token, in USD.
+    pub cached_input_cost_per_token: f64,
     /// Cost per one output (completion) token, in USD.
     pub output_cost_per_token: f64,
 }
@@ -44,9 +98,19 @@ impl ModelPricing {
     ///
     /// Estimated cost in USD.
     #[must_use]
-    pub fn estimate_cost(&self, input_tokens: u32, output_tokens: u32) -> f64 {
-        f64::from(input_tokens) * self.input_cost_per_token
-            + f64::from(output_tokens) * self.output_cost_per_token
+    pub fn estimate_cost(&self, usage: ModelUsage) -> f64 {
+        [
+            (
+                usage.input_tokens - usage.input_cache_written - usage.input_cache_read,
+                self.input_cost_per_token,
+            ),
+            (usage.input_cache_written, self.cache_write_cost_per_token),
+            (usage.input_cache_read, self.cached_input_cost_per_token),
+            (usage.output_tokens, self.output_cost_per_token),
+        ]
+        .map(|(n, c)| f64::from(n) * c)
+        .iter()
+        .sum()
     }
 }
 
@@ -106,20 +170,16 @@ impl PricingCacheOptions {
             _ => {}
         }
 
-        if self.ttl.is_none() {
+        let Some(ttl) = self.ttl else {
             return false;
-        }
+        };
 
-        let ttl = self.ttl.unwrap() as u64;
-
-        match self.cache_path.metadata() {
-            Err(_) => false,
-            Ok(meta) => match meta.modified() {
-                Err(_) => false,
-                Ok(mtime) if mtime.elapsed().is_ok_and(|mt| mt.as_secs() <= ttl) => false,
-                _ => true,
-            },
-        }
+        self.cache_path
+            .metadata()
+            .and_then(|meta| meta.modified())
+            .ok()
+            .and_then(|mtime| mtime.elapsed().ok())
+            .is_some_and(|age| age > Duration::from_secs(ttl as u64))
     }
 }
 
@@ -177,6 +237,8 @@ pub fn get_model_pricing(
     if provider == "ollama" {
         return Some(ModelPricing {
             input_cost_per_token: 0.0,
+            cache_write_cost_per_token: 0.0,
+            cached_input_cost_per_token: 0.0,
             output_cost_per_token: 0.0,
         });
     }
@@ -190,10 +252,14 @@ pub fn get_model_pricing(
     let entry = json.get(model).or_else(|| json.get(&fallback_key))?;
 
     let input_cost = entry.get("input_cost_per_token")?.as_f64()?;
+    let input_cache_read_cost = entry.get("cache_read_input_token_cost")?.as_f64()?;
+    let input_cache_write_cost = entry.get("cache_creation_input_token_cost")?.as_f64()?;
     let output_cost = entry.get("output_cost_per_token")?.as_f64()?;
 
     Some(ModelPricing {
         input_cost_per_token: input_cost,
+        cached_input_cost_per_token: input_cache_read_cost,
+        cache_write_cost_per_token: input_cache_write_cost,
         output_cost_per_token: output_cost,
     })
 }
@@ -208,11 +274,20 @@ mod tests {
 
     #[test]
     fn test_estimate_cost_basic() {
+        let usage = ModelUsage {
+            input_tokens: 1000,
+            input_cache_written: 0,
+            input_cache_read: 0,
+            output_tokens: 500,
+            reasoning_tokens: 0,
+        };
         let pricing = ModelPricing {
             input_cost_per_token: 0.000_003,
             output_cost_per_token: 0.000_015,
+            cached_input_cost_per_token: 0.000_003_75,
+            cache_write_cost_per_token: 0.000_000_3,
         };
-        let cost = pricing.estimate_cost(1000, 500);
+        let cost = pricing.estimate_cost(usage);
         let expected = 0.0105;
 
         // Relative tolerance
@@ -224,9 +299,11 @@ mod tests {
         let pricing = ModelPricing {
             input_cost_per_token: 0.000_003,
             output_cost_per_token: 0.000_015,
+            cached_input_cost_per_token: 0.000_003_75,
+            cache_write_cost_per_token: 0.000_000_3,
         };
 
-        assert!(pricing.estimate_cost(0, 0) < f64::EPSILON);
+        assert!(pricing.estimate_cost(ModelUsage::default()) < f64::EPSILON);
     }
 
     #[test]
@@ -234,9 +311,41 @@ mod tests {
         let pricing = ModelPricing {
             input_cost_per_token: 0.000_001,
             output_cost_per_token: 0.000_002,
+            cached_input_cost_per_token: 0.000_003_75,
+            cache_write_cost_per_token: 0.000_000_3,
         };
-        let cost = pricing.estimate_cost(0, 1000);
+        let usage = ModelUsage {
+            input_tokens: 0,
+            input_cache_written: 0,
+            input_cache_read: 0,
+            output_tokens: 1000,
+            reasoning_tokens: 0,
+        };
+
+        let cost = pricing.estimate_cost(usage);
         let expected = 0.002;
+
+        assert!((cost - expected).abs() < expected * f64::EPSILON * 10.0);
+    }
+
+    #[test]
+    fn test_estimate_cost_all_fields() {
+        let pricing = ModelPricing {
+            input_cost_per_token: 0.000_003,
+            output_cost_per_token: 0.000_015,
+            cached_input_cost_per_token: 0.000_003_75,
+            cache_write_cost_per_token: 0.000_000_3,
+        };
+        let usage = ModelUsage {
+            input_tokens: 2000,
+            input_cache_written: 500,
+            input_cache_read: 500,
+            output_tokens: 1000,
+            reasoning_tokens: 0,
+        };
+
+        let cost = pricing.estimate_cost(usage);
+        let expected = 0.006_525;
 
         assert!((cost - expected).abs() < expected * f64::EPSILON * 10.0);
     }
@@ -375,7 +484,15 @@ mod tests {
     fn test_get_pricing_estimate_round_trip() {
         let (_f, opts) = make_cache(SAMPLE_JSON);
         let p = get_model_pricing("openai", "gpt-5.4", Some(opts)).unwrap();
-        let cost = p.estimate_cost(100, 50);
+        let usage = ModelUsage {
+            input_tokens: 100,
+            input_cache_written: 0,
+            input_cache_read: 0,
+            output_tokens: 50,
+            reasoning_tokens: 0,
+        };
+
+        let cost = p.estimate_cost(usage);
         let expected = 100.0 * 0.000_002_5 + 50.0 * 0.00001;
 
         assert!((cost - expected).abs() < expected * f64::EPSILON * 10.0);

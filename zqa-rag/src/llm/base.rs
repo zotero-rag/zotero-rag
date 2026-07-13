@@ -6,7 +6,10 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 
 use super::errors::LLMError;
-use crate::llm::tools::{CallbackFn, Tool};
+use crate::{
+    llm::tools::{CallbackFn, Tool},
+    pricing::ModelUsage,
+};
 
 /// Roles for messages
 #[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -174,10 +177,8 @@ pub struct CompletionApiResponse {
     /// The content of the response. Note that this is a *single* response from the API, which can
     /// contain multiple types of content.
     pub content: Vec<ContentType>,
-    /// The number of tokens used in the input prompt
-    pub input_tokens: u32,
-    /// The number of tokens used in the output
-    pub output_tokens: u32,
+    /// Token usage statistics for the request.
+    pub usage: ModelUsage,
 }
 
 /// A client that can interact with an LLM provider and get a response.

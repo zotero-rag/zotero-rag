@@ -73,7 +73,7 @@ async fn run_extraction_test(client: zqa_rag::llm::factory::LLMClient, provider_
 
     println!(
         "{} extraction test passed. Token usage: input={}, output={}",
-        provider_name, response.input_tokens, response.output_tokens
+        provider_name, response.usage.input_tokens, response.usage.output_tokens
     );
 }
 
