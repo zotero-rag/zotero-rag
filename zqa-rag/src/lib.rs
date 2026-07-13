@@ -35,7 +35,6 @@
 
 pub mod capabilities;
 pub(crate) mod clients;
-pub(crate) mod common;
 pub mod config;
 pub mod constants;
 pub mod embedding;
@@ -43,5 +42,6 @@ pub(crate) mod http_client;
 pub mod llm;
 pub mod pricing;
 pub mod providers;
+pub(crate) mod requests;
 pub mod reranking;
 pub mod vector;

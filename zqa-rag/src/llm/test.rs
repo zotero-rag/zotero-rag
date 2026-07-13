@@ -4,6 +4,7 @@ use crate::{
     clients::test::TestClient,
     http_client::HttpClient,
     llm::base::{ApiClient, ChatRequest, CompletionApiResponse, ContentType},
+    pricing::ModelUsage,
 };
 
 impl ApiClient for TestClient {
@@ -35,8 +36,13 @@ impl ApiClient for TestClient {
         let result = result.expect("mock http client should not propagate errors");
         Ok(CompletionApiResponse {
             content: vec![ContentType::Text(result.text().await.unwrap())],
-            input_tokens: 0,
-            output_tokens: 0,
+            usage: ModelUsage {
+                input_tokens: 0,
+                input_cache_written: 0,
+                input_cache_read: 0,
+                output_tokens: 0,
+                reasoning_tokens: 0,
+            },
         })
     }
 }

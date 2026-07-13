@@ -4,7 +4,7 @@ use std::{
     io::Write,
     path::Path,
     pin::pin,
-    sync::{Arc, atomic},
+    sync::{Arc, Mutex, atomic},
     time::Instant,
 };
 
@@ -15,11 +15,10 @@ use zqa_rag::{
         factory::get_client_with_config,
         tools::{CallbackFn, Tool},
     },
-    pricing::get_model_pricing,
+    pricing::{ModelUsage, get_model_pricing},
     providers::registry::provider_registry,
 };
 
-use crate::store::common::ZoteroStore;
 use crate::{
     cli::{
         errors::CLIError,
@@ -34,6 +33,7 @@ use crate::{
         terminal::{DIM_TEXT, RESET},
     },
 };
+use crate::{state::UsageMetadata, store::common::ZoteroStore};
 
 /// Given a positive number, returns a thousands separator-formatted string representation
 ///
@@ -149,8 +149,6 @@ where
         };
         writeln!(&mut ctx.err, "{DIM_TEXT}Imported document: {path}{RESET}")?;
     }
-    let model_provider = ctx.config.model_provider;
-
     let llm_client = ctx
         .config
         .get_generation_config()
@@ -160,8 +158,6 @@ where
             "Failed to get LLM generation config in `run_query`".into(),
         ))?;
 
-    let generation_model_name = ctx.config.get_generation_model_name();
-
     let embedding_config = ctx
         .config
         .get_embedding_config()
@@ -170,9 +166,14 @@ where
         ))?;
     let reranker_config = ctx.config.get_reranker_config();
 
+    // Set up channels to communicate cost
+    let (cost_tx, mut cost_rx) = mpsc::unbounded_channel::<UsageMetadata>();
+
     // Spawn a background title generation task from the query alone, in parallel with summarization.
     // Only generate a title if we don't already have one (i.e., first query in the conversation).
     let title_slot = Arc::clone(&ctx.state.title);
+    let title_cost_tx = cost_tx.clone();
+    let config_clone = ctx.config.clone();
     if title_slot.lock()?.is_none()
         && let Some(small_config) = ctx.config.get_small_model_config()
         && let Ok(small_client) = get_client_with_config(&small_config)
@@ -196,12 +197,16 @@ where
                 {
                     *slot = Some(title);
                 }
+
+                let usage = UsageMetadata::from_rag_usage(response.usage, &config_clone);
+                let _ = title_cost_tx.send(usage);
             }
         });
     }
 
-    let mut total_input_tokens: u32 = 0;
-    let mut total_output_tokens: u32 = 0;
+    while let Some(title_cost) = cost_rx.recv().await {
+        ctx.state.usage += title_cost;
+    }
 
     let embedding_provider_name = embedding_config.provider_name().to_string();
     let embedding_model_name = embedding_config.model_name().to_string();
@@ -220,8 +225,15 @@ where
         let _ = text_tx.send(text.to_string());
     });
 
-    let summarization_tool = SummarizationTool::new(llm_client.clone(), store_arc);
-    let summarization_tool_clone = summarization_tool.clone();
+    // Since `Box::new` moves the tool but we still need the modified usage after the tool runs, we
+    // pass in an `Arc` that we create here. We use the `zqa-rag` struct `ModelUsage` since that
+    // doesn't require a `Config` object.
+    let summarization_usage = Arc::new(Mutex::new(ModelUsage::default()));
+    let summarization_tool = SummarizationTool::new(
+        llm_client.clone(),
+        store_arc,
+        Arc::clone(&summarization_usage),
+    );
     let mut tools: Vec<Box<dyn Tool>> = vec![
         Box::new(
             retrieval_tool
@@ -273,17 +285,6 @@ where
 
     let final_draft_duration = final_draft_start.elapsed();
 
-    // Invariant: by this point, `generation_model_name` cannot be `None`.
-    let generation_model_name = generation_model_name.unwrap_or_default();
-    let pricing = {
-        let mp = model_provider;
-        let gmn = generation_model_name.clone();
-        tokio::task::spawn_blocking(move || get_model_pricing(mp.as_str(), &gmn, None))
-            .await
-            .ok()
-            .flatten()
-    };
-
     match result {
         Ok(response) => {
             writeln!(
@@ -293,47 +294,25 @@ where
 
             let model_response_text = ModelResponse::from(&response.content).to_string();
 
-            total_input_tokens += response.input_tokens;
-            if let Ok(summarization_input_tokens) = summarization_tool_clone.input_tokens.lock() {
-                total_input_tokens += *summarization_input_tokens;
-            }
-
-            total_output_tokens += response.output_tokens;
-            if let Ok(summarization_output_tokens) = summarization_tool_clone.output_tokens.lock() {
-                total_output_tokens += *summarization_output_tokens;
-            }
-
-            // Update session cost
-            if let Some(ref p) = pricing {
-                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-                let call_cost =
-                    (p.estimate_cost(total_input_tokens, total_output_tokens) * 100.0) as u64;
-                ctx.state
-                    .session_cost
-                    .fetch_add(call_cost, atomic::Ordering::Relaxed);
-            }
+            // Accumulate token usage counts, then compute pricing using `UsageMetadata::from_rag_usage`
+            let total_usage = response.usage + summarization_usage.lock().map(|u| *u)?;
+            let usage = UsageMetadata::from_rag_usage(total_usage, &ctx.config);
+            ctx.state.usage += usage;
 
             // Add embedding cost to session cost
             let emb_chars = retrieval_embedding_tokens.load(atomic::Ordering::Relaxed);
             if emb_chars > 0 {
-                let emb_provider = embedding_provider_name.clone();
-                let emb_model = embedding_model_name.clone();
-                let emb_pricing = tokio::task::spawn_blocking(move || {
-                    get_model_pricing(&emb_provider, &emb_model, None)
-                })
-                .await
-                .ok()
-                .flatten();
+                let emb_pricing =
+                    get_model_pricing(&embedding_provider_name, &embedding_model_name, None);
 
                 if let Some(ref p) = emb_pricing {
-                    #[allow(clippy::cast_possible_truncation)]
-                    let emb_tokens = (emb_chars / 4) as u32;
-
                     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-                    let emb_cost = (p.estimate_cost(emb_tokens, 0) * 100.0) as u64;
-                    ctx.state
-                        .session_cost
-                        .fetch_add(emb_cost, atomic::Ordering::Relaxed);
+                    let emb_cost = (p.estimate_cost(ModelUsage {
+                        // TODO: Do better
+                        input_tokens: (emb_chars / 4) as u32,
+                        ..Default::default()
+                    }) * 100.0) as u32;
+                    ctx.state.usage.estimated_cost += emb_cost;
                 }
             }
 
@@ -350,15 +329,14 @@ where
                 .flatten();
 
                 if let Some(ref p) = rerank_pricing {
-                    #[allow(clippy::cast_possible_truncation)]
-                    let rerank_tokens = (rerank_chars_val / 4) as u32;
-
                     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-                    let rerank_cost = (p.estimate_cost(rerank_tokens, 0) * 100.0) as u64;
+                    let rerank_cost = (p.estimate_cost(ModelUsage {
+                        // TODO: Do better
+                        input_tokens: (rerank_chars_val / 4) as u32,
+                        ..Default::default()
+                    }) * 100.0) as u32;
 
-                    ctx.state
-                        .session_cost
-                        .fetch_add(rerank_cost, atomic::Ordering::Relaxed);
+                    ctx.state.usage.estimated_cost += rerank_cost;
                 }
             }
 
@@ -394,29 +372,20 @@ where
     writeln!(
         &mut ctx.out,
         "\t{DIM_TEXT}Input tokens: {}{RESET}",
-        format_number(total_input_tokens)
+        format_number(ctx.state.usage.input_tokens)
     )?;
     writeln!(
         &mut ctx.out,
         "\t{DIM_TEXT}Output tokens: {}{RESET}\n",
-        format_number(total_output_tokens)
+        format_number(ctx.state.usage.output_tokens)
     )?;
 
-    if let Some(p) = &pricing {
-        let cost = p.estimate_cost(total_input_tokens, total_output_tokens);
-        if cost > 0.0 {
-            writeln!(
-                &mut ctx.out,
-                "\t{DIM_TEXT}Estimated cost: ${cost:.4} ({generation_model_name}){RESET}"
-            )?;
-        }
-    }
-    let session_cost = ctx.state.session_cost.load(atomic::Ordering::Relaxed);
-    if session_cost > 0 {
-        let session_cost_dollars = session_cost as f64 / 100.0;
+    let cost = f64::from(ctx.state.usage.estimated_cost) / 100.0;
+    if cost > 0.0 {
         writeln!(
             &mut ctx.out,
-            "\t{DIM_TEXT}Session cost:   ${session_cost_dollars:.4}{RESET}"
+            "\t{DIM_TEXT}Session cost: ${cost:.4} ({}){RESET}",
+            ctx.config.get_generation_model_name().unwrap_or_default()
         )?;
     }
     writeln!(&mut ctx.out)?;

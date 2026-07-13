@@ -9,7 +9,6 @@ use serde::{Deserialize, Serialize};
 use super::base::{ApiClient, ChatRequest, CompletionApiResponse};
 use super::errors::LLMError;
 use crate::clients::gemini::{GeminiClient, get_gemini_api_key};
-use crate::common::request_with_backoff;
 use crate::constants::{
     DEFAULT_GEMINI_MODEL, DEFAULT_GEMINI_REASONING_BUDGET, DEFAULT_MAX_RETRIES,
 };
@@ -18,6 +17,8 @@ use crate::llm::base::{
     ChatHistoryContent, ChatHistoryItem, ContentType, MessageRole, ReasoningConfig, ToolCallRequest,
 };
 use crate::llm::tools::{GEMINI_SCHEMA_KEY, SerializedTool, get_owned_tools, process_tool_calls};
+use crate::pricing::ModelUsage;
+use crate::requests::request_with_backoff;
 
 /// A function (tool) call request from the model.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -281,12 +282,29 @@ struct GeminiTokenDetails {
 #[serde(rename_all = "camelCase")]
 struct GeminiUsageMetadata {
     prompt_token_count: u32,
+    cached_content_token_count: u32,
+    tool_use_prompt_token_count: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     thoughts_token_count: Option<u32>,
     candidates_token_count: u32,
     total_token_count: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     prompt_tokens_details: Option<Vec<GeminiTokenDetails>>,
+}
+
+impl Into<ModelUsage> for GeminiUsageMetadata {
+    fn into(self) -> ModelUsage {
+        ModelUsage {
+            input_tokens: self.prompt_token_count,
+            input_cache_read: self.cached_content_token_count,
+            // The Gemini API doesn't seem to distinguish between cache reads/writes, and only gives
+            // us one number. The `prompt_tokens_details` number is a split by modality.
+            // See: https://ai.google.dev/api/generate-content#UsageMetadata
+            input_cache_written: 0,
+            output_tokens: self.candidates_token_count,
+            reasoning_tokens: self.thoughts_token_count.unwrap_or_default(),
+        }
+    }
 }
 
 /// One of several response candidates.
@@ -431,11 +449,9 @@ impl<T: HttpClient> ApiClient for GeminiClient<T> {
             }
         }
 
-        // TODO: Check if this metadata includes tool use
         Ok(CompletionApiResponse {
             content: contents,
-            input_tokens: usage.prompt_token_count,
-            output_tokens: usage.candidates_token_count,
+            usage: usage.into(),
         })
     }
 }
@@ -479,6 +495,8 @@ mod tests {
                 total_token_count: 18,
                 thoughts_token_count: Some(0),
                 prompt_tokens_details: None,
+                cached_content_token_count: 0,
+                tool_use_prompt_token_count: 0,
             },
         };
 
@@ -509,8 +527,8 @@ mod tests {
         } else {
             panic!("Expected Text content type");
         }
-        test_eq!(res.input_tokens, 7);
-        test_eq!(res.output_tokens, 11);
+        test_eq!(res.usage.input_tokens, 7);
+        test_eq!(res.usage.output_tokens, 11);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
@@ -643,6 +661,8 @@ mod tests {
                 total_token_count: 15,
                 thoughts_token_count: None,
                 prompt_tokens_details: None,
+                cached_content_token_count: 0,
+                tool_use_prompt_token_count: 0,
             },
         };
         let text_response = GeminiResponseBody {
@@ -662,6 +682,8 @@ mod tests {
                 total_token_count: 28,
                 thoughts_token_count: None,
                 prompt_tokens_details: None,
+                cached_content_token_count: 0,
+                tool_use_prompt_token_count: 0,
             },
         };
 

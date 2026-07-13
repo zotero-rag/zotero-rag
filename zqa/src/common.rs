@@ -1,10 +1,7 @@
 use std::{
     collections::HashMap,
     io::{BufRead, Write},
-    sync::{
-        Arc, Mutex, RwLock,
-        atomic::{AtomicBool, AtomicU64},
-    },
+    sync::{Arc, Mutex, RwLock, atomic::AtomicBool},
 };
 
 use clap::Parser;
@@ -14,7 +11,7 @@ use log::LevelFilter;
 use zqa_pdftools::parse::ExtractedContent;
 use zqa_rag::llm::base::ChatHistoryItem;
 
-use crate::{config::Config, store::lance::LanceZoteroStore};
+use crate::{config::Config, state::UsageMetadata, store::lance::LanceZoteroStore};
 
 #[derive(Parser, Clone, Debug)]
 #[command(version, about, long_about = None)]
@@ -56,9 +53,8 @@ pub(crate) struct State {
     pub(crate) dirty: AtomicBool,
     /// A title generated for the current conversation
     pub(crate) title: Arc<Mutex<Option<String>>>,
-    /// Accumulated session cost, in US cents (Money pattern)
-    /// TODO: How do providers handle other currencies?
-    pub(crate) session_cost: AtomicU64,
+    /// The current conversation's usage
+    pub(crate) usage: UsageMetadata,
     /// Extracted content for imported documents
     pub(crate) imports: Arc<RwLock<HashMap<String, Arc<UserDocument>>>>,
 }

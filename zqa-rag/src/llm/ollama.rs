@@ -8,7 +8,6 @@ use http::HeaderMap;
 use super::base::{ApiClient, ChatRequest, CompletionApiResponse};
 use super::errors::LLMError;
 use crate::clients::ollama::OllamaClient;
-use crate::common::request_with_backoff;
 use crate::constants::{
     DEFAULT_MAX_RETRIES, DEFAULT_OLLAMA_BASE_URL, DEFAULT_OLLAMA_MAX_TOKENS, DEFAULT_OLLAMA_MODEL,
 };
@@ -19,6 +18,7 @@ use crate::llm::anthropic::{
 };
 use crate::llm::base::{ContentType, MessageRole};
 use crate::llm::tools::process_tool_calls;
+use crate::requests::request_with_backoff;
 
 /// Ollama supports the Anthropic Messages API, so we can reuse structs.
 type OllamaRequest<'a> = AnthropicRequest<'a>;
@@ -168,11 +168,9 @@ impl<T: HttpClient> ApiClient for OllamaClient<T> {
             }
         }
 
-        // TODO: Check if this metadata includes tool use
         Ok(CompletionApiResponse {
             content: contents,
-            input_tokens: response.usage.input_tokens,
-            output_tokens: response.usage.output_tokens,
+            usage: response.usage.into(),
         })
     }
 }
@@ -188,7 +186,8 @@ mod tests {
     use crate::clients::ollama::OllamaClient;
     use crate::http_client::{ReqwestClient, SequentialMockHttpClient};
     use crate::llm::anthropic::{
-        AnthropicTextResponseContent, AnthropicToolUseResponseContent, AnthropicUsageStats,
+        AnthropicOutputTokensDetails, AnthropicTextResponseContent,
+        AnthropicToolUseResponseContent, AnthropicUsageStats,
     };
     use crate::llm::base::{
         ApiClient, ChatHistoryContent, ChatHistoryItem, ChatRequest, MessageRole,
@@ -265,6 +264,9 @@ mod tests {
             usage: AnthropicUsageStats {
                 input_tokens: 10,
                 output_tokens: 5,
+                cache_creation_input_tokens: 0,
+                cache_read_input_tokens: 0,
+                output_tokens_details: AnthropicOutputTokensDetails { thinking_tokens: 0 },
             },
             r#type: "message".into(),
             content: vec![AnthropicResponseContent::ToolCall(
@@ -288,6 +290,9 @@ mod tests {
             usage: AnthropicUsageStats {
                 input_tokens: 20,
                 output_tokens: 8,
+                cache_creation_input_tokens: 0,
+                cache_read_input_tokens: 0,
+                output_tokens_details: AnthropicOutputTokensDetails { thinking_tokens: 0 },
             },
             r#type: "message".into(),
             content: vec![AnthropicResponseContent::Text(

@@ -8,7 +8,6 @@ use serde::{Deserialize, Serialize};
 use super::base::{ApiClient, ChatHistoryItem, ChatRequest, CompletionApiResponse};
 use super::errors::LLMError;
 use crate::clients::anthropic::AnthropicClient;
-use crate::common::request_with_backoff;
 use crate::constants::{
     DEFAULT_ANTHROPIC_MAX_TOKENS, DEFAULT_ANTHROPIC_MODEL, DEFAULT_ANTHROPIC_REASONING_BUDGET,
     DEFAULT_MAX_RETRIES,
@@ -21,6 +20,8 @@ use crate::llm::base::{
 use crate::llm::tools::{
     ANTHROPIC_SCHEMA_KEY, SerializedTool, get_owned_tools, process_tool_calls,
 };
+use crate::pricing::ModelUsage;
+use crate::requests::request_with_backoff;
 const DEFAULT_CLAUDE_MODEL: &str = DEFAULT_ANTHROPIC_MODEL;
 
 /// An Anthropic-specific chat history object. This is pretty much the same as `ChatHistoryItem`,
@@ -127,13 +128,38 @@ pub(crate) fn build_anthropic_messages_and_tools<'a>(
     (messages, owned_tools)
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub(crate) struct AnthropicOutputTokensDetails {
+    /// Number of output tokens the model generated as internal reasoning, including the
+    /// thinking-block delimiter token
+    pub(crate) thinking_tokens: u32,
+}
+
 /// Token usage statistics returned by the Anthropic API
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct AnthropicUsageStats {
     /// Number of tokens in the input prompt
     pub(crate) input_tokens: u32,
+    /// Number of input tokens used to create the cache entry
+    pub(crate) cache_creation_input_tokens: u32,
+    /// Number of input tokens read from the cache
+    pub(crate) cache_read_input_tokens: u32,
     /// Number of tokens in the generated response
     pub(crate) output_tokens: u32,
+    /// Breakdown of output tokens by category
+    pub(crate) output_tokens_details: AnthropicOutputTokensDetails,
+}
+
+impl Into<ModelUsage> for AnthropicUsageStats {
+    fn into(self) -> ModelUsage {
+        ModelUsage {
+            input_tokens: self.input_tokens,
+            input_cache_written: self.cache_creation_input_tokens,
+            input_cache_read: self.cache_read_input_tokens,
+            output_tokens: self.output_tokens,
+            reasoning_tokens: self.output_tokens_details.thinking_tokens,
+        }
+    }
 }
 
 /// The result of a tool call. This is the Anthropic-specific result format.
@@ -438,11 +464,9 @@ impl<T: HttpClient> ApiClient for AnthropicClient<T> {
             }
         }
 
-        // TODO: Check if this metadata includes tool use
         Ok(CompletionApiResponse {
             content: contents,
-            input_tokens: response.usage.input_tokens,
-            output_tokens: response.usage.output_tokens,
+            usage: response.usage.into(),
         })
     }
 }
@@ -459,7 +483,9 @@ mod tests {
         AnthropicToolUseResponseContent, AnthropicUsageStats,
     };
     use crate::http_client::{MockHttpClient, ReqwestClient, SequentialMockHttpClient};
-    use crate::llm::anthropic::{AnthropicTextResponseContent, DEFAULT_CLAUDE_MODEL};
+    use crate::llm::anthropic::{
+        AnthropicOutputTokensDetails, AnthropicTextResponseContent, DEFAULT_CLAUDE_MODEL,
+    };
     use crate::llm::base::{
         ApiClient, ChatHistoryContent, ChatHistoryItem, ChatRequest, ContentType, MessageRole,
         ToolCallResponse,
@@ -501,6 +527,9 @@ mod tests {
             usage: AnthropicUsageStats {
                 input_tokens: 9,
                 output_tokens: 13,
+                cache_creation_input_tokens: 0,
+                cache_read_input_tokens: 0,
+                output_tokens_details: AnthropicOutputTokensDetails { thinking_tokens: 0 },
             },
             r#type: "message".to_string(),
             content: vec![AnthropicResponseContent::Text(
@@ -532,8 +561,8 @@ mod tests {
         test_ok!(res);
 
         let res = res.unwrap();
-        test_eq!(res.input_tokens, 9);
-        test_eq!(res.output_tokens, 13);
+        test_eq!(res.usage.input_tokens, 9);
+        test_eq!(res.usage.output_tokens, 13);
 
         let content = &res.content[0];
         if let ContentType::Text(text) = content {
@@ -580,6 +609,9 @@ mod tests {
             usage: AnthropicUsageStats {
                 input_tokens: 10,
                 output_tokens: 5,
+                cache_creation_input_tokens: 0,
+                cache_read_input_tokens: 0,
+                output_tokens_details: AnthropicOutputTokensDetails { thinking_tokens: 0 },
             },
             r#type: "message".into(),
             content: vec![AnthropicResponseContent::ToolCall(
@@ -603,6 +635,9 @@ mod tests {
             usage: AnthropicUsageStats {
                 input_tokens: 20,
                 output_tokens: 8,
+                cache_creation_input_tokens: 0,
+                cache_read_input_tokens: 0,
+                output_tokens_details: AnthropicOutputTokensDetails { thinking_tokens: 0 },
             },
             r#type: "message".into(),
             content: vec![AnthropicResponseContent::Text(
