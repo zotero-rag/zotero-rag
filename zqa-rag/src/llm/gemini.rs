@@ -292,17 +292,17 @@ struct GeminiUsageMetadata {
     prompt_tokens_details: Option<Vec<GeminiTokenDetails>>,
 }
 
-impl Into<ModelUsage> for GeminiUsageMetadata {
-    fn into(self) -> ModelUsage {
+impl From<GeminiUsageMetadata> for ModelUsage {
+    fn from(val: GeminiUsageMetadata) -> Self {
         ModelUsage {
-            input_tokens: self.prompt_token_count,
-            input_cache_read: self.cached_content_token_count,
+            input_tokens: val.prompt_token_count,
+            input_cache_read: val.cached_content_token_count,
             // The Gemini API doesn't seem to distinguish between cache reads/writes, and only gives
             // us one number. The `prompt_tokens_details` number is a split by modality.
             // See: https://ai.google.dev/api/generate-content#UsageMetadata
             input_cache_written: 0,
-            output_tokens: self.candidates_token_count,
-            reasoning_tokens: self.thoughts_token_count.unwrap_or_default(),
+            output_tokens: val.candidates_token_count,
+            reasoning_tokens: val.thoughts_token_count.unwrap_or_default(),
         }
     }
 }

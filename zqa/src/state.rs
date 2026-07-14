@@ -150,6 +150,7 @@ impl UsageMetadata {
             input_cache_written: value.input_cache_written,
             output_tokens: value.output_tokens,
             reasoning_tokens: value.reasoning_tokens,
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
             estimated_cost: model_pricing.map_or(0, |p| (p.estimate_cost(value) * 100.0) as u32),
         }
     }

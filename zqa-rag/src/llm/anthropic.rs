@@ -150,14 +150,14 @@ pub(crate) struct AnthropicUsageStats {
     pub(crate) output_tokens_details: AnthropicOutputTokensDetails,
 }
 
-impl Into<ModelUsage> for AnthropicUsageStats {
-    fn into(self) -> ModelUsage {
+impl From<AnthropicUsageStats> for ModelUsage {
+    fn from(val: AnthropicUsageStats) -> Self {
         ModelUsage {
-            input_tokens: self.input_tokens,
-            input_cache_written: self.cache_creation_input_tokens,
-            input_cache_read: self.cache_read_input_tokens,
-            output_tokens: self.output_tokens,
-            reasoning_tokens: self.output_tokens_details.thinking_tokens,
+            input_tokens: val.input_tokens,
+            input_cache_written: val.cache_creation_input_tokens,
+            input_cache_read: val.cache_read_input_tokens,
+            output_tokens: val.output_tokens,
+            reasoning_tokens: val.output_tokens_details.thinking_tokens,
         }
     }
 }

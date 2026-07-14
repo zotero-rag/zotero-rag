@@ -260,14 +260,14 @@ struct OpenAIUsage {
     total_tokens: u32,
 }
 
-impl Into<ModelUsage> for OpenAIUsage {
-    fn into(self) -> ModelUsage {
+impl From<OpenAIUsage> for ModelUsage {
+    fn from(val: OpenAIUsage) -> Self {
         ModelUsage {
-            input_tokens: self.input_tokens,
-            input_cache_written: self.input_tokens_details.cache_write_tokens,
-            input_cache_read: self.input_tokens_details.cached_tokens,
-            output_tokens: self.output_tokens,
-            reasoning_tokens: self.output_tokens_details.reasoning_tokens,
+            input_tokens: val.input_tokens,
+            input_cache_written: val.input_tokens_details.cache_write_tokens,
+            input_cache_read: val.input_tokens_details.cached_tokens,
+            output_tokens: val.output_tokens,
+            reasoning_tokens: val.output_tokens_details.reasoning_tokens,
         }
     }
 }

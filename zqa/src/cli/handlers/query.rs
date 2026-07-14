@@ -232,7 +232,7 @@ where
     let summarization_tool = SummarizationTool::new(
         llm_client.clone(),
         store_arc,
-        Arc::clone(&summarization_usage),
+        &Arc::clone(&summarization_usage),
     );
     let mut tools: Vec<Box<dyn Tool>> = vec![
         Box::new(

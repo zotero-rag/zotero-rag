@@ -99,9 +99,7 @@ impl HttpClient for ReqwestClient {
         body: &'a T,
     ) -> Pin<Box<dyn Future<Output = Result<reqwest::Response, reqwest::Error>> + Send + 'a>> {
         let serialized_body = serde_json::to_string_pretty(&body);
-        log::debug!(
-            "Sending request to {url} with body: {serialized_body:#?}"
-        );
+        log::debug!("Sending request to {url} with body: {serialized_body:#?}");
 
         Box::pin(async move {
             self.client
