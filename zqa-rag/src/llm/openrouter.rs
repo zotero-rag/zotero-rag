@@ -208,19 +208,19 @@ struct OpenRouterUsageStats {
     cost: Option<f32>,
 }
 
-impl Into<ModelUsage> for OpenRouterUsageStats {
-    fn into(self) -> ModelUsage {
+impl From<OpenRouterUsageStats> for ModelUsage {
+    fn from(val: OpenRouterUsageStats) -> Self {
         ModelUsage {
-            input_tokens: self.prompt_tokens,
-            input_cache_written: self
+            input_tokens: val.prompt_tokens,
+            input_cache_written: val
                 .prompt_tokens_details
                 .map_or(0, |p| p.cache_write_tokens),
-            input_cache_read: self.prompt_tokens_details.map_or(0, |p| p.cached_tokens),
-            reasoning_tokens: self
+            input_cache_read: val.prompt_tokens_details.map_or(0, |p| p.cached_tokens),
+            reasoning_tokens: val
                 .completion_tokens_details
                 .and_then(|p| p.reasoning_tokens)
                 .unwrap_or_default(),
-            output_tokens: self.completion_tokens,
+            output_tokens: val.completion_tokens,
         }
     }
 }
