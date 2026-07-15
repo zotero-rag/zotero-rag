@@ -141,8 +141,10 @@ pub(crate) struct AnthropicUsageStats {
     /// Number of tokens in the input prompt
     pub(crate) input_tokens: u32,
     /// Number of input tokens used to create the cache entry
+    #[serde(default)]
     pub(crate) cache_creation_input_tokens: u32,
     /// Number of input tokens read from the cache
+    #[serde(default)]
     pub(crate) cache_read_input_tokens: u32,
     /// Number of tokens in the generated response
     pub(crate) output_tokens: u32,

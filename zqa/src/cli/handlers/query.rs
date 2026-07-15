@@ -172,12 +172,12 @@ where
     // Spawn a background title generation task from the query alone, in parallel with summarization.
     // Only generate a title if we don't already have one (i.e., first query in the conversation).
     let title_slot = Arc::clone(&ctx.state.title);
-    let config_clone = ctx.config.clone();
     if title_slot.lock()?.is_none()
         && let Some(small_config) = ctx.config.get_small_model_config()
         && let Ok(small_client) = get_client_with_config(&small_config)
     {
         let title_cost_tx = cost_tx.clone();
+        let config_clone = ctx.config.clone();
         let title_model_name = small_config.model_name().to_owned();
         let prompt = get_title_prompt(&query);
         tokio::spawn(async move {
@@ -286,7 +286,7 @@ where
     while let Ok(line) = status_rx.try_recv() {
         writeln!(ctx.err, "{line}")?;
     }
-    while let Ok(usage) = cost_rx.try_recv() {
+    while let Some(usage) = cost_rx.recv().await {
         ctx.state.usage += usage;
     }
 

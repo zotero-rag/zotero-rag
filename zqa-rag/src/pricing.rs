@@ -229,7 +229,7 @@ pub async fn get_model_pricing(
         };
         match fetched {
             Ok(bytes) => {
-                if let Err(e) = std::fs::write(&path, &bytes) {
+                if let Err(e) = tokio::fs::write(&path, &bytes).await {
                     log::warn!("Failed to write pricing cache file: {e}");
                 }
             }
@@ -248,7 +248,7 @@ pub async fn get_model_pricing(
         });
     }
 
-    let content = std::fs::read_to_string(&path).ok()?;
+    let content = tokio::fs::read_to_string(&path).await.ok()?;
     let json: serde_json::Value = serde_json::from_str(&content).ok()?;
 
     // LiteLLM keys are `model` for most models; fall back to `provider/name`, which is the case

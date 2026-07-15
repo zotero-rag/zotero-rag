@@ -251,11 +251,11 @@ struct OpenAIUsage {
     /// Number of tokens in the input prompt.
     input_tokens: u32,
     /// Breakdown of the input tokens.
-    input_tokens_details: OpenAIInputTokensDetails,
+    input_tokens_details: Option<OpenAIInputTokensDetails>,
     /// Number of tokens in the generated response.
     output_tokens: u32,
     /// Breakdown of the output tokens.
-    output_tokens_details: OpenAIOutputTokensDetails,
+    output_tokens_details: Option<OpenAIOutputTokensDetails>,
     /// Total token usage.
     total_tokens: u32,
 }
@@ -264,10 +264,10 @@ impl From<OpenAIUsage> for ModelUsage {
     fn from(val: OpenAIUsage) -> Self {
         ModelUsage {
             input_tokens: val.input_tokens,
-            input_cache_written: val.input_tokens_details.cache_write_tokens,
-            input_cache_read: val.input_tokens_details.cached_tokens,
+            input_cache_written: val.input_tokens_details.map_or(0, |c| c.cache_write_tokens),
+            input_cache_read: val.input_tokens_details.map_or(0, |c| c.cached_tokens),
             output_tokens: val.output_tokens,
-            reasoning_tokens: val.output_tokens_details.reasoning_tokens,
+            reasoning_tokens: val.output_tokens_details.map_or(0, |c| c.reasoning_tokens),
         }
     }
 }
@@ -757,13 +757,13 @@ mod tests {
                 input_tokens: 5,
                 output_tokens: 10,
                 total_tokens: 15,
-                input_tokens_details: OpenAIInputTokensDetails {
+                input_tokens_details: Some(OpenAIInputTokensDetails {
                     cache_write_tokens: 0,
                     cached_tokens: 0,
-                },
-                output_tokens_details: OpenAIOutputTokensDetails {
+                }),
+                output_tokens_details: Some(OpenAIOutputTokensDetails {
                     reasoning_tokens: 0,
-                },
+                }),
             },
             output: vec![OpenAIOutput::Message {
                 id: "msg_id".into(),
@@ -949,13 +949,13 @@ mod tests {
                 input_tokens: 10,
                 output_tokens: 5,
                 total_tokens: 15,
-                input_tokens_details: OpenAIInputTokensDetails {
+                input_tokens_details: Some(OpenAIInputTokensDetails {
                     cache_write_tokens: 0,
                     cached_tokens: 0,
-                },
-                output_tokens_details: OpenAIOutputTokensDetails {
+                }),
+                output_tokens_details: Some(OpenAIOutputTokensDetails {
                     reasoning_tokens: 0,
-                },
+                }),
             },
             output: vec![OpenAIOutput::FunctionCall {
                 call_id: "call-1".into(),
@@ -971,13 +971,13 @@ mod tests {
                 input_tokens: 20,
                 output_tokens: 8,
                 total_tokens: 28,
-                input_tokens_details: OpenAIInputTokensDetails {
+                input_tokens_details: Some(OpenAIInputTokensDetails {
                     cache_write_tokens: 0,
                     cached_tokens: 0,
-                },
-                output_tokens_details: OpenAIOutputTokensDetails {
+                }),
+                output_tokens_details: Some(OpenAIOutputTokensDetails {
                     reasoning_tokens: 0,
-                },
+                }),
             },
             output: vec![OpenAIOutput::Message {
                 id: "msg-1".into(),
