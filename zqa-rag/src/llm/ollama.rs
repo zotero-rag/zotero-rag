@@ -5,7 +5,7 @@ use std::env;
 
 use http::HeaderMap;
 
-use super::base::{ApiClient, ChatRequest, CompletionApiResponse};
+use super::base::ChatRequest;
 use super::errors::LLMError;
 use crate::clients::ollama::OllamaClient;
 use crate::constants::{DEFAULT_OLLAMA_BASE_URL, DEFAULT_OLLAMA_MAX_TOKENS, DEFAULT_OLLAMA_MODEL};
@@ -14,8 +14,7 @@ use crate::llm::anthropic::{
     AnthropicChatHistoryItem, AnthropicRequest, AnthropicResponse, map_response_to_chat_contents,
 };
 use crate::llm::base::{
-    AgenticClient, MessageRole, ProviderTurn, ReasoningConfig, run_agentic_loop,
-    send_generation_request,
+    AgenticClient, MessageRole, ProviderTurn, ReasoningConfig, send_generation_request,
 };
 use crate::llm::tools::{ANTHROPIC_SCHEMA_KEY, SerializedTool};
 
@@ -93,17 +92,6 @@ impl<T: HttpClient> AgenticClient for OllamaClient<T> {
     }
 }
 
-impl<T: HttpClient> ApiClient for OllamaClient<T> {
-    /// Send a request to the `ollama` API, processing tool calls as necessary. Returns a final
-    /// response after all tool calls are processed and sent back to the API.
-    async fn send_message(
-        &self,
-        request: &ChatRequest<'_>,
-    ) -> Result<CompletionApiResponse, LLMError> {
-        run_agentic_loop(self, request).await
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::{Arc, Mutex};
@@ -119,7 +107,7 @@ mod tests {
         AnthropicToolUseResponseContent, AnthropicUsageStats,
     };
     use crate::llm::base::{
-        ApiClient, ChatHistoryContent, ChatHistoryItem, ChatRequest, MessageRole,
+        AgenticClient, ChatHistoryContent, ChatHistoryItem, ChatRequest, MessageRole,
     };
     use crate::llm::tools::test_utils::MockTool;
 

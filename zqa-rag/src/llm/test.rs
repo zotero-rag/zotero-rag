@@ -3,12 +3,15 @@ use http::HeaderMap;
 use crate::{
     clients::test::TestClient,
     http_client::HttpClient,
-    llm::base::{ApiClient, ChatRequest, CompletionApiResponse, ContentType},
+    llm::{
+        base::{ChatRequest, CompletionApiResponse, ContentType},
+        errors::LLMError,
+    },
     pricing::ModelUsage,
 };
 
-impl ApiClient for TestClient {
-    /// Mock implementation for the trait's `send_message`.
+impl TestClient {
+    /// Return the next queued mock response.
     ///
     /// # Arguments
     ///
@@ -24,10 +27,10 @@ impl ApiClient for TestClient {
     /// * If a lock could not be obtained on the client's underlying mutex
     /// * If the deque has been exhausted
     /// * If the body in the next element is not UTF-8 (though this is unlikely)
-    async fn send_message(
+    pub(crate) async fn send_message(
         &self,
         _: &ChatRequest<'_>,
-    ) -> Result<CompletionApiResponse, super::errors::LLMError> {
+    ) -> Result<CompletionApiResponse, LLMError> {
         let result = self
             .client
             .post_json("", HeaderMap::new(), &None::<usize>)

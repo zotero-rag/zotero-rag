@@ -7,13 +7,13 @@ use std::env;
 use http::HeaderMap;
 use serde::{Deserialize, Serialize};
 
-use super::base::{ApiClient, ChatHistoryItem, ChatRequest, CompletionApiResponse};
+use super::base::{ChatHistoryItem, ChatRequest};
 use super::errors::LLMError;
 use crate::clients::openrouter::OpenRouterClient;
 use crate::http_client::HttpClient;
 use crate::llm::base::{
     AgenticClient, ChatHistoryContent, MessageRole, ProviderTurn, ReasoningConfig, ToolCallRequest,
-    run_agentic_loop, send_generation_request,
+    send_generation_request,
 };
 use crate::llm::tools::{OPENROUTER_SCHEMA_KEY, SerializedTool};
 use crate::pricing::ModelUsage;
@@ -370,17 +370,6 @@ impl<T: HttpClient> AgenticClient for OpenRouterClient<T> {
     }
 }
 
-impl<T: HttpClient> ApiClient for OpenRouterClient<T> {
-    /// Send a request to the OpenRouter API, processing tool calls as necessary. Returns a final
-    /// response after all tool calls are processed and sent back to the API.
-    async fn send_message(
-        &self,
-        request: &ChatRequest<'_>,
-    ) -> Result<CompletionApiResponse, LLMError> {
-        run_agentic_loop(self, request).await
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::{Arc, Mutex};
@@ -391,7 +380,7 @@ mod tests {
     use super::*;
     use crate::clients::openrouter::OpenRouterClient;
     use crate::http_client::{MockHttpClient, ReqwestClient, SequentialMockHttpClient};
-    use crate::llm::base::{ApiClient, ChatRequest, ContentType, ToolCallResponse};
+    use crate::llm::base::{AgenticClient, ChatRequest, ContentType, ToolCallResponse};
     use crate::llm::tools::test_utils::MockTool;
 
     #[tokio::test]

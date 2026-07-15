@@ -18,7 +18,7 @@ Before making any changes, confirm the following with the user:
 1. **Provider name** — the human-readable name (e.g. "Mistral AI")
 2. **Key** — the lowercase string key used in match arms and env vars (e.g. `"mistral"`)
 3. **Capabilities** — which of these the provider supports:
-   - LLM text generation (implements `ApiClient` from `llm/base.rs`)
+   - LLM text generation (implements the internal `AgenticClient` adapter from `llm/base.rs`)
    - Embedding (implements `EmbeddingFunction` from LanceDB)
    - Reranking (implements `Rerank` from `embedding/common.rs`)
 4. **Default constants** needed per capability:
@@ -65,8 +65,8 @@ Model on `zqa-rag/src/llm/openrouter.rs`. Requirements:
 - `impl<T: HttpClient + Default> Default` delegating to `new()`
 - `new()` and `with_config(config: <Name>Config)` constructors (both `#[must_use]`)
 - Private request/response structs with `#[derive(Serialize)]` / `#[derive(Deserialize)]`
-- `impl ApiClient for <Name>Client<T>`: `send_message` reads credentials from `self.config` first, then env vars
-- Use `request_with_backoff` from `crate::common` for the HTTP call
+- `impl AgenticClient for <Name>Client<T>`: define the provider-native history item, schema key, initial-history conversion, and one `send_once` request-response round trip
+- Use `send_generation_request` from `llm/base.rs` for the HTTP call
 - Tests: at minimum one mock test (using `MockHttpClient`) and one live integration test (using `ReqwestClient`, loads `.env` via `dotenv`)
 
 **Register in three places:**
@@ -75,7 +75,7 @@ Model on `zqa-rag/src/llm/openrouter.rs`. Requirements:
 - `zqa-rag/src/llm/factory.rs`:
   - Import the new client
   - Add `/// <Name> client` + `<Name>(<Name>Client)` variant to `LLMClient`
-  - Add delegation arm to the `ApiClient for LLMClient` match
+  - Add a dispatch arm to the inherent `LLMClient::send_message` match
   - Add `"<key>" => Ok(LLMClient::<Name>(<Name>Client::new()))` to `get_client_by_provider`
   - Add `LLMClientConfig::<Name>(cfg) => Ok(LLMClient::<Name>(<Name>Client::with_config(cfg)))` to `get_client_with_config`
 - `zqa-rag/src/config.rs` — add `/// <Name> client configuration` + `<Name>(crate::config::<Name>Config)` to `LLMClientConfig`

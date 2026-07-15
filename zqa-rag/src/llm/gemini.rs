@@ -6,14 +6,14 @@ use std::env;
 use reqwest::header::HeaderMap;
 use serde::{Deserialize, Serialize};
 
-use super::base::{ApiClient, ChatRequest, CompletionApiResponse};
+use super::base::ChatRequest;
 use super::errors::LLMError;
 use crate::clients::gemini::{GeminiClient, get_gemini_api_key};
 use crate::constants::{DEFAULT_GEMINI_MODEL, DEFAULT_GEMINI_REASONING_BUDGET};
 use crate::http_client::HttpClient;
 use crate::llm::base::{
     AgenticClient, ChatHistoryContent, ChatHistoryItem, MessageRole, ProviderTurn, ReasoningConfig,
-    ToolCallRequest, run_agentic_loop, send_generation_request,
+    ToolCallRequest, send_generation_request,
 };
 use crate::llm::tools::{GEMINI_SCHEMA_KEY, SerializedTool};
 use crate::pricing::ModelUsage;
@@ -371,15 +371,6 @@ impl<T: HttpClient> AgenticClient for GeminiClient<T> {
     }
 }
 
-impl<T: HttpClient> ApiClient for GeminiClient<T> {
-    async fn send_message(
-        &self,
-        request: &ChatRequest<'_>,
-    ) -> Result<CompletionApiResponse, LLMError> {
-        run_agentic_loop(self, request).await
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::{Arc, Mutex};
@@ -395,7 +386,7 @@ mod tests {
     use crate::constants::DEFAULT_GEMINI_EMBEDDING_DIM;
     use crate::http_client::ReqwestClient;
     use crate::http_client::{MockHttpClient, SequentialMockHttpClient};
-    use crate::llm::base::{ApiClient, ChatHistoryItem, ChatRequest, ContentType};
+    use crate::llm::base::{AgenticClient, ChatHistoryItem, ChatRequest, ContentType};
     use crate::llm::tools::test_utils::MockTool;
 
     #[tokio::test]

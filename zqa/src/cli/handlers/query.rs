@@ -11,7 +11,7 @@ use std::{
 use tokio::sync::mpsc;
 use zqa_rag::{
     llm::{
-        base::{ApiClient, ChatHistoryContent, ChatHistoryItem, ChatRequest, MessageRole},
+        base::{ChatHistoryContent, ChatHistoryItem, ChatRequest, MessageRole},
         factory::get_client_with_config,
         tools::{CallbackFn, Tool},
     },
