@@ -147,17 +147,19 @@ pub(crate) struct AnthropicUsageStats {
     /// Number of tokens in the generated response
     pub(crate) output_tokens: u32,
     /// Breakdown of output tokens by category
-    pub(crate) output_tokens_details: AnthropicOutputTokensDetails,
+    pub(crate) output_tokens_details: Option<AnthropicOutputTokensDetails>,
 }
 
 impl From<AnthropicUsageStats> for ModelUsage {
     fn from(val: AnthropicUsageStats) -> Self {
         ModelUsage {
-            input_tokens: val.input_tokens,
+            input_tokens: val.input_tokens
+                + val.cache_creation_input_tokens
+                + val.cache_read_input_tokens,
             input_cache_written: val.cache_creation_input_tokens,
             input_cache_read: val.cache_read_input_tokens,
             output_tokens: val.output_tokens,
-            reasoning_tokens: val.output_tokens_details.thinking_tokens,
+            reasoning_tokens: val.output_tokens_details.map_or(0, |d| d.thinking_tokens),
         }
     }
 }
@@ -529,7 +531,7 @@ mod tests {
                 output_tokens: 13,
                 cache_creation_input_tokens: 0,
                 cache_read_input_tokens: 0,
-                output_tokens_details: AnthropicOutputTokensDetails { thinking_tokens: 0 },
+                output_tokens_details: Some(AnthropicOutputTokensDetails { thinking_tokens: 0 }),
             },
             r#type: "message".to_string(),
             content: vec![AnthropicResponseContent::Text(
@@ -611,7 +613,7 @@ mod tests {
                 output_tokens: 5,
                 cache_creation_input_tokens: 0,
                 cache_read_input_tokens: 0,
-                output_tokens_details: AnthropicOutputTokensDetails { thinking_tokens: 0 },
+                output_tokens_details: Some(AnthropicOutputTokensDetails { thinking_tokens: 0 }),
             },
             r#type: "message".into(),
             content: vec![AnthropicResponseContent::ToolCall(
@@ -637,7 +639,7 @@ mod tests {
                 output_tokens: 8,
                 cache_creation_input_tokens: 0,
                 cache_read_input_tokens: 0,
-                output_tokens_details: AnthropicOutputTokensDetails { thinking_tokens: 0 },
+                output_tokens_details: Some(AnthropicOutputTokensDetails { thinking_tokens: 0 }),
             },
             r#type: "message".into(),
             content: vec![AnthropicResponseContent::Text(

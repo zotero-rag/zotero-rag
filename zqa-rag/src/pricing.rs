@@ -101,7 +101,10 @@ impl ModelPricing {
     pub fn estimate_cost(&self, usage: ModelUsage) -> f64 {
         [
             (
-                usage.input_tokens - usage.input_cache_written - usage.input_cache_read,
+                usage
+                    .input_tokens
+                    .saturating_sub(usage.input_cache_written)
+                    .saturating_sub(usage.input_cache_read),
                 self.input_cost_per_token,
             ),
             (usage.input_cache_written, self.cache_write_cost_per_token),
@@ -252,8 +255,14 @@ pub fn get_model_pricing(
     let entry = json.get(model).or_else(|| json.get(&fallback_key))?;
 
     let input_cost = entry.get("input_cost_per_token")?.as_f64()?;
-    let input_cache_read_cost = entry.get("cache_read_input_token_cost")?.as_f64()?;
-    let input_cache_write_cost = entry.get("cache_creation_input_token_cost")?.as_f64()?;
+    let input_cache_read_cost = entry
+        .get("cache_read_input_token_cost")
+        .and_then(serde_json::Value::as_f64)
+        .unwrap_or(0.0);
+    let input_cache_write_cost = entry
+        .get("cache_creation_input_token_cost")
+        .and_then(serde_json::Value::as_f64)
+        .unwrap_or(0.0);
     let output_cost = entry.get("output_cost_per_token")?.as_f64()?;
 
     Some(ModelPricing {
@@ -345,7 +354,29 @@ mod tests {
         };
 
         let cost = pricing.estimate_cost(usage);
-        let expected = 0.006_525;
+        let expected = 0.020_025;
+
+        assert!((cost - expected).abs() < expected * f64::EPSILON * 10.0);
+    }
+
+    #[test]
+    fn test_estimate_cost_with_mostly_cached_tokens() {
+        let pricing = ModelPricing {
+            input_cost_per_token: 0.000_003,
+            output_cost_per_token: 0.000_015,
+            cached_input_cost_per_token: 0.000_003_75,
+            cache_write_cost_per_token: 0.000_000_3,
+        };
+        let usage = ModelUsage {
+            input_tokens: 2000,
+            input_cache_written: 500,
+            input_cache_read: 1200,
+            output_tokens: 1000,
+            reasoning_tokens: 0,
+        };
+
+        let cost = pricing.estimate_cost(usage);
+        let expected = 0.02055;
 
         assert!((cost - expected).abs() < expected * f64::EPSILON * 10.0);
     }

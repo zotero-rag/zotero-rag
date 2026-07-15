@@ -41,11 +41,11 @@ where
     T: ZoteroStore,
 {
     /// Create a new [`SummarizationTool`] instance, given an LLM client and a backend.
-    pub fn new(llm_client: LLMClient, store: Arc<T>, usage: &Arc<Mutex<ModelUsage>>) -> Self {
+    pub fn new(llm_client: LLMClient, store: Arc<T>, usage: Arc<Mutex<ModelUsage>>) -> Self {
         Self {
             llm_client,
             store,
-            usage: Arc::clone(usage),
+            usage,
         }
     }
 }
@@ -191,7 +191,7 @@ mod tests {
         SummarizationTool::new(
             client,
             Arc::new(store),
-            &Arc::new(Mutex::new(ModelUsage::default())),
+            Arc::new(Mutex::new(ModelUsage::default())),
         )
     }
 

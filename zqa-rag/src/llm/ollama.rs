@@ -266,7 +266,7 @@ mod tests {
                 output_tokens: 5,
                 cache_creation_input_tokens: 0,
                 cache_read_input_tokens: 0,
-                output_tokens_details: AnthropicOutputTokensDetails { thinking_tokens: 0 },
+                output_tokens_details: Some(AnthropicOutputTokensDetails { thinking_tokens: 0 }),
             },
             r#type: "message".into(),
             content: vec![AnthropicResponseContent::ToolCall(
@@ -292,7 +292,7 @@ mod tests {
                 output_tokens: 8,
                 cache_creation_input_tokens: 0,
                 cache_read_input_tokens: 0,
-                output_tokens_details: AnthropicOutputTokensDetails { thinking_tokens: 0 },
+                output_tokens_details: Some(AnthropicOutputTokensDetails { thinking_tokens: 0 }),
             },
             r#type: "message".into(),
             content: vec![AnthropicResponseContent::Text(

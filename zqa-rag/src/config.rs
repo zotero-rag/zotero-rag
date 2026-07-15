@@ -230,4 +230,18 @@ impl LLMClientConfig {
             Self::Mock(_) => ProviderId::Mock,
         }
     }
+
+    /// Get the model name for the client
+    #[must_use]
+    pub fn model_name(&self) -> &str {
+        match self {
+            Self::Anthropic(cfg) => &cfg.model,
+            Self::Ollama(cfg) => &cfg.model,
+            Self::OpenAI(cfg) => &cfg.model,
+            Self::OpenRouter(cfg) => &cfg.model,
+            Self::Gemini(cfg) => &cfg.model,
+            #[cfg(any(test, feature = "mock"))]
+            Self::Mock(_) => "",
+        }
+    }
 }

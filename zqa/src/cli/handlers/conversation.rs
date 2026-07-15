@@ -96,6 +96,7 @@ pub(crate) fn handle_resume_cmd<O: Write, E: Write>(
                     ctx.state.chat_history = Arc::new(Mutex::new(selected.history));
                     *ctx.state.title.lock()? = Some(title.clone());
                     ctx.state.dirty.store(false, atomic::Ordering::Relaxed);
+                    ctx.state.usage = selected.usage;
                     writeln!(&mut ctx.out, "Resumed: {title}")?;
                 }
                 _ => {
@@ -226,7 +227,7 @@ mod tests {
             let loaded_history = ctx.state.chat_history.lock().unwrap();
             let loaded_usage = ctx.state.usage;
             test_eq!(loaded_history.len(), history_b.len());
-            test_eq!(loaded_usage.input_tokens, 1000);
+            test_eq!(loaded_usage.input_tokens, 2000);
             test_eq!(
                 *ctx.state.title.lock().unwrap(),
                 Some("Conversation B".to_string())
