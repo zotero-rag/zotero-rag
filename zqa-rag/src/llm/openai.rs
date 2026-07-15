@@ -234,6 +234,7 @@ fn build_openai_messages_and_tools<'a>(
 #[derive(Debug, Serialize, Deserialize, Clone, Copy)]
 struct OpenAIInputTokensDetails {
     /// The number of input tokens that were written to the cache.
+    #[serde(default)]
     cache_write_tokens: u32,
     /// The number of tokens that were retrieved from the cache.
     cached_tokens: u32,

@@ -133,7 +133,7 @@ impl UsageMetadata {
         model: &str,
     ) -> Self {
         let model_pricing = match get_state_dir() {
-            Ok(dir) if dir.exists() || fs::create_dir_all(&dir).is_ok() => {
+            Ok(dir) if dir.exists() || tokio::fs::create_dir_all(&dir).await.is_ok() => {
                 get_model_pricing(
                     provider.as_str(),
                     model,
