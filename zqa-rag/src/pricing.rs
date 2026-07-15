@@ -21,9 +21,12 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 use tempfile::NamedTempFile;
+use tokio::sync::OnceCell;
 
 const LITELLM_PRICING_URL: &str =
     "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json";
+
+static PRICING_CACHE: OnceCell<Option<serde_json::Value>> = OnceCell::const_new();
 
 /// Usage information for a model. This does not include pricing estimates; for that information,
 /// use [`ModelPricing::estimate_cost`].
@@ -248,8 +251,13 @@ pub async fn get_model_pricing(
         });
     }
 
-    let content = tokio::fs::read_to_string(&path).await.ok()?;
-    let json: serde_json::Value = serde_json::from_str(&content).ok()?;
+    let json = PRICING_CACHE
+        .get_or_init(|| async {
+            let content = tokio::fs::read_to_string(&path).await.ok()?;
+            serde_json::from_str(&content).ok()?
+        })
+        .await
+        .as_ref()?;
 
     // LiteLLM keys are `model` for most models; fall back to `provider/name`, which is the case
     // for OpenRouter.
