@@ -5,7 +5,7 @@ use std::env;
 use http::HeaderMap;
 use serde::{Deserialize, Serialize};
 
-use super::base::{ApiClient, ChatHistoryItem, ChatRequest, CompletionApiResponse};
+use super::base::{ChatHistoryItem, ChatRequest};
 use super::errors::LLMError;
 use crate::clients::anthropic::AnthropicClient;
 use crate::constants::{
@@ -14,7 +14,7 @@ use crate::constants::{
 use crate::http_client::HttpClient;
 use crate::llm::base::{
     AgenticClient, ChatHistoryContent, MessageRole, ProviderTurn, ReasoningConfig, ToolCallRequest,
-    ToolCallResponse, run_agentic_loop, send_generation_request,
+    ToolCallResponse, send_generation_request,
 };
 use crate::llm::tools::{ANTHROPIC_SCHEMA_KEY, SerializedTool};
 use crate::pricing::ModelUsage;
@@ -364,17 +364,6 @@ impl<T: HttpClient> AgenticClient for AnthropicClient<T> {
     }
 }
 
-impl<T: HttpClient> ApiClient for AnthropicClient<T> {
-    /// Send a request to the Anthropic API, processing tool calls as necessary. Returns a final
-    /// response after all tool calls are processed and sent back to the API.
-    async fn send_message(
-        &self,
-        request: &ChatRequest<'_>,
-    ) -> Result<CompletionApiResponse, LLMError> {
-        run_agentic_loop(self, request).await
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::{Arc, Mutex};
@@ -391,7 +380,7 @@ mod tests {
         AnthropicOutputTokensDetails, AnthropicTextResponseContent, DEFAULT_CLAUDE_MODEL,
     };
     use crate::llm::base::{
-        ApiClient, ChatHistoryContent, ChatHistoryItem, ChatRequest, ContentType, MessageRole,
+        AgenticClient, ChatHistoryContent, ChatHistoryItem, ChatRequest, ContentType, MessageRole,
         ToolCallResponse,
     };
     use crate::llm::tools::test_utils::MockTool;

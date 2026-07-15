@@ -14,7 +14,7 @@ use crate::config::LLMClientConfig;
 use crate::embedding::common::{BatchEmbeddingRequest, BatchEmbeddingResults, BatchSubmission};
 use crate::embedding::voyage::VoyageAIClient;
 use crate::http_client::ReqwestClient;
-use crate::llm::base::{ApiClient, ChatRequest, ReasoningConfig};
+use crate::llm::base::{AgenticClient, ChatRequest, CompletionApiResponse, ReasoningConfig};
 use crate::llm::errors::LLMError;
 use crate::providers::registry::provider_registry;
 
@@ -91,27 +91,37 @@ impl LLMClient {
             LLMClient::Mock(_) => None,
         }
     }
-}
 
-// Implement ApiClient for LLMClient to delegate to the inner implementations
-impl ApiClient for LLMClient {
-    async fn send_message(
+    /// Send a request to the configured LLM provider.
+    ///
+    /// # Arguments
+    ///
+    /// * `request` - The chat request to send.
+    ///
+    /// # Returns
+    ///
+    /// The final response and accumulated usage across all provider turns.
+    ///
+    /// # Errors
+    ///
+    /// * Returns [`LLMError`] if a provider request or tool execution fails.
+    pub async fn send_message(
         &self,
-        message: &ChatRequest<'_>,
-    ) -> Result<crate::llm::base::CompletionApiResponse, LLMError> {
+        request: &ChatRequest<'_>,
+    ) -> Result<CompletionApiResponse, LLMError> {
         match self {
-            LLMClient::Anthropic(client) => client.send_message(message).await,
-            LLMClient::Ollama(client) => client.send_message(message).await,
-            LLMClient::OpenAI(client) => client.send_message(message).await,
-            LLMClient::OpenRouter(client) => client.send_message(message).await,
-            LLMClient::Gemini(client) => client.send_message(message).await,
+            LLMClient::Anthropic(client) => AgenticClient::send_message(client, request).await,
+            LLMClient::Ollama(client) => AgenticClient::send_message(client, request).await,
+            LLMClient::OpenAI(client) => AgenticClient::send_message(client, request).await,
+            LLMClient::OpenRouter(client) => AgenticClient::send_message(client, request).await,
+            LLMClient::Gemini(client) => AgenticClient::send_message(client, request).await,
             #[cfg(any(test, feature = "mock"))]
-            LLMClient::Mock(client) => client.send_message(message).await,
+            LLMClient::Mock(client) => client.send_message(request).await,
         }
     }
 }
 
-/// Returns an ApiClient implementation with provided configuration
+/// Returns a configured LLM client
 ///
 /// # Errors
 ///
@@ -229,5 +239,24 @@ impl BatchAPIProvider for BatchEmbeddingClient {
         match self {
             Self::VoyageAI(client) => client.cancel_batch(batch_id).await,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::LLMClient;
+    use crate::clients::test::TestClient;
+    use crate::llm::base::{ChatRequest, ContentType};
+
+    #[tokio::test]
+    async fn mock_client_sends_queued_response() {
+        let client = LLMClient::Mock(TestClient::new(["queued response".to_string()]));
+
+        let response = client.send_message(&ChatRequest::default()).await.unwrap();
+
+        assert_eq!(
+            response.content,
+            vec![ContentType::Text("queued response".to_string())]
+        );
     }
 }

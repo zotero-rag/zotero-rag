@@ -32,8 +32,8 @@ provider selection in configuration rather than in application-specific code.
 
 # LLM and tool interface
 
-`ApiClient` implementations send `ChatRequest` values and return normalized
-completion responses. A request can include chat history, reasoning settings,
+`LLMClient::send_message` sends `ChatRequest` values and returns normalized completion
+responses. A request can include chat history, reasoning settings,
 streaming callbacks, and a list of `Tool` trait objects. Each tool supplies a
 name, description, JSON Schema for its arguments, and an asynchronous call.
 Provider adapters serialize that shared interface into their own tool schema

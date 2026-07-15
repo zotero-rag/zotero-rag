@@ -45,6 +45,9 @@ ignore = [
     # arrow ecosystem with no drop-in replacement.
     # https://rustsec.org/advisories/RUSTSEC-2024-0436
     { id = "RUSTSEC-2024-0436", reason = "transitive via datafusion/lance; awaiting ecosystem migration" },
+
+    # ttf-parser: unmaintained
+    { id = "RUSTSEC-2026-0192", reason = "transitive via lopdf" }
 ]
 
 [licenses]

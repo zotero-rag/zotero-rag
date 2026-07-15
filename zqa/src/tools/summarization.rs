@@ -10,7 +10,7 @@ use serde_json::json;
 use tokio::task::JoinSet;
 use zqa_rag::{
     llm::{
-        base::{ApiClient, ChatRequest, CompletionApiResponse},
+        base::{ChatRequest, CompletionApiResponse},
         errors::LLMError,
         factory::LLMClient,
         tools::Tool,

@@ -22,7 +22,7 @@ use zqa_rag::embedding::common::get_embedding_provider_with_config;
 use zqa_rag::llm::base::ChatRequest;
 use zqa_rag::{
     embedding::common::EmbeddingProviderConfig,
-    llm::{base::ApiClient, errors::LLMError, factory::LLMClient, tools::Tool},
+    llm::{errors::LLMError, factory::LLMClient, tools::Tool},
     reranking::common::{RerankProviderConfig, get_reranking_provider_with_config},
 };
 

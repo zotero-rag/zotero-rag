@@ -21,9 +21,9 @@ use crate::{
     reranking::common::{Rerank, RerankProviderConfig},
 };
 
-/// Providers of models that can generate text. Clients for these providers should implement
-/// the `ApiClient` trait. Generally speaking, for this reason, these structs and all their trait
-/// implementations will be in the `llm/` directory.
+/// Providers of models that can generate text.
+///
+/// Generation clients are exposed to callers through [`LLMClient`].
 #[derive(Copy, Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 #[non_exhaustive]
@@ -318,30 +318,33 @@ mod tests {
     use crate::clients::ollama::OllamaClient;
     use crate::clients::openai::OpenAIClient;
     use crate::clients::openrouter::OpenRouterClient;
-    use crate::clients::test::TestClient;
     use crate::embedding::cohere::CohereClient;
     use crate::embedding::voyage::VoyageAIClient;
     use crate::embedding::zeroentropy::ZeroEntropyClient;
     use crate::http_client::ReqwestClient;
-    use crate::llm::base::ApiClient;
+    use crate::llm::base::{AgenticClient, ChatHistoryItem};
     use crate::reranking::common::Rerank;
 
-    fn assert_api_client<T: ApiClient>() {}
+    fn assert_agentic_client<T>()
+    where
+        T: AgenticClient,
+        ChatHistoryItem: Into<Vec<T::HistoryItem>>,
+    {
+    }
     fn assert_embedding_fn<T: EmbeddingFunction>() {}
     fn assert_batch_provider<T: BatchAPIProvider>() {}
     fn assert_reranker<T: Rerank>() {}
 
-    /// Verify that every [`super::ModelProvider`] variant has a corresponding client that
-    /// implements [`ApiClient`]. If a client is removed or its trait impl is dropped, this
-    /// will fail to compile.
+    /// Verify that every production [`super::ModelProvider`] has a corresponding generation
+    /// adapter. If a provider is removed or its adapter implementation is dropped, this will fail
+    /// to compile.
     #[test]
-    fn model_providers_implement_api_client() {
-        assert_api_client::<AnthropicClient<ReqwestClient>>();
-        assert_api_client::<OllamaClient<ReqwestClient>>();
-        assert_api_client::<OpenAIClient<ReqwestClient>>();
-        assert_api_client::<OpenRouterClient<ReqwestClient>>();
-        assert_api_client::<GeminiClient<ReqwestClient>>();
-        assert_api_client::<TestClient>();
+    fn model_providers_implement_agentic_client() {
+        assert_agentic_client::<AnthropicClient<ReqwestClient>>();
+        assert_agentic_client::<OllamaClient<ReqwestClient>>();
+        assert_agentic_client::<OpenAIClient<ReqwestClient>>();
+        assert_agentic_client::<OpenRouterClient<ReqwestClient>>();
+        assert_agentic_client::<GeminiClient<ReqwestClient>>();
     }
 
     /// Verify that every [`super::EmbeddingProvider`] variant has a corresponding client that

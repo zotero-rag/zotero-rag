@@ -16,7 +16,7 @@ use lancedb::embeddings::EmbeddingFunction;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-use super::base::{ApiClient, ChatHistoryItem, ChatRequest, CompletionApiResponse};
+use super::base::{ChatHistoryItem, ChatRequest};
 use super::errors::LLMError;
 use crate::clients::openai::OpenAIClient;
 use crate::constants::{
@@ -25,7 +25,7 @@ use crate::constants::{
 use crate::http_client::HttpClient;
 use crate::llm::base::{
     AgenticClient, ChatHistoryContent, MessageRole, ProviderTurn, ReasoningConfig, ToolCallRequest,
-    run_agentic_loop, send_generation_request,
+    send_generation_request,
 };
 use crate::llm::tools::{OPENAI_SCHEMA_KEY, SerializedTool};
 use crate::pricing::ModelUsage;
@@ -486,17 +486,6 @@ impl<T: HttpClient> AgenticClient for OpenAIClient<T> {
     }
 }
 
-impl<T: HttpClient> ApiClient for OpenAIClient<T> {
-    /// Send a request to the OpenAI Responses API, processing tool calls as necessary.
-    /// Returns a final response after all tool calls are processed and sent back.
-    async fn send_message(
-        &self,
-        request: &ChatRequest<'_>,
-    ) -> Result<CompletionApiResponse, LLMError> {
-        run_agentic_loop(self, request).await
-    }
-}
-
 /// Implements the LanceDB EmbeddingFunction trait for OpenAI client.
 impl<T: HttpClient + Default + Debug> EmbeddingFunction for OpenAIClient<T> {
     fn name(&self) -> &'static str {
@@ -570,7 +559,7 @@ mod tests {
     use crate::constants::DEFAULT_OPENAI_EMBEDDING_DIM;
     use crate::http_client::{HttpClient, MockHttpClient, ReqwestClient};
     use crate::llm::base::{
-        ApiClient, ChatHistoryContent, ChatHistoryItem, ChatRequest, ContentType, MessageRole,
+        AgenticClient, ChatHistoryContent, ChatHistoryItem, ChatRequest, ContentType, MessageRole,
         ReasoningConfig,
     };
     use crate::llm::openai::{OpenAIInputTokensDetails, OpenAIOutputTokensDetails};

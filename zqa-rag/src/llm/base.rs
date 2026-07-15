@@ -1,5 +1,5 @@
-//! User-facing structs and traits for working with LLMs, including tool calling support. Most
-//! structs used by the clients can be converted to/from the structs here.
+//! User-facing types for working with LLMs, including tool calling support. Most structs used by
+//! the clients can be converted to/from the structs here.
 
 use std::sync::Arc;
 
@@ -185,16 +185,6 @@ pub struct CompletionApiResponse {
     pub usage: ModelUsage,
 }
 
-/// A client that can interact with an LLM provider and get a response.
-#[allow(async_fn_in_trait)]
-pub trait ApiClient {
-    /// Send a request to the API and return the response.
-    async fn send_message(
-        &self,
-        request: &ChatRequest<'_>,
-    ) -> Result<CompletionApiResponse, LLMError>;
-}
-
 /// An abstraction over one model turn.
 pub(crate) struct ProviderTurn<H> {
     /// The model's output in the provider-native format.
@@ -205,6 +195,7 @@ pub(crate) struct ProviderTurn<H> {
     pub(crate) usage: ModelUsage,
 }
 
+/// Internal contract for provider-specific generation adapters.
 pub(crate) trait AgenticClient
 where
     ChatHistoryItem: Into<Vec<Self::HistoryItem>>,
@@ -225,53 +216,66 @@ where
         reasoning: Option<&ReasoningConfig>,
         max_tokens: Option<u32>,
     ) -> Result<ProviderTurn<Self::HistoryItem>, LLMError>;
-}
 
-pub(crate) async fn run_agentic_loop<C: AgenticClient>(
-    client: &C,
-    request: &ChatRequest<'_>,
-) -> Result<CompletionApiResponse, LLMError>
-where
-    ChatHistoryItem: Into<Vec<<C as AgenticClient>::HistoryItem>>,
-{
-    let mut history = client.build_initial_history(request);
-    let tools = get_owned_tools(request.tools, C::SCHEMA_KEY);
-    let mut usage = ModelUsage::default();
-    let mut contents = Vec::<ContentType>::new();
+    /// Send a chat request, executing requested tools until the provider returns a final response.
+    ///
+    /// # Arguments
+    ///
+    /// * `request` - The chat request to send.
+    ///
+    /// # Returns
+    ///
+    /// The final response and accumulated usage across all provider turns.
+    ///
+    /// # Errors
+    ///
+    /// * Returns [`LLMError`] if a provider request or tool execution fails.
+    async fn send_message(
+        &self,
+        request: &ChatRequest<'_>,
+    ) -> Result<CompletionApiResponse, LLMError>
+    where
+        Self: Sized,
+    {
+        let mut history = self.build_initial_history(request);
+        let tools = get_owned_tools(request.tools, Self::SCHEMA_KEY);
+        let mut usage = ModelUsage::default();
+        let mut contents = Vec::<ContentType>::new();
 
-    // TODO: Add max tool iterations support
-    loop {
-        let turn = client
-            .send_once(
-                &history,
-                tools.as_deref(),
-                request.reasoning.as_ref(),
-                request.max_tokens,
+        // TODO: Add max tool iterations support
+        loop {
+            let turn = self
+                .send_once(
+                    &history,
+                    tools.as_deref(),
+                    request.reasoning.as_ref(),
+                    request.max_tokens,
+                )
+                .await?;
+            usage += turn.usage;
+            history.extend(turn.native_items);
+
+            let new_history_items = process_tool_calls(
+                &mut contents,
+                &turn.contents,
+                tools.as_deref().unwrap_or_default(),
+                request.on_tool_call.as_ref(),
+                request.on_text.as_ref(),
             )
             .await?;
-        usage += turn.usage;
-        history.extend(turn.native_items);
 
-        let new_history_items = process_tool_calls(
-            &mut contents,
-            &turn.contents,
-            tools.as_deref().unwrap_or_default(),
-            request.on_tool_call.as_ref(),
-            request.on_text.as_ref(),
-        )
-        .await?;
+            if new_history_items.is_empty() {
+                break;
+            }
 
-        if new_history_items.is_empty() {
-            break;
+            history.extend(new_history_items.into_iter().flat_map(Into::into));
         }
 
-        history.extend(new_history_items.into_iter().flat_map(Into::into));
+        Ok(CompletionApiResponse {
+            content: contents,
+            usage,
+        })
     }
-
-    Ok(CompletionApiResponse {
-        content: contents,
-        usage,
-    })
 }
 
 pub(crate) async fn send_generation_request<R, S>(
