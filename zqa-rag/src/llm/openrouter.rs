@@ -12,19 +12,17 @@ use super::errors::LLMError;
 use crate::clients::openrouter::OpenRouterClient;
 use crate::http_client::HttpClient;
 use crate::llm::base::{
-    ChatHistoryContent, ContentType, MessageRole, ReasoningConfig, ToolCallRequest,
+    AgenticClient, ChatHistoryContent, MessageRole, ProviderTurn, ReasoningConfig, ToolCallRequest,
+    run_agentic_loop, send_generation_request,
 };
-use crate::llm::tools::{
-    OPENROUTER_SCHEMA_KEY, SerializedTool, get_owned_tools, process_tool_calls,
-};
+use crate::llm::tools::{OPENROUTER_SCHEMA_KEY, SerializedTool};
 use crate::pricing::ModelUsage;
-use crate::requests::request_with_backoff;
 
 const DEFAULT_MODEL: &str = "anthropic/claude-sonnet-4.5";
 
 /// OpenRouter-specific message format
 #[derive(Clone, Debug, Serialize)]
-struct OpenRouterMessage {
+pub(crate) struct OpenRouterMessage {
     role: MessageRole,
     #[serde(skip_serializing_if = "Option::is_none")]
     content: Option<String>,
@@ -35,17 +33,9 @@ struct OpenRouterMessage {
     tool_call_id: Option<String>,
 }
 
-impl From<ChatHistoryItem> for OpenRouterMessage {
+impl From<ChatHistoryItem> for Vec<OpenRouterMessage> {
     fn from(item: ChatHistoryItem) -> Self {
         convert_to_openrouter_messages(&item)
-            .into_iter()
-            .next()
-            .unwrap_or(OpenRouterMessage {
-                role: item.role,
-                content: None,
-                tool_calls: None,
-                tool_call_id: None,
-            })
     }
 }
 
@@ -69,12 +59,12 @@ struct OpenRouterReasoning {
     summary: Option<String>,
 }
 
-impl From<ReasoningConfig> for OpenRouterReasoning {
-    fn from(value: ReasoningConfig) -> Self {
+impl From<&ReasoningConfig> for OpenRouterReasoning {
+    fn from(value: &ReasoningConfig) -> Self {
         Self {
-            effort: value.effort,
+            effort: value.effort.clone(),
             max_tokens: value.max_tokens,
-            summary: value.summary,
+            summary: value.summary.clone(),
         }
     }
 }
@@ -151,30 +141,6 @@ fn convert_to_openrouter_messages(item: &ChatHistoryItem) -> Vec<OpenRouterMessa
     }
 
     messages
-}
-
-/// Helper to build messages and tools from a ChatRequest.
-/// Returns owned data that can then be borrowed by OpenRouterRequest.
-fn build_openrouter_messages_and_tools<'a>(
-    req: &'a ChatRequest<'a>,
-) -> (Vec<OpenRouterMessage>, Option<Vec<SerializedTool<'a>>>) {
-    let mut messages: Vec<OpenRouterMessage> = req
-        .chat_history
-        .iter()
-        .flat_map(convert_to_openrouter_messages)
-        .collect();
-
-    messages.push(OpenRouterMessage {
-        role: MessageRole::User,
-        content: Some(req.message.clone()),
-        tool_calls: None,
-        tool_call_id: None,
-    });
-
-    let owned_tools: Option<Vec<SerializedTool<'a>>> =
-        get_owned_tools(req.tools, OPENROUTER_SCHEMA_KEY);
-
-    (messages, owned_tools)
 }
 
 #[derive(Copy, Clone, Serialize, Deserialize)]
@@ -293,43 +259,6 @@ struct OpenRouterResponse {
     choices: Vec<OpenRouterResponseChoices>,
 }
 
-/// Send an API request to OpenRouter.
-///
-/// # Arguments:
-///
-/// * `client`: An `HttpClient` implementation.
-/// * `headers`: A set of headers to pass.
-/// * `req`: The request body to send
-///
-/// # Returns
-///
-/// The OpenRouter-specific response.
-async fn send_openrouter_request(
-    client: &impl HttpClient,
-    headers: &HeaderMap,
-    req: &OpenRouterRequest<'_>,
-) -> Result<OpenRouterResponse, LLMError> {
-    const MAX_RETRIES: usize = 3;
-    let res = request_with_backoff(
-        client,
-        "https://openrouter.ai/api/v1/chat/completions",
-        headers,
-        req,
-        MAX_RETRIES,
-    )
-    .await?;
-
-    let body = res.text().await?;
-    let json: serde_json::Value = serde_json::from_str(&body)?;
-    let response: OpenRouterResponse = serde_json::from_value(json.clone()).map_err(|err| {
-        log::error!("Failed to deserialize OpenRouter response: we got the response {json}");
-
-        LLMError::DeserializationError(err.to_string())
-    })?;
-
-    Ok(response)
-}
-
 /// Convert OpenRouter response message into provider-agnostic `ChatHistoryContent` items.
 fn map_response_to_chat_contents(message: &OpenRouterResponseMessage) -> Vec<ChatHistoryContent> {
     let mut contents = Vec::new();
@@ -356,14 +285,34 @@ fn map_response_to_chat_contents(message: &OpenRouterResponseMessage) -> Vec<Cha
     contents
 }
 
-impl<T: HttpClient> ApiClient for OpenRouterClient<T> {
-    /// Send a request to the OpenRouter API, processing tool calls as necessary. Returns a final
-    /// response after all tool calls are processed and sent back to the API.
-    #[allow(clippy::too_many_lines)]
-    async fn send_message(
+impl<T: HttpClient> AgenticClient for OpenRouterClient<T> {
+    type HistoryItem = OpenRouterMessage;
+    const SCHEMA_KEY: &'static str = OPENROUTER_SCHEMA_KEY;
+
+    fn build_initial_history(&self, request: &ChatRequest<'_>) -> Vec<Self::HistoryItem> {
+        let mut messages: Vec<OpenRouterMessage> = request
+            .chat_history
+            .iter()
+            .flat_map(convert_to_openrouter_messages)
+            .collect();
+
+        messages.push(OpenRouterMessage {
+            role: MessageRole::User,
+            content: Some(request.message.clone()),
+            tool_calls: None,
+            tool_call_id: None,
+        });
+
+        messages
+    }
+
+    async fn send_once(
         &self,
-        request: &ChatRequest<'_>,
-    ) -> Result<CompletionApiResponse, LLMError> {
+        history: &[Self::HistoryItem],
+        tools: Option<&[SerializedTool<'_>]>,
+        reasoning: Option<&ReasoningConfig>,
+        _max_tokens: Option<u32>,
+    ) -> Result<ProviderTurn<Self::HistoryItem>, LLMError> {
         // Use config if available, otherwise fall back to env vars
         let (api_key, model) = if let Some(ref config) = self.config {
             (config.api_key.clone(), config.model.clone())
@@ -374,117 +323,61 @@ impl<T: HttpClient> ApiClient for OpenRouterClient<T> {
             )
         };
 
+        let wrapped_tools = tools.map(|tools| {
+            tools
+                .iter()
+                .map(|tool| OpenRouterTool {
+                    r#type: "function",
+                    function: tool,
+                })
+                .collect::<Vec<_>>()
+        });
+        let request_body = OpenRouterRequest {
+            model: &model,
+            messages: history,
+            reasoning: reasoning.map(Into::into),
+            tools: wrapped_tools,
+        };
+
         let mut headers = HeaderMap::new();
         let auth = format!("Bearer {api_key}");
         headers.insert("Authorization", auth.parse()?);
         headers.insert("Content-Type", "application/json".parse()?);
 
-        // Build the initial messages and tools (owned)
-        let (mut chat_history, tools) = build_openrouter_messages_and_tools(request);
-
-        // Helper to create wrapped tools
-        let make_wrapped_tools = || {
-            tools.as_ref().map(|t| {
-                t.iter()
-                    .map(|tool| OpenRouterTool {
-                        r#type: "function",
-                        function: tool,
-                    })
-                    .collect()
-            })
-        };
-
-        // Create the initial request
-        let req_body = OpenRouterRequest {
-            model: &model,
-            messages: &chat_history,
-            reasoning: request.reasoning.clone().map(Into::into),
-            tools: make_wrapped_tools(),
-        };
-
-        let mut response = send_openrouter_request(&self.client, &headers, &req_body).await?;
-
-        let mut choice = response.choices.into_iter().next().ok_or_else(|| {
+        let response: OpenRouterResponse = send_generation_request(
+            &self.client,
+            request_body,
+            &headers,
+            "https://openrouter.ai/api/v1/chat/completions",
+        )
+        .await?;
+        let usage = response.usage.into();
+        let choice = response.choices.into_iter().next().ok_or_else(|| {
             LLMError::DeserializationError("OpenRouter response contained no choices".to_string())
         })?;
+        let contents = map_response_to_chat_contents(&choice.message);
 
-        let mut has_tool_calls: bool = choice
-            .message
-            .tool_calls
-            .as_ref()
-            .is_some_and(|tc| !tc.is_empty());
-
-        // Append the assistant's response to chat history
-        chat_history.push(OpenRouterMessage {
-            role: choice.message.role,
-            content: choice.message.content.clone(),
-            tool_calls: choice.message.tool_calls.clone(),
-            tool_call_id: None,
-        });
-
-        let mut contents: Vec<ContentType> = Vec::new();
-
-        while has_tool_calls {
-            let converted_contents = map_response_to_chat_contents(&choice.message);
-            process_tool_calls(
-                &mut chat_history,
-                &mut contents,
-                &converted_contents,
-                tools.as_ref().ok_or_else(|| {
-                    LLMError::ToolCallError(
-                        "Model returned tool calls, but no tools were provided.".to_string(),
-                    )
-                })?,
-                request.on_tool_call.as_ref(),
-                request.on_text.as_ref(),
-            )
-            .await?;
-
-            // Create a new request borrowing the updated chat history
-            let updated_req_body = OpenRouterRequest {
-                model: &model,
-                messages: &chat_history,
-                reasoning: None,
-                tools: make_wrapped_tools(),
-            };
-
-            response = send_openrouter_request(&self.client, &headers, &updated_req_body).await?;
-
-            choice = response.choices.into_iter().next().ok_or_else(|| {
-                LLMError::DeserializationError(
-                    "OpenRouter response contained no choices".to_string(),
-                )
-            })?;
-
-            // Append the new response to chat history
-            chat_history.push(OpenRouterMessage {
+        Ok(ProviderTurn {
+            contents,
+            native_items: vec![OpenRouterMessage {
                 role: choice.message.role,
-                content: choice.message.content.clone(),
-                tool_calls: choice.message.tool_calls.clone(),
+                content: choice.message.content,
+                tool_calls: choice.message.tool_calls,
                 tool_call_id: None,
-            });
-
-            has_tool_calls = choice
-                .message
-                .tool_calls
-                .as_ref()
-                .is_some_and(|tc| !tc.is_empty());
-        }
-
-        // Process the final response (which has no tool calls) to extract text content
-        if let Some(text) = &choice.message.content
-            && !text.is_empty()
-        {
-            if let Some(cb) = request.on_text.as_ref() {
-                cb(text);
-            }
-            contents.push(ContentType::Text(text.clone()));
-        }
-
-        Ok(CompletionApiResponse {
-            content: contents,
-            usage: response.usage.into(),
+            }],
+            usage,
         })
+    }
+}
+
+impl<T: HttpClient> ApiClient for OpenRouterClient<T> {
+    /// Send a request to the OpenRouter API, processing tool calls as necessary. Returns a final
+    /// response after all tool calls are processed and sent back to the API.
+    async fn send_message(
+        &self,
+        request: &ChatRequest<'_>,
+    ) -> Result<CompletionApiResponse, LLMError> {
+        run_agentic_loop(self, request).await
     }
 }
 
@@ -498,7 +391,7 @@ mod tests {
     use super::*;
     use crate::clients::openrouter::OpenRouterClient;
     use crate::http_client::{MockHttpClient, ReqwestClient, SequentialMockHttpClient};
-    use crate::llm::base::{ApiClient, ChatRequest};
+    use crate::llm::base::{ApiClient, ChatRequest, ContentType, ToolCallResponse};
     use crate::llm::tools::test_utils::MockTool;
 
     #[tokio::test]
@@ -583,6 +476,34 @@ mod tests {
         } else {
             panic!("Expected Text content type");
         }
+    }
+
+    #[test]
+    fn test_tool_responses_expand_to_tool_messages() {
+        let history = ChatHistoryItem {
+            role: MessageRole::User,
+            content: vec![
+                ChatHistoryContent::ToolCallResponse(ToolCallResponse {
+                    id: "call-1".into(),
+                    tool_name: "mock_tool".into(),
+                    result: serde_json::json!({"answer": 1}),
+                }),
+                ChatHistoryContent::ToolCallResponse(ToolCallResponse {
+                    id: "call-2".into(),
+                    tool_name: "mock_tool".into(),
+                    result: serde_json::json!({"answer": 2}),
+                }),
+            ],
+        };
+
+        let messages: Vec<OpenRouterMessage> = history.into();
+        assert_eq!(messages.len(), 2);
+
+        let messages = serde_json::to_value(messages).unwrap();
+        assert_eq!(messages[0]["role"].as_str(), Some("tool"));
+        assert_eq!(messages[0]["tool_call_id"].as_str(), Some("call-1"));
+        assert_eq!(messages[1]["role"].as_str(), Some("tool"));
+        assert_eq!(messages[1]["tool_call_id"].as_str(), Some("call-2"));
     }
 
     #[tokio::test]
@@ -706,7 +627,10 @@ mod tests {
         };
         let res = mock_client.send_message(&request).await;
         test_ok!(res);
+        let res = res.unwrap();
 
+        test_eq!(res.usage.input_tokens, 30);
+        test_eq!(res.usage.output_tokens, 13);
         test_eq!(*tool_call_count.lock().unwrap(), 1_usize);
         let texts = text_segments.lock().unwrap();
         test_eq!(texts.len(), 1);

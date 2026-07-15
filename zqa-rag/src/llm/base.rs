@@ -3,12 +3,16 @@
 
 use std::sync::Arc;
 
-use serde::{Deserialize, Serialize};
+use http::HeaderMap;
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 use super::errors::LLMError;
 use crate::{
-    llm::tools::{CallbackFn, Tool},
+    constants::DEFAULT_MAX_RETRIES,
+    http_client::HttpClient,
+    llm::tools::{CallbackFn, SerializedTool, Tool, get_owned_tools, process_tool_calls},
     pricing::ModelUsage,
+    requests::request_with_backoff,
 };
 
 /// Roles for messages
@@ -189,4 +193,109 @@ pub trait ApiClient {
         &self,
         request: &ChatRequest<'_>,
     ) -> Result<CompletionApiResponse, LLMError>;
+}
+
+/// An abstraction over one model turn.
+pub(crate) struct ProviderTurn<H> {
+    /// The model's output in the provider-native format.
+    pub(crate) native_items: Vec<H>,
+    /// Provider-agnostic view of the same output, for tool dispatch and final-text extraction.
+    pub(crate) contents: Vec<ChatHistoryContent>,
+    /// Token usage
+    pub(crate) usage: ModelUsage,
+}
+
+pub(crate) trait AgenticClient
+where
+    ChatHistoryItem: Into<Vec<Self::HistoryItem>>,
+{
+    type HistoryItem;
+    const SCHEMA_KEY: &'static str;
+
+    /// Build the initial conversation history in the provider-native format given a
+    /// [`ChatRequest`].
+    fn build_initial_history(&self, request: &ChatRequest<'_>) -> Vec<Self::HistoryItem>;
+
+    /// Perform one provider request-response round trip and convert the response into native and
+    /// provider-agnostic history items.
+    async fn send_once(
+        &self,
+        history: &[Self::HistoryItem],
+        tools: Option<&[SerializedTool<'_>]>,
+        reasoning: Option<&ReasoningConfig>,
+        max_tokens: Option<u32>,
+    ) -> Result<ProviderTurn<Self::HistoryItem>, LLMError>;
+}
+
+pub(crate) async fn run_agentic_loop<C: AgenticClient>(
+    client: &C,
+    request: &ChatRequest<'_>,
+) -> Result<CompletionApiResponse, LLMError>
+where
+    ChatHistoryItem: Into<Vec<<C as AgenticClient>::HistoryItem>>,
+{
+    let mut history = client.build_initial_history(request);
+    let tools = get_owned_tools(request.tools, C::SCHEMA_KEY);
+    let mut usage = ModelUsage::default();
+    let mut contents = Vec::<ContentType>::new();
+
+    // TODO: Add max tool iterations support
+    loop {
+        let turn = client
+            .send_once(
+                &history,
+                tools.as_deref(),
+                request.reasoning.as_ref(),
+                request.max_tokens,
+            )
+            .await?;
+        usage += turn.usage;
+        history.extend(turn.native_items);
+
+        let new_history_items = process_tool_calls(
+            &mut contents,
+            &turn.contents,
+            tools.as_deref().unwrap_or_default(),
+            request.on_tool_call.as_ref(),
+            request.on_text.as_ref(),
+        )
+        .await?;
+
+        if new_history_items.is_empty() {
+            break;
+        }
+
+        history.extend(new_history_items.into_iter().flat_map(Into::into));
+    }
+
+    Ok(CompletionApiResponse {
+        content: contents,
+        usage,
+    })
+}
+
+pub(crate) async fn send_generation_request<R, S>(
+    client: &impl HttpClient,
+    request: R,
+    headers: &HeaderMap,
+    api_url: &str,
+) -> Result<S, LLMError>
+where
+    R: Serialize + Send + Sync,
+    S: DeserializeOwned,
+{
+    let res = request_with_backoff(client, api_url, headers, &request, DEFAULT_MAX_RETRIES).await?;
+
+    let body = res.text().await?;
+    let json: serde_json::Value = match serde_json::from_str(&body) {
+        Ok(json) => json,
+        Err(_) => return Err(LLMError::DeserializationError(body)),
+    };
+
+    let response: S = match serde_json::from_value(json) {
+        Ok(response) => response,
+        Err(_) => return Err(LLMError::DeserializationError(body)),
+    };
+
+    Ok(response)
 }

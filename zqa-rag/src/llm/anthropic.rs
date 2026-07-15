@@ -10,18 +10,14 @@ use super::errors::LLMError;
 use crate::clients::anthropic::AnthropicClient;
 use crate::constants::{
     DEFAULT_ANTHROPIC_MAX_TOKENS, DEFAULT_ANTHROPIC_MODEL, DEFAULT_ANTHROPIC_REASONING_BUDGET,
-    DEFAULT_MAX_RETRIES,
 };
 use crate::http_client::HttpClient;
 use crate::llm::base::{
-    ChatHistoryContent, ContentType, MessageRole, ReasoningConfig, ToolCallRequest,
-    ToolCallResponse,
+    AgenticClient, ChatHistoryContent, MessageRole, ProviderTurn, ReasoningConfig, ToolCallRequest,
+    ToolCallResponse, run_agentic_loop, send_generation_request,
 };
-use crate::llm::tools::{
-    ANTHROPIC_SCHEMA_KEY, SerializedTool, get_owned_tools, process_tool_calls,
-};
+use crate::llm::tools::{ANTHROPIC_SCHEMA_KEY, SerializedTool};
 use crate::pricing::ModelUsage;
-use crate::requests::request_with_backoff;
 const DEFAULT_CLAUDE_MODEL: &str = DEFAULT_ANTHROPIC_MODEL;
 
 /// An Anthropic-specific chat history object. This is pretty much the same as `ChatHistoryItem`,
@@ -32,6 +28,12 @@ pub(crate) struct AnthropicChatHistoryItem {
     pub role: MessageRole,
     /// The contents of this item.
     pub content: Vec<AnthropicResponseContent>,
+}
+
+impl From<ChatHistoryItem> for Vec<AnthropicChatHistoryItem> {
+    fn from(value: ChatHistoryItem) -> Self {
+        vec![value.into()]
+    }
 }
 
 impl From<ChatHistoryItem> for AnthropicChatHistoryItem {
@@ -75,8 +77,8 @@ pub(crate) struct AnthropicThinkingConfig {
     r#type: &'static str,
 }
 
-impl From<ReasoningConfig> for AnthropicThinkingConfig {
-    fn from(value: ReasoningConfig) -> Self {
+impl From<&ReasoningConfig> for AnthropicThinkingConfig {
+    fn from(value: &ReasoningConfig) -> Self {
         Self {
             budget_tokens: value
                 .max_tokens
@@ -95,37 +97,12 @@ pub(crate) struct AnthropicRequest<'a> {
     pub(crate) max_tokens: u32,
     /// The conversation history and current message
     pub(crate) messages: &'a [AnthropicChatHistoryItem],
+    /// Thinking/reasoning configuration
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) thinking: Option<AnthropicThinkingConfig>,
     /// The tools passed in
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) tools: Option<&'a [SerializedTool<'a>]>,
-}
-
-/// Helper to build messages and tools from a ChatRequest.
-/// Returns owned data that can then be borrowed by AnthropicRequest.
-pub(crate) fn build_anthropic_messages_and_tools<'a>(
-    req: &'a ChatRequest<'a>,
-) -> (
-    Vec<AnthropicChatHistoryItem>,
-    Option<Vec<SerializedTool<'a>>>,
-) {
-    let mut messages: Vec<AnthropicChatHistoryItem> = req
-        .chat_history
-        .clone()
-        .into_iter()
-        .map(Into::into)
-        .collect();
-
-    messages.push(AnthropicChatHistoryItem {
-        role: MessageRole::User,
-        content: vec![req.message.clone().into()],
-    });
-
-    let owned_tools: Option<Vec<SerializedTool<'a>>> =
-        get_owned_tools(req.tools, ANTHROPIC_SCHEMA_KEY);
-
-    (messages, owned_tools)
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -283,47 +260,6 @@ pub(crate) struct AnthropicResponse {
     pub(crate) content: Vec<AnthropicResponseContent>,
 }
 
-/// Send an API request to Anthropic.
-///
-/// This function takes references to a client, a set of headers, and an Anthropic-specific
-/// request body, and sends a request with exponential backoff. This acts as a helper function so
-/// that the calling code can be easier to follow.
-///
-/// # Arguments:
-///
-/// * `client`: An `HttpClient` implementation.
-/// * `headers`: A set of headers to pass.
-/// * `req`: The request body to send
-///
-/// # Returns
-///
-/// The Anthropic-specific response.
-async fn send_anthropic_request(
-    client: &impl HttpClient,
-    headers: &HeaderMap,
-    req: &AnthropicRequest<'_>,
-) -> Result<AnthropicResponse, LLMError> {
-    const MAX_RETRIES: usize = DEFAULT_MAX_RETRIES;
-    let res = request_with_backoff(
-        client,
-        "https://api.anthropic.com/v1/messages",
-        headers,
-        req,
-        MAX_RETRIES,
-    )
-    .await?;
-
-    let body = res.text().await?;
-    let json: serde_json::Value = serde_json::from_str(&body)?;
-    let response: AnthropicResponse = serde_json::from_value(json.clone()).map_err(|err| {
-        log::error!("Failed to deserialize Anthropic response: we got the response {json}");
-
-        LLMError::DeserializationError(err.to_string())
-    })?;
-
-    Ok(response)
-}
-
 /// Convert Anthropic response content into provider-agnostic `ChatHistoryContent` items.
 ///
 /// Tool results should never appear in Anthropic API responses; if encountered, they are ignored
@@ -354,15 +290,35 @@ pub(crate) fn map_response_to_chat_contents(
     out
 }
 
-impl<T: HttpClient> ApiClient for AnthropicClient<T> {
-    /// Send a request to the Anthropic API, processing tool calls as necessary. Returns a final
-    /// response after all tool calls are processed and sent back to the API.
-    async fn send_message(
+impl<T: HttpClient> AgenticClient for AnthropicClient<T> {
+    type HistoryItem = AnthropicChatHistoryItem;
+    const SCHEMA_KEY: &'static str = ANTHROPIC_SCHEMA_KEY;
+
+    fn build_initial_history(&self, request: &ChatRequest<'_>) -> Vec<Self::HistoryItem> {
+        let mut messages: Vec<AnthropicChatHistoryItem> = request
+            .chat_history
+            .clone()
+            .into_iter()
+            .map(Into::into)
+            .collect();
+
+        messages.push(AnthropicChatHistoryItem {
+            role: MessageRole::User,
+            content: vec![request.message.clone().into()],
+        });
+
+        messages
+    }
+
+    async fn send_once(
         &self,
-        request: &ChatRequest<'_>,
-    ) -> Result<CompletionApiResponse, LLMError> {
+        history: &[Self::HistoryItem],
+        tools: Option<&[SerializedTool<'_>]>,
+        reasoning: Option<&ReasoningConfig>,
+        max_tokens: Option<u32>,
+    ) -> Result<super::base::ProviderTurn<Self::HistoryItem>, LLMError> {
         // Use config if available, otherwise fall back to env vars
-        let (api_key, model, max_tokens) = if let Some(ref config) = self.config {
+        let (api_key, model, config_max_tokens) = if let Some(ref config) = self.config {
             (
                 config.api_key.clone(),
                 config.model.clone(),
@@ -376,102 +332,46 @@ impl<T: HttpClient> ApiClient for AnthropicClient<T> {
             )
         };
 
+        let request = AnthropicRequest {
+            model: &model,
+            max_tokens: max_tokens.unwrap_or(config_max_tokens),
+            messages: history,
+            thinking: reasoning.map(Into::into),
+            tools,
+        };
+
         let mut headers = HeaderMap::new();
         headers.insert("x-api-key", api_key.parse()?);
         headers.insert("anthropic-version", "2023-06-01".parse()?);
         headers.insert("content-type", "application/json".parse()?);
 
-        // Build the initial messages and tools (owned)
-        let (mut chat_history, tools) = build_anthropic_messages_and_tools(request);
-        let max_tokens_to_use = request.max_tokens.unwrap_or(max_tokens);
-        let reasoning_config = request.reasoning.clone().map(Into::into);
+        let response: AnthropicResponse = send_generation_request(
+            &self.client,
+            &request,
+            &headers,
+            "https://api.anthropic.com/v1/messages",
+        )
+        .await?;
 
-        // Create the initial request
-        let req_body = AnthropicRequest {
-            model: &model,
-            max_tokens: max_tokens_to_use,
-            messages: &chat_history,
-            thinking: reasoning_config,
-            tools: tools.as_deref(),
-        };
-
-        let mut response = send_anthropic_request(&self.client, &headers, &req_body).await?;
-
-        let mut has_tool_calls: bool = response
-            .content
-            .iter()
-            .any(|c| matches!(c, AnthropicResponseContent::ToolCall { .. }));
-
-        // Append the contents
-        chat_history.push(AnthropicChatHistoryItem {
-            role: MessageRole::Assistant,
-            content: response.content.clone(),
-        });
-
-        let mut contents: Vec<ContentType> = Vec::new();
-
-        while has_tool_calls {
-            let converted_contents = map_response_to_chat_contents(&response.content);
-            process_tool_calls(
-                &mut chat_history,
-                &mut contents,
-                &converted_contents,
-                tools.as_ref().ok_or_else(|| {
-                    LLMError::ToolCallError(
-                        "Model returned tool calls, but no tools were provided.".to_string(),
-                    )
-                })?,
-                request.on_tool_call.as_ref(),
-                request.on_text.as_ref(),
-            )
-            .await?;
-
-            // Create a new request borrowing the updated chat history
-            let updated_req_body = AnthropicRequest {
-                model: &model,
-                max_tokens: max_tokens_to_use,
-                messages: &chat_history,
-                thinking: None,
-                tools: tools.as_deref(),
-            };
-
-            response = send_anthropic_request(&self.client, &headers, &updated_req_body).await?;
-
-            // Append the new response to chat history
-            chat_history.push(AnthropicChatHistoryItem {
+        Ok(ProviderTurn {
+            contents: map_response_to_chat_contents(&response.content),
+            native_items: vec![AnthropicChatHistoryItem {
                 role: MessageRole::Assistant,
-                content: response.content.clone(),
-            });
-
-            has_tool_calls = response
-                .content
-                .iter()
-                .any(|c| matches!(c, AnthropicResponseContent::ToolCall { .. }));
-        }
-
-        // Process the final response (which has no tool calls) to extract text content
-        for content in &response.content {
-            match content {
-                AnthropicResponseContent::PlainText(s) => {
-                    if let Some(cb) = request.on_text.as_ref() {
-                        cb(s);
-                    }
-                    contents.push(ContentType::Text(s.clone()));
-                }
-                AnthropicResponseContent::Text(text_content) => {
-                    if let Some(cb) = request.on_text.as_ref() {
-                        cb(&text_content.text);
-                    }
-                    contents.push(ContentType::Text(text_content.text.clone()));
-                }
-                _ => {}
-            }
-        }
-
-        Ok(CompletionApiResponse {
-            content: contents,
+                content: response.content,
+            }],
             usage: response.usage.into(),
         })
+    }
+}
+
+impl<T: HttpClient> ApiClient for AnthropicClient<T> {
+    /// Send a request to the Anthropic API, processing tool calls as necessary. Returns a final
+    /// response after all tool calls are processed and sent back to the API.
+    async fn send_message(
+        &self,
+        request: &ChatRequest<'_>,
+    ) -> Result<CompletionApiResponse, LLMError> {
+        run_agentic_loop(self, request).await
     }
 }
 
