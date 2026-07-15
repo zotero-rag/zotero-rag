@@ -26,7 +26,7 @@ use tokio::sync::OnceCell;
 const LITELLM_PRICING_URL: &str =
     "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json";
 
-static PRICING_CACHE: OnceCell<Option<serde_json::Value>> = OnceCell::const_new();
+static PRICING_CACHE: OnceCell<serde_json::Value> = OnceCell::const_new();
 
 /// Usage information for a model. This does not include pricing estimates; for that information,
 /// use [`ModelPricing::estimate_cost`].
@@ -204,7 +204,6 @@ impl PricingCacheOptions {
 ///
 /// * `None` when pricing is unknown (unknown future model, etc.).
 /// * `Some` with both prices set to `0.0` for local/free providers (Ollama).
-#[must_use]
 pub async fn get_model_pricing(
     provider: &str,
     model: &str,
@@ -252,12 +251,14 @@ pub async fn get_model_pricing(
     }
 
     let json = PRICING_CACHE
-        .get_or_init(|| async {
-            let content = tokio::fs::read_to_string(&path).await.ok()?;
-            serde_json::from_str(&content).ok()?
+        .get_or_try_init(|| async {
+            let content = tokio::fs::read_to_string(&path)
+                .await
+                .map_err(|e| e.to_string())?;
+            serde_json::from_str::<serde_json::Value>(&content).map_err(|e| e.to_string())
         })
         .await
-        .as_ref()?;
+        .ok()?;
 
     // LiteLLM keys are `model` for most models; fall back to `provider/name`, which is the case
     // for OpenRouter.
