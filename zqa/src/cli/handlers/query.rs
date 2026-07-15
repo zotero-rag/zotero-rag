@@ -203,7 +203,8 @@ where
                     response.usage,
                     config_clone.model_provider,
                     &title_model_name,
-                );
+                )
+                .await;
                 let _ = title_cost_tx.send(usage);
             }
         });
@@ -306,14 +307,15 @@ where
                 total_usage,
                 ctx.config.model_provider,
                 &ctx.config.get_generation_model_name().unwrap_or_default(),
-            );
+            )
+            .await;
             ctx.state.usage += usage;
 
             // Add embedding cost to session cost
             let emb_chars = retrieval_embedding_tokens.load(atomic::Ordering::Relaxed);
             if emb_chars > 0 {
                 let emb_pricing =
-                    get_model_pricing(&embedding_provider_name, &embedding_model_name, None);
+                    get_model_pricing(&embedding_provider_name, &embedding_model_name, None).await;
 
                 if let Some(ref p) = emb_pricing {
                     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
@@ -331,12 +333,7 @@ where
             if rerank_chars_val > 0
                 && let Some((rerank_provider, rerank_model)) = reranker_provider_and_model
             {
-                let rerank_pricing = tokio::task::spawn_blocking(move || {
-                    get_model_pricing(&rerank_provider, &rerank_model, None)
-                })
-                .await
-                .ok()
-                .flatten();
+                let rerank_pricing = get_model_pricing(&rerank_provider, &rerank_model, None).await;
 
                 if let Some(ref p) = rerank_pricing {
                     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]

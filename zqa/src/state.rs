@@ -127,21 +127,25 @@ impl AddAssign<UsageMetadata> for UsageMetadata {
 }
 
 impl UsageMetadata {
-    pub(crate) fn from_rag_usage(value: ModelUsage, provider: ModelProvider, model: &str) -> Self {
-        let model_pricing = get_state_dir().ok().and_then(|dir| {
-            if !dir.exists() {
-                fs::create_dir_all(&dir).ok()?;
+    pub(crate) async fn from_rag_usage(
+        value: ModelUsage,
+        provider: ModelProvider,
+        model: &str,
+    ) -> Self {
+        let model_pricing = match get_state_dir() {
+            Ok(dir) if dir.exists() || fs::create_dir_all(&dir).is_ok() => {
+                get_model_pricing(
+                    provider.as_str(),
+                    model,
+                    Some(PricingCacheOptions {
+                        cache_path: dir.join("pricing_cache.json"),
+                        ttl: Some(60 * 60 * 24), // 1 day
+                    }),
+                )
+                .await
             }
-
-            get_model_pricing(
-                provider.as_str(),
-                model,
-                Some(PricingCacheOptions {
-                    cache_path: dir.join("pricing_cache.json"),
-                    ttl: Some(60 * 60 * 24), // 1 day
-                }),
-            )
-        });
+            _ => None,
+        };
 
         Self {
             input_tokens: value.input_tokens,

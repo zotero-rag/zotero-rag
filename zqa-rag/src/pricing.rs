@@ -202,7 +202,7 @@ impl PricingCacheOptions {
 /// * `None` when pricing is unknown (unknown future model, etc.).
 /// * `Some` with both prices set to `0.0` for local/free providers (Ollama).
 #[must_use]
-pub fn get_model_pricing(
+pub async fn get_model_pricing(
     provider: &str,
     model: &str,
     cache_opts: Option<PricingCacheOptions>,
@@ -223,9 +223,11 @@ pub fn get_model_pricing(
     };
 
     if should_fetch {
-        match reqwest::blocking::get(LITELLM_PRICING_URL)
-            .and_then(reqwest::blocking::Response::bytes)
-        {
+        let fetched = match reqwest::get(LITELLM_PRICING_URL).await {
+            Ok(resp) => resp.bytes().await,
+            Err(e) => Err(e),
+        };
+        match fetched {
             Ok(bytes) => {
                 if let Err(e) = std::fs::write(&path, &bytes) {
                     log::warn!("Failed to write pricing cache file: {e}");
@@ -459,20 +461,24 @@ mod tests {
         (f, opts)
     }
 
-    #[test]
-    fn test_get_pricing_ollama_returns_zero() {
+    #[tokio::test]
+    async fn test_get_pricing_ollama_returns_zero() {
         let (_, opts) = make_cache(SAMPLE_JSON);
-        let p = get_model_pricing("ollama", "llama3.2", Some(opts)).unwrap();
+        let p = get_model_pricing("ollama", "llama3.2", Some(opts))
+            .await
+            .unwrap();
 
         assert!(p.input_cost_per_token < f64::EPSILON);
         assert!(p.output_cost_per_token < f64::EPSILON);
     }
 
-    #[test]
-    fn test_get_pricing_known_model() {
+    #[tokio::test]
+    async fn test_get_pricing_known_model() {
         // NOTE: This cannot be changed to `_`! That would clean up the tempfile.
         let (_f, opts) = make_cache(SAMPLE_JSON);
-        let p = get_model_pricing("openai", "gpt-5.4", Some(opts)).unwrap();
+        let p = get_model_pricing("openai", "gpt-5.4", Some(opts))
+            .await
+            .unwrap();
         let expected_input_cost = 0.000_002_5;
         let expected_output_cost = 0.00001;
 
@@ -486,10 +492,12 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_get_pricing_fallback_provider_slash_model_key() {
+    #[tokio::test]
+    async fn test_get_pricing_fallback_provider_slash_model_key() {
         let (_f, opts) = make_cache(SAMPLE_JSON);
-        let p = get_model_pricing("openrouter", "mistral-7b", Some(opts)).unwrap();
+        let p = get_model_pricing("openrouter", "mistral-7b", Some(opts))
+            .await
+            .unwrap();
         let expected_input_cost = 0.000_000_1;
         let expected_output_cost = 0.000_000_2;
 
@@ -503,18 +511,20 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_get_pricing_unknown_model_returns_none() {
+    #[tokio::test]
+    async fn test_get_pricing_unknown_model_returns_none() {
         let (_f, opts) = make_cache(SAMPLE_JSON);
-        let result = get_model_pricing("openai", "foobar", Some(opts));
+        let result = get_model_pricing("openai", "foobar", Some(opts)).await;
 
         assert!(result.is_none());
     }
 
-    #[test]
-    fn test_get_pricing_estimate_round_trip() {
+    #[tokio::test]
+    async fn test_get_pricing_estimate_round_trip() {
         let (_f, opts) = make_cache(SAMPLE_JSON);
-        let p = get_model_pricing("openai", "gpt-5.4", Some(opts)).unwrap();
+        let p = get_model_pricing("openai", "gpt-5.4", Some(opts))
+            .await
+            .unwrap();
         let usage = ModelUsage {
             input_tokens: 100,
             input_cache_written: 0,
