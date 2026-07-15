@@ -282,8 +282,10 @@ struct GeminiTokenDetails {
 #[serde(rename_all = "camelCase")]
 struct GeminiUsageMetadata {
     prompt_token_count: u32,
-    cached_content_token_count: u32,
-    tool_use_prompt_token_count: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    cached_content_token_count: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    tool_use_prompt_token_count: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     thoughts_token_count: Option<u32>,
     candidates_token_count: u32,
@@ -296,7 +298,7 @@ impl From<GeminiUsageMetadata> for ModelUsage {
     fn from(val: GeminiUsageMetadata) -> Self {
         ModelUsage {
             input_tokens: val.prompt_token_count,
-            input_cache_read: val.cached_content_token_count,
+            input_cache_read: val.cached_content_token_count.unwrap_or_default(),
             // The Gemini API doesn't seem to distinguish between cache reads/writes, and only gives
             // us one number. The `prompt_tokens_details` number is a split by modality.
             // See: https://ai.google.dev/api/generate-content#UsageMetadata
@@ -495,8 +497,8 @@ mod tests {
                 total_token_count: 18,
                 thoughts_token_count: Some(0),
                 prompt_tokens_details: None,
-                cached_content_token_count: 0,
-                tool_use_prompt_token_count: 0,
+                cached_content_token_count: None,
+                tool_use_prompt_token_count: None,
             },
         };
 
@@ -661,8 +663,8 @@ mod tests {
                 total_token_count: 15,
                 thoughts_token_count: None,
                 prompt_tokens_details: None,
-                cached_content_token_count: 0,
-                tool_use_prompt_token_count: 0,
+                cached_content_token_count: Some(0),
+                tool_use_prompt_token_count: Some(0),
             },
         };
         let text_response = GeminiResponseBody {
@@ -682,8 +684,8 @@ mod tests {
                 total_token_count: 28,
                 thoughts_token_count: None,
                 prompt_tokens_details: None,
-                cached_content_token_count: 0,
-                tool_use_prompt_token_count: 0,
+                cached_content_token_count: Some(0),
+                tool_use_prompt_token_count: None,
             },
         };
 

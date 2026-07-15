@@ -172,12 +172,13 @@ where
     // Spawn a background title generation task from the query alone, in parallel with summarization.
     // Only generate a title if we don't already have one (i.e., first query in the conversation).
     let title_slot = Arc::clone(&ctx.state.title);
-    let title_cost_tx = cost_tx.clone();
     let config_clone = ctx.config.clone();
     if title_slot.lock()?.is_none()
         && let Some(small_config) = ctx.config.get_small_model_config()
         && let Ok(small_client) = get_client_with_config(&small_config)
     {
+        let title_cost_tx = cost_tx.clone();
+        let title_model_name = small_config.model_name().to_owned();
         let prompt = get_title_prompt(&query);
         tokio::spawn(async move {
             let request = ChatRequest {
@@ -198,15 +199,16 @@ where
                     *slot = Some(title);
                 }
 
-                let usage = UsageMetadata::from_rag_usage(response.usage, &config_clone);
+                let usage = UsageMetadata::from_rag_usage(
+                    response.usage,
+                    config_clone.model_provider,
+                    &title_model_name,
+                );
                 let _ = title_cost_tx.send(usage);
             }
         });
     }
-
-    while let Some(title_cost) = cost_rx.recv().await {
-        ctx.state.usage += title_cost;
-    }
+    drop(cost_tx);
 
     let embedding_provider_name = embedding_config.provider_name().to_string();
     let embedding_model_name = embedding_config.model_name().to_string();
@@ -232,7 +234,7 @@ where
     let summarization_tool = SummarizationTool::new(
         llm_client.clone(),
         store_arc,
-        &Arc::clone(&summarization_usage),
+        Arc::clone(&summarization_usage),
     );
     let mut tools: Vec<Box<dyn Tool>> = vec![
         Box::new(
@@ -272,6 +274,7 @@ where
         tokio::select! {
             Some(segment) = text_rx.recv() => writeln!(ctx.out, "{segment}")?,
             Some(line) = status_rx.recv() => writeln!(ctx.err, "{line}")?,
+            Some(title_cost) = cost_rx.recv() => ctx.state.usage += title_cost,
             result = &mut send_message => break result,
         }
     };
@@ -281,6 +284,9 @@ where
     }
     while let Ok(line) = status_rx.try_recv() {
         writeln!(ctx.err, "{line}")?;
+    }
+    while let Ok(usage) = cost_rx.try_recv() {
+        ctx.state.usage += usage;
     }
 
     let final_draft_duration = final_draft_start.elapsed();
@@ -296,7 +302,11 @@ where
 
             // Accumulate token usage counts, then compute pricing using `UsageMetadata::from_rag_usage`
             let total_usage = response.usage + summarization_usage.lock().map(|u| *u)?;
-            let usage = UsageMetadata::from_rag_usage(total_usage, &ctx.config);
+            let usage = UsageMetadata::from_rag_usage(
+                total_usage,
+                ctx.config.model_provider,
+                &ctx.config.get_generation_model_name().unwrap_or_default(),
+            );
             ctx.state.usage += usage;
 
             // Add embedding cost to session cost
