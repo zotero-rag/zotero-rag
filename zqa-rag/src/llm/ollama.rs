@@ -8,62 +8,50 @@ use http::HeaderMap;
 use super::base::{ApiClient, ChatRequest, CompletionApiResponse};
 use super::errors::LLMError;
 use crate::clients::ollama::OllamaClient;
-use crate::constants::{
-    DEFAULT_MAX_RETRIES, DEFAULT_OLLAMA_BASE_URL, DEFAULT_OLLAMA_MAX_TOKENS, DEFAULT_OLLAMA_MODEL,
-};
+use crate::constants::{DEFAULT_OLLAMA_BASE_URL, DEFAULT_OLLAMA_MAX_TOKENS, DEFAULT_OLLAMA_MODEL};
 use crate::http_client::HttpClient;
 use crate::llm::anthropic::{
-    AnthropicChatHistoryItem, AnthropicRequest, AnthropicResponse, AnthropicResponseContent,
-    build_anthropic_messages_and_tools, map_response_to_chat_contents,
+    AnthropicChatHistoryItem, AnthropicRequest, AnthropicResponse, map_response_to_chat_contents,
 };
-use crate::llm::base::{ContentType, MessageRole};
-use crate::llm::tools::process_tool_calls;
-use crate::requests::request_with_backoff;
+use crate::llm::base::{
+    AgenticClient, MessageRole, ProviderTurn, ReasoningConfig, run_agentic_loop,
+    send_generation_request,
+};
+use crate::llm::tools::{ANTHROPIC_SCHEMA_KEY, SerializedTool};
 
 /// Ollama supports the Anthropic Messages API, so we can reuse structs.
 type OllamaRequest<'a> = AnthropicRequest<'a>;
 type OllamaResponse = AnthropicResponse;
 
-/// Send an API request to `ollama`.
-///
-/// # Arguments:
-///
-/// * `client`: An `HttpClient` implementation.
-/// * `headers`: A set of headers to pass.
-/// * `req`: The request body to send
-///
-/// # Returns
-///
-/// The `ollama`-specific response.
-async fn send_ollama_request(
-    client: &impl HttpClient,
-    headers: &HeaderMap,
-    req: &OllamaRequest<'_>,
-    url: &str,
-) -> Result<OllamaResponse, LLMError> {
-    const MAX_RETRIES: usize = DEFAULT_MAX_RETRIES;
-    let res = request_with_backoff(client, url, headers, req, MAX_RETRIES).await?;
+impl<T: HttpClient> AgenticClient for OllamaClient<T> {
+    type HistoryItem = AnthropicChatHistoryItem;
+    const SCHEMA_KEY: &'static str = ANTHROPIC_SCHEMA_KEY;
 
-    let body = res.text().await?;
-    let json: serde_json::Value = serde_json::from_str(&body)?;
-    let response: OllamaResponse = serde_json::from_value(json.clone()).map_err(|err| {
-        log::error!("Failed to deserialize ollama response: we got the response {json}");
+    fn build_initial_history(&self, request: &ChatRequest<'_>) -> Vec<Self::HistoryItem> {
+        let mut messages: Vec<AnthropicChatHistoryItem> = request
+            .chat_history
+            .clone()
+            .into_iter()
+            .map(Into::into)
+            .collect();
 
-        LLMError::DeserializationError(err.to_string())
-    })?;
+        messages.push(AnthropicChatHistoryItem {
+            role: MessageRole::User,
+            content: vec![request.message.clone().into()],
+        });
 
-    Ok(response)
-}
+        messages
+    }
 
-impl<T: HttpClient> ApiClient for OllamaClient<T> {
-    /// Send a request to the `ollama` API, processing tool calls as necessary. Returns a final
-    /// response after all tool calls are processed and sent back to the API.
-    async fn send_message(
+    async fn send_once(
         &self,
-        request: &ChatRequest<'_>,
-    ) -> Result<CompletionApiResponse, LLMError> {
+        history: &[Self::HistoryItem],
+        tools: Option<&[SerializedTool<'_>]>,
+        reasoning: Option<&ReasoningConfig>,
+        max_tokens: Option<u32>,
+    ) -> Result<ProviderTurn<Self::HistoryItem>, LLMError> {
         // Use config if available, otherwise fall back to env vars
-        let (model, max_tokens, base_url) = if let Some(ref config) = self.config {
+        let (model, config_max_tokens, base_url) = if let Some(ref config) = self.config {
             (
                 config.model.clone(),
                 config.max_tokens,
@@ -77,101 +65,42 @@ impl<T: HttpClient> ApiClient for OllamaClient<T> {
             )
         };
 
+        let request_body = OllamaRequest {
+            model: &model,
+            max_tokens: max_tokens.unwrap_or(config_max_tokens),
+            messages: history,
+            thinking: reasoning.map(Into::into),
+            tools,
+        };
+
         let mut headers = HeaderMap::new();
         headers.insert("Content-Type", "application/json".parse()?);
         headers.insert("x-api-key", "ollama".parse()?);
         headers.insert("anthropic-version", "2023-06-01".parse()?);
 
-        // Build the initial messages and tools (owned)
-        let (mut chat_history, tools) = build_anthropic_messages_and_tools(request);
-        let max_tokens_to_use = request.max_tokens.unwrap_or(max_tokens);
-
-        // Create the initial request
-        let req_body = OllamaRequest {
-            model: &model,
-            max_tokens: max_tokens_to_use,
-            messages: &chat_history,
-            thinking: request.reasoning.clone().map(Into::into),
-            tools: tools.as_deref(),
-        };
-
         let url = format!("{base_url}/v1/messages");
-        let mut response = send_ollama_request(&self.client, &headers, &req_body, &url).await?;
+        let response: OllamaResponse =
+            send_generation_request(&self.client, &request_body, &headers, &url).await?;
 
-        let mut has_tool_calls: bool = response
-            .content
-            .iter()
-            .any(|c| matches!(c, AnthropicResponseContent::ToolCall { .. }));
-
-        // Append the contents
-        chat_history.push(AnthropicChatHistoryItem {
-            role: MessageRole::Assistant,
-            content: response.content.clone(),
-        });
-
-        let mut contents: Vec<ContentType> = Vec::new();
-
-        while has_tool_calls {
-            let converted_contents = map_response_to_chat_contents(&response.content);
-            process_tool_calls(
-                &mut chat_history,
-                &mut contents,
-                &converted_contents,
-                tools.as_ref().ok_or_else(|| {
-                    LLMError::ToolCallError(
-                        "Model returned tool calls, but no tools were provided.".to_string(),
-                    )
-                })?,
-                request.on_tool_call.as_ref(),
-                request.on_text.as_ref(),
-            )
-            .await?;
-
-            // Create a new request borrowing the updated chat history
-            let updated_req_body = OllamaRequest {
-                model: &model,
-                max_tokens: max_tokens_to_use,
-                messages: &chat_history,
-                thinking: None,
-                tools: tools.as_deref(),
-            };
-
-            response = send_ollama_request(&self.client, &headers, &updated_req_body, &url).await?;
-
-            // Append the new response to chat history
-            chat_history.push(AnthropicChatHistoryItem {
+        Ok(ProviderTurn {
+            contents: map_response_to_chat_contents(&response.content),
+            native_items: vec![AnthropicChatHistoryItem {
                 role: MessageRole::Assistant,
-                content: response.content.clone(),
-            });
-
-            has_tool_calls = response
-                .content
-                .iter()
-                .any(|c| matches!(c, AnthropicResponseContent::ToolCall { .. }));
-        }
-        // Process the final response (which has no tool calls) to extract text content
-        for content in &response.content {
-            match content {
-                AnthropicResponseContent::PlainText(s) => {
-                    if let Some(cb) = request.on_text.as_ref() {
-                        cb(s);
-                    }
-                    contents.push(ContentType::Text(s.clone()));
-                }
-                AnthropicResponseContent::Text(text_content) => {
-                    if let Some(cb) = request.on_text.as_ref() {
-                        cb(&text_content.text);
-                    }
-                    contents.push(ContentType::Text(text_content.text.clone()));
-                }
-                _ => {}
-            }
-        }
-
-        Ok(CompletionApiResponse {
-            content: contents,
+                content: response.content,
+            }],
             usage: response.usage.into(),
         })
+    }
+}
+
+impl<T: HttpClient> ApiClient for OllamaClient<T> {
+    /// Send a request to the `ollama` API, processing tool calls as necessary. Returns a final
+    /// response after all tool calls are processed and sent back to the API.
+    async fn send_message(
+        &self,
+        request: &ChatRequest<'_>,
+    ) -> Result<CompletionApiResponse, LLMError> {
+        run_agentic_loop(self, request).await
     }
 }
 
@@ -186,7 +115,7 @@ mod tests {
     use crate::clients::ollama::OllamaClient;
     use crate::http_client::{ReqwestClient, SequentialMockHttpClient};
     use crate::llm::anthropic::{
-        AnthropicOutputTokensDetails, AnthropicTextResponseContent,
+        AnthropicOutputTokensDetails, AnthropicResponseContent, AnthropicTextResponseContent,
         AnthropicToolUseResponseContent, AnthropicUsageStats,
     };
     use crate::llm::base::{
@@ -333,7 +262,10 @@ mod tests {
         };
         let res = mock_client.send_message(&request).await;
         test_ok!(res);
+        let res = res.unwrap();
 
+        test_eq!(res.usage.input_tokens, 30);
+        test_eq!(res.usage.output_tokens, 13);
         test_eq!(*tool_call_count.lock().unwrap(), 1_usize);
         let texts = text_segments.lock().unwrap();
         test_eq!(texts.len(), 1);

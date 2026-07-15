@@ -180,14 +180,12 @@ pub type CallbackFn<T> = dyn Fn(&T) + Send + Sync + 'static;
 /// Process tool calls in a single model response (provider‑agnostic).
 ///
 /// This function consumes a slice of provider‑agnostic `ChatHistoryContent` that represents the
-/// model's latest message (text and/or tool call requests). It executes tool calls, appends the
-/// corresponding tool results to `chat_history` as user messages, and pushes user‑visible entries
-/// to `new_contents` (both text and tool call summaries).
+/// model's latest message (text and/or tool call requests). It executes tool calls, returns the
+/// corresponding tool results as user history items, and pushes user-visible entries to
+/// `new_contents` (both text and tool call summaries).
 ///
 /// # Arguments:
 ///
-/// * `chat_history` - Mutable, provider‑specific chat history. Each element implements
-///   `From<ChatHistoryItem>` so the function can insert tool results in the provider's native type.
 /// * `new_contents` - Accumulates user‑facing `ContentType` items produced while processing.
 /// * `contents` - The model's latest message converted to `ChatHistoryContent` values.
 /// * `tools` - The available tools for invocation.
@@ -198,22 +196,18 @@ pub type CallbackFn<T> = dyn Fn(&T) + Send + Sync + 'static;
 ///
 /// # Returns
 ///
-/// `Ok(())` on success, or an `LLMError` if a tool dispatch fails.
+/// A vector of user history items containing tool call results.
 ///
 /// # Errors
 ///
 /// Returns an error if a tool is called that does not exist in the provided list of tools.
-pub(crate) async fn process_tool_calls<CHI>(
-    chat_history: &mut Vec<CHI>,
+pub(crate) async fn process_tool_calls(
     new_contents: &mut Vec<ContentType>,
     contents: &[ChatHistoryContent],
     tools: &[SerializedTool<'_>],
     on_tool_call: Option<&Arc<CallbackFn<ToolUseStats>>>,
     on_text: Option<&Arc<CallbackFn<str>>>,
-) -> Result<(), LLMError>
-where
-    CHI: From<ChatHistoryItem>,
-{
+) -> Result<Vec<ChatHistoryItem>, LLMError> {
     let futures = contents.iter().map(|content| async move {
         match content {
             ChatHistoryContent::Text(s) => {
@@ -267,6 +261,7 @@ where
 
     let results = join_all(futures).await;
 
+    let mut new_history_items = Vec::new();
     for result in results {
         let (content_opt, history_opt) = result?;
         if let Some(content) = content_opt {
@@ -285,11 +280,11 @@ where
             new_contents.push(content);
         }
         if let Some(history) = history_opt {
-            chat_history.push(history.into());
+            new_history_items.push(history);
         }
     }
 
-    Ok(())
+    Ok(new_history_items)
 }
 
 #[cfg(test)]
@@ -360,7 +355,7 @@ mod tests {
     use zqa_macros::test_eq;
 
     use super::*;
-    use crate::llm::base::{ChatHistoryContent, ChatHistoryItem, ContentType, ToolCallRequest};
+    use crate::llm::base::{ChatHistoryContent, ContentType, ToolCallRequest};
 
     #[derive(Debug)]
     pub(crate) struct SlowTool {
@@ -417,20 +412,13 @@ mod tests {
             }),
         ];
 
-        let mut chat_history: Vec<ChatHistoryItem> = vec![];
         let mut new_contents: Vec<ContentType> = vec![];
 
         let start = Instant::now();
-        process_tool_calls(
-            &mut chat_history,
-            &mut new_contents,
-            &contents,
-            &serialized_tools,
-            None,
-            None,
-        )
-        .await
-        .unwrap();
+        let chat_history =
+            process_tool_calls(&mut new_contents, &contents, &serialized_tools, None, None)
+                .await
+                .unwrap();
         let duration = start.elapsed();
 
         // Expect ~500ms for concurrent execution
