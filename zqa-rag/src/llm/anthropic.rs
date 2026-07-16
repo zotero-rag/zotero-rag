@@ -71,6 +71,8 @@ impl From<&ChatHistoryItem> for AnthropicChatHistoryItem {
 
 #[derive(Serialize)]
 pub(crate) struct AnthropicThinkingConfig {
+    /// "summarized" or "omitted"
+    display: &'static str,
     /// Token budget for thinking
     budget_tokens: u32,
     /// Always "enabled"
@@ -80,6 +82,7 @@ pub(crate) struct AnthropicThinkingConfig {
 impl From<&ReasoningConfig> for AnthropicThinkingConfig {
     fn from(value: &ReasoningConfig) -> Self {
         Self {
+            display: "summarized",
             budget_tokens: value
                 .max_tokens
                 .unwrap_or(DEFAULT_ANTHROPIC_REASONING_BUDGET),
