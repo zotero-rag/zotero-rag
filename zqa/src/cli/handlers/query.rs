@@ -267,7 +267,7 @@ where
             tools: Some(&tools),
             on_tool_call: None,
             on_text: Some(on_text),
-            tool_iteration_limit: None,
+            tool_iteration_limit: Some(ctx.config.tool_iteration_limit),
         }
     };
 
