@@ -256,7 +256,8 @@ where
             .tool_iteration_limit
             .unwrap_or(DEFAULT_MAX_TOOL_ITERATIONS);
         while round_trips < iteration_limit {
-            let tools_passed = if round_trips == iteration_limit.saturating_sub(1) {
+            let is_last_turn = round_trips == iteration_limit.saturating_sub(1);
+            let tools_passed = if is_last_turn {
                 // On the last trip, disallow tool calls
                 None
             } else {
@@ -277,7 +278,11 @@ where
             let tool_call_results = process_tool_calls(
                 &mut contents,
                 &turn.contents,
-                tools.as_deref().unwrap_or_default(),
+                if is_last_turn {
+                    &[]
+                } else {
+                    tools.as_deref().unwrap_or_default()
+                },
                 request.on_tool_call.as_ref(),
                 request.on_text.as_ref(),
             )
