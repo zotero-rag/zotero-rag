@@ -291,15 +291,14 @@ where
     let res = request_with_backoff(client, api_url, headers, &request, DEFAULT_MAX_RETRIES).await?;
 
     let body = res.text().await?;
-    let json: serde_json::Value = match serde_json::from_str(&body) {
-        Ok(json) => json,
-        Err(_) => return Err(LLMError::DeserializationError(body)),
-    };
-
-    let response: S = match serde_json::from_value(json) {
-        Ok(response) => response,
-        Err(_) => return Err(LLMError::DeserializationError(body)),
-    };
+    let json: serde_json::Value = serde_json::from_str(&body).map_err(|err| {
+        log::error!("Failed to parse response body as JSON: {err}. Body: {body}");
+        LLMError::DeserializationError(body.clone())
+    })?;
+    let response: S = serde_json::from_value(json).map_err(|err| {
+        log::error!("Failed to deserialize response into target type: {err}. Body: {body}");
+        LLMError::DeserializationError(body)
+    })?;
 
     Ok(response)
 }
