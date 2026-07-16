@@ -233,7 +233,8 @@ pub fn parse_library_metadata(
             LEFT JOIN itemAttachments ia ON i.itemID = ia.parentItemID
             JOIN items i2 ON ia.itemID = i2.itemID
             WHERE f.fieldName = 'title'
-          AND it.typeName IN ('conferencePaper', 'journalArticle', 'preprint') "
+            AND ia.contentType = 'application/pdf'
+            AND it.typeName IN ('conferencePaper', 'journalArticle', 'preprint') "
             .to_string();
 
         // Useful for debugging
