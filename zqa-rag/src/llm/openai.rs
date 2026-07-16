@@ -573,6 +573,7 @@ mod tests {
             tools: None,
             on_tool_call: None,
             on_text: None,
+            tool_iteration_limit: None,
         };
         let res = client.send_message(&request).await;
 
@@ -627,6 +628,7 @@ mod tests {
             tools: None,
             on_tool_call: None,
             on_text: None,
+            tool_iteration_limit: None,
         };
         let res = mock_client.send_message(&request).await;
 
@@ -684,6 +686,7 @@ mod tests {
             tools: Some(&[Box::new(tool)]),
             on_tool_call: None,
             on_text: None,
+            tool_iteration_limit: None,
         };
 
         let res = client.send_message(&request).await;
@@ -811,6 +814,7 @@ mod tests {
                 let text_segments = Arc::clone(&text_segments);
                 move |text| text_segments.lock().unwrap().push(text.to_string())
             })),
+            tool_iteration_limit: None,
         };
         let http_client =
             RecordingSequentialMockHttpClient::new([tool_call_response, text_response]);

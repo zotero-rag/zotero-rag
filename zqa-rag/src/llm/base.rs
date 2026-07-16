@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 use super::errors::LLMError;
 use crate::{
-    constants::DEFAULT_MAX_RETRIES,
+    constants::{DEFAULT_MAX_RETRIES, DEFAULT_MAX_TOOL_ITERATIONS},
     http_client::HttpClient,
     llm::tools::{CallbackFn, SerializedTool, Tool, get_owned_tools, process_tool_calls},
     pricing::ModelUsage,
@@ -122,7 +122,11 @@ pub struct ReasoningConfig {
     pub summary: Option<String>,
 }
 
-/// Represents a request to the chat API with optional tools.
+// TODO: The driver options probably don't belong here; it might at some point make sense to make a
+// new `Request<'a>` or similar type, that has this struct along with a `DriverOptions` or
+// something. It's not yet clear *when* (i.e., at how many fields) that transition should happen.
+/// Represents a request to the chat API with optional tools, along with options for the behavior of
+/// the agentic loop itself.
 #[derive(Default)]
 pub struct ChatRequest<'a> {
     /// The chat history
@@ -135,10 +139,15 @@ pub struct ChatRequest<'a> {
     pub reasoning: Option<ReasoningConfig>,
     /// The tools to use
     pub tools: Option<&'a [Box<dyn Tool>]>,
+
+    // Driver options: these must be `Option<T>`; semantically, it doesn't make sense to force
+    // end-users into supplying these options.
     /// Optional callback invoked each time a tool call completes.
     pub on_tool_call: Option<Arc<CallbackFn<ToolUseStats>>>,
     /// Optional callback invoked each time a text chunk is produced.
     pub on_text: Option<Arc<CallbackFn<str>>>,
+    /// Optional limit on the number of tool call iterations per user message.
+    pub tool_iteration_limit: Option<usize>,
 }
 
 /// A structure dedicated to a single tool call. This contains the tool called, the arguments
@@ -242,12 +251,22 @@ where
         let mut usage = ModelUsage::default();
         let mut contents = Vec::<ContentType>::new();
 
-        // TODO: Add max tool iterations support
-        loop {
+        let mut round_trips = 0;
+        let iteration_limit = request
+            .tool_iteration_limit
+            .unwrap_or(DEFAULT_MAX_TOOL_ITERATIONS);
+        while round_trips < iteration_limit {
+            let tools_passed = if round_trips == iteration_limit.saturating_sub(1) {
+                // On the last trip, disallow tool calls
+                None
+            } else {
+                tools.as_deref()
+            };
+
             let turn = self
                 .send_once(
                     &history,
-                    tools.as_deref(),
+                    tools_passed,
                     request.reasoning.as_ref(),
                     request.max_tokens,
                 )
@@ -255,7 +274,7 @@ where
             usage += turn.usage;
             history.extend(turn.native_items);
 
-            let new_history_items = process_tool_calls(
+            let tool_call_results = process_tool_calls(
                 &mut contents,
                 &turn.contents,
                 tools.as_deref().unwrap_or_default(),
@@ -264,11 +283,17 @@ where
             )
             .await?;
 
-            if new_history_items.is_empty() {
+            if tool_call_results.is_empty() {
                 break;
+            } else if iteration_limit > 1 && round_trips == iteration_limit - 2 {
+                // On the next turn, tool calls will be disallowed, so we should log this.
+                log::warn!(
+                    "Reached penultimate iteration ({round_trips}), last trip will not allow tool calling."
+                );
             }
 
-            history.extend(new_history_items.into_iter().flat_map(Into::into));
+            history.extend(tool_call_results.into_iter().flat_map(Into::into));
+            round_trips += 1;
         }
 
         Ok(CompletionApiResponse {
@@ -301,4 +326,116 @@ where
     })?;
 
     Ok(response)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        collections::VecDeque,
+        sync::{Arc, Mutex},
+    };
+
+    use super::*;
+    use crate::llm::tools::test_utils::MockTool;
+
+    struct TestHistoryItem;
+
+    impl From<ChatHistoryItem> for Vec<TestHistoryItem> {
+        fn from(_: ChatHistoryItem) -> Self {
+            Vec::new()
+        }
+    }
+
+    struct TestClient {
+        turns: Mutex<VecDeque<ProviderTurn<TestHistoryItem>>>,
+        tools_seen: Arc<Mutex<Vec<Option<usize>>>>,
+    }
+
+    impl AgenticClient for TestClient {
+        type HistoryItem = TestHistoryItem;
+        const SCHEMA_KEY: &'static str = "parameters";
+
+        fn build_initial_history(&self, _: &ChatRequest<'_>) -> Vec<Self::HistoryItem> {
+            Vec::new()
+        }
+
+        async fn send_once(
+            &self,
+            _: &[Self::HistoryItem],
+            tools: Option<&[SerializedTool<'_>]>,
+            _: Option<&ReasoningConfig>,
+            _: Option<u32>,
+        ) -> Result<ProviderTurn<Self::HistoryItem>, LLMError> {
+            self.tools_seen.lock().unwrap().push(tools.map(<[_]>::len));
+            Ok(self.turns.lock().unwrap().pop_front().unwrap())
+        }
+    }
+
+    fn tool_call_turn() -> ProviderTurn<TestHistoryItem> {
+        ProviderTurn {
+            native_items: Vec::new(),
+            contents: vec![ChatHistoryContent::ToolCallRequest(ToolCallRequest {
+                id: "call-1".into(),
+                tool_name: "mock_tool".into(),
+                args: serde_json::json!({"name": "Alice"}),
+            })],
+            usage: ModelUsage::default(),
+        }
+    }
+
+    #[tokio::test]
+    async fn tool_iteration_limit_disables_tools_on_last_turn() {
+        let tools_seen = Arc::new(Mutex::new(Vec::new()));
+        let client = TestClient {
+            turns: Mutex::new(VecDeque::from([
+                tool_call_turn(),
+                ProviderTurn {
+                    native_items: Vec::new(),
+                    contents: vec![ChatHistoryContent::Text("done".into())],
+                    usage: ModelUsage::default(),
+                },
+            ])),
+            tools_seen: Arc::clone(&tools_seen),
+        };
+        let call_count = Arc::new(Mutex::new(0));
+        let tool = MockTool {
+            call_count: Arc::clone(&call_count),
+        };
+        let request = ChatRequest {
+            tools: Some(&[Box::new(tool)]),
+            tool_iteration_limit: Some(2),
+            ..ChatRequest::default()
+        };
+
+        let response = client.send_message(&request).await.unwrap();
+
+        assert_eq!(*tools_seen.lock().unwrap(), vec![Some(1), None]);
+        assert_eq!(*call_count.lock().unwrap(), 1);
+        assert!(matches!(
+            response.content.as_slice(),
+            [ContentType::ToolCall(_), ContentType::Text(text)] if text == "done"
+        ));
+    }
+
+    #[tokio::test]
+    async fn tool_iteration_limit_of_one_does_not_underflow() {
+        let tools_seen = Arc::new(Mutex::new(Vec::new()));
+        let client = TestClient {
+            turns: Mutex::new(VecDeque::from([tool_call_turn()])),
+            tools_seen: Arc::clone(&tools_seen),
+        };
+        let tool = MockTool {
+            call_count: Arc::new(Mutex::new(0)),
+        };
+        let request = ChatRequest {
+            tools: Some(&[Box::new(tool)]),
+            tool_iteration_limit: Some(1),
+            ..ChatRequest::default()
+        };
+
+        let response = client.send_message(&request).await.unwrap();
+
+        assert_eq!(*tools_seen.lock().unwrap(), vec![None]);
+        assert_eq!(response.content.len(), 1);
+    }
 }

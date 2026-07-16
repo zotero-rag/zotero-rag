@@ -717,11 +717,9 @@ mod tests {
         let items = parse_library(&store, Some(0), Some(7)).await;
         test_ok!(items);
 
-        // Two of the items in the toy library are HTML files, so we actually
-        // expect those to fail.
         let mut items = items.unwrap();
         assert!(!items.is_empty());
-        test_eq!(items.len(), 5);
+        test_eq!(items.len(), 7);
 
         // Now fetch authors from the Zotero DB
         let authors_result = get_authors(&mut items);

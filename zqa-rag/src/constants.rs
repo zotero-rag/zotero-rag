@@ -1,5 +1,8 @@
 //! Constants used throughout the RAG system
 
+/// Default maximum tool call processing round trips for one user message
+pub const DEFAULT_MAX_TOOL_ITERATIONS: usize = 15;
+
 /// Default maximum concurrent requests for embedding processing
 pub const DEFAULT_MAX_CONCURRENT_REQUESTS: usize = 1;
 

@@ -432,6 +432,7 @@ mod tests {
             tools: None,
             on_tool_call: None,
             on_text: None,
+            tool_iteration_limit: None,
         };
         let res = client.send_message(&request).await;
         test_ok!(res);
@@ -521,6 +522,7 @@ mod tests {
             tools: None,
             on_tool_call: None,
             on_text: None,
+            tool_iteration_limit: None,
         };
         let res = client.send_message(&request).await;
 
@@ -544,6 +546,7 @@ mod tests {
             tools: Some(&[Box::new(tool)]),
             on_tool_call: None,
             on_text: None,
+            tool_iteration_limit: None,
         };
 
         let res = client.send_message(&request).await;
@@ -624,6 +627,7 @@ mod tests {
             on_text: Some(Arc::new(move |s| {
                 text_segments_cb.lock().unwrap().push(s.to_string());
             })),
+            tool_iteration_limit: None,
         };
 
         let mock_client = GeminiClient {
