@@ -189,6 +189,7 @@ where
                 tools: None,
                 on_tool_call: None,
                 on_text: None,
+                tool_iteration_limit: None,
             };
             if let Ok(response) = small_client.send_message(&request).await {
                 let title = ModelResponse::from(&response.content).to_string();
@@ -266,6 +267,7 @@ where
             tools: Some(&tools),
             on_tool_call: None,
             on_text: Some(on_text),
+            tool_iteration_limit: None,
         }
     };
 

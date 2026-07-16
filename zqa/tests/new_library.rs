@@ -8,7 +8,8 @@ use zqa::{LanceZoteroStore, full_library_to_arrow};
 use zqa_macros::test_ok;
 use zqa_rag::capabilities::{EmbeddingProvider, ModelProvider, RerankerProvider};
 use zqa_rag::constants::{
-    DEFAULT_MAX_CONCURRENT_REQUESTS, DEFAULT_MAX_RETRIES, DEFAULT_VOYAGE_EMBEDDING_DIM,
+    DEFAULT_MAX_CONCURRENT_REQUESTS, DEFAULT_MAX_RETRIES, DEFAULT_MAX_TOOL_ITERATIONS,
+    DEFAULT_VOYAGE_EMBEDDING_DIM,
 };
 
 #[tokio::test]
@@ -27,6 +28,7 @@ async fn test_integration_works() {
         reranker_provider: Some(RerankerProvider::VoyageAI),
         max_concurrent_requests: DEFAULT_MAX_CONCURRENT_REQUESTS,
         max_retries: DEFAULT_MAX_RETRIES,
+        tool_iteration_limit: DEFAULT_MAX_TOOL_ITERATIONS,
         gemini: None,
         ollama: None,
         openai: None,
