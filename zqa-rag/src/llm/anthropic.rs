@@ -172,8 +172,20 @@ impl From<ToolCallResponse> for AnthropicToolUseResult {
 pub(crate) struct AnthropicThinkingResponseContent {
     /// The content type. Always "thinking".
     pub(crate) r#type: String,
-    /// The thinking content from the model
+    /// The thinking content from the model.
     pub(crate) thinking: String,
+    /// Opaque signature that must be returned unchanged with a tool-use continuation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) signature: Option<String>,
+}
+
+/// A redacted thinking block returned by models with extended thinking enabled.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub(crate) struct AnthropicRedactedThinkingResponseContent {
+    /// The content type. Always "redacted_thinking".
+    pub(crate) r#type: String,
+    /// Opaque redacted thinking data that must be returned unchanged with a tool-use continuation.
+    pub(crate) data: String,
 }
 
 /// A part of an Anthropic API response denoting some text from the model.
@@ -228,6 +240,8 @@ pub(crate) enum AnthropicResponseContent {
     ToolResult(AnthropicToolUseResult),
     /// A thinking block from models with extended thinking enabled.
     Thinking(AnthropicThinkingResponseContent),
+    /// A redacted thinking block from models with extended thinking enabled.
+    RedactedThinking(AnthropicRedactedThinkingResponseContent),
 }
 
 impl From<String> for AnthropicResponseContent {
@@ -284,7 +298,8 @@ pub(crate) fn map_response_to_chat_contents(
                     "Got a tool result from the API response. This is not expected, and will be ignored."
                 );
             }
-            AnthropicResponseContent::Thinking(_) => {}
+            AnthropicResponseContent::Thinking(_)
+            | AnthropicResponseContent::RedactedThinking(_) => {}
         }
     }
     out
@@ -372,18 +387,91 @@ mod tests {
     use zqa_macros::{test_eq, test_ok};
 
     use super::{
-        AnthropicClient, AnthropicResponse, AnthropicResponseContent,
+        AnthropicClient, AnthropicRedactedThinkingResponseContent, AnthropicResponse,
+        AnthropicResponseContent, AnthropicThinkingResponseContent,
         AnthropicToolUseResponseContent, AnthropicUsageStats,
     };
-    use crate::http_client::{MockHttpClient, ReqwestClient, SequentialMockHttpClient};
+    use crate::config::AnthropicConfig;
+    use crate::http_client::{
+        MockHttpClient, RecordingSequentialMockHttpClient, ReqwestClient, SequentialMockHttpClient,
+    };
     use crate::llm::anthropic::{
         AnthropicOutputTokensDetails, AnthropicTextResponseContent, DEFAULT_CLAUDE_MODEL,
     };
     use crate::llm::base::{
         AgenticClient, ChatHistoryContent, ChatHistoryItem, ChatRequest, ContentType, MessageRole,
-        ToolCallResponse,
+        ReasoningConfig, ToolCallResponse,
     };
     use crate::llm::tools::test_utils::MockTool;
+
+    fn mock_response(
+        id: &str,
+        stop_reason: &str,
+        input_tokens: u32,
+        output_tokens: u32,
+        content: Vec<AnthropicResponseContent>,
+    ) -> AnthropicResponse {
+        AnthropicResponse {
+            id: id.into(),
+            model: DEFAULT_CLAUDE_MODEL.into(),
+            role: MessageRole::Assistant,
+            stop_reason: stop_reason.into(),
+            stop_sequence: None,
+            usage: AnthropicUsageStats {
+                input_tokens,
+                output_tokens,
+                cache_creation_input_tokens: 0,
+                cache_read_input_tokens: 0,
+                output_tokens_details: Some(AnthropicOutputTokensDetails { thinking_tokens: 0 }),
+            },
+            r#type: "message".into(),
+            content,
+        }
+    }
+
+    fn assert_thinking_config(request: &serde_json::Value) {
+        assert_eq!(request["thinking"]["type"].as_str(), Some("enabled"));
+        assert_eq!(request["thinking"]["budget_tokens"].as_u64(), Some(1024));
+    }
+
+    fn content_block<'a>(
+        content: &'a [serde_json::Value],
+        content_type: &str,
+    ) -> &'a serde_json::Value {
+        content
+            .iter()
+            .find(|block| block["type"].as_str() == Some(content_type))
+            .unwrap()
+    }
+
+    fn assert_thinking_continuation(request: &serde_json::Value) {
+        assert_thinking_config(request);
+        let messages = request["messages"].as_array().unwrap();
+        let assistant_content = messages
+            .iter()
+            .find(|message| message["role"].as_str() == Some("assistant"))
+            .unwrap()["content"]
+            .as_array()
+            .unwrap();
+        let thinking = content_block(assistant_content, "thinking");
+        assert_eq!(
+            thinking["thinking"].as_str(),
+            Some("I need the tool result.")
+        );
+        assert_eq!(thinking["signature"].as_str(), Some("thinking-signature"));
+        assert_eq!(
+            content_block(assistant_content, "redacted_thinking")["data"].as_str(),
+            Some("redacted-thinking-data")
+        );
+
+        let tool_result = messages
+            .iter()
+            .filter_map(|message| message["content"].as_array())
+            .flat_map(|content| content.iter())
+            .find(|block| block["type"].as_str() == Some("tool_result"))
+            .unwrap();
+        assert_eq!(tool_result["content"].as_str(), Some("Hello, Alice!"));
+    }
 
     #[tokio::test]
     async fn test_request_works() {
@@ -576,6 +664,106 @@ mod tests {
         let texts = text_segments.lock().unwrap();
         test_eq!(texts.len(), 1);
         test_eq!(texts[0].as_str(), "Done!");
+    }
+
+    #[test]
+    fn test_thinking_blocks_round_trip() {
+        let expected = serde_json::json!([
+            {
+                "type": "thinking",
+                "thinking": "I need the tool result.",
+                "signature": "thinking-signature"
+            },
+            {
+                "type": "redacted_thinking",
+                "data": "redacted-thinking-data"
+            }
+        ]);
+        let content: Vec<AnthropicResponseContent> =
+            serde_json::from_value(expected.clone()).unwrap();
+
+        assert_eq!(serde_json::to_value(content).unwrap(), expected);
+    }
+
+    #[tokio::test]
+    async fn test_thinking_blocks_are_replayed_after_tool_call() {
+        let tool_call_response = mock_response(
+            "msg-1",
+            "tool_use",
+            10,
+            5,
+            vec![
+                AnthropicResponseContent::Thinking(AnthropicThinkingResponseContent {
+                    r#type: "thinking".into(),
+                    thinking: "I need the tool result.".into(),
+                    signature: Some("thinking-signature".into()),
+                }),
+                AnthropicResponseContent::RedactedThinking(
+                    AnthropicRedactedThinkingResponseContent {
+                        r#type: "redacted_thinking".into(),
+                        data: "redacted-thinking-data".into(),
+                    },
+                ),
+                AnthropicResponseContent::ToolCall(AnthropicToolUseResponseContent {
+                    id: "tool-1".into(),
+                    r#type: "tool_use".into(),
+                    name: "mock_tool".into(),
+                    input: serde_json::json!({"name": "Alice"})
+                        .as_object()
+                        .unwrap()
+                        .clone(),
+                }),
+            ],
+        );
+        let text_response = mock_response(
+            "msg-2",
+            "end_turn",
+            20,
+            8,
+            vec![AnthropicResponseContent::Text(
+                AnthropicTextResponseContent {
+                    r#type: "text".into(),
+                    text: "Done!".into(),
+                },
+            )],
+        );
+        let call_count = Arc::new(Mutex::new(0_usize));
+        let tool = MockTool {
+            call_count: Arc::clone(&call_count),
+        };
+        let http_client =
+            RecordingSequentialMockHttpClient::new([tool_call_response, text_response]);
+        let client = AnthropicClient {
+            client: http_client.clone(),
+            config: Some(AnthropicConfig {
+                api_key: "test".into(),
+                model: DEFAULT_CLAUDE_MODEL.into(),
+                max_tokens: 2048,
+                reasoning_budget: None,
+            }),
+        };
+        let request = ChatRequest {
+            chat_history: Vec::new(),
+            max_tokens: Some(2048),
+            message: "Test".into(),
+            reasoning: Some(ReasoningConfig {
+                max_tokens: Some(1024),
+                effort: None,
+                summary: None,
+            }),
+            tools: Some(&[Box::new(tool)]),
+            on_tool_call: None,
+            on_text: None,
+        };
+
+        let response = client.send_message(&request).await;
+        test_ok!(response);
+        test_eq!(*call_count.lock().unwrap(), 1_usize);
+
+        let requests = http_client.requests();
+        assert_eq!(requests.len(), 2);
+        assert_thinking_config(&requests[0]);
+        assert_thinking_continuation(&requests[1]);
     }
 
     #[test]
