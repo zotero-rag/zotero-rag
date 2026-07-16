@@ -10,7 +10,8 @@ use crate::{
         DEFAULT_GEMINI_EMBEDDING_MODEL, DEFAULT_GEMINI_MODEL, DEFAULT_OLLAMA_BASE_URL,
         DEFAULT_OLLAMA_EMBEDDING_DIM, DEFAULT_OLLAMA_EMBEDDING_MODEL, DEFAULT_OLLAMA_MAX_TOKENS,
         DEFAULT_OLLAMA_MODEL, DEFAULT_OPENAI_EMBEDDING_DIM, DEFAULT_OPENAI_EMBEDDING_MODEL,
-        DEFAULT_OPENAI_MAX_TOKENS, DEFAULT_OPENAI_MODEL, DEFAULT_OPENROUTER_MODEL,
+        DEFAULT_OPENAI_MAX_TOKENS, DEFAULT_OPENAI_MODEL, DEFAULT_OPENROUTER_MAX_TOKENS,
+        DEFAULT_OPENROUTER_MODEL,
     },
     providers::ProviderId,
 };
@@ -172,6 +173,8 @@ pub struct OpenRouterConfig {
     pub api_key: String,
     /// Model name (e.g., "anthropic/claude-sonnet-4.5")
     pub model: String,
+    /// Output token budget
+    pub max_tokens: u32,
     /// Reasoning effort level (e.g., "high"). `None` disables reasoning.
     pub reasoning_effort: Option<String>,
     /// Token budget for extended thinking. `None` disables thinking.
@@ -182,6 +185,7 @@ impl Default for OpenRouterConfig {
     fn default() -> Self {
         Self {
             api_key: String::new(),
+            max_tokens: DEFAULT_OPENROUTER_MAX_TOKENS,
             model: DEFAULT_OPENROUTER_MODEL.into(),
             reasoning_effort: None,
             reasoning_budget: None,

@@ -66,6 +66,9 @@ pub const DEFAULT_OPENROUTER_MODEL: &str = "anthropic/claude-sonnet-4.6";
 /// Default OpenRouter model for conversation title generation
 pub const DEFAULT_OPENROUTER_MODEL_SMALL: &str = "anthropic/claude-haiku-4.5";
 
+/// Default maximum tokens for OpenRouter requests
+pub const DEFAULT_OPENROUTER_MAX_TOKENS: u32 = 32_000;
+
 /// Default Cohere dimensions
 pub const DEFAULT_COHERE_EMBEDDING_DIM: u32 = 1536;
 

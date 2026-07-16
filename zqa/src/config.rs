@@ -84,6 +84,7 @@ use zqa_rag::reranking::common::RerankProviderConfig;
 /// api_key = "..."
 /// model = "anthropic/claude-sonnet-4.5"
 /// model_small = "anthropic/claude-haiku-4.5"
+/// max_tokens = 32000
 /// reasoning_effort = "high"
 /// reasoning_budget = 2048
 /// ```
@@ -785,6 +786,9 @@ pub struct OpenRouterConfig {
     /// API key
     pub api_key: Option<String>,
 
+    /// Max output tokens
+    pub max_tokens: Option<u32>,
+
     /// Reasoning effort level (e.g., "high"). Omit to disable reasoning.
     pub reasoning_effort: Option<String>,
 
@@ -798,6 +802,7 @@ impl Default for OpenRouterConfig {
             model: Some(DEFAULT_OPENROUTER_MODEL.into()),
             model_small: Some(DEFAULT_OPENROUTER_MODEL_SMALL.into()),
             api_key: None,
+            max_tokens: None,
             reasoning_effort: None,
             reasoning_budget: None,
         }
@@ -1066,6 +1071,7 @@ impl From<OpenRouterConfig> for zqa_rag::config::OpenRouterConfig {
                 .or_else(|| env::var("OPENROUTER_API_KEY").ok())
                 .expect("OpenRouter API key not found. Please set it in your config file or as OPENROUTER_API_KEY."),
             model: config.model.unwrap_or(DEFAULT_OPENROUTER_MODEL.into()),
+            max_tokens: config.max_tokens.unwrap_or(DEFAULT_OPENROUTER_MAX_TOKENS),
             reasoning_effort: config.reasoning_effort,
             reasoning_budget: config.reasoning_budget,
         }

@@ -158,6 +158,7 @@ api_key = "..."
 api_key = "..."
 model = "anthropic/claude-sonnet-4.5"
 model_small = "anthropic/claude-haiku-4.5"
+max_tokens = 32000
 reasoning_effort = "high"
 reasoning_budget = 2048
 ```

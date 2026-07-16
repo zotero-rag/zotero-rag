@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use super::base::{ChatHistoryItem, ChatRequest};
 use super::errors::LLMError;
 use crate::clients::openrouter::OpenRouterClient;
+use crate::constants::DEFAULT_OPENROUTER_MAX_TOKENS;
 use crate::http_client::HttpClient;
 use crate::llm::base::{
     AgenticClient, ChatHistoryContent, MessageRole, ProviderTurn, ReasoningConfig, ToolCallRequest,
@@ -81,6 +82,8 @@ struct OpenRouterRequest<'a> {
     /// The tools passed in
     #[serde(skip_serializing_if = "Option::is_none")]
     tools: Option<Vec<OpenRouterTool<'a>>>,
+    /// Maximum output tokens
+    max_tokens: u32,
 }
 
 /// Convert ChatHistoryItem to OpenRouterMessage
@@ -311,15 +314,20 @@ impl<T: HttpClient> AgenticClient for OpenRouterClient<T> {
         history: &[Self::HistoryItem],
         tools: Option<&[SerializedTool<'_>]>,
         reasoning: Option<&ReasoningConfig>,
-        _max_tokens: Option<u32>,
+        max_tokens: Option<u32>,
     ) -> Result<ProviderTurn<Self::HistoryItem>, LLMError> {
         // Use config if available, otherwise fall back to env vars
-        let (api_key, model) = if let Some(ref config) = self.config {
-            (config.api_key.clone(), config.model.clone())
+        let (api_key, model, config_max_tokens) = if let Some(ref config) = self.config {
+            (
+                config.api_key.clone(),
+                config.model.clone(),
+                config.max_tokens,
+            )
         } else {
             (
                 env::var("OPENROUTER_API_KEY")?,
                 env::var("OPENROUTER_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.to_string()),
+                DEFAULT_OPENROUTER_MAX_TOKENS,
             )
         };
 
@@ -337,6 +345,7 @@ impl<T: HttpClient> AgenticClient for OpenRouterClient<T> {
             messages: history,
             reasoning: reasoning.map(Into::into),
             tools: wrapped_tools,
+            max_tokens: max_tokens.unwrap_or(config_max_tokens),
         };
 
         let mut headers = HeaderMap::new();

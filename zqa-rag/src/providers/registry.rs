@@ -285,6 +285,7 @@ mod tests {
     fn openrouter_llm_config() -> crate::config::LLMClientConfig {
         crate::config::LLMClientConfig::OpenRouter(OpenRouterConfig {
             api_key: "test-key".into(),
+            max_tokens: 8192,
             model: "anthropic/test-model".into(),
             reasoning_effort: None,
             reasoning_budget: None,
