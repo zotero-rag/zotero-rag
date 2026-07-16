@@ -539,12 +539,7 @@ impl<T: HttpClient + Default + Debug> EmbeddingFunction for OpenAIClient<T> {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        collections::VecDeque,
-        future::Future,
-        pin::Pin,
-        sync::{Arc, Mutex},
-    };
+    use std::sync::{Arc, Mutex};
 
     use arrow_array::Array;
     use dotenv::dotenv;
@@ -557,96 +552,13 @@ mod tests {
     };
     use crate::config::OpenAIConfig;
     use crate::constants::DEFAULT_OPENAI_EMBEDDING_DIM;
-    use crate::http_client::{HttpClient, MockHttpClient, ReqwestClient};
+    use crate::http_client::{MockHttpClient, RecordingSequentialMockHttpClient, ReqwestClient};
     use crate::llm::base::{
         AgenticClient, ChatHistoryContent, ChatHistoryItem, ChatRequest, ContentType, MessageRole,
         ReasoningConfig,
     };
     use crate::llm::openai::{OpenAIInputTokensDetails, OpenAIOutputTokensDetails};
     use crate::llm::tools::test_utils::MockTool;
-
-    #[derive(Clone)]
-    struct RecordingSequentialMockHttpClient {
-        responses: Arc<Mutex<VecDeque<String>>>,
-        requests: Arc<Mutex<Vec<serde_json::Value>>>,
-    }
-
-    impl RecordingSequentialMockHttpClient {
-        fn new<T: serde::Serialize>(responses: impl IntoIterator<Item = T>) -> Self {
-            Self {
-                responses: Arc::new(Mutex::new(
-                    responses
-                        .into_iter()
-                        .map(|response| serde_json::to_string(&response).unwrap())
-                        .collect(),
-                )),
-                requests: Arc::new(Mutex::new(Vec::new())),
-            }
-        }
-
-        fn requests(&self) -> Vec<serde_json::Value> {
-            self.requests.lock().unwrap().clone()
-        }
-    }
-
-    impl HttpClient for RecordingSequentialMockHttpClient {
-        fn post_json<'a, T: serde::Serialize + Send + Sync>(
-            &'a self,
-            _url: &'a str,
-            _headers: http::HeaderMap,
-            body: &'a T,
-        ) -> Pin<Box<dyn Future<Output = Result<reqwest::Response, reqwest::Error>> + Send + 'a>>
-        {
-            self.requests
-                .lock()
-                .unwrap()
-                .push(serde_json::to_value(body).unwrap());
-            let responses = Arc::clone(&self.responses);
-
-            Box::pin(async move {
-                let body = responses
-                    .lock()
-                    .unwrap()
-                    .pop_front()
-                    .expect("RecordingSequentialMockHttpClient: no more responses");
-                let response = http::Response::builder()
-                    .status(200)
-                    .header("content-type", "application/json")
-                    .body(bytes::Bytes::from(body))
-                    .unwrap();
-
-                Ok(reqwest::Response::from(response))
-            })
-        }
-
-        fn post_form<'a>(
-            &'a self,
-            url: &'a str,
-            headers: http::HeaderMap,
-            _form_data: reqwest::multipart::Form,
-        ) -> Pin<Box<dyn Future<Output = Result<reqwest::Response, reqwest::Error>> + Send + '_>>
-        {
-            self.post_json(url, headers, &None::<usize>)
-        }
-
-        fn get_json<'a>(
-            &'a self,
-            url: &'a str,
-            headers: http::HeaderMap,
-        ) -> Pin<Box<dyn Future<Output = Result<reqwest::Response, reqwest::Error>> + Send + 'a>>
-        {
-            self.post_json(url, headers, &None::<usize>)
-        }
-
-        fn post_empty<'a>(
-            &'a self,
-            url: &'a str,
-            headers: http::HeaderMap,
-        ) -> Pin<Box<dyn Future<Output = Result<reqwest::Response, reqwest::Error>> + Send + 'a>>
-        {
-            self.post_json(url, headers, &None::<usize>)
-        }
-    }
 
     #[tokio::test]
     async fn test_request_works() {

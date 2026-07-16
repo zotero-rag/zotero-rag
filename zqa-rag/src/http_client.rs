@@ -265,6 +265,71 @@ impl HttpClient for SequentialMockHttpClient {
     }
 }
 
+/// A sequential mock HTTP client that records serialized JSON request bodies.
+#[cfg(test)]
+#[derive(Debug, Clone)]
+pub(crate) struct RecordingSequentialMockHttpClient {
+    client: SequentialMockHttpClient,
+    requests: Arc<Mutex<Vec<serde_json::Value>>>,
+}
+
+#[cfg(test)]
+impl RecordingSequentialMockHttpClient {
+    /// Create a recording mock with responses returned in order.
+    pub(crate) fn new<T: serde::Serialize>(responses: impl IntoIterator<Item = T>) -> Self {
+        Self {
+            client: SequentialMockHttpClient::new(responses),
+            requests: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
+    /// Return the request bodies recorded so far.
+    pub(crate) fn requests(&self) -> Vec<serde_json::Value> {
+        self.requests.lock().unwrap().clone()
+    }
+}
+
+#[cfg(test)]
+impl HttpClient for RecordingSequentialMockHttpClient {
+    fn post_json<'a, T: serde::Serialize + Send + Sync>(
+        &'a self,
+        url: &'a str,
+        headers: HeaderMap,
+        body: &'a T,
+    ) -> Pin<Box<dyn Future<Output = Result<reqwest::Response, reqwest::Error>> + Send + 'a>> {
+        self.requests
+            .lock()
+            .unwrap()
+            .push(serde_json::to_value(body).unwrap());
+        self.client.post_json(url, headers, body)
+    }
+
+    fn post_form<'a>(
+        &'a self,
+        url: &'a str,
+        headers: HeaderMap,
+        form_data: Form,
+    ) -> Pin<Box<dyn Future<Output = Result<reqwest::Response, reqwest::Error>> + Send + '_>> {
+        self.client.post_form(url, headers, form_data)
+    }
+
+    fn get_json<'a>(
+        &'a self,
+        url: &'a str,
+        headers: HeaderMap,
+    ) -> Pin<Box<dyn Future<Output = Result<reqwest::Response, reqwest::Error>> + Send + 'a>> {
+        self.client.get_json(url, headers)
+    }
+
+    fn post_empty<'a>(
+        &'a self,
+        url: &'a str,
+        headers: HeaderMap,
+    ) -> Pin<Box<dyn Future<Output = Result<reqwest::Response, reqwest::Error>> + Send + 'a>> {
+        self.client.post_empty(url, headers)
+    }
+}
+
 #[cfg(test)]
 impl<T: serde::Serialize + Send + Sync + Clone> HttpClient for MockHttpClient<T> {
     #[allow(unused_variables)]
