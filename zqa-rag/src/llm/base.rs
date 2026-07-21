@@ -254,7 +254,8 @@ where
         let mut round_trips = 0;
         let iteration_limit = request
             .tool_iteration_limit
-            .unwrap_or(DEFAULT_MAX_TOOL_ITERATIONS);
+            .unwrap_or(DEFAULT_MAX_TOOL_ITERATIONS)
+            + 1;
         while round_trips < iteration_limit {
             let is_last_turn = round_trips == iteration_limit.saturating_sub(1);
             let tools_passed = if is_last_turn {
@@ -414,7 +415,7 @@ mod tests {
 
         let response = client.send_message(&request).await.unwrap();
 
-        assert_eq!(*tools_seen.lock().unwrap(), vec![Some(1), None]);
+        assert_eq!(*tools_seen.lock().unwrap(), vec![Some(1), Some(1)]);
         assert_eq!(*call_count.lock().unwrap(), 1);
         assert!(matches!(
             response.content.as_slice(),
@@ -426,7 +427,11 @@ mod tests {
     async fn tool_iteration_limit_of_one_does_not_underflow() {
         let tools_seen = Arc::new(Mutex::new(Vec::new()));
         let client = TestClient {
-            turns: Mutex::new(VecDeque::from([tool_call_turn()])),
+            turns: Mutex::new(VecDeque::from([ProviderTurn {
+                native_items: Vec::new(),
+                contents: vec![ChatHistoryContent::Text("done".into())],
+                usage: ModelUsage::default(),
+            }])),
             tools_seen: Arc::clone(&tools_seen),
         };
         let tool = MockTool {
@@ -440,7 +445,7 @@ mod tests {
 
         let response = client.send_message(&request).await.unwrap();
 
-        assert_eq!(*tools_seen.lock().unwrap(), vec![None]);
+        assert_eq!(*tools_seen.lock().unwrap(), vec![Some(1)]);
         assert_eq!(response.content.len(), 1);
     }
 }
