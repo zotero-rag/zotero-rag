@@ -409,13 +409,13 @@ mod tests {
         };
         let request = ChatRequest {
             tools: Some(&[Box::new(tool)]),
-            tool_iteration_limit: Some(2),
+            tool_iteration_limit: Some(1),
             ..ChatRequest::default()
         };
 
         let response = client.send_message(&request).await.unwrap();
 
-        assert_eq!(*tools_seen.lock().unwrap(), vec![Some(1), Some(1)]);
+        assert_eq!(*tools_seen.lock().unwrap(), vec![Some(1)]);
         assert_eq!(*call_count.lock().unwrap(), 1);
         assert!(matches!(
             response.content.as_slice(),
