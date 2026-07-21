@@ -238,7 +238,7 @@ where
     ///
     /// # Errors
     ///
-    /// * Returns [`LLMError`] if a provider request or tool execution fails.
+    /// * Returns [`LLMError`] if a provider request fails.
     async fn send_message(
         &self,
         request: &ChatRequest<'_>,
@@ -286,7 +286,7 @@ where
                 request.on_tool_call.as_ref(),
                 request.on_text.as_ref(),
             )
-            .await?;
+            .await;
 
             if tool_call_results.is_empty() {
                 break;

@@ -12,12 +12,8 @@ use serde::Serialize;
 use serde::ser::SerializeMap;
 use serde_json::{Map, Value};
 
-use crate::llm::{
-    base::{
-        ChatHistoryContent, ChatHistoryItem, ContentType, MessageRole, ToolCallResponse,
-        ToolUseStats,
-    },
-    errors::LLMError,
+use crate::llm::base::{
+    ChatHistoryContent, ChatHistoryItem, ContentType, MessageRole, ToolCallResponse, ToolUseStats,
 };
 
 /// The key for the input schema for tools passed to Anthropic.
@@ -180,9 +176,9 @@ pub type CallbackFn<T> = dyn Fn(&T) + Send + Sync + 'static;
 /// Process tool calls in a single model response (provider‑agnostic).
 ///
 /// This function consumes a slice of provider‑agnostic `ChatHistoryContent` that represents the
-/// model's latest message (text and/or tool call requests). It executes tool calls, returns the
-/// corresponding tool results as user history items, and pushes user-visible entries to
-/// `new_contents` (both text and tool call summaries).
+/// model's latest message (text and/or tool call requests). It executes known tool calls and
+/// turns unknown calls into error results, then returns the corresponding results as user history
+/// items and pushes user-visible entries to `new_contents` (both text and tool call summaries).
 ///
 /// # Arguments:
 ///
@@ -197,45 +193,55 @@ pub type CallbackFn<T> = dyn Fn(&T) + Send + Sync + 'static;
 /// # Returns
 ///
 /// A vector of user history items containing tool call results.
-///
-/// # Errors
-///
-/// Returns an error if a tool is called that does not exist in the provided list of tools.
 pub(crate) async fn process_tool_calls(
     new_contents: &mut Vec<ContentType>,
     contents: &[ChatHistoryContent],
     tools: &[SerializedTool<'_>],
     on_tool_call: Option<&Arc<CallbackFn<ToolUseStats>>>,
     on_text: Option<&Arc<CallbackFn<str>>>,
-) -> Result<Vec<ChatHistoryItem>, LLMError> {
+) -> Vec<ChatHistoryItem> {
     let futures = contents.iter().map(|content| async move {
         match content {
-            ChatHistoryContent::Text(s) => {
-                Ok::<_, LLMError>((Some(ContentType::Text(s.clone())), None))
-            }
+            ChatHistoryContent::Text(s) => (Some(ContentType::Text(s.clone())), None),
             ChatHistoryContent::ToolCallResponse(tool_result) => {
                 // This is invalid, but technically we can recover by just ignoring it--so
                 // we will.
                 log::warn!(
-                    "Got a tool result from the API response. This is not expected, and will be ignored. Tool result: {tool_result:#?}"
+                    "Got a tool result from the API response. This is not expected, and will be \
+                    ignored. Tool result: {tool_result:#?}"
                 );
-                Ok((None, None))
+                (None, None)
             }
             ChatHistoryContent::ToolCallRequest(tool_call) => {
                 let tool_call_id = tool_call.id.clone();
-                let called_tool = tools
+                let tool_result = if let Some(tool) = tools
                     .iter()
                     .find(|tool| tool.tool.name() == tool_call.tool_name)
-                    .ok_or_else(|| {
-                        LLMError::ToolCallError(format!(
-                            "Tool {} was called, but it does not exist in the passed list of tools.",
-                            tool_call.tool_name
-                        ))
-                    })?;
+                {
+                    tool.tool
+                        .call(tool_call.args.clone())
+                        .await
+                        .unwrap_or_else(|e| Value::String(format!("Error calling tool: {e}")))
+                } else {
+                    let available_tool_names = tools
+                        .iter()
+                        .map(|tool| tool.tool.name())
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    let available_tools = if available_tool_names.is_empty() {
+                        "none"
+                    } else {
+                        &available_tool_names
+                    };
 
-                let tool_result = match called_tool.tool.call(tool_call.args.clone()).await {
-                    Ok(res) => res,
-                    Err(e) => Value::String(format!("Error calling tool: {e}")),
+                    log::warn!(
+                        "Model called unknown tool '{}'. Available tools: {available_tools}.",
+                        tool_call.tool_name
+                    );
+                    Value::String(format!(
+                        "Tool '{}' does not exist. Available tools: {available_tools}.",
+                        tool_call.tool_name
+                    ))
                 };
 
                 let tool_use_stats = ToolUseStats {
@@ -254,7 +260,10 @@ pub(crate) async fn process_tool_calls(
                     })],
                 };
 
-                Ok((Some(ContentType::ToolCall(tool_use_stats)), Some(chat_history_item)))
+                (
+                    Some(ContentType::ToolCall(tool_use_stats)),
+                    Some(chat_history_item),
+                )
             }
         }
     });
@@ -262,8 +271,7 @@ pub(crate) async fn process_tool_calls(
     let results = join_all(futures).await;
 
     let mut new_history_items = Vec::new();
-    for result in results {
-        let (content_opt, history_opt) = result?;
+    for (content_opt, history_opt) in results {
         if let Some(content) = content_opt {
             match &content {
                 ContentType::ToolCall(stats) => {
@@ -284,7 +292,7 @@ pub(crate) async fn process_tool_calls(
         }
     }
 
-    Ok(new_history_items)
+    new_history_items
 }
 
 #[cfg(test)]
@@ -345,9 +353,12 @@ pub(crate) mod test_utils {
 
 #[cfg(test)]
 mod tests {
-    use std::future::Future;
-    use std::pin::Pin;
-    use std::time::Instant;
+    use std::{
+        future::Future,
+        pin::Pin,
+        sync::{Arc, Mutex},
+        time::Instant,
+    };
 
     use schemars::{JsonSchema, schema_for};
     use serde::Deserialize;
@@ -355,7 +366,11 @@ mod tests {
     use zqa_macros::test_eq;
 
     use super::*;
-    use crate::llm::base::{ChatHistoryContent, ContentType, ToolCallRequest};
+    use crate::llm::base::{
+        ChatHistoryContent, ChatHistoryItem, ContentType, MessageRole, ToolCallRequest,
+        ToolCallResponse, ToolUseStats,
+    };
+    use crate::llm::tools::test_utils::MockTool;
 
     #[derive(Debug)]
     pub(crate) struct SlowTool {
@@ -416,9 +431,7 @@ mod tests {
 
         let start = Instant::now();
         let chat_history =
-            process_tool_calls(&mut new_contents, &contents, &serialized_tools, None, None)
-                .await
-                .unwrap();
+            process_tool_calls(&mut new_contents, &contents, &serialized_tools, None, None).await;
         let duration = start.elapsed();
 
         // Expect ~500ms for concurrent execution
@@ -426,5 +439,48 @@ mod tests {
         // Ensure that we processed two tool calls
         test_eq!(chat_history.len(), 2);
         test_eq!(new_contents.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn unknown_tool_call_returns_an_error_result() {
+        let call_count = Arc::new(Mutex::new(0));
+        let tools: Vec<Box<dyn Tool>> = vec![Box::new(MockTool {
+            call_count: Arc::clone(&call_count),
+        })];
+        let serialized_tools = get_owned_tools(Some(&tools), OPENAI_SCHEMA_KEY).unwrap();
+        let contents = vec![ChatHistoryContent::ToolCallRequest(ToolCallRequest {
+            id: "call-1".into(),
+            tool_name: "imaginary_tool".into(),
+            args: json!({"query": "test"}),
+        })];
+        let mut new_contents = Vec::new();
+
+        let chat_history =
+            process_tool_calls(&mut new_contents, &contents, &serialized_tools, None, None).await;
+        let expected_result = Value::String(
+            "Tool 'imaginary_tool' does not exist. Available tools: mock_tool.".into(),
+        );
+
+        assert_eq!(*call_count.lock().unwrap(), 0);
+        assert_eq!(
+            chat_history,
+            vec![ChatHistoryItem {
+                role: MessageRole::User,
+                content: vec![ChatHistoryContent::ToolCallResponse(ToolCallResponse {
+                    id: "call-1".into(),
+                    tool_name: "imaginary_tool".into(),
+                    result: expected_result.clone(),
+                })],
+            }]
+        );
+        assert_eq!(
+            new_contents,
+            vec![ContentType::ToolCall(ToolUseStats {
+                tool_call_id: "call-1".into(),
+                tool_name: "imaginary_tool".into(),
+                tool_args: json!({"query": "test"}),
+                tool_result: expected_result,
+            })]
+        );
     }
 }
