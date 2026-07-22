@@ -109,8 +109,8 @@ where
     let batches = vec![record_batch.clone()];
 
     // Write to binary file using Arrow IPC format
-    let batch_iter_path = ctx.path_options.batch_iter_path.clone();
-    let file = File::create(&batch_iter_path)?;
+    let batch_iter_path = &ctx.path_options.batch_iter_path;
+    let file = File::create(batch_iter_path)?;
     let mut writer = FileWriter::try_new(file, &schema)?;
 
     writer.write(&record_batch)?;
@@ -121,7 +121,7 @@ where
     match result {
         Ok(()) => {
             writeln!(&mut ctx.out, "Successfully parsed library!")?;
-            std::fs::remove_file(&batch_iter_path)?;
+            std::fs::remove_file(batch_iter_path)?;
         }
         Err(e) => {
             writeln!(&mut ctx.err, "Parsing library failed: {e}")?;
@@ -167,10 +167,10 @@ where
         return fix_zero_embeddings(ctx).await;
     }
 
-    let batch_iter_path = ctx.path_options.batch_iter_path.clone();
+    let batch_iter_path = &ctx.path_options.batch_iter_path;
     let batch_iter_display = batch_iter_path.display();
 
-    let file = File::open(&batch_iter_path)?;
+    let file = File::open(batch_iter_path)?;
     let reader = FileReader::try_new(file, None)?;
 
     let mut batches = Vec::<RecordBatch>::new();
@@ -199,7 +199,7 @@ where
 
     if db.is_ok() {
         writeln!(ctx.out, "Successfully parsed library!")?;
-        std::fs::remove_file(&batch_iter_path)?;
+        std::fs::remove_file(batch_iter_path)?;
     } else if let Err(e) = db {
         writeln!(ctx.err, "Parsing library failed: {e}")?;
         writeln!(

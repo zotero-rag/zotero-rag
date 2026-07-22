@@ -168,11 +168,11 @@ mod tests {
     use zqa_rag::providers::registry::provider_registry;
 
     use super::*;
+    use crate::{cli::handlers::library::handle_process_cmd, config::MockConfig};
     use crate::{
-        cli::app::tests::{create_test_context, get_config},
+        common::test_support::create_test_context, common::test_support::get_config,
         store::lance::LanceZoteroStore,
     };
-    use crate::{cli::handlers::library::handle_process_cmd, config::MockConfig};
 
     fn make_tool(llm_responses: Vec<String>) -> SummarizationTool<LanceZoteroStore> {
         let config = get_config(MockConfig {

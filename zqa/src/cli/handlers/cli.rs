@@ -197,7 +197,7 @@ mod tests {
     use zqa_macros::test_contains;
 
     use super::handle_help_cmd;
-    use crate::cli::app::tests::create_test_context;
+    use crate::common::test_support::create_test_context;
 
     #[test]
     fn test_handle_help_cmd() {
