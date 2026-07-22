@@ -3,25 +3,16 @@ use std::sync::Arc;
 use arrow_array::RecordBatch;
 use arrow_schema::Schema;
 use async_trait::async_trait;
-use zqa_rag::{
-    embedding::common::EmbeddingProviderConfig,
-    reranking::common::{RerankProviderConfig, get_reranking_provider_with_config},
-    vector::backends::{
-        backend::VectorBackend,
-        lance::{LanceBackend, LanceMetadata},
-    },
-};
+use zqa_rag::embedding::common::EmbeddingProviderConfig;
+use zqa_rag::reranking::common::{RerankProviderConfig, get_reranking_provider_with_config};
+use zqa_rag::vector::backends::backend::VectorBackend;
+use zqa_rag::vector::backends::lance::{LanceBackend, LanceMetadata};
 
-use crate::store::common::VectorSearchStats;
-use crate::{
-    cli::errors::CLIError,
-    config::Config,
-    store::common::ZoteroStore,
-    utils::{
-        arrow::{DbFields, get_schema, library_to_arrow},
-        library::{ZoteroItem, ZoteroItemSet},
-    },
-};
+use crate::cli::errors::CLIError;
+use crate::config::Config;
+use crate::store::common::{VectorSearchStats, ZoteroStore};
+use crate::utils::arrow::{DbFields, get_schema, library_to_arrow};
+use crate::utils::library::{ZoteroItem, ZoteroItemSet};
 
 /// Zotero-specific store backed by LanceDB.
 #[derive(Clone)]

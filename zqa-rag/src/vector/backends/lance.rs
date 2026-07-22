@@ -13,18 +13,17 @@ use arrow_array::{RecordBatch, RecordBatchIterator, StringArray, record_batch};
 use arrow_schema::{ArrowError, Schema};
 use async_trait::async_trait;
 use futures::TryStreamExt;
-use lancedb::Connection;
 use lancedb::database::CreateTableMode;
 use lancedb::embeddings::EmbeddingDefinition;
+use lancedb::index::scalar::FtsIndexBuilder;
 use lancedb::query::{ExecutableQuery, QueryBase};
-use lancedb::{Error as LanceDbError, connect, index::scalar::FtsIndexBuilder};
+use lancedb::{Connection, Error as LanceDbError, connect};
 use thiserror::Error;
 
+use crate::embedding::common::EmbeddingProviderConfig;
 use crate::providers::ProviderId;
-use crate::{
-    embedding::common::EmbeddingProviderConfig, providers::registry::provider_registry,
-    vector::backends::backend::VectorBackend,
-};
+use crate::providers::registry::provider_registry;
+use crate::vector::backends::backend::VectorBackend;
 
 // NOTE: Maintainers: ensure that `LANCEDB_URI` begins with `LANCE_DATA_TABLE_NAME`
 
@@ -961,11 +960,9 @@ mod tests {
     use std::env;
     use std::sync::Arc;
 
-    use arrow_array::Array;
-    use arrow_array::StringArray;
-    use arrow_array::cast::as_fixed_size_list_array;
-    use arrow_array::cast::as_string_array;
+    use arrow_array::cast::{as_fixed_size_list_array, as_string_array};
     use arrow_array::types::Float32Type;
+    use arrow_array::{Array, StringArray};
     use dotenv::dotenv;
     use futures::StreamExt;
     use lancedb::embeddings::EmbeddingFunction;

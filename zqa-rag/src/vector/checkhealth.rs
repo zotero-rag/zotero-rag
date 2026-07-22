@@ -1,18 +1,17 @@
 //! Utilities for checking the health of the LanceDB database. This includes helpers to provide
 //! possible diagnostics for common issues.
 
-use std::fmt;
-use std::fs;
-use std::io;
 use std::path::PathBuf;
+use std::{fmt, fs, io};
 
 use arrow_array::RecordBatch;
 use futures::TryStreamExt;
 use lancedb::query::{ExecutableQuery, QueryBase};
 use lancedb::{Table, connect};
 
-use super::backends::lance::LanceError;
-use super::backends::lance::{LANCE_DATA_TABLE_NAME as TABLE_NAME, read_stored_data_table_version};
+use super::backends::lance::{
+    LANCE_DATA_TABLE_NAME as TABLE_NAME, LanceError, read_stored_data_table_version,
+};
 use crate::capabilities::EmbeddingProvider;
 use crate::embedding::common::get_embedding_dims_by_provider;
 use crate::providers::ProviderId;
@@ -434,13 +433,12 @@ mod tests {
     use super::lancedb_health_check;
     use crate::capabilities::EmbeddingProvider;
     use crate::config::VoyageAIConfig;
-    use crate::constants::DEFAULT_VOYAGE_EMBEDDING_DIM;
-    use crate::constants::DEFAULT_VOYAGE_EMBEDDING_MODEL;
-    use crate::constants::DEFAULT_VOYAGE_RERANK_MODEL;
+    use crate::constants::{
+        DEFAULT_VOYAGE_EMBEDDING_DIM, DEFAULT_VOYAGE_EMBEDDING_MODEL, DEFAULT_VOYAGE_RERANK_MODEL,
+    };
     use crate::embedding::common::EmbeddingProviderConfig;
     use crate::vector::backends::backend::VectorBackend;
-    use crate::vector::backends::lance::LanceBackend;
-    use crate::vector::backends::lance::get_db_uri;
+    use crate::vector::backends::lance::{LanceBackend, get_db_uri};
 
     #[tokio::test]
     #[serial]

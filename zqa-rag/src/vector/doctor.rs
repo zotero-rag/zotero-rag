@@ -3,10 +3,9 @@
 
 use std::io::Write;
 
-use crate::{
-    capabilities::EmbeddingProvider,
-    vector::{backends::lance::LanceError, checkhealth::lancedb_health_check},
-};
+use crate::capabilities::EmbeddingProvider;
+use crate::vector::backends::lance::LanceError;
+use crate::vector::checkhealth::lancedb_health_check;
 
 const HELP: &str = "\x1b[32;1m";
 const SYMPTOM: &str = "\x1b[33;1m";

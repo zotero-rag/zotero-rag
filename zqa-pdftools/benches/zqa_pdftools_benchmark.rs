@@ -1,4 +1,6 @@
-use std::{fs, hint::black_box, time::Duration};
+use std::fs;
+use std::hint::black_box;
+use std::time::Duration;
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use zqa_pdftools::parse::extract_text;

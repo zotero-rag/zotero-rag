@@ -83,11 +83,9 @@ pub(crate) async fn request_with_backoff<T: HttpClient>(
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        pin::Pin,
-        sync::{Arc, Mutex},
-        time::Duration,
-    };
+    use std::pin::Pin;
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
 
     use http::HeaderMap;
     use reqwest::Response;
@@ -95,10 +93,8 @@ mod tests {
     use serde_json::json;
     use zqa_macros::{test_eq, test_ok};
 
-    use crate::{
-        http_client::HttpClient,
-        requests::{calculate_backoff_delay, request_with_backoff},
-    };
+    use crate::http_client::HttpClient;
+    use crate::requests::{calculate_backoff_delay, request_with_backoff};
 
     struct MockRateLimitClient {
         call_count: Arc<Mutex<usize>>,

@@ -1,18 +1,18 @@
-use std::{
-    collections::HashMap,
-    io::{BufRead, Write},
-    path::PathBuf,
-    sync::{Arc, Mutex, RwLock, atomic::AtomicBool},
-};
+use std::collections::HashMap;
+use std::io::{BufRead, Write};
+use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
+use std::sync::{Arc, Mutex, RwLock};
 
 use clap::Parser;
-use fern;
-use humantime;
 use log::LevelFilter;
 use zqa_pdftools::parse::ExtractedContent;
 use zqa_rag::llm::base::ChatHistoryItem;
+use {fern, humantime};
 
-use crate::{config::Config, state::UsageMetadata, store::lance::LanceZoteroStore};
+use crate::config::Config;
+use crate::state::UsageMetadata;
+use crate::store::lance::LanceZoteroStore;
 
 #[derive(Parser, Clone, Debug)]
 #[command(version, about, long_about = None)]
@@ -144,11 +144,9 @@ pub(crate) mod test_support {
     };
 
     use super::{Context, PathOptions};
-    use crate::{
-        LanceZoteroStore,
-        common::State,
-        config::{Config, MockConfig, VoyageAIConfig},
-    };
+    use crate::LanceZoteroStore;
+    use crate::common::State;
+    use crate::config::{Config, MockConfig, VoyageAIConfig};
 
     /// Create a config with the mock LLM provider.
     pub(crate) fn get_config(mock_config: MockConfig) -> Config {

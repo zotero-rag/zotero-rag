@@ -6,8 +6,7 @@ use std::env;
 use std::sync::Arc;
 
 use arrow_array;
-use futures::StreamExt;
-use futures::stream;
+use futures::{StreamExt, stream};
 use http::HeaderMap;
 use lancedb::arrow::arrow_schema::{DataType, Field};
 use serde::{Deserialize, Serialize};

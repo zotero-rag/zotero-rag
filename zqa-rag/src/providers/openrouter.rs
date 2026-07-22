@@ -1,11 +1,10 @@
 //! OpenRouter provider implementation
-use crate::{
-    capabilities::LlmFactory,
-    clients::openrouter::OpenRouterClient,
-    config::LLMClientConfig,
-    llm::{errors::LLMError, factory::LLMClient},
-    providers::provider_id::ProviderId,
-};
+use crate::capabilities::LlmFactory;
+use crate::clients::openrouter::OpenRouterClient;
+use crate::config::LLMClientConfig;
+use crate::llm::errors::LLMError;
+use crate::llm::factory::LLMClient;
+use crate::providers::provider_id::ProviderId;
 
 /// Provider descriptor for OpenRouter-backed LLM capabilities.
 pub struct OpenRouterProvider;

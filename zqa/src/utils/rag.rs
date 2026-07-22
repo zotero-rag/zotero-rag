@@ -1,9 +1,7 @@
 //! Utilities to interface with the `rag` crate. This mostly contains type conversions.
 
-use std::{
-    borrow::Cow,
-    fmt::{self, Write},
-};
+use std::borrow::Cow;
+use std::fmt::{self, Write};
 
 use zqa_rag::llm::base::ContentType;
 

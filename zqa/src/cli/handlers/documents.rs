@@ -1,15 +1,17 @@
 //! Command handlers for document-related operations.
 
-use std::{io::Write, path::Path, sync::Arc};
+use std::io::Write;
+use std::path::Path;
+use std::sync::Arc;
 
 use tokio::sync::mpsc::UnboundedSender;
-use zqa_rag::{llm::tools::Tool, providers::registry::provider_registry};
+use zqa_rag::llm::tools::Tool;
+use zqa_rag::providers::registry::provider_registry;
 
-use crate::{
-    cli::{commands::DocsCommand, errors::CLIError},
-    common::Context,
-    tools::documents::{DocumentsToolFactory, parse_user_document},
-};
+use crate::cli::commands::DocsCommand;
+use crate::cli::errors::CLIError;
+use crate::common::Context;
+use crate::tools::documents::{DocumentsToolFactory, parse_user_document};
 
 /// Given a path to a file, attempt to return a relative path, or return the full canonical path
 /// string. This returns a relative path if either `path` is relative, or if the specified `path` is

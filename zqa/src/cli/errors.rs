@@ -1,9 +1,13 @@
-use std::{io, sync::PoisonError};
+use std::io;
+use std::sync::PoisonError;
 
 use thiserror::Error;
-use zqa_rag::{llm::errors::LLMError, vector::backends::lance::LanceError};
+use zqa_rag::llm::errors::LLMError;
+use zqa_rag::vector::backends::lance::LanceError;
 
-use crate::{config::ConfigError, state::StateError, utils};
+use crate::config::ConfigError;
+use crate::state::StateError;
+use crate::utils;
 
 #[derive(Debug, Error)]
 pub enum CLIError {

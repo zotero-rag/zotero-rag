@@ -353,12 +353,10 @@ pub(crate) mod test_utils {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        future::Future,
-        pin::Pin,
-        sync::{Arc, Mutex},
-        time::Instant,
-    };
+    use std::future::Future;
+    use std::pin::Pin;
+    use std::sync::{Arc, Mutex};
+    use std::time::Instant;
 
     use schemars::{JsonSchema, schema_for};
     use serde::Deserialize;

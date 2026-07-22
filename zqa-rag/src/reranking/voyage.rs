@@ -1,12 +1,15 @@
-use std::{env, pin::Pin, time::Instant};
+use std::env;
+use std::pin::Pin;
+use std::time::Instant;
 
 use http::HeaderMap;
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    constants::DEFAULT_VOYAGE_RERANK_MODEL, embedding::voyage::VoyageAIClient,
-    http_client::HttpClient, llm::errors::LLMError, reranking::common::Rerank,
-};
+use crate::constants::DEFAULT_VOYAGE_RERANK_MODEL;
+use crate::embedding::voyage::VoyageAIClient;
+use crate::http_client::HttpClient;
+use crate::llm::errors::LLMError;
+use crate::reranking::common::Rerank;
 
 #[derive(Serialize, Debug)]
 struct VoyageAIRerankRequest<'a> {

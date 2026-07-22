@@ -1,23 +1,23 @@
 //! Command handlers for library-related tasks
 
-use std::{fs::File, io::Write};
+use std::fs::File;
+use std::io::Write;
 
 use arrow_array::RecordBatch;
-use arrow_ipc::{reader::FileReader, writer::FileWriter};
+use arrow_ipc::reader::FileReader;
+use arrow_ipc::writer::FileWriter;
 use zqa_rag::vector::checkhealth::lancedb_health_check;
 use zqa_rag::vector::doctor::doctor as rag_doctor;
 
-use crate::utils::terminal::{DIM_TEXT, RESET, read_line};
-use crate::{
-    cli::errors::CLIError,
-    common::Context,
-    full_library_to_arrow,
-    store::common::ZoteroStore,
-    utils::{
-        arrow::library_to_arrow,
-        library::{ZoteroItem, ZoteroItemSet, get_new_library_items, parse_library_metadata},
-    },
+use crate::cli::errors::CLIError;
+use crate::common::Context;
+use crate::full_library_to_arrow;
+use crate::store::common::ZoteroStore;
+use crate::utils::arrow::library_to_arrow;
+use crate::utils::library::{
+    ZoteroItem, ZoteroItemSet, get_new_library_items, parse_library_metadata,
 };
+use crate::utils::terminal::{DIM_TEXT, RESET, read_line};
 
 /// Print table statistics for the current LanceDB database.
 ///
@@ -432,7 +432,8 @@ async fn fix_zero_embeddings<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Res
 
 #[cfg(test)]
 mod tests {
-    use std::{fs::File, sync::Arc};
+    use std::fs::File;
+    use std::sync::Arc;
 
     use arrow_array::{
         FixedSizeListArray, Float32Array, RecordBatch, RecordBatchIterator, StringArray,

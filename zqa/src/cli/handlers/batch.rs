@@ -62,39 +62,30 @@
 //!     same auxiliary information.
 //!   * For the structure of this file, see [`BatchEmbeddingMetadata`].
 
-use std::collections::HashSet;
-use std::io::Seek;
-use std::{
-    collections::HashMap,
-    fmt::Display,
-    fs::{self, OpenOptions},
-    io::{self, Read, Write},
-    path::{Path, PathBuf},
-};
+use std::collections::{HashMap, HashSet};
+use std::fmt::Display;
+use std::fs::{self, OpenOptions};
+use std::io::{self, Read, Seek, Write};
+use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
 use humantime::format_duration;
 use serde::{Deserialize, Serialize};
 use xxhash_rust::xxh3;
-use zqa_rag::capabilities::BatchAPIProvider;
-use zqa_rag::{
-    capabilities::BatchJobState,
-    embedding::common::{
-        BatchEmbeddingInput, BatchEmbeddingRequest, BatchEmbeddingResult, BatchSubmission,
-    },
-    providers::{ProviderId, registry::provider_registry},
+use zqa_rag::capabilities::{BatchAPIProvider, BatchJobState};
+use zqa_rag::embedding::common::{
+    BatchEmbeddingInput, BatchEmbeddingRequest, BatchEmbeddingResult, BatchSubmission,
 };
+use zqa_rag::providers::ProviderId;
+use zqa_rag::providers::registry::provider_registry;
 
-use crate::{
-    cli::{commands::BatchCommand, errors::CLIError},
-    common::Context,
-    utils::{
-        arrow::library_to_arrow_with_embeddings,
-        library::ZoteroItem,
-        terminal::{read_char, read_number},
-    },
-};
-use crate::{state::get_state_dir, utils::library::parse_library};
+use crate::cli::commands::BatchCommand;
+use crate::cli::errors::CLIError;
+use crate::common::Context;
+use crate::state::get_state_dir;
+use crate::utils::arrow::library_to_arrow_with_embeddings;
+use crate::utils::library::{ZoteroItem, parse_library};
+use crate::utils::terminal::{read_char, read_number};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct BatchItem {
@@ -1005,7 +996,8 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::{fs, io::Cursor};
+    use std::fs;
+    use std::io::Cursor;
 
     use chrono::{Duration, Utc};
     use serial_test::serial;

@@ -13,11 +13,9 @@
 //! only time pricing matters is if the user already has an Internet connection, so we can also
 //! grab this file.
 
-use std::{
-    ops::{Add, AddAssign},
-    path::PathBuf,
-    time::Duration,
-};
+use std::ops::{Add, AddAssign};
+use std::path::PathBuf;
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use tempfile::NamedTempFile;

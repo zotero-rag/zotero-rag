@@ -1,16 +1,15 @@
 use std::collections::HashSet;
-use std::env;
 use std::fmt::Write;
 use std::hash::Hash;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::sync::atomic;
 use std::sync::atomic::AtomicUsize;
-use std::thread;
+use std::sync::{Arc, atomic};
 use std::time::Instant;
+use std::{env, thread};
 
-use arrow_array::{RecordBatch, cast::AsArray};
+use arrow_array::RecordBatch;
+use arrow_array::cast::AsArray;
 use directories::UserDirs;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use rusqlite::Connection;
@@ -18,8 +17,9 @@ use serde::Serialize;
 use thiserror::Error;
 use zqa_pdftools::parse::extract_text;
 
+use crate::izip;
 use crate::store::common::ZoteroStore;
-use crate::{izip, utils::arrow::DbFields};
+use crate::utils::arrow::DbFields;
 
 /// Gets the Zotero library path. Works on Linux, macOS, and Windows systems.
 /// On CI environments, returns a location to a toy library in assets/ instead.
@@ -634,14 +634,11 @@ mod tests {
 
     use dotenv::dotenv;
     use zqa_macros::{test_eq, test_ok};
-    use zqa_rag::{
-        config::VoyageAIConfig,
-        constants::{
-            DEFAULT_VOYAGE_EMBEDDING_DIM, DEFAULT_VOYAGE_EMBEDDING_MODEL,
-            DEFAULT_VOYAGE_RERANK_MODEL,
-        },
-        embedding::common::EmbeddingProviderConfig,
+    use zqa_rag::config::VoyageAIConfig;
+    use zqa_rag::constants::{
+        DEFAULT_VOYAGE_EMBEDDING_DIM, DEFAULT_VOYAGE_EMBEDDING_MODEL, DEFAULT_VOYAGE_RERANK_MODEL,
     };
+    use zqa_rag::embedding::common::EmbeddingProviderConfig;
 
     use super::*;
     use crate::LanceZoteroStore;

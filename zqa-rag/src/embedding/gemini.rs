@@ -1,4 +1,6 @@
-use std::{borrow::Cow, env, sync::Arc};
+use std::borrow::Cow;
+use std::env;
+use std::sync::Arc;
 
 use arrow_schema::{DataType, Field};
 use futures::{StreamExt, stream};
@@ -6,16 +8,15 @@ use http::HeaderMap;
 use lancedb::embeddings::EmbeddingFunction;
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    clients::gemini::{GeminiClient, get_gemini_api_key},
-    constants::{
-        DEFAULT_GEMINI_EMBEDDING_DIM, DEFAULT_GEMINI_EMBEDDING_MODEL,
-        DEFAULT_MAX_CONCURRENT_REQUESTS, DEFAULT_MAX_RETRIES,
-    },
-    http_client::HttpClient,
-    llm::{errors::LLMError, gemini::GeminiPart},
-    requests::request_with_backoff,
+use crate::clients::gemini::{GeminiClient, get_gemini_api_key};
+use crate::constants::{
+    DEFAULT_GEMINI_EMBEDDING_DIM, DEFAULT_GEMINI_EMBEDDING_MODEL, DEFAULT_MAX_CONCURRENT_REQUESTS,
+    DEFAULT_MAX_RETRIES,
 };
+use crate::http_client::HttpClient;
+use crate::llm::errors::LLMError;
+use crate::llm::gemini::GeminiPart;
+use crate::requests::request_with_backoff;
 
 impl<T> GeminiClient<T>
 where

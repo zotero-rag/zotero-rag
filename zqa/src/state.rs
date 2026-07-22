@@ -1,20 +1,16 @@
 //!  NOTE: This is not state management! The `state` module is actually a way to interact with `XDG_STATE_HOME`.
 
-use std::{
-    fs,
-    io::{self, BufRead},
-    ops::{Add, AddAssign},
-    path::PathBuf,
-};
+use std::fs;
+use std::io::{self, BufRead};
+use std::ops::{Add, AddAssign};
+use std::path::PathBuf;
 
 use chrono::{DateTime, Local};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use zqa_rag::{
-    capabilities::{EmbeddingProvider, ModelProvider, RerankerProvider},
-    llm::base::ChatHistoryItem,
-    pricing::{ModelUsage, PricingCacheOptions, get_model_pricing},
-};
+use zqa_rag::capabilities::{EmbeddingProvider, ModelProvider, RerankerProvider};
+use zqa_rag::llm::base::ChatHistoryItem;
+use zqa_rag::pricing::{ModelUsage, PricingCacheOptions, get_model_pricing};
 
 use crate::config::{BaseDirError, Config, get_config_dir};
 use crate::utils::terminal::{read_char, read_number, read_password};

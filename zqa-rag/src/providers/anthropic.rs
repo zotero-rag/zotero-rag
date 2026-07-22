@@ -1,11 +1,10 @@
 //! Anthropic provider implementation
-use crate::{
-    capabilities::LlmFactory,
-    clients::anthropic::AnthropicClient,
-    config::LLMClientConfig,
-    llm::{errors::LLMError, factory::LLMClient},
-    providers::provider_id::ProviderId,
-};
+use crate::capabilities::LlmFactory;
+use crate::clients::anthropic::AnthropicClient;
+use crate::config::LLMClientConfig;
+use crate::llm::errors::LLMError;
+use crate::llm::factory::LLMClient;
+use crate::providers::provider_id::ProviderId;
 
 /// Provider descriptor for Anthropic-backed LLM capabilities.
 pub struct AnthropicProvider;

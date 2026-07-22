@@ -1,4 +1,5 @@
-use std::{cmp::Ordering, collections::BTreeSet};
+use std::cmp::Ordering;
+use std::collections::BTreeSet;
 
 use crate::fonts::FontSizeMarker;
 

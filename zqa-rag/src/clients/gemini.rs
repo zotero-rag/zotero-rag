@@ -2,10 +2,8 @@
 
 use std::env;
 
-use crate::{
-    http_client::{HttpClient, ReqwestClient},
-    llm::errors::LLMError,
-};
+use crate::http_client::{HttpClient, ReqwestClient};
+use crate::llm::errors::LLMError;
 
 /// A client for Google's Gemini APIs (chat + embeddings)
 #[derive(Debug, Clone)]

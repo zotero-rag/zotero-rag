@@ -143,7 +143,8 @@ Here is the user query: <user_query>{query}</user_query>.")
 #[cfg(test)]
 mod tests {
     use super::get_summarize_prompt;
-    use crate::tools::{retrieval::RETRIEVAL_TOOL_NAME, summarization::SUMMARIZATION_TOOL_NAME};
+    use crate::tools::retrieval::RETRIEVAL_TOOL_NAME;
+    use crate::tools::summarization::SUMMARIZATION_TOOL_NAME;
 
     #[test]
     fn summarize_prompt_requires_retrieval_before_answering() {

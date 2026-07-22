@@ -22,16 +22,13 @@ use config::Config;
 use state::{check_or_create_first_run_file, oobe};
 pub use store::lance::LanceZoteroStore;
 pub use utils::arrow::full_library_to_arrow;
-use zqa_rag::{
-    config::LLMClientConfig, embedding::common::EmbeddingProviderConfig,
-    reranking::common::RerankProviderConfig,
-};
+use zqa_rag::config::LLMClientConfig;
+use zqa_rag::embedding::common::EmbeddingProviderConfig;
+use zqa_rag::reranking::common::RerankProviderConfig;
 
-use crate::{
-    cli::errors::CLIError,
-    common::{PathOptions, State},
-    utils::terminal::{RED, RED_BOLD, RESET, YELLOW, YELLOW_BOLD},
-};
+use crate::cli::errors::CLIError;
+use crate::common::{PathOptions, State};
+use crate::utils::terminal::{RED, RED_BOLD, RESET, YELLOW, YELLOW_BOLD};
 
 fn load_config() -> Result<Config, CLIError> {
     // Load the configs in priority order: TOML < env < CLI args

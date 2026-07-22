@@ -1,20 +1,19 @@
+use std::borrow::Cow;
+use std::fmt::Debug;
 use std::sync::Arc;
-use std::{borrow::Cow, fmt::Debug};
 
 use arrow_schema::{DataType, Field};
 use lancedb::embeddings::EmbeddingFunction;
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    capabilities::EmbeddingProvider,
-    clients::ollama::OllamaClient,
-    constants::{
-        DEFAULT_OLLAMA_BASE_URL, DEFAULT_OLLAMA_EMBEDDING_DIM, DEFAULT_OLLAMA_EMBEDDING_MODEL,
-    },
-    embedding::common::{EmbeddingApiResponse, compute_embeddings_async},
-    http_client::HttpClient,
-    llm::errors::LLMError,
+use crate::capabilities::EmbeddingProvider;
+use crate::clients::ollama::OllamaClient;
+use crate::constants::{
+    DEFAULT_OLLAMA_BASE_URL, DEFAULT_OLLAMA_EMBEDDING_DIM, DEFAULT_OLLAMA_EMBEDDING_MODEL,
 };
+use crate::embedding::common::{EmbeddingApiResponse, compute_embeddings_async};
+use crate::http_client::HttpClient;
+use crate::llm::errors::LLMError;
 
 #[derive(Debug, Serialize)]
 struct OllamaEmbeddingRequest {
@@ -184,12 +183,10 @@ mod tests {
         OllamaClient, OllamaEmbeddingErrorResponse, OllamaEmbeddingResponse,
         OllamaEmbeddingSuccessResponse,
     };
-    use crate::{
-        config::OllamaConfig,
-        constants::DEFAULT_OLLAMA_EMBEDDING_DIM,
-        embedding::common::EmbeddingApiResponse,
-        http_client::{MockHttpClient, ReqwestClient},
-    };
+    use crate::config::OllamaConfig;
+    use crate::constants::DEFAULT_OLLAMA_EMBEDDING_DIM;
+    use crate::embedding::common::EmbeddingApiResponse;
+    use crate::http_client::{MockHttpClient, ReqwestClient};
 
     #[test]
     fn test_success_response_deserializes() {

@@ -1,4 +1,5 @@
-use std::{pin::Pin, time::Instant};
+use std::pin::Pin;
+use std::time::Instant;
 
 use tokio::sync::mpsc::UnboundedSender;
 use zqa_rag::llm::tools::Tool;
@@ -170,10 +171,8 @@ impl<T> ToolExt for T where T: Tool + Sized {}
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        pin::Pin,
-        sync::{Arc, Mutex},
-    };
+    use std::pin::Pin;
+    use std::sync::{Arc, Mutex};
 
     use schemars::schema_for;
     use serde_json::json;

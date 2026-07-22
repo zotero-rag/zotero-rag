@@ -2,24 +2,21 @@
 //! providers exposed through this crate have which capabilities. Note that it is possible for a
 //! provider to not have all the capabilities listed here, if that API endpoint is not (yet) supported.
 
-use std::{cmp::Ordering, sync::Arc};
+use std::cmp::Ordering;
+use std::sync::Arc;
 
 use lancedb::embeddings::EmbeddingFunction;
 use serde::{Deserialize, Serialize};
 use zqa_pdftools::chunk::ChunkingStrategy;
 
-use crate::{
-    config::LLMClientConfig,
-    embedding::common::{
-        BatchEmbeddingRequest, BatchEmbeddingResults, BatchSubmission, EmbeddingProviderConfig,
-    },
-    llm::{
-        errors::LLMError,
-        factory::{BatchEmbeddingClient, LLMClient},
-    },
-    providers::provider_id::ProviderId,
-    reranking::common::{Rerank, RerankProviderConfig},
+use crate::config::LLMClientConfig;
+use crate::embedding::common::{
+    BatchEmbeddingRequest, BatchEmbeddingResults, BatchSubmission, EmbeddingProviderConfig,
 };
+use crate::llm::errors::LLMError;
+use crate::llm::factory::{BatchEmbeddingClient, LLMClient};
+use crate::providers::provider_id::ProviderId;
+use crate::reranking::common::{Rerank, RerankProviderConfig};
 
 /// Providers of models that can generate text.
 ///

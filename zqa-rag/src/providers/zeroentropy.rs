@@ -3,18 +3,15 @@ use std::sync::Arc;
 
 use lancedb::embeddings::EmbeddingFunction;
 
-use crate::{
-    capabilities::{EmbeddingFactory, RerankFactory},
-    embedding::{common::EmbeddingProviderConfig, zeroentropy::ZeroEntropyClient},
-    http_client::ReqwestClient,
-    llm::errors::LLMError,
-    providers::provider_id::ProviderId,
-    reranking::common::{Rerank, RerankProviderConfig},
-    vector::backends::{
-        backend::VectorBackendRegistrar,
-        lance::{LanceBackend, LanceError},
-    },
-};
+use crate::capabilities::{EmbeddingFactory, RerankFactory};
+use crate::embedding::common::EmbeddingProviderConfig;
+use crate::embedding::zeroentropy::ZeroEntropyClient;
+use crate::http_client::ReqwestClient;
+use crate::llm::errors::LLMError;
+use crate::providers::provider_id::ProviderId;
+use crate::reranking::common::{Rerank, RerankProviderConfig};
+use crate::vector::backends::backend::VectorBackendRegistrar;
+use crate::vector::backends::lance::{LanceBackend, LanceError};
 
 /// Provider descriptor for ZeroEntropy capabilities.
 pub struct ZeroEntropyProvider;

@@ -1,7 +1,9 @@
 //! Tools for interacting with documents that are not from the user's Zotero library.
 
+use std::collections::HashMap;
+use std::path::Path;
+use std::pin::Pin;
 use std::sync::{Arc, RwLock};
-use std::{collections::HashMap, path::Path, pin::Pin};
 
 use arrow_array::StringArray;
 use arrow_array::cast::AsArray;
@@ -14,17 +16,14 @@ use serde::Deserialize;
 use serde_json::json;
 use thiserror::Error;
 use tokio::sync::mpsc::UnboundedSender;
-use zqa_pdftools::{
-    chunk::{Chunker, ChunkingStrategy},
-    parse::{ExtractedContent, extract_text},
-};
-use zqa_rag::embedding::common::get_embedding_provider_with_config;
+use zqa_pdftools::chunk::{Chunker, ChunkingStrategy};
+use zqa_pdftools::parse::{ExtractedContent, extract_text};
+use zqa_rag::embedding::common::{EmbeddingProviderConfig, get_embedding_provider_with_config};
 use zqa_rag::llm::base::ChatRequest;
-use zqa_rag::{
-    embedding::common::EmbeddingProviderConfig,
-    llm::{errors::LLMError, factory::LLMClient, tools::Tool},
-    reranking::common::{RerankProviderConfig, get_reranking_provider_with_config},
-};
+use zqa_rag::llm::errors::LLMError;
+use zqa_rag::llm::factory::LLMClient;
+use zqa_rag::llm::tools::Tool;
+use zqa_rag::reranking::common::{RerankProviderConfig, get_reranking_provider_with_config};
 
 use crate::common::UserDocument;
 use crate::tools::mixins::ToolExt;

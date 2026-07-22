@@ -201,8 +201,7 @@ mod tests {
     use zqa_rag::reranking::common::RerankProviderConfig;
 
     use super::dispatch_command;
-    use crate::common::test_support::TestPaths;
-    use crate::common::test_support::create_test_context;
+    use crate::common::test_support::{TestPaths, create_test_context};
     use crate::store::lance::LanceZoteroStore;
     use crate::tools::retrieval::RetrievalTool;
 

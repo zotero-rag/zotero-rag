@@ -1,12 +1,15 @@
-use std::{env, pin::Pin, time::Instant};
+use std::env;
+use std::pin::Pin;
+use std::time::Instant;
 
 use http::HeaderMap;
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    constants::DEFAULT_COHERE_RERANK_MODEL, embedding::cohere::CohereClient,
-    http_client::HttpClient, llm::errors::LLMError, reranking::common::Rerank,
-};
+use crate::constants::DEFAULT_COHERE_RERANK_MODEL;
+use crate::embedding::cohere::CohereClient;
+use crate::http_client::HttpClient;
+use crate::llm::errors::LLMError;
+use crate::reranking::common::Rerank;
 
 #[derive(Serialize)]
 struct CohereRerankRequest<'a> {

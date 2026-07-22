@@ -1,12 +1,15 @@
-use std::{env, pin::Pin, time::Instant};
+use std::env;
+use std::pin::Pin;
+use std::time::Instant;
 
 use http::HeaderMap;
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    constants::DEFAULT_ZEROENTROPY_RERANK_MODEL, embedding::zeroentropy::ZeroEntropyClient,
-    http_client::HttpClient, llm::errors::LLMError, reranking::common::Rerank,
-};
+use crate::constants::DEFAULT_ZEROENTROPY_RERANK_MODEL;
+use crate::embedding::zeroentropy::ZeroEntropyClient;
+use crate::http_client::HttpClient;
+use crate::llm::errors::LLMError;
+use crate::reranking::common::Rerank;
 
 // Like with the embedding case, we just use the default `latency` option because it's the best
 // default.

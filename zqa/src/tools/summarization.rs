@@ -1,28 +1,21 @@
-use std::{
-    future::Future,
-    pin::Pin,
-    sync::{Arc, Mutex},
-};
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::{Arc, Mutex};
 
 use schemars::{JsonSchema, schema_for};
 use serde::Deserialize;
 use serde_json::json;
 use tokio::task::JoinSet;
-use zqa_rag::{
-    llm::{
-        base::{ChatRequest, CompletionApiResponse},
-        errors::LLMError,
-        factory::LLMClient,
-        tools::Tool,
-    },
-    pricing::ModelUsage,
-};
+use zqa_rag::llm::base::{ChatRequest, CompletionApiResponse};
+use zqa_rag::llm::errors::LLMError;
+use zqa_rag::llm::factory::LLMClient;
+use zqa_rag::llm::tools::Tool;
+use zqa_rag::pricing::ModelUsage;
 
-use crate::{
-    cli::prompts::get_extraction_prompt,
-    store::common::ZoteroStore,
-    utils::{library::ZoteroItem, rag::ModelResponse},
-};
+use crate::cli::prompts::get_extraction_prompt;
+use crate::store::common::ZoteroStore;
+use crate::utils::library::ZoteroItem;
+use crate::utils::rag::ModelResponse;
 
 pub(crate) const SUMMARIZATION_TOOL_NAME: &str = "summarization_tool";
 
@@ -162,17 +155,15 @@ mod tests {
     use std::sync::Arc;
 
     use serde_json::json;
-    use temp_env;
-    use tempfile;
     use zqa_macros::{test_contains, test_eq, test_ok};
     use zqa_rag::providers::registry::provider_registry;
+    use {temp_env, tempfile};
 
     use super::*;
-    use crate::{cli::handlers::library::handle_process_cmd, config::MockConfig};
-    use crate::{
-        common::test_support::create_test_context, common::test_support::get_config,
-        store::lance::LanceZoteroStore,
-    };
+    use crate::cli::handlers::library::handle_process_cmd;
+    use crate::common::test_support::{create_test_context, get_config};
+    use crate::config::MockConfig;
+    use crate::store::lance::LanceZoteroStore;
 
     fn make_tool(llm_responses: Vec<String>) -> SummarizationTool<LanceZoteroStore> {
         let config = get_config(MockConfig {

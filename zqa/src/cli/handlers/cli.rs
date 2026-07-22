@@ -1,15 +1,12 @@
 //! Command handlers for CLI-related operations.
 
-use std::{
-    io::Write,
-    sync::{Arc, Mutex, atomic},
-};
+use std::io::Write;
+use std::sync::{Arc, Mutex, atomic};
 
+use crate::cli::errors::CLIError;
+use crate::cli::handlers::conversation::save_current_conversation;
+use crate::common::Context;
 use crate::utils::terminal::{BOLD, RESET};
-use crate::{
-    cli::{errors::CLIError, handlers::conversation::save_current_conversation},
-    common::Context,
-};
 
 /// Save the current conversation, if needed, and prepare to exit the CLI.
 ///

@@ -1,14 +1,10 @@
 use http::HeaderMap;
 
-use crate::{
-    clients::test::TestClient,
-    http_client::HttpClient,
-    llm::{
-        base::{ChatRequest, CompletionApiResponse, ContentType},
-        errors::LLMError,
-    },
-    pricing::ModelUsage,
-};
+use crate::clients::test::TestClient;
+use crate::http_client::HttpClient;
+use crate::llm::base::{ChatRequest, CompletionApiResponse, ContentType};
+use crate::llm::errors::LLMError;
+use crate::pricing::ModelUsage;
 
 impl TestClient {
     /// Return the next queued mock response.

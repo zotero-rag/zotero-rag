@@ -1,20 +1,20 @@
 //! Functions, structs, and trait implementations for interacting with the Cohere API. This module
 //! includes support for embedding only.
 
-use std::{borrow::Cow, env, sync::Arc};
+use std::borrow::Cow;
+use std::env;
+use std::sync::Arc;
 
 use arrow_schema::{DataType, Field};
 use lancedb::embeddings::EmbeddingFunction;
 use serde::{Deserialize, Serialize};
 
 use super::common::EmbeddingApiResponse;
+use crate::capabilities::EmbeddingProvider;
+use crate::constants::{DEFAULT_COHERE_EMBEDDING_DIM, DEFAULT_COHERE_EMBEDDING_MODEL};
+use crate::embedding::common::compute_embeddings_async;
 use crate::http_client::{HttpClient, ReqwestClient};
 use crate::llm::errors::LLMError;
-use crate::{
-    capabilities::EmbeddingProvider,
-    constants::{DEFAULT_COHERE_EMBEDDING_DIM, DEFAULT_COHERE_EMBEDDING_MODEL},
-    embedding::common::compute_embeddings_async,
-};
 
 /// A client for Cohere's embeddings API.
 #[derive(Debug, Clone)]

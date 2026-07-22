@@ -1,39 +1,32 @@
 //! Command handlers for query operations.
 
-use std::{
-    io::Write,
-    path::Path,
-    pin::pin,
-    sync::{Arc, Mutex, atomic},
-    time::Instant,
-};
+use std::io::Write;
+use std::path::Path;
+use std::pin::pin;
+use std::sync::{Arc, Mutex, atomic};
+use std::time::Instant;
 
 use tokio::sync::mpsc;
-use zqa_rag::{
-    llm::{
-        base::{ChatHistoryContent, ChatHistoryItem, ChatRequest, MessageRole},
-        factory::get_client_with_config,
-        tools::{CallbackFn, Tool},
-    },
-    pricing::{ModelUsage, get_model_pricing},
-    providers::registry::provider_registry,
-};
+use zqa_rag::llm::base::{ChatHistoryContent, ChatHistoryItem, ChatRequest, MessageRole};
+use zqa_rag::llm::factory::get_client_with_config;
+use zqa_rag::llm::tools::{CallbackFn, Tool};
+use zqa_rag::pricing::{ModelUsage, get_model_pricing};
+use zqa_rag::providers::registry::provider_registry;
 
-use crate::{
-    cli::{
-        errors::CLIError,
-        handlers::documents::{get_document_mentions, get_user_document_tools, import_document},
-        prompts::{get_summarize_prompt, get_title_prompt},
-    },
-    common::Context,
-    tools::{mixins::ToolExt, retrieval::RetrievalTool, summarization::SummarizationTool},
-    utils::{
-        library::get_authors,
-        rag::ModelResponse,
-        terminal::{DIM_TEXT, RESET},
-    },
+use crate::cli::errors::CLIError;
+use crate::cli::handlers::documents::{
+    get_document_mentions, get_user_document_tools, import_document,
 };
-use crate::{state::UsageMetadata, store::common::ZoteroStore};
+use crate::cli::prompts::{get_summarize_prompt, get_title_prompt};
+use crate::common::Context;
+use crate::state::UsageMetadata;
+use crate::store::common::ZoteroStore;
+use crate::tools::mixins::ToolExt;
+use crate::tools::retrieval::RetrievalTool;
+use crate::tools::summarization::SummarizationTool;
+use crate::utils::library::get_authors;
+use crate::utils::rag::ModelResponse;
+use crate::utils::terminal::{DIM_TEXT, RESET};
 
 /// Given a positive number, returns a thousands separator-formatted string representation
 ///

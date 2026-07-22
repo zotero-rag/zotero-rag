@@ -1,16 +1,13 @@
-use std::{
-    path::PathBuf,
-    pin::Pin,
-    sync::{
-        Arc,
-        atomic::{AtomicU64, Ordering},
-    },
-};
+use std::path::PathBuf;
+use std::pin::Pin;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use schemars::{JsonSchema, schema_for};
 use serde::Deserialize;
 use serde_json::json;
-use zqa_rag::{llm::tools::Tool, reranking::common::RerankProviderConfig};
+use zqa_rag::llm::tools::Tool;
+use zqa_rag::reranking::common::RerankProviderConfig;
 
 use crate::store::common::ZoteroStore;
 use crate::utils::library::get_authors;

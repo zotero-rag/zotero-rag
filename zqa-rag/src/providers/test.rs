@@ -1,10 +1,9 @@
-use crate::{
-    capabilities::LlmFactory,
-    clients::test::TestClient,
-    config::LLMClientConfig,
-    llm::{errors::LLMError, factory::LLMClient},
-    providers::ProviderId,
-};
+use crate::capabilities::LlmFactory;
+use crate::clients::test::TestClient;
+use crate::config::LLMClientConfig;
+use crate::llm::errors::LLMError;
+use crate::llm::factory::LLMClient;
+use crate::providers::ProviderId;
 
 /// An [`LlmFactory`] that produces mock LLM clients returning canned responses.
 pub struct MockProvider;

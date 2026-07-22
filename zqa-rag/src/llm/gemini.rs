@@ -378,14 +378,12 @@ mod tests {
     use arrow_array::Array;
     use dotenv::dotenv;
     use lancedb::embeddings::EmbeddingFunction;
-    use zqa_macros::test_eq;
-    use zqa_macros::test_ok;
+    use zqa_macros::{test_eq, test_ok};
 
     use super::*;
     use crate::clients::gemini::GeminiClient;
     use crate::constants::DEFAULT_GEMINI_EMBEDDING_DIM;
-    use crate::http_client::ReqwestClient;
-    use crate::http_client::{MockHttpClient, SequentialMockHttpClient};
+    use crate::http_client::{MockHttpClient, ReqwestClient, SequentialMockHttpClient};
     use crate::llm::base::{AgenticClient, ChatHistoryItem, ChatRequest, ContentType};
     use crate::llm::tools::test_utils::MockTool;
 

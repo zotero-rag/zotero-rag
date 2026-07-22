@@ -1,23 +1,20 @@
 use std::sync::Arc;
 
-use arrow_array::{
-    ArrayRef, FixedSizeListArray, Float32Array, RecordBatch, StringArray, cast::AsArray,
-};
+use arrow_array::cast::AsArray;
+use arrow_array::{ArrayRef, FixedSizeListArray, Float32Array, RecordBatch, StringArray};
 use arrow_schema;
 use thiserror::Error;
-use zqa_rag::{
-    capabilities::EmbeddingProvider,
-    embedding::common::{
-        EmbeddingProviderConfig, get_embedding_dims_by_provider, get_embedding_provider_with_config,
-    },
-    llm::errors::LLMError,
-    vector::backends::lance::LanceError,
+use zqa_rag::capabilities::EmbeddingProvider;
+use zqa_rag::embedding::common::{
+    EmbeddingProviderConfig, get_embedding_dims_by_provider, get_embedding_provider_with_config,
 };
+use zqa_rag::llm::errors::LLMError;
+use zqa_rag::vector::backends::lance::LanceError;
 
 use super::library::{LibraryParsingError, parse_library};
-use crate::{
-    store::common::ZoteroStore, store::lance::LanceZoteroStore, utils::library::ZoteroItem,
-};
+use crate::store::common::ZoteroStore;
+use crate::store::lance::LanceZoteroStore;
+use crate::utils::library::ZoteroItem;
 
 /// An enum containing the fields stored by our application in `LanceDB`, in order. Implementations
 /// `as_ref()` and `into()` are provided to convert this to `&str` and `String` respectively.
@@ -353,10 +350,8 @@ mod tests {
     };
 
     use super::*;
-    use crate::{
-        common::setup_logger,
-        config::{Config, VoyageAIConfig},
-    };
+    use crate::common::setup_logger;
+    use crate::config::{Config, VoyageAIConfig};
 
     fn get_config() -> Config {
         let mut config = Config {

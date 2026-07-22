@@ -1,7 +1,9 @@
 //! Functions, structs, and trait implementations for interacting with the VoyageAI API. This module
 //! includes support for both embedding only.
 
-use std::{borrow::Cow, env, sync::Arc};
+use std::borrow::Cow;
+use std::env;
+use std::sync::Arc;
 
 use arrow_schema::{DataType, Field};
 use http::HeaderMap;
@@ -10,17 +12,14 @@ use reqwest::multipart::Form;
 use serde::{Deserialize, Serialize};
 use serde_jsonlines::{json_lines, write_json_lines};
 
+use crate::capabilities::{BatchAPIProvider, BatchJobState, EmbeddingProvider};
+use crate::constants::{DEFAULT_VOYAGE_EMBEDDING_DIM, DEFAULT_VOYAGE_EMBEDDING_MODEL};
 use crate::embedding::common::{
     BatchEmbeddingError, BatchEmbeddingRequest, BatchEmbeddingResult, BatchEmbeddingResults,
-    BatchSubmission,
+    BatchSubmission, EmbeddingApiResponse, compute_embeddings_async,
 };
 use crate::http_client::{HttpClient, ReqwestClient};
 use crate::llm::errors::LLMError;
-use crate::{
-    capabilities::{BatchAPIProvider, BatchJobState, EmbeddingProvider},
-    constants::{DEFAULT_VOYAGE_EMBEDDING_DIM, DEFAULT_VOYAGE_EMBEDDING_MODEL},
-    embedding::common::{EmbeddingApiResponse, compute_embeddings_async},
-};
 
 /// A client for Voyage AI's embedding API.
 #[derive(Debug, Clone)]

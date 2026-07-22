@@ -1,32 +1,28 @@
 //! Registry for providers
-use std::{
-    collections::HashMap,
-    sync::{Arc, LazyLock},
-};
+use std::collections::HashMap;
+use std::sync::{Arc, LazyLock};
 
 use lancedb::embeddings::EmbeddingFunction;
 
+use crate::capabilities::{BatchEmbeddingFactory, EmbeddingFactory, LlmFactory, RerankFactory};
+use crate::config::LLMClientConfig;
+use crate::embedding::common::EmbeddingProviderConfig;
+use crate::llm::errors::LLMError;
+use crate::llm::factory::{BatchEmbeddingClient, LLMClient};
+use crate::providers::anthropic::AnthropicProvider;
+use crate::providers::cohere::CohereProvider;
+use crate::providers::gemini::GeminiProvider;
+use crate::providers::ollama::OllamaProvider;
+use crate::providers::openai::OpenAIProvider;
+use crate::providers::openrouter::OpenRouterProvider;
+use crate::providers::provider_id::ProviderId;
 #[cfg(any(test, feature = "mock"))]
 use crate::providers::test::MockProvider;
-use crate::{
-    capabilities::{BatchEmbeddingFactory, EmbeddingFactory, LlmFactory, RerankFactory},
-    config::LLMClientConfig,
-    embedding::common::EmbeddingProviderConfig,
-    llm::{
-        errors::LLMError,
-        factory::{BatchEmbeddingClient, LLMClient},
-    },
-    providers::{
-        anthropic::AnthropicProvider, cohere::CohereProvider, gemini::GeminiProvider,
-        ollama::OllamaProvider, openai::OpenAIProvider, openrouter::OpenRouterProvider,
-        provider_id::ProviderId, voyage::VoyageAIProvider, zeroentropy::ZeroEntropyProvider,
-    },
-    reranking::common::{Rerank, RerankProviderConfig},
-    vector::backends::{
-        backend::VectorBackendRegistrar,
-        lance::{LanceBackend, LanceError},
-    },
-};
+use crate::providers::voyage::VoyageAIProvider;
+use crate::providers::zeroentropy::ZeroEntropyProvider;
+use crate::reranking::common::{Rerank, RerankProviderConfig};
+use crate::vector::backends::backend::VectorBackendRegistrar;
+use crate::vector::backends::lance::{LanceBackend, LanceError};
 
 /// Registry for provider factories keyed by canonical provider ID.
 pub struct ProviderRegistry {
@@ -229,17 +225,15 @@ pub fn provider_registry() -> &'static ProviderRegistry {
 #[cfg(test)]
 mod tests {
     use super::ProviderRegistry;
-    use crate::{
-        config::{
-            AnthropicConfig, CohereConfig, GeminiConfig, OllamaConfig, OpenAIConfig,
-            OpenRouterConfig, VoyageAIConfig, ZeroEntropyConfig,
-        },
-        embedding::common::EmbeddingProviderConfig,
-        llm::factory::LLMClient,
-        providers::registry::provider_registry,
-        reranking::common::RerankProviderConfig,
-        vector::backends::lance::LanceError,
+    use crate::config::{
+        AnthropicConfig, CohereConfig, GeminiConfig, OllamaConfig, OpenAIConfig, OpenRouterConfig,
+        VoyageAIConfig, ZeroEntropyConfig,
     };
+    use crate::embedding::common::EmbeddingProviderConfig;
+    use crate::llm::factory::LLMClient;
+    use crate::providers::registry::provider_registry;
+    use crate::reranking::common::RerankProviderConfig;
+    use crate::vector::backends::lance::LanceError;
 
     fn openai_llm_config() -> crate::config::LLMClientConfig {
         crate::config::LLMClientConfig::OpenAI(OpenAIConfig {

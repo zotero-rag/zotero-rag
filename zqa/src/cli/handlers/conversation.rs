@@ -1,17 +1,13 @@
 //! Command handlers for conversation-related operations.
 
-use std::{
-    io::{BufRead, Write},
-    sync::{Arc, Mutex, atomic},
-};
+use std::io::{BufRead, Write};
+use std::sync::{Arc, Mutex, atomic};
 
 use chrono::Local;
 
-use crate::{
-    cli::errors::CLIError,
-    common::Context,
-    state::{SavedChatHistory, get_conversation_history, save_conversation},
-};
+use crate::cli::errors::CLIError;
+use crate::common::Context;
+use crate::state::{SavedChatHistory, get_conversation_history, save_conversation};
 
 /// Resume a previous conversation selected by the user.
 ///
@@ -146,10 +142,8 @@ mod tests {
     use zqa_rag::llm::base::{ChatHistoryContent, ChatHistoryItem, MessageRole};
 
     use super::handle_resume_cmd;
-    use crate::{
-        common::test_support::create_test_context,
-        state::{SavedChatHistory, UsageMetadata, save_conversation},
-    };
+    use crate::common::test_support::create_test_context;
+    use crate::state::{SavedChatHistory, UsageMetadata, save_conversation};
 
     #[test]
     fn test_resume_no_conversations() {

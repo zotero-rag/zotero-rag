@@ -3,18 +3,16 @@ use std::sync::Arc;
 
 use lancedb::embeddings::EmbeddingFunction;
 
-use crate::{
-    capabilities::{BatchEmbeddingFactory, EmbeddingFactory, RerankFactory},
-    embedding::{common::EmbeddingProviderConfig, voyage::VoyageAIClient},
-    http_client::ReqwestClient,
-    llm::{errors::LLMError, factory::BatchEmbeddingClient},
-    providers::provider_id::ProviderId,
-    reranking::common::{Rerank, RerankProviderConfig},
-    vector::backends::{
-        backend::VectorBackendRegistrar,
-        lance::{LanceBackend, LanceError},
-    },
-};
+use crate::capabilities::{BatchEmbeddingFactory, EmbeddingFactory, RerankFactory};
+use crate::embedding::common::EmbeddingProviderConfig;
+use crate::embedding::voyage::VoyageAIClient;
+use crate::http_client::ReqwestClient;
+use crate::llm::errors::LLMError;
+use crate::llm::factory::BatchEmbeddingClient;
+use crate::providers::provider_id::ProviderId;
+use crate::reranking::common::{Rerank, RerankProviderConfig};
+use crate::vector::backends::backend::VectorBackendRegistrar;
+use crate::vector::backends::lance::{LanceBackend, LanceError};
 
 /// Provider descriptor for Voyage AI capabilities.
 pub struct VoyageAIProvider;

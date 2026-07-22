@@ -4,16 +4,15 @@
 use std::sync::Arc;
 
 use http::HeaderMap;
-use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 
 use super::errors::LLMError;
-use crate::{
-    constants::{DEFAULT_MAX_RETRIES, DEFAULT_MAX_TOOL_ITERATIONS},
-    http_client::HttpClient,
-    llm::tools::{CallbackFn, SerializedTool, Tool, get_owned_tools, process_tool_calls},
-    pricing::ModelUsage,
-    requests::request_with_backoff,
-};
+use crate::constants::{DEFAULT_MAX_RETRIES, DEFAULT_MAX_TOOL_ITERATIONS};
+use crate::http_client::HttpClient;
+use crate::llm::tools::{CallbackFn, SerializedTool, Tool, get_owned_tools, process_tool_calls};
+use crate::pricing::ModelUsage;
+use crate::requests::request_with_backoff;
 
 /// Roles for messages
 #[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -335,10 +334,8 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        collections::VecDeque,
-        sync::{Arc, Mutex},
-    };
+    use std::collections::VecDeque;
+    use std::sync::{Arc, Mutex};
 
     use super::*;
     use crate::llm::tools::test_utils::MockTool;

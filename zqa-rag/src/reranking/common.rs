@@ -1,12 +1,12 @@
 //! Structs, functions, and traits shared by reranking clients
 
-use std::{pin::Pin, sync::Arc};
+use std::pin::Pin;
+use std::sync::Arc;
 
-use crate::{
-    capabilities::RerankerProvider,
-    llm::errors::LLMError,
-    providers::{ProviderId, registry::provider_registry},
-};
+use crate::capabilities::RerankerProvider;
+use crate::llm::errors::LLMError;
+use crate::providers::ProviderId;
+use crate::providers::registry::provider_registry;
 
 /// A trait indicating reranking capabilities.
 pub trait Rerank: Send + Sync {

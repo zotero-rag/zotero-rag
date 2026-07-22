@@ -5,10 +5,10 @@
 
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
-use std::f32;
+use std::error::Error;
 use std::str::Utf8Error;
 use std::sync::LazyLock;
-use std::{error::Error, str};
+use std::{f32, str};
 
 use itertools::Itertools;
 use log;
