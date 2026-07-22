@@ -1024,7 +1024,7 @@ mod tests {
         handle_batch_cancel_cmd, handle_batch_check_status_cmd, handle_batch_create_cmd,
         prompt_and_fetch_batch_results, update_hash_cache, write_batch_metadata,
     };
-    use crate::cli::app::tests::create_test_context;
+    use crate::common::test_support::create_test_context;
     use crate::utils::library::{ZoteroItem, ZoteroItemMetadata};
 
     /// A [`CacheEntry`] for a VoyageAI batch with the given model and sequence number.

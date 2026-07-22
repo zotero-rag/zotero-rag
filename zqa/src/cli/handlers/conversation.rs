@@ -147,7 +147,7 @@ mod tests {
 
     use super::handle_resume_cmd;
     use crate::{
-        cli::app::tests::create_test_context,
+        common::test_support::create_test_context,
         state::{SavedChatHistory, UsageMetadata, save_conversation},
     };
 

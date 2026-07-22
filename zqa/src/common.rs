@@ -139,10 +139,69 @@ pub(crate) mod test_support {
     use std::path::PathBuf;
 
     use tempfile::TempDir;
-
-    use crate::cli::app::tests::create_test_context;
+    use zqa_rag::constants::{
+        DEFAULT_VOYAGE_EMBEDDING_DIM, DEFAULT_VOYAGE_EMBEDDING_MODEL, DEFAULT_VOYAGE_RERANK_MODEL,
+    };
 
     use super::{Context, PathOptions};
+    use crate::{
+        LanceZoteroStore,
+        common::State,
+        config::{Config, MockConfig, VoyageAIConfig},
+    };
+
+    /// Create a config with the mock LLM provider.
+    pub(crate) fn get_config(mock_config: MockConfig) -> Config {
+        let mut config = Config {
+            voyageai: Some(VoyageAIConfig {
+                reranker: Some(DEFAULT_VOYAGE_RERANK_MODEL.into()),
+                embedding_model: Some(DEFAULT_VOYAGE_EMBEDDING_MODEL.into()),
+                embedding_dims: Some(DEFAULT_VOYAGE_EMBEDDING_DIM as usize),
+                api_key: Some(String::new()),
+            }),
+            mock: Some(mock_config),
+            ..Default::default()
+        };
+
+        config.read_env().unwrap();
+        config
+    }
+
+    /// Create a default `Context` object where the output and error streams are buffers that can
+    /// be written into. This allows for the output to be easily inspected in tests.
+    pub(crate) fn create_test_context(
+        llm_responses: Vec<String>,
+    ) -> Context<Cursor<Vec<u8>>, Cursor<Vec<u8>>> {
+        let out_buf: Vec<u8> = Vec::new();
+        let out = Cursor::new(out_buf);
+
+        let err_buf: Vec<u8> = Vec::new();
+        let err = Cursor::new(err_buf);
+
+        let schema = arrow_schema::Schema::new(vec![
+            arrow_schema::Field::new("library_key", arrow_schema::DataType::Utf8, false),
+            arrow_schema::Field::new("title", arrow_schema::DataType::Utf8, false),
+            arrow_schema::Field::new("file_path", arrow_schema::DataType::Utf8, false),
+            arrow_schema::Field::new("pdf_text", arrow_schema::DataType::Utf8, false),
+        ]);
+
+        let config = get_config(MockConfig {
+            responses: llm_responses,
+        });
+
+        let embedding_config = config.get_embedding_config().unwrap();
+
+        Context {
+            state: State::default(),
+            store: LanceZoteroStore::from_schema(embedding_config, schema.into()),
+            config,
+            path_options: PathOptions::default(),
+            // Default to empty input (EOF); tests that drive prompts overwrite `ctx.input`.
+            input: Box::new(Cursor::new(Vec::new())),
+            out,
+            err,
+        }
+    }
 
     /// Isolated, per-test filesystem locations that mirror the `temp_db` pattern used in the
     /// `zqa-rag` LanceDB tests: a unique temporary database directory, the toy Zotero library
