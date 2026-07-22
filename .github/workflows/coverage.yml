@@ -36,18 +36,18 @@ jobs:
               ~/.cargo/registry/cache/
               ~/.cargo/git/db/
               target/
-          key: ${{ runner.os }}-cargo-llvm-cov-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-tarpaulin-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Install Rust
         run: rustup update stable
 
-      - name: Install cargo-llvm-cov
+      - name: Install cargo-tarpaulin
         uses: taiki-e/install-action@v2
         with:
-          tool: cargo-llvm-cov
+          tool: cargo-tarpaulin
 
       - name: Generate code coverage
-        run: cargo llvm-cov --workspace --lcov --output-path lcov.info
+        run: cargo tarpaulin --engine llvm --out lcov --output-dir . --timeout 300 --exclude-files 'zqa/tests/*'
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_KEY }}
           VOYAGE_AI_API_KEY: ${{ secrets.VOYAGE_AI_API_KEY }}
