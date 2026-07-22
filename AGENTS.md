@@ -21,6 +21,38 @@ This is a Rust-based Zotero RAG QA System for answering questions from academic 
 - Bench (zqa-pdftools): `cargo bench -p zqa-pdftools`
 - Faster Linux linking: uses `mold` via `.cargo/config.toml` (install or remove the flag).
 
+# Answering Questions
+
+ALWAYS talk through what you are doing and why. Do not merely use reasoning; before making a series of 3 or more tool 
+calls at once, briefly state what you will do, and only then call the tool. You do not need to wait for a user
+response; it suffices to simply state what you are doing and then call the tools.
+
+If the tool call is rejected, you do not need to stop immediately. If a reason is provided, address that and continue.
+
+This is not to encourage that you spend a lot of time. In general, avoid spending several minutes before a definitive
+answer. Use subagents if you need to speed it up, but NEVER keep the user waiting for a technical question (if it is
+not an implementation request).
+
+Your final answer should not be terse. Provide sufficient detail explaining why you recommend what you did. Again,
+use good judgement here: don't yap if the question is a basic syntax question, but don't give a simple one-paragraph
+answer for a more complex question.
+
+## Technical Decisions
+
+When asked a question, especially regarding making a technical decision, you MUST think through very carefully:
+- What alternatives exist? Why are you not recommending those instead?
+- Given the context of the project, is what you are recommending the *best* solution? If not, what trade-offs are
+you making against the alternatives?
+- Never present a solution that is good only in the short-term and will result in maintenance burden, poor code, 
+or other issues in the longer term, unless expressly asked for this.
+- You MUST consider every facet of the problem. Do NOT make a recommendation if it answers the question directly, 
+but has a drawback in some other aspect of that technical decision.
+
+## Direct Questions
+
+When asked general technical questions such as syntax help, idioms, etc., where the question does not explicitly
+mention the code base, do not waste time using tool calls; answer directly.
+
 # Coding Standards
 
 ## Rust Conventions
