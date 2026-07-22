@@ -13,7 +13,7 @@ use lancedb::{Table, connect};
 
 use super::backends::lance::LanceError;
 use super::backends::lance::{
-    LANCE_DATA_TABLE_NAME as TABLE_NAME, get_db_uri, read_stored_data_table_version,
+    LANCE_DATA_TABLE_NAME as TABLE_NAME, read_stored_data_table_version,
 };
 use crate::capabilities::EmbeddingProvider;
 use crate::embedding::common::get_embedding_dims_by_provider;
@@ -321,9 +321,10 @@ async fn check_indexes(tbl: &lancedb::table::Table) -> Result<Vec<(String, Strin
 /// - Index information (warns if missing or incomplete)
 ///
 /// # Arguments:
-/// * `schema` - The expected schema for the LanceDB table.
-/// * `text_col` - The name of the column containing the full texts.
 /// * `embedding_provider` - The embedding provider. Must be one of `EmbeddingProviders`.
+/// * `db_uri` - The URI of the database to check. Pass a store's own URI (e.g. via
+///   `LanceZoteroStore::db_uri`) so the check targets the same database the store uses, rather than
+///   relying on the process-global `LANCEDB_URI`.
 ///
 /// # Returns:
 ///
@@ -336,6 +337,7 @@ async fn check_indexes(tbl: &lancedb::table::Table) -> Result<Vec<(String, Strin
 #[must_use = "This function has no side-effects, so you likely want to inspect this value."]
 pub async fn lancedb_health_check(
     embedding_provider: EmbeddingProvider,
+    db_uri: &str,
 ) -> Result<HealthCheckResult, LanceError> {
     let mut result = HealthCheckResult {
         directory_exists: false,
@@ -348,8 +350,7 @@ pub async fn lancedb_health_check(
     };
 
     // Check 1: Directory existence and size
-    let db_uri = get_db_uri();
-    let db_path = PathBuf::from(&db_uri);
+    let db_path = PathBuf::from(db_uri);
     result.directory_exists = db_path.exists();
 
     if result.directory_exists {
@@ -360,7 +361,7 @@ pub async fn lancedb_health_check(
     }
 
     // Check 2: Table connectivity
-    let db = match connect(&db_uri).execute().await {
+    let db = match connect(db_uri).execute().await {
         Ok(conn) => conn,
         Err(e) => {
             // Capture the error
@@ -452,7 +453,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(get_db_uri());
         let _ = std::fs::remove_dir_all(format!("zqa-rag/{}", get_db_uri()));
 
-        let result = lancedb_health_check(EmbeddingProvider::VoyageAI).await;
+        let result = lancedb_health_check(EmbeddingProvider::VoyageAI, &get_db_uri()).await;
         test_ok!(result);
 
         let health_result = result.unwrap();
@@ -497,7 +498,7 @@ mod tests {
         backend.insert_items(batches, None).await.unwrap();
 
         // Now test health check
-        let result = lancedb_health_check(EmbeddingProvider::VoyageAI).await;
+        let result = lancedb_health_check(EmbeddingProvider::VoyageAI, &get_db_uri()).await;
         test_ok!(result);
 
         let health_result = result.unwrap();

@@ -1,4 +1,5 @@
 use std::{
+    path::PathBuf,
     pin::Pin,
     sync::{
         Arc,
@@ -26,6 +27,9 @@ where
     pub(crate) store: Arc<T>,
     /// The reranker provider to use.
     pub(crate) reranker_config: Option<RerankProviderConfig>,
+    /// Optional override for the Zotero library directory, used when enriching results with author
+    /// metadata. When `None`, the path is resolved from the environment.
+    pub(crate) library_path: Option<PathBuf>,
     /// Accumulated token count of text sent to the embedding API across all calls.
     pub(crate) embedding_tokens: Arc<AtomicU64>,
     /// Accumulated token count of text sent to the reranker API across all calls.
@@ -36,11 +40,17 @@ impl<T> RetrievalTool<T>
 where
     T: ZoteroStore,
 {
-    /// Create a new instance of the [`RetrievalTool`] given a backend and reranker config.
-    pub(crate) fn new(store: Arc<T>, reranker_provider: Option<RerankProviderConfig>) -> Self {
+    /// Create a new instance of the [`RetrievalTool`] given a backend, reranker config, and an
+    /// optional Zotero library path override (see [`RetrievalTool::library_path`]).
+    pub(crate) fn new(
+        store: Arc<T>,
+        reranker_provider: Option<RerankProviderConfig>,
+        library_path: Option<PathBuf>,
+    ) -> Self {
         Self {
             store,
             reranker_config: reranker_provider,
+            library_path,
             embedding_tokens: Arc::new(AtomicU64::new(0)),
             rerank_tokens: Arc::new(AtomicU64::new(0)),
         }
@@ -91,6 +101,7 @@ where
         let embedding_tokens = Arc::clone(&self.embedding_tokens);
         let rerank_tokens = Arc::clone(&self.rerank_tokens);
         let store = Arc::clone(&self.store);
+        let library_path = self.library_path.clone();
 
         Box::pin(async move {
             let input: RetrievalToolInput =
@@ -102,7 +113,8 @@ where
             embedding_tokens.fetch_add(stats.embedding_tokens as u64, Ordering::Relaxed);
             rerank_tokens.fetch_add(stats.rerank_tokens as u64, Ordering::Relaxed);
 
-            get_authors(&mut results).map_err(|e| format!("Failed to get authors: {e}"))?;
+            get_authors(&mut results, library_path.as_deref())
+                .map_err(|e| format!("Failed to get authors: {e}"))?;
 
             let tool_results = results
                 .iter()
@@ -160,6 +172,7 @@ mod tests {
         RetrievalTool::new(
             Arc::new(store),
             Some(RerankProviderConfig::VoyageAI(config)),
+            None,
         )
     }
 

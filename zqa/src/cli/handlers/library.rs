@@ -9,7 +9,7 @@ use zqa_rag::vector::doctor::doctor as rag_doctor;
 
 use crate::utils::terminal::{DIM_TEXT, RESET, read_line};
 use crate::{
-    cli::{app::BATCH_ITER_FILE, errors::CLIError},
+    cli::errors::CLIError,
     common::Context,
     full_library_to_arrow,
     store::common::ZoteroStore,
@@ -50,7 +50,7 @@ where
 ///
 /// This parses the library, extracts text from each file, stores the records in LanceDB,
 /// and generates embeddings. If the embedding step fails, parsed records are kept in
-/// [`BATCH_ITER_FILE`] so embedding can be retried later.
+/// [`BATCH_ITER_FILE`](crate::cli::app::BATCH_ITER_FILE) so embedding can be retried later.
 ///
 /// # Arguments
 ///
@@ -72,10 +72,11 @@ where
 {
     const WARNING_THRESHOLD: usize = 100;
 
+    let library_path = ctx.path_options.library_path.as_deref();
     let item_metadata = if ctx.store.exists().await {
-        get_new_library_items(&ctx.store).await
+        get_new_library_items(&ctx.store, library_path).await
     } else {
-        parse_library_metadata(None, None)
+        parse_library_metadata(library_path, None, None)
     };
 
     if let Err(parse_err) = item_metadata {
@@ -103,12 +104,13 @@ where
         }
     }
 
-    let record_batch = full_library_to_arrow(&ctx.store, None, None).await?;
+    let record_batch = full_library_to_arrow(&ctx.store, library_path, None, None).await?;
     let schema = record_batch.schema();
     let batches = vec![record_batch.clone()];
 
     // Write to binary file using Arrow IPC format
-    let file = File::create(BATCH_ITER_FILE)?;
+    let batch_iter_path = ctx.path_options.batch_iter_path.clone();
+    let file = File::create(&batch_iter_path)?;
     let mut writer = FileWriter::try_new(file, &schema)?;
 
     writer.write(&record_batch)?;
@@ -119,13 +121,14 @@ where
     match result {
         Ok(()) => {
             writeln!(&mut ctx.out, "Successfully parsed library!")?;
-            std::fs::remove_file(BATCH_ITER_FILE)?;
+            std::fs::remove_file(&batch_iter_path)?;
         }
         Err(e) => {
             writeln!(&mut ctx.err, "Parsing library failed: {e}")?;
             writeln!(
                 &mut ctx.err,
-                "The parsed PDFs have been saved in 'batch_iter.bin'. Run '/embed' to retry embedding."
+                "The parsed PDFs have been saved in '{}'. Run '/embed' to retry embedding.",
+                batch_iter_path.display()
             )?;
         }
     }
@@ -135,7 +138,7 @@ where
 
 /// Retry embedding from saved batch data or repair zero-vector rows.
 ///
-/// When `fix` is `false`, this reads [`BATCH_ITER_FILE`] and inserts the saved batches into
+/// When `fix` is `false`, this reads [`BATCH_ITER_FILE`](crate::cli::app::BATCH_ITER_FILE) and inserts the saved batches into
 /// LanceDB. When `fix` is `true`, it repairs rows whose stored embeddings are all zero.
 ///
 /// # Arguments
@@ -164,7 +167,10 @@ where
         return fix_zero_embeddings(ctx).await;
     }
 
-    let file = File::open(BATCH_ITER_FILE)?;
+    let batch_iter_path = ctx.path_options.batch_iter_path.clone();
+    let batch_iter_display = batch_iter_path.display();
+
+    let file = File::open(&batch_iter_path)?;
     let reader = FileReader::try_new(file, None)?;
 
     let mut batches = Vec::<RecordBatch>::new();
@@ -175,7 +181,7 @@ where
     if batches.is_empty() {
         writeln!(
             &mut ctx.err,
-            "(/embed) It seems {BATCH_ITER_FILE} contains no batches. Exiting early."
+            "(/embed) It seems {batch_iter_display} contains no batches. Exiting early."
         )?;
         return Ok(());
     }
@@ -193,12 +199,12 @@ where
 
     if db.is_ok() {
         writeln!(ctx.out, "Successfully parsed library!")?;
-        std::fs::remove_file(BATCH_ITER_FILE)?;
+        std::fs::remove_file(&batch_iter_path)?;
     } else if let Err(e) = db {
         writeln!(ctx.err, "Parsing library failed: {e}")?;
         writeln!(
             ctx.err,
-            "Your {BATCH_ITER_FILE} file has been left untouched."
+            "Your {batch_iter_display} file has been left untouched."
         )?;
     }
 
@@ -293,7 +299,7 @@ where
 pub(crate) async fn handle_checkhealth_cmd<O: Write, E: Write>(
     ctx: &mut Context<O, E>,
 ) -> Result<(), CLIError> {
-    let _ = match lancedb_health_check(ctx.config.embedding_provider).await {
+    let _ = match lancedb_health_check(ctx.config.embedding_provider, &ctx.store.db_uri()).await {
         Ok(result) => writeln!(ctx.out, "{result}"),
         Err(e) => writeln!(ctx.err, "{e}"),
     };
@@ -323,7 +329,8 @@ where
     O: Write,
     E: Write,
 {
-    if let Err(e) = rag_doctor(ctx.config.embedding_provider, &mut ctx.out).await {
+    let db_uri = ctx.store.db_uri();
+    if let Err(e) = rag_doctor(ctx.config.embedding_provider, &db_uri, &mut ctx.out).await {
         writeln!(ctx.err, "{e}")?;
     }
 
@@ -350,7 +357,8 @@ where
 /// Returns a [`CLIError`] if configuration is invalid, database operations fail,
 /// embedding regeneration fails, or writing output fails.
 async fn fix_zero_embeddings<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Result<(), CLIError> {
-    let healthcheck = lancedb_health_check(ctx.config.embedding_provider).await?;
+    let healthcheck =
+        lancedb_health_check(ctx.config.embedding_provider, &ctx.store.db_uri()).await?;
 
     let zero_batches = match healthcheck.zero_embedding_items {
         Some(Ok(zero_items)) => {
@@ -424,40 +432,28 @@ async fn fix_zero_embeddings<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Res
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        fs::{self, File},
-        sync::Arc,
-    };
+    use std::{fs::File, sync::Arc};
 
     use arrow_array::{
         FixedSizeListArray, Float32Array, RecordBatch, RecordBatchIterator, StringArray,
     };
     use arrow_ipc::writer::FileWriter;
     use lancedb::connect;
-    use serial_test::serial;
-    use temp_env;
     use zqa_macros::{test_contains, test_ok};
     use zqa_macros_proc::retry;
     use zqa_rag::constants::DEFAULT_VOYAGE_EMBEDDING_DIM;
 
     use super::{handle_checkhealth_cmd, handle_embed_cmd, handle_process_cmd, handle_stats_cmd};
-    use crate::cli::app::{BATCH_ITER_FILE, tests::create_test_context};
+    use crate::common::test_support::TestPaths;
 
     #[retry(3)]
     #[tokio::test(flavor = "multi_thread")]
-    #[serial]
     async fn test_embed() {
         dotenv::dotenv().ok();
 
-        let temp_dir = tempfile::tempdir().unwrap();
-        let db_uri = temp_dir
-            .path()
-            .join("lancedb-table")
-            .to_str()
-            .unwrap()
-            .to_string();
+        let paths = TestPaths::new();
+        let mut ctx = paths.context(vec![]);
 
-        let mut ctx = create_test_context(vec![]);
         let schema = arrow_schema::Schema::new(vec![arrow_schema::Field::new(
             "pdf_text",
             arrow_schema::DataType::Utf8,
@@ -467,16 +463,12 @@ mod tests {
         let record_batch =
             RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(data)]).unwrap();
 
-        let file = File::create(BATCH_ITER_FILE).unwrap();
+        let file = File::create(&ctx.path_options.batch_iter_path).unwrap();
         let mut writer = FileWriter::try_new(file, &schema).unwrap();
         writer.write(&record_batch).unwrap();
         writer.finish().unwrap();
 
-        let result = temp_env::async_with_vars(
-            [("LANCEDB_URI", Some(&db_uri))],
-            handle_embed_cmd(false, &mut ctx),
-        )
-        .await;
+        let result = handle_embed_cmd(false, &mut ctx).await;
         test_ok!(result);
         assert!(result.is_ok());
 
@@ -485,102 +477,55 @@ mod tests {
 
         let err = String::from_utf8(ctx.err.into_inner()).unwrap();
         assert!(err.is_empty());
-
-        if fs::metadata(BATCH_ITER_FILE).is_ok() {
-            fs::remove_file(BATCH_ITER_FILE).expect("Failed to clean up BATCH_ITER_FILE");
-        }
     }
 
     #[retry(3)]
     #[tokio::test(flavor = "multi_thread")]
-    #[serial]
     async fn test_process_and_stats() {
         dotenv::dotenv().ok();
 
-        let temp_dir = tempfile::tempdir().unwrap();
-        let db_uri = temp_dir
-            .path()
-            .join("lancedb-table")
-            .to_str()
-            .unwrap()
-            .to_string();
+        let paths = TestPaths::new();
+        let mut ctx = paths.context(vec![]);
 
-        let mut ctx = create_test_context(vec![]);
-        let result = temp_env::async_with_vars(
-            [("CI", Some("true")), ("LANCEDB_URI", Some(&db_uri))],
-            handle_process_cmd(&mut ctx),
-        )
-        .await;
+        let result = handle_process_cmd(&mut ctx).await;
         test_ok!(result);
         assert!(result.is_ok());
 
         let output = String::from_utf8(ctx.out.clone().into_inner()).unwrap();
         assert!(output.contains("Successfully parsed library!"));
 
-        let stats =
-            temp_env::async_with_vars([("LANCEDB_URI", Some(&db_uri))], handle_stats_cmd(&mut ctx))
-                .await;
+        let stats = handle_stats_cmd(&mut ctx).await;
         let output = String::from_utf8(ctx.out.into_inner()).unwrap();
         test_ok!(stats);
         test_contains!(output, "LanceDB metadata:");
         test_contains!(output, "Number of rows: 8");
-
-        if fs::metadata(BATCH_ITER_FILE).is_ok() {
-            fs::remove_file(BATCH_ITER_FILE).expect("Failed to clean up BATCH_ITER_FILE");
-        }
     }
 
     #[tokio::test]
-    #[serial]
     async fn test_checkhealth_no_database() {
         dotenv::dotenv().ok();
 
-        let temp_dir = tempfile::tempdir().unwrap();
-        let db_uri = temp_dir
-            .path()
-            .join("lancedb-table")
-            .to_str()
-            .unwrap()
-            .to_string();
-
-        let mut ctx = create_test_context(vec![]);
-        let output = temp_env::async_with_vars([("LANCEDB_URI", Some(&db_uri))], async move {
-            handle_checkhealth_cmd(&mut ctx).await.unwrap();
-            String::from_utf8(ctx.out.into_inner()).unwrap()
-        })
-        .await;
+        let paths = TestPaths::new();
+        let mut ctx = paths.context(vec![]);
+        handle_checkhealth_cmd(&mut ctx).await.unwrap();
+        let output = String::from_utf8(ctx.out.into_inner()).unwrap();
 
         assert!(output.contains("directory does not exist"));
     }
 
     #[retry(3)]
     #[tokio::test]
-    #[serial]
     async fn test_checkhealth_with_database() {
         dotenv::dotenv().ok();
 
-        let temp_dir = tempfile::tempdir().unwrap();
-        let db_uri = temp_dir
-            .path()
-            .join("lancedb-table")
-            .to_str()
-            .unwrap()
-            .to_string();
-
-        let mut setup_ctx = create_test_context(vec![]);
-        let result = temp_env::async_with_vars(
-            [("CI", Some("true")), ("LANCEDB_URI", Some(&db_uri))],
-            handle_process_cmd(&mut setup_ctx),
-        )
-        .await;
+        let paths = TestPaths::new();
+        let mut setup_ctx = paths.context(vec![]);
+        let result = handle_process_cmd(&mut setup_ctx).await;
         test_ok!(result);
 
-        let mut ctx = create_test_context(vec![]);
-        let output = temp_env::async_with_vars([("LANCEDB_URI", Some(&db_uri))], async move {
-            handle_checkhealth_cmd(&mut ctx).await.unwrap();
-            String::from_utf8(ctx.out.into_inner()).unwrap()
-        })
-        .await;
+        let mut ctx = paths.context(vec![]);
+        handle_checkhealth_cmd(&mut ctx).await.unwrap();
+        let output = String::from_utf8(ctx.out.into_inner()).unwrap();
 
         test_contains!(output, "LanceDB Health Check Results");
         test_contains!(output, "directory exists");
@@ -648,41 +593,21 @@ mod tests {
 
     #[retry(3)]
     #[tokio::test(flavor = "multi_thread")]
-    #[serial]
     async fn test_fix_zero_embeddings_no_zeros() {
         dotenv::dotenv().ok();
 
-        let temp_dir = tempfile::tempdir().unwrap();
-        let db_uri = temp_dir
-            .path()
-            .join("lancedb-table")
-            .to_str()
-            .unwrap()
-            .to_string();
-
-        let mut setup_ctx = create_test_context(vec![]);
-        let setup_result = temp_env::async_with_vars(
-            [("CI", Some("true")), ("LANCEDB_URI", Some(&db_uri))],
-            handle_process_cmd(&mut setup_ctx),
-        )
-        .await;
+        let paths = TestPaths::new();
+        let mut setup_ctx = paths.context(vec![]);
+        let setup_result = handle_process_cmd(&mut setup_ctx).await;
         test_ok!(setup_result);
 
-        let mut first_ctx = create_test_context(vec![]);
-        let first_result = temp_env::async_with_vars(
-            [("LANCEDB_URI", Some(&db_uri))],
-            handle_embed_cmd(true, &mut first_ctx),
-        )
-        .await;
+        let mut first_ctx = paths.context(vec![]);
+        let first_result = handle_embed_cmd(true, &mut first_ctx).await;
         test_ok!(first_result);
         assert!(first_result.is_ok());
 
-        let mut ctx = create_test_context(vec![]);
-        let result = temp_env::async_with_vars(
-            [("LANCEDB_URI", Some(&db_uri))],
-            handle_embed_cmd(true, &mut ctx),
-        )
-        .await;
+        let mut ctx = paths.context(vec![]);
+        let result = handle_embed_cmd(true, &mut ctx).await;
         test_ok!(result);
         assert!(result.is_ok());
 
@@ -692,34 +617,18 @@ mod tests {
 
     #[retry(3)]
     #[tokio::test(flavor = "multi_thread")]
-    #[serial]
     async fn test_fix_zero_embeddings_with_zero_rows() {
         dotenv::dotenv().ok();
 
-        let temp_dir = tempfile::tempdir().unwrap();
-        let db_uri = temp_dir
-            .path()
-            .join("lancedb-table")
-            .to_str()
-            .unwrap()
-            .to_string();
-
-        let mut setup_ctx = create_test_context(vec![]);
-        let setup_result = temp_env::async_with_vars(
-            [("CI", Some("true")), ("LANCEDB_URI", Some(&db_uri))],
-            handle_process_cmd(&mut setup_ctx),
-        )
-        .await;
+        let paths = TestPaths::new();
+        let mut setup_ctx = paths.context(vec![]);
+        let setup_result = handle_process_cmd(&mut setup_ctx).await;
         test_ok!(setup_result);
 
-        insert_zero_embedding_row(&db_uri).await;
+        insert_zero_embedding_row(&paths.db_uri).await;
 
-        let mut ctx = create_test_context(vec![]);
-        let result = temp_env::async_with_vars(
-            [("LANCEDB_URI", Some(&db_uri))],
-            handle_embed_cmd(true, &mut ctx),
-        )
-        .await;
+        let mut ctx = paths.context(vec![]);
+        let result = handle_embed_cmd(true, &mut ctx).await;
         test_ok!(result);
         assert!(result.is_ok());
 

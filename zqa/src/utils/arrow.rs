@@ -1,4 +1,4 @@
-use std::{path::PathBuf, sync::Arc};
+use std::sync::Arc;
 
 use arrow_array::{
     ArrayRef, FixedSizeListArray, Float32Array, RecordBatch, StringArray, cast::AsArray,
@@ -11,11 +11,13 @@ use zqa_rag::{
         EmbeddingProviderConfig, get_embedding_dims_by_provider, get_embedding_provider_with_config,
     },
     llm::errors::LLMError,
-    vector::backends::lance::{LANCE_DATA_TABLE_NAME, LanceError, get_db_uri},
+    vector::backends::lance::LanceError,
 };
 
 use super::library::{LibraryParsingError, parse_library};
-use crate::{store::lance::LanceZoteroStore, utils::library::ZoteroItem};
+use crate::{
+    store::common::ZoteroStore, store::lance::LanceZoteroStore, utils::library::ZoteroItem,
+};
 
 /// An enum containing the fields stored by our application in `LanceDB`, in order. Implementations
 /// `as_ref()` and `into()` are provided to convert this to `&str` and `String` respectively.
@@ -87,20 +89,6 @@ impl From<LibraryParsingError> for ArrowError {
 impl From<LanceError> for ArrowError {
     fn from(value: LanceError) -> Self {
         Self::LanceError(value.to_string())
-    }
-}
-
-/// Checks whether the configured LanceDB database exists and contains the expected table.
-pub(crate) async fn lancedb_exists() -> bool {
-    let uri = get_db_uri();
-    if !PathBuf::from(&uri).exists() {
-        return false;
-    }
-
-    if let Ok(db) = lancedb::connect(&uri).execute().await {
-        db.open_table(LANCE_DATA_TABLE_NAME).execute().await.is_ok()
-    } else {
-        false
     }
 }
 
@@ -252,18 +240,23 @@ pub fn library_to_arrow(
 /// # Arguments
 ///
 /// * `store` - [`LanceZoteroStore`] with configuration
+/// * `library_path` - An optional override for the Zotero library directory. When `None`, the path
+///   is resolved from the environment.
 /// * `start_from` - An optional offset for the SQL query. Useful for debugging, pagination,
 ///   multi-threading, etc.
 /// * `limit` - Optional limit, meant to be used in conjunction with `start_from`.
 pub async fn full_library_to_arrow(
     store: &LanceZoteroStore,
+    library_path: Option<&std::path::Path>,
     start_from: Option<usize>,
     limit: Option<usize>,
 ) -> Result<RecordBatch, ArrowError> {
-    let lib_items = parse_library(store, start_from, limit).await?;
+    let lib_items = parse_library(store, library_path, start_from, limit).await?;
     log::info!("Finished parsing library items.");
 
-    let include_embeddings = lancedb_exists().await;
+    // Consult the store itself (which may be pinned to a specific URI) rather than the global
+    // `LANCEDB_URI`, so callers with an explicitly-configured store stay self-consistent.
+    let include_embeddings = store.exists().await;
     library_to_arrow(
         &lib_items,
         &store.get_embedding_config(),
@@ -399,7 +392,7 @@ mod tests {
             let embedding_config = config.get_embedding_config().unwrap();
             let schema = Arc::new(get_schema(embedding_config.provider(), true));
             let store = LanceZoteroStore::from_schema(embedding_config, schema);
-            full_library_to_arrow(&store, Some(0), Some(5)).await
+            full_library_to_arrow(&store, None, Some(0), Some(5)).await
         })
         .await;
 

@@ -1,6 +1,7 @@
 use std::{
     collections::HashMap,
     io::{BufRead, Write},
+    path::PathBuf,
     sync::{Arc, Mutex, RwLock, atomic::AtomicBool},
 };
 
@@ -59,6 +60,29 @@ pub(crate) struct State {
     pub(crate) imports: Arc<RwLock<HashMap<String, Arc<UserDocument>>>>,
 }
 
+/// Filesystem paths the application resolves at runtime.
+///
+/// In production these use their defaults; tests override them to point at isolated, per-test
+/// locations. Keeping these off of process-global state lets the tests that touch the store
+/// and library run in parallel without `#[serial]`.
+#[derive(Clone, Debug)]
+pub(crate) struct PathOptions {
+    /// Override for the Zotero library directory. When `None`, the path is resolved from the
+    /// environment (the CI toy library, or the default Zotero location in the user's home directory).
+    pub(crate) library_path: Option<PathBuf>,
+    /// Path to the file used to persist parsed PDFs between `/process` and `/embed`.
+    pub(crate) batch_iter_path: PathBuf,
+}
+
+impl Default for PathOptions {
+    fn default() -> Self {
+        Self {
+            library_path: None,
+            batch_iter_path: PathBuf::from(crate::cli::app::BATCH_ITER_FILE),
+        }
+    }
+}
+
 /// A structure that holds the application context, including CLI arguments and writers
 /// for `stdout` and `stderr`.
 pub(crate) struct Context<OutStream: Write, ErrStream: Write> {
@@ -68,6 +92,8 @@ pub(crate) struct Context<OutStream: Write, ErrStream: Write> {
     pub(crate) config: Config,
     /// The store to use for storage and retrieval
     pub(crate) store: LanceZoteroStore,
+    /// Runtime filesystem path overrides (library location, batch-iter file)
+    pub(crate) path_options: PathOptions,
     /// Abstraction for `stdin()`. Boxed rather than generic because, unlike `out`/`err` (which
     /// tests substitute with an inspectable `Cursor` to assert on), input is only ever *supplied*:
     /// no caller needs the concrete reader type. Boxing also keeps the input concern off every
@@ -105,4 +131,68 @@ pub fn setup_logger(log_level: LevelFilter) -> Result<(), log::SetLoggerError> {
         .level_for("rustyline", log::LevelFilter::Off)
         .chain(std::io::stdout())
         .apply()
+}
+
+#[cfg(test)]
+pub(crate) mod test_support {
+    use std::io::Cursor;
+    use std::path::PathBuf;
+
+    use tempfile::TempDir;
+
+    use crate::cli::app::tests::create_test_context;
+
+    use super::{Context, PathOptions};
+
+    /// Isolated, per-test filesystem locations that mirror the `temp_db` pattern used in the
+    /// `zqa-rag` LanceDB tests: a unique temporary database directory, the toy Zotero library
+    /// shipped under `assets/`, and a temporary batch-iter file.
+    ///
+    /// The [`TempDir`] guard is owned by this struct and must be kept alive for the duration of the
+    /// test; dropping it deletes the temporary database. Multiple contexts built from the same
+    /// `TestPaths` share one database, mirroring the setup/act split that many tests use (populate
+    /// with one context, then assert with another).
+    pub(crate) struct TestPaths {
+        _dir: TempDir,
+        pub(crate) db_uri: String,
+        pub(crate) path_options: PathOptions,
+    }
+
+    impl TestPaths {
+        pub(crate) fn new() -> Self {
+            let dir = tempfile::tempdir().unwrap();
+            let db_uri = dir
+                .path()
+                .join("lancedb-table")
+                .to_str()
+                .unwrap()
+                .to_string();
+            let library_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("assets")
+                .join("Zotero");
+            let batch_iter_path = dir.path().join("batch_iter.bin");
+
+            Self {
+                _dir: dir,
+                db_uri,
+                path_options: PathOptions {
+                    library_path: Some(library_path),
+                    batch_iter_path,
+                },
+            }
+        }
+
+        /// Build a [`Context`] bound to these isolated paths, seeded with the given mock LLM
+        /// responses. Reuses [`create_test_context`](create_test_context) for config/schema
+        /// setup, then points the store at the temp database and installs the isolated [`PathOptions`].
+        pub(crate) fn context(
+            &self,
+            llm_responses: Vec<String>,
+        ) -> Context<Cursor<Vec<u8>>, Cursor<Vec<u8>>> {
+            let mut ctx = create_test_context(llm_responses);
+            ctx.store = ctx.store.with_uri(&self.db_uri);
+            ctx.path_options = self.path_options.clone();
+            ctx
+        }
+    }
 }

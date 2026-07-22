@@ -826,7 +826,14 @@ where
         }
     }
 
-    let lib_items = match parse_library(&ctx.store, None, None).await {
+    let lib_items = match parse_library(
+        &ctx.store,
+        ctx.path_options.library_path.as_deref(),
+        None,
+        None,
+    )
+    .await
+    {
         Ok(items) => items,
         Err(parse_err) => {
             return Err(CLIError::CommandError(format!(
