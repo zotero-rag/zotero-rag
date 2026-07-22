@@ -47,9 +47,12 @@ jobs:
           tool: cargo-llvm-cov
 
       - name: Generate code coverage
-        run: cargo llvm-cov --workspace --lcov --output-path lcov.info
+        run: |
+          cargo llvm-cov --workspace --lcov --output-path lcov.info
+          cargo llvm-cov report --workspace --summary-only
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_KEY }}
+          COVERALLS_REPO_TOKEN: ${{ secrets.COVERALLS_REPO_TOKEN }}
           VOYAGE_AI_API_KEY: ${{ secrets.VOYAGE_AI_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
@@ -63,10 +66,10 @@ jobs:
           OPENAI_EMBEDDING_MODEL: text-embedding-3-small
           MAX_CONCURRENT_REQUESTS: 5
 
-      - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v5
+      - name: Upload coverage to Coveralls
+        uses: coverallsapp/github-action@v2
         with:
-          token: ${{ secrets.CODECOV_TOKEN }}
-          slug: zotero-rag/zotero-rag
-          files: lcov.info
-          fail_ci_if_error: true
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          file: lcov.info
+          format: lcov
+          fail-on-error: true
