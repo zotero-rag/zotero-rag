@@ -275,9 +275,11 @@ pub(crate) mod tests {
             arrow_schema::Field::new("file_path", arrow_schema::DataType::Utf8, false),
             arrow_schema::Field::new("pdf_text", arrow_schema::DataType::Utf8, false),
         ]));
-        let store =
-            LanceZoteroStore::from_schema(EmbeddingProviderConfig::VoyageAI(config.clone()), schema)
-                .with_uri(&paths.db_uri);
+        let store = LanceZoteroStore::from_schema(
+            EmbeddingProviderConfig::VoyageAI(config.clone()),
+            schema,
+        )
+        .with_uri(&paths.db_uri);
         RetrievalTool::new(
             Arc::new(store),
             Some(RerankProviderConfig::VoyageAI(config)),

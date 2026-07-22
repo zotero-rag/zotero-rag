@@ -12,9 +12,7 @@ use lancedb::query::{ExecutableQuery, QueryBase};
 use lancedb::{Table, connect};
 
 use super::backends::lance::LanceError;
-use super::backends::lance::{
-    LANCE_DATA_TABLE_NAME as TABLE_NAME, read_stored_data_table_version,
-};
+use super::backends::lance::{LANCE_DATA_TABLE_NAME as TABLE_NAME, read_stored_data_table_version};
 use crate::capabilities::EmbeddingProvider;
 use crate::embedding::common::get_embedding_dims_by_provider;
 use crate::providers::ProviderId;
