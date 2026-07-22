@@ -49,7 +49,7 @@ jobs:
       - name: Generate code coverage
         run: |
           cargo llvm-cov --workspace --lcov --output-path lcov.info
-          cargo llvm-cov report --workspace --summary-only
+          cargo llvm-cov report --summary-only
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_KEY }}
           COVERALLS_REPO_TOKEN: ${{ secrets.COVERALLS_REPO_TOKEN }}
