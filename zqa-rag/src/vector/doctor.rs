@@ -244,7 +244,10 @@ mod tests {
             "pdf_text".into(),
         )
         .with_uri(&db_uri);
-        backend.insert_items(vec![record_batch], None).await.unwrap();
+        backend
+            .insert_items(vec![record_batch], None)
+            .await
+            .unwrap();
 
         let mut out: Vec<u8> = Vec::new();
         let result = doctor(EmbeddingProvider::VoyageAI, &db_uri, &mut out).await;

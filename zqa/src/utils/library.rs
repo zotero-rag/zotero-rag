@@ -647,7 +647,12 @@ mod tests {
     #[test]
     fn test_library_fetching_works() {
         dotenv().ok();
-        let library_items = parse_library_metadata(None, None, None);
+        // Read the toy library shipped in `assets/` rather than a real `~/Zotero`, so this does not
+        // depend on the developer's library (which may be locked by a running Zotero app).
+        let library_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("assets")
+            .join("Zotero");
+        let library_items = parse_library_metadata(Some(&library_path), None, None);
 
         test_ok!(library_items);
         let items = library_items.unwrap();
@@ -716,8 +721,13 @@ mod tests {
             .to_str()
             .unwrap()
             .to_string();
-        // SAFETY: single-threaded async test, no concurrent env var access
-        unsafe { env::set_var("LANCEDB_URI", &db_uri) };
+
+        // Pin the store to an isolated temp URI and read the toy library shipped in `assets/`, so
+        // this test touches no process-global `LANCEDB_URI`/`CI` state (parallel-safe) and does not
+        // depend on a real `~/Zotero` that may be locked by a running Zotero app.
+        let library_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("assets")
+            .join("Zotero");
 
         let embedding_config = EmbeddingProviderConfig::VoyageAI(VoyageAIConfig {
             embedding_model: DEFAULT_VOYAGE_EMBEDDING_MODEL.into(),
@@ -731,8 +741,8 @@ mod tests {
             arrow_schema::Field::new("file_path", arrow_schema::DataType::Utf8, false),
             arrow_schema::Field::new("pdf_text", arrow_schema::DataType::Utf8, false),
         ]));
-        let store = LanceZoteroStore::from_schema(embedding_config, schema);
-        let items = parse_library(&store, None, Some(0), Some(7)).await;
+        let store = LanceZoteroStore::from_schema(embedding_config, schema).with_uri(&db_uri);
+        let items = parse_library(&store, Some(&library_path), Some(0), Some(7)).await;
         test_ok!(items);
 
         let mut items = items.unwrap();
@@ -740,7 +750,7 @@ mod tests {
         test_eq!(items.len(), 7);
 
         // Now fetch authors from the Zotero DB
-        let authors_result = get_authors(&mut items, None);
+        let authors_result = get_authors(&mut items, Some(&library_path));
         test_ok!(authors_result);
 
         let mut found_bits = 0;

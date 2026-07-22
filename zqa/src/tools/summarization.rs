@@ -157,15 +157,25 @@ mod tests {
     use serde_json::json;
     use zqa_macros::{test_contains, test_eq, test_ok};
     use zqa_rag::providers::registry::provider_registry;
-    use {temp_env, tempfile};
 
     use super::*;
     use crate::cli::handlers::library::handle_process_cmd;
-    use crate::common::test_support::{create_test_context, get_config};
+    use crate::common::test_support::{TestPaths, get_config};
     use crate::config::MockConfig;
     use crate::store::lance::LanceZoteroStore;
 
     fn make_tool(llm_responses: Vec<String>) -> SummarizationTool<LanceZoteroStore> {
+        make_tool_with_uri(llm_responses, None)
+    }
+
+    /// Like [`make_tool`], but optionally pins the store to an explicit database URI. Tests that
+    /// actually query the store must pass `Some(uri)` so they read their own isolated database
+    /// rather than the process-global `LANCEDB_URI` — that's what keeps them safe to run in
+    /// parallel. Tests that never touch the store can use [`make_tool`].
+    fn make_tool_with_uri(
+        llm_responses: Vec<String>,
+        db_uri: Option<&str>,
+    ) -> SummarizationTool<LanceZoteroStore> {
         let config = get_config(MockConfig {
             responses: llm_responses,
         });
@@ -179,7 +189,10 @@ mod tests {
             arrow_schema::Field::new("file_path", arrow_schema::DataType::Utf8, false),
             arrow_schema::Field::new("pdf_text", arrow_schema::DataType::Utf8, false),
         ]));
-        let store = LanceZoteroStore::from_schema(embedding_config, schema);
+        let mut store = LanceZoteroStore::from_schema(embedding_config, schema);
+        if let Some(uri) = db_uri {
+            store = store.with_uri(uri);
+        }
         SummarizationTool::new(
             client,
             Arc::new(store),
@@ -297,41 +310,30 @@ mod tests {
 
     #[tokio::test]
     async fn test_call_successful_summarization() {
-        // Set up test database with real data
-        let temp_dir = tempfile::tempdir().unwrap();
-        let db_uri = temp_dir
-            .path()
-            .join("lancedb-table")
-            .to_str()
-            .unwrap()
-            .to_string();
+        // Set up an isolated test database with the toy library's data.
+        let paths = TestPaths::new();
+        let mut setup_ctx = paths.context(vec![]);
 
-        let mut setup_ctx = create_test_context(vec![]);
-
-        // Create test database with assets data
-        let setup_result = temp_env::async_with_vars(
-            [("CI", Some("true")), ("LANCEDB_URI", Some(&db_uri))],
-            handle_process_cmd(&mut setup_ctx),
-        )
-        .await;
-
+        let setup_result = handle_process_cmd(&mut setup_ctx).await;
         assert!(setup_result.is_ok(), "Failed to set up test database");
 
-        let tool = make_tool(vec![
-            r"<title>Some title</title>
+        let tool = make_tool_with_uri(
+            vec![
+                r"<title>Some title</title>
             <authors>Last, Name</authors>
             <reference>Some reference</reference>
             <excerpt>foobar</excerpt>
             "
-            .into(),
-        ]);
+                .into(),
+            ],
+            Some(&paths.db_uri),
+        );
 
         let args = json!({
             "query": "What is the main contribution of this paper?",
             "ids": ["5KWS383N"]  // Known working test ID
         });
-        let result =
-            temp_env::async_with_vars([("LANCEDB_URI", Some(&db_uri))], tool.call(args)).await;
+        let result = tool.call(args).await;
         test_ok!(result);
 
         let response = result.unwrap();

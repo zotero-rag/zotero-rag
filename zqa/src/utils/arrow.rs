@@ -383,13 +383,16 @@ mod tests {
 
         let config = get_config();
 
-        let record_batch = temp_env::async_with_vars([("LANCEDB_URI", Some(&db_uri))], async {
-            let embedding_config = config.get_embedding_config().unwrap();
-            let schema = Arc::new(get_schema(embedding_config.provider(), true));
-            let store = LanceZoteroStore::from_schema(embedding_config, schema);
-            full_library_to_arrow(&store, None, Some(0), Some(5)).await
-        })
-        .await;
+        // Isolate this test: pin the store to a temp DB URI and read the toy library shipped in
+        // `assets/`, so it touches no process-global `LANCEDB_URI`/`CI` state and is parallel-safe.
+        let library_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("assets")
+            .join("Zotero");
+        let embedding_config = config.get_embedding_config().unwrap();
+        let schema = Arc::new(get_schema(embedding_config.provider(), true));
+        let store = LanceZoteroStore::from_schema(embedding_config, schema).with_uri(&db_uri);
+        let record_batch =
+            full_library_to_arrow(&store, Some(&library_path), Some(0), Some(5)).await;
 
         assert!(
             record_batch.is_ok(),
