@@ -89,8 +89,8 @@ The title should capture the main topic. Respond with only the title text, no qu
     )
 }
 
-/// Get the "summarization" prompt, which takes the excerpts from each search result and then asks
-/// the LLM to generate a researched answer to the user query.
+/// Get the "summarization" prompt, which directs the LLM to retrieve evidence from the user's
+/// Zotero library before generating a researched answer to the user query.
 ///
 /// # Arguments
 ///
@@ -102,15 +102,14 @@ The title should capture the main topic. Respond with only the title text, no qu
 #[must_use]
 pub fn get_summarize_prompt(query: &str) -> String {
     format!(
-        "You are given a user question and excerpts from papers that are relevant in answering the question.
-Each paper that was used as a reference may have multiple excerpts that potentially answer the user's
-question. Use these search results to draft an answer to the user query. 
+        "You answer questions grounded in the user's Zotero library. You have tools to search the library and
+extract relevant passages; your answer MUST be grounded in what they return. No excerpts are provided with
+this request, so retrieve evidence before drafting an answer.
 
-You have access to tools to help retrieve results and summarize results from the user's Zotero library. Your
-answer MUST be grounded in these results.
-* The `{RETRIEVAL_TOOL_NAME}` will retrieve metadata of papers that seem relevant, but not their contents.
-* The `{SUMMARIZATION_TOOL_NAME}` takes a list of paper IDs (which you can get from the `{RETRIEVAL_TOOL_NAME}`),
-and for each paper, produces a list of passages that are most relevant to the user's query.
+Start by calling `{RETRIEVAL_TOOL_NAME}` to find candidate papers. It returns metadata, including paper IDs,
+but not the paper contents. Then call `{SUMMARIZATION_TOOL_NAME}` with all promising IDs and the user query
+to retrieve relevant passages. You may repeat these calls if the first results are insufficient. Once you have
+enough relevant excerpts to answer, write the final response and do not keep searching.
 
 Here are some guidelines when replying:
 
@@ -127,8 +126,9 @@ here in APA format.
 throughout. You should change numbered citations to be in APA format instead.
 5. If the user requests references to be in a different format (e.g., MLA, Chicago, etc.), use that format instead.
 This includes numbered formats: if the user prefers a numbered citation style, use that instead.
-6. In certain places, the excerpts may have an equation marked with \"possible fix\". This indicates that a different
-agent found a malformed equation, and attempted to fix it. If this fixed version appears correct, use that instead.
+6. In certain places, excerpts may have an equation marked with \"possible fix\". This indicates that the
+extraction process found a malformed equation and attempted to fix it. If this fixed version appears correct,
+use that instead.
 7. Format the answer depending on the user's request. For example, if the user requests a summary of prior work on a
 problem, it is appropriate to use Markdown-formatted sections. In other cases, a user may ask a question with a
 straightforward answer (based on the search results). In this case, it is usually better to answer the question
@@ -138,4 +138,32 @@ Instead, use excerpts and search results that have relevant information to the u
 on the side of *inclusion*. It is better to erroneously include a paper than to falsely ignore one.
 
 Here is the user query: <user_query>{query}</user_query>.")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::get_summarize_prompt;
+    use crate::tools::{retrieval::RETRIEVAL_TOOL_NAME, summarization::SUMMARIZATION_TOOL_NAME};
+
+    #[test]
+    fn summarize_prompt_requires_retrieval_before_answering() {
+        let prompt = get_summarize_prompt("How does retrieval-augmented generation work?");
+        let retrieval_instruction = format!("Start by calling `{RETRIEVAL_TOOL_NAME}`");
+        let summarization_instruction = format!("Then call `{SUMMARIZATION_TOOL_NAME}`");
+        let retrieval_position = prompt
+            .find(&retrieval_instruction)
+            .expect("prompt should instruct retrieval first");
+        let summarization_position = prompt
+            .find(&summarization_instruction)
+            .expect("prompt should instruct passage extraction second");
+
+        assert!(prompt.contains("MUST be grounded in what they return."));
+        assert!(prompt.contains("No excerpts are provided"));
+        assert!(retrieval_position < summarization_position);
+        assert!(prompt.contains("do not keep searching."));
+        assert!(
+            prompt
+                .contains("<user_query>How does retrieval-augmented generation work?</user_query>")
+        );
+    }
 }
