@@ -6779,6 +6779,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "zqa-macros",
+ "zqa-macros-proc",
  "zqa-pdftools",
 ]
 
