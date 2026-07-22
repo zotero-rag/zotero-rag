@@ -379,7 +379,6 @@ mod tests {
     use dotenv::dotenv;
     use lancedb::embeddings::EmbeddingFunction;
     use zqa_macros::{test_eq, test_ok};
-    use zqa_macros_proc::retry;
 
     use super::*;
     use crate::clients::gemini::GeminiClient;
@@ -528,7 +527,6 @@ mod tests {
         test_ok!(res);
     }
 
-    #[retry(1)]
     #[tokio::test]
     async fn test_request_works_with_tools() {
         dotenv().ok();
