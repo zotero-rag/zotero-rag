@@ -33,6 +33,8 @@ pub(crate) struct GeminiFunctionCall {
 /// A result of a tool call, to be sent to the API.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct GeminiFunctionResult {
+    /// The ID of the corresponding function call
+    id: String,
     /// The name of the function
     name: String,
     /// The function response in JSON format
@@ -119,6 +121,7 @@ impl From<ChatHistoryItem> for GeminiContent {
 
                         GeminiPart::FunctionResult {
                             function_response: GeminiFunctionResult {
+                                id: tool_res.id,
                                 name: tool_res.tool_name,
                                 response,
                             },
