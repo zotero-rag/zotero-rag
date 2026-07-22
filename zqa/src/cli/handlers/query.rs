@@ -93,7 +93,10 @@ where
             ctx.config.get_reranker_config().as_ref(),
         )
         .await?;
-    let _ = get_authors(&mut search_results, ctx.path_options.library_path.as_deref());
+    let _ = get_authors(
+        &mut search_results,
+        ctx.path_options.library_path.as_deref(),
+    );
 
     let vector_search_duration = vector_search_start.elapsed();
     writeln!(
