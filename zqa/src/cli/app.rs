@@ -202,7 +202,9 @@ pub(crate) mod tests {
 
     use super::dispatch_command;
     use crate::common::Context;
+    use crate::common::PathOptions;
     use crate::common::State;
+    use crate::common::test_support::TestPaths;
     use crate::config::{Config, MockConfig, VoyageAIConfig};
     use crate::store::lance::LanceZoteroStore;
     use crate::tools::retrieval::RetrievalTool;
@@ -251,6 +253,7 @@ pub(crate) mod tests {
             state: State::default(),
             store: LanceZoteroStore::from_schema(embedding_config, schema.into()),
             config,
+            path_options: PathOptions::default(),
             // Default to empty input (EOF); tests that drive prompts overwrite `ctx.input`.
             input: Box::new(Cursor::new(Vec::new())),
             out,
@@ -258,7 +261,7 @@ pub(crate) mod tests {
         }
     }
 
-    fn make_retrieval_tool(_schema_key: &str) -> RetrievalTool<LanceZoteroStore> {
+    fn make_retrieval_tool(paths: &TestPaths) -> RetrievalTool<LanceZoteroStore> {
         let api_key = std::env::var("VOYAGE_AI_API_KEY").unwrap_or_default();
         let config = zqa_rag::config::VoyageAIConfig {
             api_key,
@@ -272,13 +275,13 @@ pub(crate) mod tests {
             arrow_schema::Field::new("file_path", arrow_schema::DataType::Utf8, false),
             arrow_schema::Field::new("pdf_text", arrow_schema::DataType::Utf8, false),
         ]));
-        let store = LanceZoteroStore::from_schema(
-            EmbeddingProviderConfig::VoyageAI(config.clone()),
-            schema,
-        );
+        let store =
+            LanceZoteroStore::from_schema(EmbeddingProviderConfig::VoyageAI(config.clone()), schema)
+                .with_uri(&paths.db_uri);
         RetrievalTool::new(
             Arc::new(store),
             Some(RerankProviderConfig::VoyageAI(config)),
+            paths.path_options.library_path.clone(),
         )
     }
 
@@ -333,70 +336,40 @@ pub(crate) mod tests {
 
     #[retry(3)]
     #[tokio::test(flavor = "multi_thread")]
-    #[serial]
     async fn test_dispatch_dedup_command() {
         dotenv::dotenv().ok();
 
-        let temp_dir = tempfile::tempdir().unwrap();
-        let db_uri = temp_dir
-            .path()
-            .join("lancedb-table")
-            .to_str()
-            .unwrap()
-            .to_string();
+        let paths = TestPaths::new();
+        let mut ctx = paths.context(vec![]);
 
-        temp_env::async_with_vars(
-            [("CI", Some("true")), ("LANCEDB_URI", Some(db_uri.as_str()))],
-            async {
-                let mut ctx = create_test_context(vec![]);
+        let process_result = dispatch_command("/process", &mut ctx).await;
+        test_ok!(process_result);
+        assert!(process_result.unwrap());
 
-                let process_result = dispatch_command("/process", &mut ctx).await;
-                test_ok!(process_result);
-                assert!(process_result.unwrap());
+        let dedup_result = dispatch_command("/dedup", &mut ctx).await;
+        test_ok!(dedup_result);
+        assert!(dedup_result.unwrap());
 
-                let dedup_result = dispatch_command("/dedup", &mut ctx).await;
-                test_ok!(dedup_result);
-                assert!(dedup_result.unwrap());
-
-                let output = String::from_utf8(ctx.out.into_inner()).unwrap();
-                test_contains!(output, "Deduped ");
-            },
-        )
-        .await;
+        let output = String::from_utf8(ctx.out.into_inner()).unwrap();
+        test_contains!(output, "Deduped ");
     }
 
     #[retry(3)]
     #[tokio::test(flavor = "multi_thread")]
-    #[serial]
     async fn test_call_returns_results_key() {
         dotenv::dotenv().ok();
 
-        let temp_dir = tempfile::tempdir().unwrap();
-        let db_uri = temp_dir
-            .path()
-            .join("lancedb-table")
-            .to_str()
-            .unwrap()
-            .to_string();
-
-        let mut setup_ctx = create_test_context(vec![]);
+        let paths = TestPaths::new();
+        let mut setup_ctx = paths.context(vec![]);
 
         // Create test database with assets data
-        let setup_result = temp_env::async_with_vars(
-            [("CI", Some("true")), ("LANCEDB_URI", Some(&db_uri))],
-            dispatch_command("/process", &mut setup_ctx),
-        )
-        .await;
+        let setup_result = dispatch_command("/process", &mut setup_ctx).await;
         test_ok!(setup_result);
 
         // Now test the retrieval tool
-        let tool = make_retrieval_tool("input_schema");
+        let tool = make_retrieval_tool(&paths);
 
-        let result = temp_env::async_with_vars(
-            [("LANCEDB_URI", Some(&db_uri))],
-            tool.call(json!({"query": "machine learning"})),
-        )
-        .await;
+        let result = tool.call(json!({"query": "machine learning"})).await;
         test_ok!(result);
 
         let value = result.unwrap();

@@ -52,10 +52,30 @@ impl LanceZoteroStore {
         Self::new(backend, embedding_config)
     }
 
+    /// Point this store at an explicit database URI, overriding the `LANCEDB_URI` environment
+    /// variable (and the built-in default). This mirrors [`LanceBackend::with_uri`] and is
+    /// primarily useful in tests: each store can be isolated in its own temporary directory rather
+    /// than sharing the process-global `LANCEDB_URI`, which lets those tests run in parallel without
+    /// `#[serial]`.
+    #[must_use]
+    pub fn with_uri(mut self, uri: impl Into<String>) -> Self {
+        self.backend = self.backend.with_uri(uri);
+        self
+    }
+
     /// Get a read-only embedding config
     #[must_use]
     pub fn get_embedding_config(&self) -> EmbeddingProviderConfig {
         self.embedding_config.clone()
+    }
+
+    /// Returns the effective database URI this store is bound to: the explicit override from
+    /// [`LanceZoteroStore::with_uri`] if set, otherwise the `LANCEDB_URI` environment variable (or
+    /// the built-in default). Callers that reach LanceDB through a free function taking a URI (such
+    /// as the health check) should pass this so they stay consistent with the store.
+    #[must_use]
+    pub fn db_uri(&self) -> String {
+        self.backend.get_db_path()
     }
 
     /// Create a Lance-backed Zotero store from an embedding configuration.

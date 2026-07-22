@@ -55,6 +55,8 @@ fn symptom(out: &mut impl Write, msg: &str) -> Result<(), LanceError> {
 /// # Arguments:
 ///
 /// * `embeddings_provider`: The embedding provider. Must be one of `EmbeddingProviders`.
+/// * `db_uri`: The URI of the database to diagnose. Pass a store's own URI so diagnostics target
+///   the same database the store uses rather than the process-global `LANCEDB_URI`.
 /// * `stdout`: A writer object. This does not *have* to be `stdout`, but it is unlikely you would
 ///   want these messages going to an error stream, considering the messages printed here are meant
 ///   for end-users.
@@ -69,9 +71,10 @@ fn symptom(out: &mut impl Write, msg: &str) -> Result<(), LanceError> {
 /// Returns an error if writing to the output stream fails or if the health check is in an invalid state.
 pub async fn doctor(
     embedding_provider: EmbeddingProvider,
+    db_uri: &str,
     stdout: &mut impl Write,
 ) -> Result<(), LanceError> {
-    let healthcheck_results = lancedb_health_check(embedding_provider).await?;
+    let healthcheck_results = lancedb_health_check(embedding_provider, db_uri).await?;
 
     if !healthcheck_results.directory_exists {
         symptom(stdout, "database directory does not exist.")?;

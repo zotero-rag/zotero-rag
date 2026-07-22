@@ -46,6 +46,15 @@ fn get_lib_path() -> Option<PathBuf> {
     }
 }
 
+/// Resolves the Zotero library path, preferring an explicit `override_path` and otherwise falling
+/// back to [`get_lib_path`]'s environment-based resolution.
+///
+/// The override is how tests point at the isolated toy library under `assets/` without setting the
+/// process-global `CI` env var, which is what lets them avoid `#[serial]`.
+fn resolve_lib_path(override_path: Option<&Path>) -> Option<PathBuf> {
+    override_path.map(Path::to_path_buf).or_else(get_lib_path)
+}
+
 /// Metadata for items in the Zotero library.
 #[derive(Debug, Clone, Serialize)]
 pub struct ZoteroItemMetadata {
@@ -186,13 +195,14 @@ pub(crate) fn get_column_from_batch(batch: &RecordBatch, column: usize) -> Vec<S
 /// * `LibraryParsingError::LanceDBError` if fetching the rows from LanceDB fails.
 pub async fn get_new_library_items<T: ZoteroStore>(
     store: &T,
+    library_path: Option<&Path>,
 ) -> Result<Vec<ZoteroItemMetadata>, LibraryParsingError> {
     let metadata_vecs = store
         .existing_item_metadata()
         .await
         .map_err(|e| LibraryParsingError::LanceDBError(e.to_string()))?;
 
-    let library_items = parse_library_metadata(None, None)?;
+    let library_items = parse_library_metadata(library_path, None, None)?;
 
     let db_items_set: HashSet<_> = metadata_vecs.iter().collect();
 
@@ -206,6 +216,8 @@ pub async fn get_new_library_items<T: ZoteroStore>(
 ///
 /// # Arguments
 ///
+/// * `library_path` - An optional override for the Zotero library directory. When `None`, the path
+///   is resolved from the environment (see [`get_lib_path`]).
 /// * `start_from` - An optional offset for the SQL query. Useful for debugging, pagination,
 ///   multi-threading, etc.
 /// * `limit` - Optional limit, meant to be used in conjunction with `start_from`.
@@ -215,10 +227,11 @@ pub async fn get_new_library_items<T: ZoteroStore>(
 /// * `LibraryParsingError::SqliteError` if the library path was not found, the query could not be prepared, or
 ///   columns from the result set could not be parsed, or `query_map` fails.
 pub fn parse_library_metadata(
+    library_path: Option<&Path>,
     start_from: Option<usize>,
     limit: Option<usize>,
 ) -> Result<Vec<ZoteroItemMetadata>, LibraryParsingError> {
-    if let Some(path) = get_lib_path() {
+    if let Some(path) = resolve_lib_path(library_path) {
         let conn = Connection::open(path.join("zotero.sqlite"))?;
 
         let mut query = "SELECT DISTINCT
@@ -278,12 +291,17 @@ pub fn parse_library_metadata(
 /// # Arguments
 ///
 /// * `items` - The items whose metadata needs to be filled in.
+/// * `library_path` - An optional override for the Zotero library directory. When `None`, the path
+///   is resolved from the environment (see [`get_lib_path`]).
 ///
 /// # Errors
 ///
 /// * `LibraryParsingError::SqlError` if the operation failed for any items.
-pub fn get_authors(items: &mut [ZoteroItem]) -> Result<(), LibraryParsingError> {
-    if let Some(path) = get_lib_path() {
+pub fn get_authors(
+    items: &mut [ZoteroItem],
+    library_path: Option<&Path>,
+) -> Result<(), LibraryParsingError> {
+    if let Some(path) = resolve_lib_path(library_path) {
         let conn = Connection::open(path.join("zotero.sqlite"))?;
 
         // For some reason, the `key` field in the `items` table (what we call `library_key`) seems
@@ -389,7 +407,9 @@ fn get_pbar_ticks() -> String {
 ///
 /// # Arguments
 ///
-/// * `embedding_config` - The embedding provider configuration for the configured `LanceDB` embedding.
+/// * `store` - The vector store, used to determine which items are already present.
+/// * `library_path` - An optional override for the Zotero library directory. When `None`, the path
+///   is resolved from the environment (see [`get_lib_path`]).
 /// * `start_from` - An optional offset for the SQL query. Useful for debugging, pagination,
 ///   multi-threading, etc.
 /// * `limit` - Optional limit, meant to be used in conjunction with `start_from`.
@@ -407,15 +427,16 @@ fn get_pbar_ticks() -> String {
 #[allow(clippy::too_many_lines)]
 pub async fn parse_library<T: ZoteroStore>(
     store: &T,
+    library_path: Option<&Path>,
     start_from: Option<usize>,
     limit: Option<usize>,
 ) -> Result<Vec<ZoteroItem>, LibraryParsingError> {
     let start_time = Instant::now();
 
     let metadata = if store.exists().await {
-        get_new_library_items(store).await?
+        get_new_library_items(store, library_path).await?
     } else {
-        parse_library_metadata(start_from, limit)?
+        parse_library_metadata(library_path, start_from, limit)?
     };
 
     if metadata.is_empty() {
@@ -629,7 +650,7 @@ mod tests {
     #[test]
     fn test_library_fetching_works() {
         dotenv().ok();
-        let library_items = parse_library_metadata(None, None);
+        let library_items = parse_library_metadata(None, None, None);
 
         test_ok!(library_items);
         let items = library_items.unwrap();
@@ -655,7 +676,7 @@ mod tests {
             let lib_path = lib_path.unwrap();
             assert!(lib_path.to_str().unwrap().contains("zqa"));
 
-            let library_items = parse_library_metadata(None, None);
+            let library_items = parse_library_metadata(None, None, None);
             test_ok!(library_items);
 
             let items = library_items.unwrap();
@@ -714,7 +735,7 @@ mod tests {
             arrow_schema::Field::new("pdf_text", arrow_schema::DataType::Utf8, false),
         ]));
         let store = LanceZoteroStore::from_schema(embedding_config, schema);
-        let items = parse_library(&store, Some(0), Some(7)).await;
+        let items = parse_library(&store, None, Some(0), Some(7)).await;
         test_ok!(items);
 
         let mut items = items.unwrap();
@@ -722,7 +743,7 @@ mod tests {
         test_eq!(items.len(), 7);
 
         // Now fetch authors from the Zotero DB
-        let authors_result = get_authors(&mut items);
+        let authors_result = get_authors(&mut items, None);
         test_ok!(authors_result);
 
         let mut found_bits = 0;

@@ -93,7 +93,7 @@ where
             ctx.config.get_reranker_config().as_ref(),
         )
         .await?;
-    let _ = get_authors(&mut search_results);
+    let _ = get_authors(&mut search_results, ctx.path_options.library_path.as_deref());
 
     let vector_search_duration = vector_search_start.elapsed();
     writeln!(
@@ -219,7 +219,11 @@ where
         .map(|c| (c.provider_name().to_string(), c.model_name().to_string()));
 
     let store_arc = std::sync::Arc::new(ctx.store.clone());
-    let retrieval_tool = RetrievalTool::new(std::sync::Arc::clone(&store_arc), reranker_config);
+    let retrieval_tool = RetrievalTool::new(
+        std::sync::Arc::clone(&store_arc),
+        reranker_config,
+        ctx.path_options.library_path.clone(),
+    );
     let retrieval_embedding_tokens = std::sync::Arc::clone(&retrieval_tool.embedding_tokens);
     let retrieval_rerank_tokens = std::sync::Arc::clone(&retrieval_tool.rerank_tokens);
 
@@ -404,42 +408,27 @@ where
 
 #[cfg(test)]
 mod tests {
-    use serial_test::serial;
-    use temp_env;
     use zqa_macros::test_ok;
     use zqa_macros_proc::retry;
 
     use super::{handle_query_cmd, handle_search_cmd};
-    use crate::cli::{app::tests::create_test_context, handlers::library::handle_process_cmd};
+    use crate::cli::handlers::library::handle_process_cmd;
+    use crate::common::test_support::TestPaths;
 
     #[retry(3)]
     #[tokio::test(flavor = "multi_thread")]
-    #[serial]
     async fn test_search_only() {
         dotenv::dotenv().ok();
-        let temp_dir = tempfile::tempdir().unwrap();
-        let db_uri = temp_dir
-            .path()
-            .join("lancedb-table")
-            .to_str()
-            .unwrap()
-            .to_string();
 
-        let mut setup_ctx = create_test_context(vec![]);
-        let result = temp_env::async_with_vars(
-            [("CI", Some("true")), ("LANCEDB_URI", Some(&db_uri))],
-            handle_process_cmd(&mut setup_ctx),
-        )
-        .await;
+        let paths = TestPaths::new();
+        let mut setup_ctx = paths.context(vec![]);
+        let result = handle_process_cmd(&mut setup_ctx).await;
         test_ok!(result);
 
-        let mut ctx = create_test_context(vec![]); // search doesn't use LLMs
-        let result = temp_env::async_with_vars(
-            [("CI", Some("true")), ("LANCEDB_URI", Some(&db_uri))],
-            handle_search_cmd(
-                "How should I oversample in defect prediction?".to_string(),
-                &mut ctx,
-            ),
+        let mut ctx = paths.context(vec![]); // search doesn't use LLMs
+        let result = handle_search_cmd(
+            "How should I oversample in defect prediction?".to_string(),
+            &mut ctx,
         )
         .await;
         test_ok!(result);
@@ -451,33 +440,19 @@ mod tests {
 
     #[retry(3)]
     #[tokio::test(flavor = "multi_thread")]
-    #[serial]
     async fn test_run_query() {
         dotenv::dotenv().ok();
-        let temp_dir = tempfile::tempdir().unwrap();
-        let db_uri = temp_dir
-            .path()
-            .join("lancedb-table")
-            .to_str()
-            .unwrap()
-            .to_string();
 
-        let mut setup_ctx = create_test_context(vec![]);
-        let _ = temp_env::async_with_vars(
-            [("CI", Some("true")), ("LANCEDB_URI", Some(&db_uri))],
-            handle_process_cmd(&mut setup_ctx),
-        )
-        .await;
+        let paths = TestPaths::new();
+        let mut setup_ctx = paths.context(vec![]);
+        let _ = handle_process_cmd(&mut setup_ctx).await;
 
         // TODO: At some point, we'll want to add support for tool calls on these. Right now, the
         // underlying `TestClient` doesn't call `process_tool_calls
-        let mut ctx = create_test_context(vec!["You have papers X, Y, and Z.".into()]);
-        let result = temp_env::async_with_vars(
-            [("CI", Some("true")), ("LANCEDB_URI", Some(&db_uri))],
-            handle_query_cmd(
-                "What papers do I have about learning rate scheduling?".to_string(),
-                &mut ctx,
-            ),
+        let mut ctx = paths.context(vec!["You have papers X, Y, and Z.".into()]);
+        let result = handle_query_cmd(
+            "What papers do I have about learning rate scheduling?".to_string(),
+            &mut ctx,
         )
         .await;
 

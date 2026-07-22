@@ -29,7 +29,7 @@ use zqa_rag::{
 
 use crate::{
     cli::errors::CLIError,
-    common::State,
+    common::{PathOptions, State},
     utils::terminal::{RED, RED_BOLD, RESET, YELLOW, YELLOW_BOLD},
 };
 
@@ -216,6 +216,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         state: State::default(),
         config,
         store,
+        path_options: PathOptions::default(),
         input: Box::new(io::stdin().lock()),
         out: stdout(),
         err: stderr(),
