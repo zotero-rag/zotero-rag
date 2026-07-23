@@ -373,7 +373,7 @@ mod tests {
         }
     }
 
-    fn tool_call_turn() -> ProviderTurn<TestHistoryItem> {
+    fn tool_call_turn(usage: ModelUsage) -> ProviderTurn<TestHistoryItem> {
         ProviderTurn {
             native_items: Vec::new(),
             contents: vec![ChatHistoryContent::ToolCallRequest(ToolCallRequest {
@@ -381,20 +381,32 @@ mod tests {
                 tool_name: "mock_tool".into(),
                 args: serde_json::json!({"name": "Alice"}),
             })],
-            usage: ModelUsage::default(),
+            usage,
         }
     }
 
     #[tokio::test]
-    async fn tool_iteration_limit_disables_tools_on_last_turn() {
+    async fn tool_iteration_limit_disables_tools_on_last_turn_and_accumulates_usage() {
         let tools_seen = Arc::new(Mutex::new(Vec::new()));
         let client = TestClient {
             turns: Mutex::new(VecDeque::from([
-                tool_call_turn(),
+                tool_call_turn(ModelUsage {
+                    input_tokens: 10,
+                    input_cache_written: 1,
+                    input_cache_read: 2,
+                    output_tokens: 3,
+                    reasoning_tokens: 4,
+                }),
                 ProviderTurn {
                     native_items: Vec::new(),
                     contents: vec![ChatHistoryContent::Text("done".into())],
-                    usage: ModelUsage::default(),
+                    usage: ModelUsage {
+                        input_tokens: 20,
+                        input_cache_written: 5,
+                        input_cache_read: 6,
+                        output_tokens: 7,
+                        reasoning_tokens: 8,
+                    },
                 },
             ])),
             tools_seen: Arc::clone(&tools_seen),
@@ -413,6 +425,11 @@ mod tests {
 
         assert_eq!(*tools_seen.lock().unwrap(), vec![Some(1), None]);
         assert_eq!(*call_count.lock().unwrap(), 1);
+        assert_eq!(response.usage.input_tokens, 30);
+        assert_eq!(response.usage.input_cache_written, 6);
+        assert_eq!(response.usage.input_cache_read, 8);
+        assert_eq!(response.usage.output_tokens, 10);
+        assert_eq!(response.usage.reasoning_tokens, 12);
         assert!(matches!(
             response.content.as_slice(),
             [ContentType::ToolCall(_), ContentType::Text(text)] if text == "done"
