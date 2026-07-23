@@ -229,9 +229,11 @@ fn get_summary_end_index(
 #[derive(Debug, Clone, Copy, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 enum QueryMethod {
-    /// Only rely on embeddings + optionally, reranking if a config was provided.
+    /// Fast, lower-cost semantic retrieval. Use when directly relevant passages are sufficient and
+    /// broader document context is unnecessary.
     Embedding,
-    /// Use an agent to clean up the chunks fetched by the embedding + optional reranking pipeline.
+    /// Uses an LLM to refine passages and include surrounding sections. Use when the question
+    /// needs broader context; this is slower and requires an LLM client.
     Hybrid,
 }
 
@@ -606,7 +608,8 @@ struct QueryDocumentsToolInput {
     filenames: Option<Vec<String>>,
     /// A query to obtain relevant passages
     query: String,
-    /// Query method. One of "embedding" or "hybrid".
+    /// Retrieval strategy. Use `embedding` for a fast, lower-cost lookup, or `hybrid` when the
+    /// question needs surrounding context and an LLM is available.
     query_method: QueryMethod,
 }
 
@@ -839,6 +842,18 @@ mod tests {
             contents: text.unwrap(),
             summary: String::new(),
         }
+    }
+
+    #[test]
+    fn query_method_schema_describes_query_tradeoffs() {
+        let schema = serde_json::to_value(schemars::schema_for!(QueryMethod)).unwrap();
+        let schema_text = schema.to_string();
+
+        assert!(schema_text.contains("Fast, lower-cost semantic retrieval."));
+        assert!(
+            schema_text
+                .contains("Uses an LLM to refine passages and include surrounding sections.")
+        );
     }
 
     async fn run_user_document_tool_test(tool: QueryDocumentsTool, provider_name: &str) {

@@ -10,6 +10,7 @@ use zqa_rag::llm::tools::Tool;
 use zqa_rag::reranking::common::RerankProviderConfig;
 
 use crate::store::common::ZoteroStore;
+use crate::tools::summarization::SUMMARIZATION_TOOL_NAME;
 use crate::utils::library::get_authors;
 
 pub(crate) const RETRIEVAL_TOOL_NAME: &str = "retrieval_tool";
@@ -69,7 +70,11 @@ where
     }
 
     fn description(&self) -> String {
-        "Retrieves relevant papers from the user's Zotero library based on a search query".into()
+        format!(
+            "Searches the user's Zotero library and returns the top 10 matching papers as metadata only: \
+             title, authors, and paper ID. To retrieve paper passages, call `{SUMMARIZATION_TOOL_NAME}` \
+             with promising IDs."
+        )
     }
 
     fn parameters(&self) -> schemars::Schema {
@@ -184,7 +189,11 @@ mod tests {
         let tool = make_tool();
         assert_eq!(
             tool.description(),
-            "Retrieves relevant papers from the user's Zotero library based on a search query"
+            format!(
+                "Searches the user's Zotero library and returns the top 10 matching papers as metadata only: \
+                 title, authors, and paper ID. To retrieve paper passages, call `{SUMMARIZATION_TOOL_NAME}` \
+                 with promising IDs."
+            )
         );
     }
 

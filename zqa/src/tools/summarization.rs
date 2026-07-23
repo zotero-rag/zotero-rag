@@ -14,6 +14,7 @@ use zqa_rag::pricing::ModelUsage;
 
 use crate::cli::prompts::get_extraction_prompt;
 use crate::store::common::ZoteroStore;
+use crate::tools::retrieval::RETRIEVAL_TOOL_NAME;
 use crate::utils::library::ZoteroItem;
 use crate::utils::rag::ModelResponse;
 
@@ -61,7 +62,11 @@ where
     }
 
     fn description(&self) -> String {
-        "A tool to summarize Zotero papers with a specified ID.".into()
+        format!(
+            "Given paper IDs from `{RETRIEVAL_TOOL_NAME}` and a query, returns passages from each \
+             paper most relevant to the query. Call after `{RETRIEVAL_TOOL_NAME}` and pass all \
+             promising IDs in one call; papers are processed in parallel."
+        )
     }
 
     fn parameters(&self) -> schemars::Schema {
@@ -211,7 +216,11 @@ mod tests {
         let tool = make_tool(vec![]);
         test_eq!(
             tool.description(),
-            "A tool to summarize Zotero papers with a specified ID."
+            format!(
+                "Given paper IDs from `{RETRIEVAL_TOOL_NAME}` and a query, returns passages from each \
+                 paper most relevant to the query. Call after `{RETRIEVAL_TOOL_NAME}` and pass all \
+                 promising IDs in one call; papers are processed in parallel."
+            )
         );
     }
 
