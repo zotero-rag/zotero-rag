@@ -130,6 +130,10 @@ pub(crate) enum FontEncoding {
     /// two-byte (or multi-byte, but we don't yet handle this) CIDs, custom glyph ID maps, and
     /// `ToUnicode` CMaps for real text extraction.
     CIDKeyed(CMap),
+    /// A CID-keyed font with no `ToUnicode` CMap. Text in such fonts cannot be reliably
+    /// extracted, so instead of erroring out, the parser skips text set in these fonts and
+    /// records how much was skipped.
+    Unmappable,
 }
 
 /// CMaps can take two main forms: individual, where `beginbfchar` and `endbfchar` wrap a set of
@@ -365,7 +369,6 @@ pub(crate) fn parse_cmap(cmap: &str, font_key: &str) -> Result<HashMap<String, S
 /// * `PdfError::FontNotFound` if the font key does not exist.
 /// * `PdfError::EncodingError` if the font dictionary:
 ///      * Has an /Encoding that could not be read
-///      * Indicates a CID-keyed font but does not have a ToUnicode CMap.
 ///      * Has a ToUnicode CMap that could not be read or deflated.
 ///      * Has a ToUnicode CMap without a `beginbfchar`, `endbfchar`, `beginbfrange`, or
 ///        `endbfrange` marker.
@@ -439,17 +442,18 @@ pub(crate) fn compute_font_encoding(
         // Test 3: if the font has:
         //   /Subtype /Type0
         // then it is likely a CID-keyed font.
-        let cmap_ref = font_obj
-            .get("ToUnicode")
-            .ok_or(PdfError::EncodingError(format!(
-                "CID-keyed font {font_key} does not have a ToUnicode CMap.",
-            )))?
-            .as_reference()
-            .map_err(|_| {
-                PdfError::EncodingError(format!(
-                    "CID-keyed font {font_key}'s ToUnicode CMap could not be read."
-                ))
-            })?;
+        let Some(to_unicode) = font_obj.get("ToUnicode") else {
+            log::debug!(
+                "CID-keyed font {font_key} does not have a ToUnicode CMap; text using it will be skipped."
+            );
+            return Ok(FontEncoding::Unmappable);
+        };
+
+        let cmap_ref = to_unicode.as_reference().map_err(|_| {
+            PdfError::EncodingError(format!(
+                "CID-keyed font {font_key}'s ToUnicode CMap could not be read."
+            ))
+        })?;
 
         let decompressed = doc
             .get_object(cmap_ref)
