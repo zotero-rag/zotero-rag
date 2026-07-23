@@ -271,6 +271,9 @@ struct ParseResult {
     font_size_markers: Vec<FontSizeMarker>,
     /// Body font size
     body_font_size: Option<f32>,
+    /// The number of characters that were skipped on this page because they used CID-keyed fonts
+    /// without a usable `ToUnicode` CMap.
+    skipped_chars: usize,
 }
 
 impl PdfParser {
@@ -309,7 +312,6 @@ impl PdfParser {
     /// * `PdfError::FontNotFound` if the font key does not exist.
     /// * `PdfError::EncodingError` if the font dictionary:
     ///      * Has an /Encoding that could not be read
-    ///      * Indicates a CID-keyed font but does not have a ToUnicode CMap.
     ///      * Has a ToUnicode CMap that could not be read or deflated.
     ///      * Has a ToUnicode CMap without a `beginbfchar` or `endbfchar` marker.
     /// * `PdfError::InternalError` if the font dictionary:
@@ -471,23 +473,27 @@ impl PdfParser {
     ///
     /// # Returns
     ///
-    /// The extracted text string with proper spacing applied
+    /// A tuple of the extracted text string with proper spacing applied, and the number of
+    /// characters that were skipped because the current font is CID-keyed but has no usable
+    /// `ToUnicode` CMap (an estimate based on the number of CIDs skipped).
     ///
     /// # Errors
     ///
     /// Returns an error if font information cannot be retrieved
+    #[allow(clippy::too_many_lines)]
     fn process_tj_tokens(
         &mut self,
         tokens: &[Token<'_>],
         doc: &Document,
         page_id: PageID,
-    ) -> Result<String, PdfError> {
+    ) -> Result<(String, usize), PdfError> {
         let mut result = String::new();
+        let mut skipped_chars = 0;
         let font_id = self.cur_font_id.clone();
 
         // Skip if we don't have a valid font ID yet
         if font_id.is_empty() {
-            return Ok(result);
+            return Ok((result, skipped_chars));
         }
 
         let cur_font = self.cur_font.clone();
@@ -512,6 +518,13 @@ impl PdfParser {
                         FontEncoding::CIDKeyed(_) => {
                             // This shouldn't happen - CID-keyed fonts use Hex tokens
                             log::warn!("Unexpected Literal token in CID-keyed font");
+                        }
+                        FontEncoding::Unmappable => {
+                            log::debug!(
+                                "Skipping {} byte(s) of text in unmappable font {font_id}",
+                                text.len()
+                            );
+                            skipped_chars += text.len();
                         }
                     }
 
@@ -551,6 +564,16 @@ impl PdfParser {
                         FontEncoding::Simple => {
                             log::warn!("Unexpected Hex token in simple font");
                         }
+                        FontEncoding::Unmappable => {
+                            // CIDs are two bytes each, encoded as four hex characters; use the
+                            // number of skipped CIDs as an estimate of skipped characters.
+                            let num_cids =
+                                std::str::from_utf8(hex_str).unwrap_or("").len().div_ceil(4);
+                            log::debug!(
+                                "Skipping {num_cids} CID(s) of text in unmappable font {font_id}"
+                            );
+                            skipped_chars += num_cids;
+                        }
                     }
 
                     // Check for spacing after this hex string
@@ -580,7 +603,7 @@ impl PdfParser {
             i += 1;
         }
 
-        Ok(result)
+        Ok((result, skipped_chars))
     }
 
     /// Given a token slice and an index `pos` of an `ET` token, look *around* `pos` and search for
@@ -721,6 +744,7 @@ impl PdfParser {
         let mut parsed = String::new();
 
         let tokens = tokenize(&content);
+        let mut skipped_chars = 0;
 
         // Keep track of the font sizes markers (from Tf) and associated positions
         let mut tf_history: Vec<FontSizeMarker> = Vec::new();
@@ -770,8 +794,10 @@ impl PdfParser {
                 }
                 Token::Op(b"TJ") => {
                     if let Some(start_idx) = tj_start_idx {
-                        parsed +=
-                            &self.process_tj_tokens(&tokens[start_idx..token_idx], doc, page_id)?;
+                        let (text, skipped) =
+                            self.process_tj_tokens(&tokens[start_idx..token_idx], doc, page_id)?;
+                        parsed += &text;
+                        skipped_chars += skipped;
                         tj_start_idx = None;
                     }
                 }
@@ -858,6 +884,7 @@ impl PdfParser {
             content: parsed,
             font_size_markers: tf_history,
             body_font_size,
+            skipped_chars,
         })
     }
 }
@@ -932,6 +959,7 @@ pub fn extract_text(file_path: &str) -> Result<ExtractedContent, Box<dyn Error>>
     let mut full_text = String::new();
     let mut sections = Vec::new();
     let mut body_font_size: Option<f32> = None;
+    let mut skipped_chars_total = 0;
 
     let page_count = doc.get_pages().len();
 
@@ -966,6 +994,20 @@ pub fn extract_text(file_path: &str) -> Result<ExtractedContent, Box<dyn Error>>
         }
 
         full_text.push_str(&result.content);
+        skipped_chars_total += result.skipped_chars;
+    }
+
+    if skipped_chars_total > 0 {
+        let total = skipped_chars_total + full_text.len();
+        let pct = 100.0 * (skipped_chars_total as f64) / (total as f64);
+
+        // Decide on a log level based on `pct`; we don't want to alarm users needlessly.
+        // TODO: Consider making this part of [`PdfParserThresholds`]
+        if pct >= 5.0 {
+            log::warn!(
+                "Skipped {skipped_chars_total} character(s) ({pct:.1}% of the document): text uses CID-keyed fonts with no usable ToUnicode CMap and could not be extracted."
+            );
+        }
     }
 
     let mut font_sizes = sections
@@ -1416,7 +1458,7 @@ mod tests {
         let result = parser.process_tj_tokens(&tokens, &doc, page_id);
         assert!(result.is_ok(), "process_tj_tokens failed: {result:?}");
 
-        let text = result.unwrap();
+        let (text, _) = result.unwrap();
         assert!(text.contains("Hello"));
         assert!(text.contains("World"));
     }
