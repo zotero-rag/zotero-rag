@@ -136,17 +136,6 @@ pub(crate) enum FontEncoding {
     Unmappable,
 }
 
-/// CMaps can take two main forms: individual, where `beginbfchar` and `endbfchar` wrap a set of
-/// lines, each with two tokens; and ranged, where `beginbfrange` and `endbfrange` wrap a set of
-/// triples. The first two tokens in the triples mark begin and end of a range, and the third token
-/// can be in hex form or an array (currently, not yet supported).
-#[derive(Debug, PartialEq)]
-enum CMapKind {
-    Individual,
-    Ranged,
-    Unknown,
-}
-
 /// Given a PDF `Document` reference, a page ID, and a font key (e.g., "F19"), return the font
 /// object.
 ///
@@ -193,164 +182,239 @@ pub(crate) fn get_font<'a>(
         .collect::<Result<_, _>>()
 }
 
-/// Parse a CMap string. A font key is taken as reference to provide more context in errors.
+/// Parse a single `beginbfchar`..`endbfchar` block, assuming the enclosing keywords have been
+/// stripped out.
 ///
-/// Currently, this CMap parser supports scenarios with one block of mappings per font, and only
-/// supports `beginbfchar`..`endbfchar` and `beginbfrange`..`endbfrange`s, i.e., it does not support
-/// more complex use cases such as those involving `begincidrange`..`endcidrange`. Note that per
-/// ISO 32000-1:2008, §9.7.5.4(e), `beginrearrangedfont`..`endrearrangedfont` should not be used in
-/// embedded CMaps; moreover, `usefont`s should only specify a font number of 0.
-#[allow(clippy::too_many_lines)]
-pub(crate) fn parse_cmap(cmap: &str, font_key: &str) -> Result<HashMap<String, String>, PdfError> {
-    // TODO: (ZOT-202) Technically, the number of entries in each block is limited to 100,
-    // so a CID mapping can have multiple blocks. We should parse all such blocks, not just
-    // the first.
+/// # Arguments
+///
+/// * `csrange` - String slice of the block, excluding the `beginbfchar` and `endbfchar` markers.
+/// * `font_key` - The key for the current font being parsed, used for logging.
+/// * `cmap` - Mutable reference to a map where the parsed mappings will be inserted.
+///
+/// # Errors
+///
+/// * `PdfError::EncodingError` in the following cases:
+///     * The range contains invalid UTF-8 characters.
+///     * A mapping contains invalid UTF-16 code units.
+fn parse_bfchar_block(
+    csrange: &str,
+    font_key: &str,
+    cmap: &mut HashMap<String, String>,
+) -> Result<(), PdfError> {
+    let lines = csrange.split('\n');
 
-    let cmap_kind = if cmap.contains("beginbfchar") {
-        CMapKind::Individual
-    } else if cmap.contains("beginbfrange") {
-        CMapKind::Ranged
-    } else {
-        CMapKind::Unknown
-    };
-
-    match cmap_kind {
-        CMapKind::Unknown => Err(PdfError::EncodingError(format!(
-            "CMap type for {font_key} could not be determined."
-        ))),
-        CMapKind::Individual => {
-            let csrange_begin = cmap.find("beginbfchar").unwrap() + "beginbfchar".len();
-            let csrange_end = cmap
-                .find("endbfchar")
-                .ok_or(PdfError::EncodingError(format!(
-                    "Deflated ToUnicode CMap for font {font_key} has no `endbfchar`."
-                )))?;
-
-            let csrange = cmap[csrange_begin..csrange_end].trim();
-            let lines = csrange.split('\n');
-
-            let mut mappings = HashMap::new();
-
-            // Within the CMap, each line has the following form:
-            //   <001B> <0041>
-            // In this case, the 2-byte CID 001B maps to U+0041.
-            for line in lines {
-                let parts: Vec<&str> = line.split_whitespace().collect();
-                if parts.len() != 2 {
-                    log::warn!(
-                        "In CMap for {font_key}, unexpected line with {} tokens.",
-                        parts.len()
-                    );
-                    continue;
-                }
-
-                let cid = parts[0].trim_matches(|c| c == '<' || c == '>');
-
-                // In some cases, `parts[1]` can have multiple Unicode code points. This is
-                // sometimes done to handle ligatures, among others. For example, the ligature
-                // `ff` is represented as two U+066 code points.
-                let code_units: Vec<u16> = parts[1]
-                    .trim_matches(|c| c == '<' || c == '>')
-                    .as_bytes()
-                    .chunks_exact(4)
-                    .map(|chunk| u16::from_str_radix(std::str::from_utf8(chunk).unwrap(), 16))
-                    .collect::<Result<_, _>>()
-                    .map_err(|_| PdfError::InvalidUtf8)?;
-
-                let unicode: String = std::char::decode_utf16(code_units)
-                    .map(|r| r.map_err(|e| PdfError::EncodingError(format!("Invalid UTF-16: {e}"))))
-                    .collect::<Result<_, _>>()?;
-
-                mappings.insert(cid.to_string().to_lowercase(), unicode);
-            }
-
-            Ok(mappings)
+    // Within the CMap, each line has the following form:
+    //   <001B> <0041>
+    // In this case, the 2-byte CID 001B maps to U+0041.
+    for line in lines {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.len() != 2 {
+            log::warn!(
+                "In CMap for {font_key}, unexpected line with {} tokens.",
+                parts.len()
+            );
+            continue;
         }
-        CMapKind::Ranged => {
-            let csrange_begin = cmap.find("beginbfrange").unwrap() + "beginbfrange".len();
-            let csrange_end = cmap
-                .find("endbfrange")
-                .ok_or(PdfError::EncodingError(format!(
-                    "Deflated ToUnicode CMap for font {font_key} has no `endbfrange`."
-                )))?;
 
-            let csrange = cmap[csrange_begin..csrange_end].trim();
-            let lines = csrange.split('\n');
+        let cid = parts[0].trim_matches(|c| c == '<' || c == '>');
 
-            let mut mappings = HashMap::new();
+        // In some cases, `parts[1]` can have multiple Unicode code points. This is
+        // sometimes done to handle ligatures, among others. For example, the ligature
+        // `ff` is represented as two U+066 code points.
+        let code_units: Vec<u16> = parts[1]
+            .trim_matches(|c| c == '<' || c == '>')
+            .as_bytes()
+            .chunks_exact(4)
+            .map(|chunk| u16::from_str_radix(std::str::from_utf8(chunk).unwrap(), 16))
+            .collect::<Result<_, _>>()
+            .map_err(|_| PdfError::InvalidUtf8)?;
 
-            // Within the CMap, each line has the following form:
-            //   <000B> <000C> <0028>
-            // In this case, we have:
-            //   * CID 000B -> U+0028
-            //   * CID 000C -> U+0029
-            for line in lines {
-                if line.contains('[') {
-                    log::error!("CMaps with `bfrange`s that contain arrays are not yet supported.");
-                    return Err(PdfError::EncodingError(
-                        "Unsupported CID map with arrays in range.".into(),
-                    ));
-                }
+        let unicode: String = char::decode_utf16(code_units)
+            .map(|r| r.map_err(|e| PdfError::EncodingError(format!("Invalid UTF-16: {e}"))))
+            .collect::<Result<_, _>>()?;
 
-                let parts: Vec<&str> = line.split_whitespace().collect();
-                if parts.len() != 3 {
-                    log::warn!(
-                        "In CMap for {font_key}, unexpected line with {} tokens.",
-                        parts.len()
-                    );
-                    continue;
-                }
+        cmap.insert(cid.to_string().to_lowercase(), unicode);
+    }
 
-                let start_cid = parts[0].trim_matches(|c| c == '<' || c == '>');
-                let end_cid = parts[1].trim_matches(|c| c == '<' || c == '>');
+    Ok(())
+}
 
-                let start_cid_u16 = u16::from_str_radix(start_cid, 16).map_err(|_| {
+/// Parse a single `beginbfrange`..`endbfrange` block, assuming the enclosing keywords have been
+/// stripped out.
+///
+/// # Arguments
+///
+/// * `csrange` - String slice of the block, excluding the `beginbfrange` and `endbfrange` markers.
+/// * `font_key` - The key for the current font being parsed, used for logging.
+/// * `cmap` - Mutable reference to a map where the parsed mappings will be inserted.
+///
+/// # Errors
+///
+/// * `PdfError::EncodingError` in the following cases:
+///     * The range contains arrays (currently unsupported).
+///     * The range contains an invalid UTF-16 CID.
+///     * The range contains invalid UTF-8 characters.
+///     * Any of the specified ranges contains an end index that overflows, disallowed by the spec.
+fn parse_bfrange_block(
+    csrange: &str,
+    font_key: &str,
+    cmap: &mut HashMap<String, String>,
+) -> Result<(), PdfError> {
+    let lines = csrange.split('\n');
+
+    // Within the CMap, each line has the following form:
+    //   <000B> <000C> <0028>
+    // In this case, we have:
+    //   * CID 000B -> U+0028
+    //   * CID 000C -> U+0029
+    for line in lines {
+        if line.contains('[') {
+            log::error!("CMaps with `bfrange`s that contain arrays are not yet supported.");
+            return Err(PdfError::EncodingError(
+                "Unsupported CID map with arrays in range.".into(),
+            ));
+        }
+
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.len() != 3 {
+            log::warn!(
+                "In CMap for {font_key}, unexpected line with {} tokens.",
+                parts.len()
+            );
+            continue;
+        }
+
+        let start_cid = parts[0].trim_matches(|c| c == '<' || c == '>');
+        let end_cid = parts[1].trim_matches(|c| c == '<' || c == '>');
+
+        let start_cid_u16 = u16::from_str_radix(start_cid, 16).map_err(|_| {
+            PdfError::EncodingError(format!(
+                "In CMap for {font_key}, CID {start_cid} was not valid UTF-16"
+            ))
+        })?;
+        let end_cid_u16 = u16::from_str_radix(end_cid, 16).map_err(|_| {
+            PdfError::EncodingError(format!(
+                "In CMap for {font_key}, CID {end_cid} was not valid UTF-16"
+            ))
+        })?;
+
+        // Again, parts[2] can have multiple UTF-16BE code units. In this case, for each
+        // consecutive code in the source code range, we increment the last byte of the
+        // string, see the PDF standard, ISO 32000-1:2008, §9.10.3 ("ToUnicode CMaps").
+        // This means that we don't treat the hex string as one Big Endian integer, and only
+        // look at the last byte for the purposes of the range.
+        let mut code_units: Vec<u16> = parts[2]
+            .trim_matches(|c| c == '<' || c == '>')
+            .as_bytes()
+            .chunks_exact(4)
+            .map(|chunk| u16::from_str_radix(std::str::from_utf8(chunk).unwrap(), 16))
+            .collect::<Result<_, _>>()
+            .map_err(|_| PdfError::InvalidUtf8)?;
+
+        let original_last = code_units.last().copied();
+        for i in start_cid_u16..=end_cid_u16 {
+            if let (Some(c), Some(orig)) = (code_units.last_mut(), original_last) {
+                // Technically, this is supposed to be *byte* addition, so it's not
+                // to-spec, but this is good enough.
+                *c = orig.checked_add(i - start_cid_u16).ok_or_else(|| {
                     PdfError::EncodingError(format!(
-                        "In CMap for {font_key}, CID {start_cid} was not valid UTF-16"
+                        "In CMap for {font_key}, ranged destination overflowed u16"
                     ))
                 })?;
-                let end_cid_u16 = u16::from_str_radix(end_cid, 16).map_err(|_| {
-                    PdfError::EncodingError(format!(
-                        "In CMap for {font_key}, CID {end_cid} was not valid UTF-16"
-                    ))
-                })?;
-
-                // Again, parts[2] can have multiple UTF-16BE code units. In this case, for each
-                // consecutive code in the source code range, we increment the last byte of the
-                // string, see the PDF standard, ISO 32000-1:2008, §9.10.3 ("ToUnicode CMaps").
-                // This means that we don't treat the hex string as one Big Endian integer, and only
-                // look at the last byte for the purposes of the range.
-                let mut code_units: Vec<u16> = parts[2]
-                    .trim_matches(|c| c == '<' || c == '>')
-                    .as_bytes()
-                    .chunks_exact(4)
-                    .map(|chunk| u16::from_str_radix(std::str::from_utf8(chunk).unwrap(), 16))
-                    .collect::<Result<_, _>>()
-                    .map_err(|_| PdfError::InvalidUtf8)?;
-
-                let original_last = code_units.last().copied();
-                for i in start_cid_u16..=end_cid_u16 {
-                    if let (Some(c), Some(orig)) = (code_units.last_mut(), original_last) {
-                        // Technically, this is supposed to be *byte* addition, so it's not
-                        // to-spec, but this is good enough.
-                        *c = orig.checked_add(i - start_cid_u16).ok_or_else(|| {
-                            PdfError::EncodingError(format!(
-                                "In CMap for {font_key}, ranged destination overflowed u16"
-                            ))
-                        })?;
-                    }
-                    let unicode: String = std::char::decode_utf16(code_units.iter().copied())
-                        .map(|r| {
-                            r.map_err(|e| PdfError::EncodingError(format!("Invalid UTF-16: {e}")))
-                        })
-                        .collect::<Result<_, _>>()?;
-                    mappings.insert(format!("{i:04x}"), unicode);
-                }
             }
-
-            Ok(mappings)
+            let unicode: String = char::decode_utf16(code_units.iter().copied())
+                .map(|r| r.map_err(|e| PdfError::EncodingError(format!("Invalid UTF-16: {e}"))))
+                .collect::<Result<_, _>>()?;
+            cmap.insert(format!("{i:04x}"), unicode);
         }
     }
+
+    Ok(())
+}
+
+/// Parse a CMap string. A font key is taken as reference to provide more context in errors.
+///
+/// Currently, this CMap parser supports multiple `beginbfchar`..`endbfchar` and
+/// `beginbfrange`..`endbfrange`s, but does not support more complex use cases such as those
+/// involving `begincidrange`..`endcidrange`. Note that per ISO 32000-1:2008, §9.7.5.4(e),
+/// `beginrearrangedfont`..`endrearrangedfont` should not be used in embedded CMaps; moreover,
+/// `usefont`s should only specify a font number of 0.
+///
+/// # Arguments
+///
+/// * `cmap` - The entirety of the CMap to parse.
+/// * `font_key` - The key for the current font being parsed, used for logging.
+///
+/// # Returns
+///
+/// A [`HashMap<String, String>`] mapping CIDs to readable characters.
+///
+/// # Errors
+///
+/// * `PdfError::EncodingError` in the following cases:
+///     * A block ends unexpectedly on "beginbf".
+///     * A mapping in a `bfchar` block contains invalid UTF-16 code units.
+///     * A `bfrange` block contains arrays (currently unsupported).
+///     * A `bfrange` block contains an invalid UTF-16 CID.
+///     * The range contains invalid UTF-8 characters.
+///     * Any of the specified ranges in a `bfrange` block contains an end index that overflows,
+///       disallowed by the spec.
+pub(crate) fn parse_cmap(cmap: &str, font_key: &str) -> Result<HashMap<String, String>, PdfError> {
+    let mut mappings = HashMap::new();
+    let bytes = cmap.as_bytes();
+
+    let mut cmap_pos = 0;
+    // The spec limits each mapping set to 100 lines, and requires any font needing more than that
+    // many entries to split them into batches of at most 100, see Adobe Technical Notes #5014,
+    // "Adobe CMap and CIDFont Files Specification", §7.4 ("Operator Details").
+    while let Some(bf_pos) = cmap[cmap_pos..].find("beginbf") {
+        let offset = "beginbf".len();
+        let Some(&discriminant) = bytes.get(cmap_pos + bf_pos + offset) else {
+            return Err(PdfError::EncodingError(format!(
+                "CMap type for {font_key} could not be determined."
+            )));
+        };
+
+        if discriminant == b'c' {
+            // `beginbfchar`..`endbfchar` section
+            let csrange_begin = cmap_pos + bf_pos + offset + "char".len();
+            let csrange_end = csrange_begin
+                + cmap[csrange_begin..]
+                    .find("endbfchar")
+                    .ok_or(PdfError::EncodingError(format!(
+                        "Deflated ToUnicode CMap for font {font_key} has no `endbfchar`."
+                    )))?;
+            let csrange = cmap[csrange_begin..csrange_end].trim();
+            parse_bfchar_block(csrange, font_key, &mut mappings)?;
+
+            cmap_pos = csrange_end + "endbfchar".len();
+        } else if discriminant == b'r' {
+            // `beginbfrange`..`endbfrange` section
+            let csrange_begin = cmap_pos + bf_pos + offset + "range".len();
+            let csrange_end = csrange_begin
+                + cmap[csrange_begin..]
+                    .find("endbfrange")
+                    .ok_or(PdfError::EncodingError(format!(
+                        "Deflated ToUnicode CMap for font {font_key} has no `endbfrange`."
+                    )))?;
+            let csrange = cmap[csrange_begin..csrange_end].trim();
+            parse_bfrange_block(csrange, font_key, &mut mappings)?;
+
+            cmap_pos = csrange_end + "endbfrange".len();
+        } else {
+            return Err(PdfError::EncodingError(format!(
+                "CMap type for {font_key} could not be determined."
+            )));
+        }
+    }
+
+    if cmap_pos == 0 {
+        return Err(PdfError::EncodingError(format!(
+            "Font {font_key} contains an unrecognized CMap kind."
+        )));
+    }
+
+    Ok(mappings)
 }
 
 /// Attempt to get the font encoding for a font key on a specific page.
@@ -491,6 +555,7 @@ pub(crate) fn compute_font_encoding(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use zqa_macros::test_eq;
 
     #[test]
     fn test_parse_cmap_ranged() {
@@ -538,6 +603,65 @@ endbfrange";
 
         let err = parse_cmap(cmap, "F3").expect_err("array ranges are unsupported");
         assert!(matches!(err, PdfError::EncodingError(_)));
+    }
+
+    #[test]
+    fn test_parse_cmap_multiple_bfchar_blocks() {
+        // The spec caps each block at 100 entries, so large CMaps split into multiple blocks;
+        // mappings from every block must be collected, not just the first.
+        let cmap = "\
+1 beginbfchar
+<0001> <0041>
+endbfchar
+1 beginbfchar
+<0002> <0042>
+endbfchar";
+
+        let mappings = parse_cmap(cmap, "F5").expect("multi-block bfchar CMap should parse");
+
+        test_eq!(mappings.len(), 2);
+        test_eq!(mappings.get("0001"), Some(&"A".to_string()));
+        test_eq!(mappings.get("0002"), Some(&"B".to_string()));
+    }
+
+    #[test]
+    fn test_parse_cmap_multiple_bfrange_blocks() {
+        // Same multi-block case for ranged mappings: entries from the second block must not be
+        // dropped.
+        let cmap = "\
+1 beginbfrange
+<0001> <0002> <0041>
+endbfrange
+1 beginbfrange
+<0003> <0003> <005a>
+endbfrange";
+
+        let mappings = parse_cmap(cmap, "F6").expect("multi-block bfrange CMap should parse");
+
+        test_eq!(mappings.len(), 3);
+        test_eq!(mappings.get("0001"), Some(&"A".to_string()));
+        test_eq!(mappings.get("0002"), Some(&"B".to_string()));
+        test_eq!(mappings.get("0003"), Some(&"Z".to_string()));
+    }
+
+    #[test]
+    fn test_parse_cmap_mixed_bfchar_and_bfrange_blocks() {
+        // A CMap may contain both bfchar and bfrange blocks; mappings from both kinds must be
+        // collected.
+        let cmap = "\
+1 beginbfchar
+<0001> <0041>
+endbfchar
+1 beginbfrange
+<0002> <0003> <0042>
+endbfrange";
+
+        let mappings = parse_cmap(cmap, "F7").expect("mixed-kind CMap should parse");
+
+        test_eq!(mappings.len(), 3);
+        test_eq!(mappings.get("0001"), Some(&"A".to_string()));
+        test_eq!(mappings.get("0002"), Some(&"B".to_string()));
+        test_eq!(mappings.get("0003"), Some(&"C".to_string()));
     }
 
     #[test]
