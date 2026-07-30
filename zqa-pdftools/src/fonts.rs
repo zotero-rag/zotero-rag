@@ -254,6 +254,7 @@ fn parse_bfchar_block(
 ///     * The range contains arrays (currently unsupported).
 ///     * The range contains an invalid UTF-16 CID.
 ///     * The range contains invalid UTF-8 characters.
+///     * The range contains a CID range exceeding the spec's 100-entry limit.
 ///     * Any of the specified ranges contains an end index that overflows, disallowed by the spec.
 fn parse_bfrange_block(
     csrange: &str,
@@ -297,6 +298,11 @@ fn parse_bfrange_block(
                 "In CMap for {font_key}, CID {end_cid} was not valid UTF-16"
             ))
         })?;
+        if end_cid_u16.saturating_sub(start_cid_u16) >= 100 {
+            return Err(PdfError::EncodingError(format!(
+                "In CMap for {font_key}, range {start_cid}..{end_cid} exceeds the 100-entry spec limit."
+            )));
+        }
 
         // Again, parts[2] can have multiple UTF-16BE code units. In this case, for each
         // consecutive code in the source code range, we increment the last byte of the
@@ -356,12 +362,15 @@ fn parse_bfrange_block(
 ///     * A mapping in a `bfchar` block contains invalid UTF-16 code units.
 ///     * A `bfrange` block contains arrays (currently unsupported).
 ///     * A `bfrange` block contains an invalid UTF-16 CID.
+///     * A `bfrange` block contains a CID range exceeding the spec's 100-entry limit.
 ///     * The range contains invalid UTF-8 characters.
 ///     * Any of the specified ranges in a `bfrange` block contains an end index that overflows,
 ///       disallowed by the spec.
+///     * The CMap contains more than 8192 entries (heuristically chosen).
 pub(crate) fn parse_cmap(cmap: &str, font_key: &str) -> Result<HashMap<String, String>, PdfError> {
     let mut mappings = HashMap::new();
     let bytes = cmap.as_bytes();
+    const MAX_CMAP_ENTRIES: usize = 8192;
 
     let mut cmap_pos = 0;
     // The spec limits each mapping set to 100 lines, and requires any font needing more than that
@@ -404,6 +413,13 @@ pub(crate) fn parse_cmap(cmap: &str, font_key: &str) -> Result<HashMap<String, S
         } else {
             return Err(PdfError::EncodingError(format!(
                 "CMap type for {font_key} could not be determined."
+            )));
+        }
+
+        // Check overall CMap size
+        if mappings.len() > MAX_CMAP_ENTRIES {
+            return Err(PdfError::EncodingError(format!(
+                "CMap for {font_key} exceeds maximum allowed entries ({MAX_CMAP_ENTRIES})."
             )));
         }
     }
