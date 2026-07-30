@@ -9,6 +9,8 @@ use ordered_float::OrderedFloat;
 use crate::math::{from_cmex, from_cmmi, from_cmsy, from_msbm};
 use crate::parse::{PageID, PdfError};
 
+const MAX_CMAP_ENTRIES: usize = 8192;
+
 /// A struct to keep track of font size changes. This includes all the metadata you might need
 /// about font changes. The primary purpose of this is to track sections, subsections, etc., but
 /// the additional metadata here can also be used to chunk text by section.
@@ -196,6 +198,7 @@ pub(crate) fn get_font<'a>(
 /// * `PdfError::EncodingError` in the following cases:
 ///     * The range contains invalid UTF-8 characters.
 ///     * A mapping contains invalid UTF-16 code units.
+///     * The CMap exceeds the maximum allowed entries (8192)
 fn parse_bfchar_block(
     csrange: &str,
     font_key: &str,
@@ -234,6 +237,11 @@ fn parse_bfchar_block(
             .collect::<Result<_, _>>()?;
 
         cmap.insert(cid.to_string().to_lowercase(), unicode);
+        if cmap.len() >= MAX_CMAP_ENTRIES {
+            return Err(PdfError::EncodingError(format!(
+                "CMap for {font_key} exceeds maximum allowed entries."
+            )));
+        }
     }
 
     Ok(())
@@ -256,6 +264,7 @@ fn parse_bfchar_block(
 ///     * The range contains invalid UTF-8 characters.
 ///     * The range contains a CID range exceeding the spec's 100-entry limit.
 ///     * Any of the specified ranges contains an end index that overflows, disallowed by the spec.
+///     * The CMap contains more than 8192 entries (heuristically chosen).
 fn parse_bfrange_block(
     csrange: &str,
     font_key: &str,
@@ -298,11 +307,6 @@ fn parse_bfrange_block(
                 "In CMap for {font_key}, CID {end_cid} was not valid UTF-16"
             ))
         })?;
-        if end_cid_u16.saturating_sub(start_cid_u16) >= 100 {
-            return Err(PdfError::EncodingError(format!(
-                "In CMap for {font_key}, range {start_cid}..{end_cid} exceeds the 100-entry spec limit."
-            )));
-        }
 
         // Again, parts[2] can have multiple UTF-16BE code units. In this case, for each
         // consecutive code in the source code range, we increment the last byte of the
@@ -332,6 +336,12 @@ fn parse_bfrange_block(
                 .map(|r| r.map_err(|e| PdfError::EncodingError(format!("Invalid UTF-16: {e}"))))
                 .collect::<Result<_, _>>()?;
             cmap.insert(format!("{i:04x}"), unicode);
+
+            if cmap.len() >= MAX_CMAP_ENTRIES {
+                return Err(PdfError::EncodingError(format!(
+                    "CMap for {font_key} exceeds maximum allowed entries."
+                )));
+            }
         }
     }
 
@@ -370,7 +380,6 @@ fn parse_bfrange_block(
 pub(crate) fn parse_cmap(cmap: &str, font_key: &str) -> Result<HashMap<String, String>, PdfError> {
     let mut mappings = HashMap::new();
     let bytes = cmap.as_bytes();
-    const MAX_CMAP_ENTRIES: usize = 8192;
 
     let mut cmap_pos = 0;
     // The spec limits each mapping set to 100 lines, and requires any font needing more than that
@@ -413,13 +422,6 @@ pub(crate) fn parse_cmap(cmap: &str, font_key: &str) -> Result<HashMap<String, S
         } else {
             return Err(PdfError::EncodingError(format!(
                 "CMap type for {font_key} could not be determined."
-            )));
-        }
-
-        // Check overall CMap size
-        if mappings.len() > MAX_CMAP_ENTRIES {
-            return Err(PdfError::EncodingError(format!(
-                "CMap for {font_key} exceeds maximum allowed entries ({MAX_CMAP_ENTRIES})."
             )));
         }
     }
