@@ -334,11 +334,11 @@ fn parse_bfrange_block(
 
 /// Parse a CMap string. A font key is taken as reference to provide more context in errors.
 ///
-/// Currently, this CMap parser supports scenarios with one block of mappings per font, and only
-/// supports `beginbfchar`..`endbfchar` and `beginbfrange`..`endbfrange`s, i.e., it does not support
-/// more complex use cases such as those involving `begincidrange`..`endcidrange`. Note that per
-/// ISO 32000-1:2008, §9.7.5.4(e), `beginrearrangedfont`..`endrearrangedfont` should not be used in
-/// embedded CMaps; moreover, `usefont`s should only specify a font number of 0.
+/// Currently, this CMap parser supports multiple `beginbfchar`..`endbfchar` and
+/// `beginbfrange`..`endbfrange`s, but does not support more complex use cases such as those
+/// involving `begincidrange`..`endcidrange`. Note that per ISO 32000-1:2008, §9.7.5.4(e),
+/// `beginrearrangedfont`..`endrearrangedfont` should not be used in embedded CMaps; moreover,
+/// `usefont`s should only specify a font number of 0.
 ///
 /// # Arguments
 ///
@@ -352,6 +352,7 @@ fn parse_bfrange_block(
 /// # Errors
 ///
 /// * `PdfError::EncodingError` in the following cases:
+///     * A block ends unexpectedly on "beginbf".
 ///     * A mapping in a `bfchar` block contains invalid UTF-16 code units.
 ///     * A `bfrange` block contains arrays (currently unsupported).
 ///     * A `bfrange` block contains an invalid UTF-16 CID.
@@ -367,12 +368,16 @@ pub(crate) fn parse_cmap(cmap: &str, font_key: &str) -> Result<HashMap<String, S
     // many entries to split them into batches of at most 100, see Adobe Technical Notes #5014,
     // "Adobe CMap and CIDFont Files Specification", §7.4 ("Operator Details").
     while let Some(bf_pos) = cmap[cmap_pos..].find("beginbf") {
-        let offset = const { "beginbf".len() };
-        let discriminant = bytes[cmap_pos + bf_pos + offset];
+        let offset = "beginbf".len();
+        let Some(&discriminant) = bytes.get(cmap_pos + bf_pos + offset) else {
+            return Err(PdfError::EncodingError(format!(
+                "CMap type for {font_key} could not be determined."
+            )));
+        };
 
         if discriminant == b'c' {
             // `beginbfchar`..`endbfchar` section
-            let csrange_begin = cmap_pos + bf_pos + offset + const { "char".len() };
+            let csrange_begin = cmap_pos + bf_pos + offset + "char".len();
             let csrange_end = csrange_begin
                 + cmap[csrange_begin..]
                     .find("endbfchar")
@@ -382,10 +387,10 @@ pub(crate) fn parse_cmap(cmap: &str, font_key: &str) -> Result<HashMap<String, S
             let csrange = cmap[csrange_begin..csrange_end].trim();
             parse_bfchar_block(csrange, font_key, &mut mappings)?;
 
-            cmap_pos = csrange_end + const { "endbfchar".len() };
+            cmap_pos = csrange_end + "endbfchar".len();
         } else if discriminant == b'r' {
             // `beginbfrange`..`endbfrange` section
-            let csrange_begin = cmap_pos + bf_pos + offset + const { "range".len() };
+            let csrange_begin = cmap_pos + bf_pos + offset + "range".len();
             let csrange_end = csrange_begin
                 + cmap[csrange_begin..]
                     .find("endbfrange")
@@ -395,12 +400,18 @@ pub(crate) fn parse_cmap(cmap: &str, font_key: &str) -> Result<HashMap<String, S
             let csrange = cmap[csrange_begin..csrange_end].trim();
             parse_bfrange_block(csrange, font_key, &mut mappings)?;
 
-            cmap_pos = csrange_end + const { "endbfrange".len() };
+            cmap_pos = csrange_end + "endbfrange".len();
         } else {
             return Err(PdfError::EncodingError(format!(
                 "CMap type for {font_key} could not be determined."
             )));
         }
+    }
+
+    if cmap_pos == 0 {
+        return Err(PdfError::EncodingError(format!(
+            "Font {font_key} contains an unrecognized CMap kind."
+        )));
     }
 
     Ok(mappings)
