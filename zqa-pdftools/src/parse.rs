@@ -567,10 +567,15 @@ impl PdfParser {
                             log::warn!("Unexpected Hex token in simple font");
                         }
                         FontEncoding::Unmappable => {
-                            // CIDs are two bytes each, encoded as four hex characters; use the
+                            // CIDs are two bytes each, encoded as four hex digits; use the
                             // number of skipped CIDs as an estimate of skipped characters.
-                            let num_cids =
-                                std::str::from_utf8(hex_str).unwrap_or("").len().div_ceil(4);
+                            // Whitespace is permitted inside PDF hex strings, so count only
+                            // hex digits to avoid inflating the estimate.
+                            let num_cids = hex_str
+                                .iter()
+                                .filter(|b| b.is_ascii_hexdigit())
+                                .count()
+                                .div_ceil(4);
                             log::debug!(
                                 "Skipping {num_cids} CID(s) of text in unmappable font {font_id}"
                             );
@@ -1565,12 +1570,19 @@ mod tests {
             ..PdfParser::default()
         };
 
-        // 8 hex chars = 2 CIDs; 4 literal bytes = 2 CIDs.
+        // 8 hex digits = 2 CIDs; 4 literal bytes = 2 CIDs.
         let tokens = vec![Token::Hex(b"ABCD1234"), Token::Literal(b"ABCD")];
         let (text, skipped) = parser.process_tj_tokens(&tokens, &doc, page_id).unwrap();
 
         test_eq!(skipped, 4);
         assert!(text.trim().is_empty(), "Expected no text, got {text:?}");
+
+        // Whitespace inside a hex string is permitted by the PDF spec and must not inflate the
+        // skipped count: this is still 8 hex digits = 2 CIDs.
+        let tokens = vec![Token::Hex(b"AB CD 12\n34")];
+        let (_, skipped) = parser.process_tj_tokens(&tokens, &doc, page_id).unwrap();
+
+        test_eq!(skipped, 2);
     }
 
     #[test]
