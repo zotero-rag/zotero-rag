@@ -520,11 +520,13 @@ impl PdfParser {
                             log::warn!("Unexpected Literal token in CID-keyed font");
                         }
                         FontEncoding::Unmappable => {
+                            // In a CID-keyed font, literal strings contain two-byte character
+                            // codes, so halve the byte count to estimate skipped characters.
+                            let num_cids = text.len().div_ceil(2);
                             log::debug!(
-                                "Skipping {} byte(s) of text in unmappable font {font_id}",
-                                text.len()
+                                "Skipping {num_cids} CID(s) of text in unmappable font {font_id}"
                             );
-                            skipped_chars += text.len();
+                            skipped_chars += num_cids;
                         }
                     }
 
@@ -998,13 +1000,17 @@ pub fn extract_text(file_path: &str) -> Result<ExtractedContent, Box<dyn Error>>
     }
 
     if skipped_chars_total > 0 {
-        let total = skipped_chars_total + full_text.len();
+        let total = skipped_chars_total + full_text.chars().count();
         let pct = 100.0 * (skipped_chars_total as f64) / (total as f64);
 
         // Decide on a log level based on `pct`; we don't want to alarm users needlessly.
         // TODO: Consider making this part of [`PdfParserThresholds`]
         if pct >= 5.0 {
             log::warn!(
+                "Skipped {skipped_chars_total} character(s) ({pct:.1}% of the document): text uses CID-keyed fonts with no usable ToUnicode CMap and could not be extracted."
+            );
+        } else {
+            log::debug!(
                 "Skipped {skipped_chars_total} character(s) ({pct:.1}% of the document): text uses CID-keyed fonts with no usable ToUnicode CMap and could not be extracted."
             );
         }
@@ -1234,7 +1240,7 @@ mod tests {
             text[content.sections.get(3).unwrap().byte_index..][..10].to_string(),
             "1.1 subsec"
         );
-        assert_eq!(
+        test_eq!(
             text[content.sections.get(4).unwrap().byte_index..][..15].to_string(),
             "1.1.1 subsubsec"
         );
@@ -1461,6 +1467,110 @@ mod tests {
         let (text, _) = result.unwrap();
         assert!(text.contains("Hello"));
         assert!(text.contains("World"));
+    }
+
+    /// Build a minimal in-memory PDF with a single page whose content stream is `content`,
+    /// using a Type0 font (`F1`) with an Identity-H encoding and no `ToUnicode` CMap.
+    fn doc_with_unmappable_type0_font(content: &[u8]) -> (Document, PageID) {
+        let mut doc = Document::with_version("1.5");
+
+        let font_id = doc.add_object(lopdf::Dictionary::from_iter(vec![
+            ("Type", lopdf::Object::Name(b"Font".to_vec())),
+            ("Subtype", lopdf::Object::Name(b"Type0".to_vec())),
+            ("BaseFont", lopdf::Object::Name(b"FakeFont".to_vec())),
+            ("Encoding", lopdf::Object::Name(b"Identity-H".to_vec())),
+        ]));
+
+        let content_id = doc.add_object(lopdf::Stream::new(
+            lopdf::Dictionary::new(),
+            content.to_vec(),
+        ));
+
+        let fonts = lopdf::Dictionary::from_iter(vec![(b"F1", lopdf::Object::Reference(font_id))]);
+        let resources_id = doc.add_object(lopdf::Dictionary::from_iter(vec![(
+            "Font",
+            lopdf::Object::Dictionary(fonts),
+        )]));
+
+        let page_obj_id = doc.add_object(lopdf::Dictionary::from_iter(vec![
+            ("Type", lopdf::Object::Name(b"Page".to_vec())),
+            ("Resources", lopdf::Object::Reference(resources_id)),
+            ("Contents", lopdf::Object::Reference(content_id)),
+        ]));
+
+        let pages_id = doc.add_object(lopdf::Dictionary::from_iter(vec![
+            ("Type", lopdf::Object::Name(b"Pages".to_vec())),
+            (
+                "Kids",
+                lopdf::Object::Array(vec![lopdf::Object::Reference(page_obj_id)]),
+            ),
+            ("Count", lopdf::Object::Integer(1)),
+        ]));
+
+        if let Ok(lopdf::Object::Dictionary(page)) = doc.get_object_mut(page_obj_id) {
+            page.set("Parent", pages_id);
+        }
+
+        let catalog_id = doc.add_object(lopdf::Dictionary::from_iter(vec![
+            ("Type", lopdf::Object::Name(b"Catalog".to_vec())),
+            ("Pages", lopdf::Object::Reference(pages_id)),
+        ]));
+        doc.trailer.set("Root", catalog_id);
+
+        (doc, page_obj_id)
+    }
+
+    #[test]
+    fn test_type0_font_without_tounicode_is_unmappable() {
+        use crate::fonts::compute_font_encoding;
+
+        let (doc, page_id) = doc_with_unmappable_type0_font(b"");
+
+        let encoding = compute_font_encoding(&doc, page_id, "F1")
+            .expect("A Type0 font without a ToUnicode CMap should not be an error");
+
+        assert!(
+            matches!(encoding, FontEncoding::Unmappable),
+            "Expected Unmappable, got {encoding:?}"
+        );
+    }
+
+    #[test]
+    fn test_unmappable_font_text_is_skipped_and_counted() {
+        // One TJ block with a hex string (8 hex chars = 2 CIDs), and one with a literal string
+        // (4 bytes = 2 two-byte CIDs).
+        let (doc, page_id) =
+            doc_with_unmappable_type0_font(b"BT /F1 12 Tf [<ABCD1234>]TJ [(ABCD)]TJ ET");
+
+        let mut parser = PdfParser::default();
+        let result = parser
+            .parse_content(&doc, page_id, 0, false)
+            .expect("Parsing text in an unmappable font should not be an error");
+
+        test_eq!(result.skipped_chars, 4);
+        assert!(
+            result.content.trim().is_empty(),
+            "Expected no extracted content, got {:?}",
+            result.content
+        );
+    }
+
+    #[test]
+    fn test_process_tj_tokens_counts_skipped_cids() {
+        let (doc, page_id) = doc_with_unmappable_type0_font(b"");
+
+        let mut parser = PdfParser {
+            cur_font_id: "F1".to_string(),
+            cur_font: "FakeFont".to_string(),
+            ..PdfParser::default()
+        };
+
+        // 8 hex chars = 2 CIDs; 4 literal bytes = 2 CIDs.
+        let tokens = vec![Token::Hex(b"ABCD1234"), Token::Literal(b"ABCD")];
+        let (text, skipped) = parser.process_tj_tokens(&tokens, &doc, page_id).unwrap();
+
+        test_eq!(skipped, 4);
+        assert!(text.trim().is_empty(), "Expected no text, got {text:?}");
     }
 
     #[test]
