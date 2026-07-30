@@ -262,7 +262,6 @@ fn parse_bfchar_block(
 ///     * The range contains arrays (currently unsupported).
 ///     * The range contains an invalid UTF-16 CID.
 ///     * The range contains invalid UTF-8 characters.
-///     * The range contains a CID range exceeding the spec's 100-entry limit.
 ///     * Any of the specified ranges contains an end index that overflows, disallowed by the spec.
 ///     * The CMap contains more than 8192 entries (heuristically chosen).
 fn parse_bfrange_block(
@@ -372,7 +371,6 @@ fn parse_bfrange_block(
 ///     * A mapping in a `bfchar` block contains invalid UTF-16 code units.
 ///     * A `bfrange` block contains arrays (currently unsupported).
 ///     * A `bfrange` block contains an invalid UTF-16 CID.
-///     * A `bfrange` block contains a CID range exceeding the spec's 100-entry limit.
 ///     * The range contains invalid UTF-8 characters.
 ///     * Any of the specified ranges in a `bfrange` block contains an end index that overflows,
 ///       disallowed by the spec.
