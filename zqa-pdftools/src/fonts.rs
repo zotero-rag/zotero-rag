@@ -424,7 +424,7 @@ pub(crate) fn parse_cmap(cmap: &str, font_key: &str) -> Result<HashMap<String, S
         }
     }
 
-    if cmap_pos == 0 {
+    if mappings.is_empty() {
         return Err(PdfError::EncodingError(format!(
             "Font {font_key} contains an unrecognized CMap kind."
         )));
