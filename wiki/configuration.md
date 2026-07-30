@@ -3,7 +3,7 @@ type: Configuration
 title: Runtime Configuration
 description: Provider settings, API credentials, and runtime defaults loaded from user configuration and environment variables.
 tags: [configuration, providers, security]
-timestamp: 2026-07-12T19:58:42-07:00
+timestamp: 2026-07-30T01:14:36-04:00
 ---
 
 # Configuration sources
@@ -38,7 +38,10 @@ retrieval abstractions.
 # Operational settings
 
 `max_concurrent_requests` controls concurrent embedding requests, while
-`max_retries` controls retries after network failures. `LANCEDB_URI` overrides
+`max_retries` controls retries after network failures.
+`tool_iteration_limit` bounds how many tool-call round trips a single user
+message may trigger before the model is forced to answer without tools
+(default 15). `LANCEDB_URI` overrides
 the database location. When it is unset, the CLI places the database under its
 state directory before initializing the vector store.
 

@@ -1,6 +1,6 @@
 ---
 okf_version: "0.1"
-source_commit: f47a18f77f5209c956dc5da83a0e6dd5729771eb
+source_commit: 05287d75707100ce586548c9eb9fb19cfa86d697
 ---
 
 # Zotero RAG QA System
