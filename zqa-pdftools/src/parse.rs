@@ -328,13 +328,13 @@ impl PdfParser {
         doc: &Document,
         page_id: PageID,
         font_key: &str,
-    ) -> Result<&FontEncoding, PdfError> {
+    ) -> &FontEncoding {
         // Use the entry API to avoid borrow checker issues
         match self.font_type.entry((page_id, font_key.to_string())) {
-            Entry::Occupied(entry) => Ok(entry.into_mut()),
-            Entry::Vacant(entry) => {
-                Ok(entry.insert(compute_font_encoding(doc, page_id, font_key)?))
-            }
+            Entry::Occupied(entry) => entry.into_mut(),
+            Entry::Vacant(entry) => entry.insert(
+                compute_font_encoding(doc, page_id, font_key).unwrap_or(FontEncoding::Unmappable),
+            ),
         }
     }
 
@@ -499,7 +499,7 @@ impl PdfParser {
         let cur_font = self.cur_font.clone();
         let same_word_threshold = self.thresholds.same_word;
 
-        let font_encoding = self.is_cid_keyed_font(doc, page_id, &font_id)?;
+        let font_encoding = self.is_cid_keyed_font(doc, page_id, &font_id);
         let mut i = 0;
 
         while i < tokens.len() {
