@@ -546,18 +546,9 @@ impl PdfParser {
                         } else {
                             result += " ";
                         }
-                    } else {
-                        match text_op {
-                            Token::Op(b"TJ") => {
-                                // After the last literal, emit a space
-                                result += " ";
-                            }
-                            Token::Op(b"'" | b"\"") => {
-                                // Implicitly execute `T*`, so emit a newline
-                                result += "\n";
-                            }
-                            _ => {}
-                        }
+                    } else if text_op == Token::Op(b"TJ") {
+                        // After the last literal, emit a space
+                        result += " ";
                     }
                 }
                 Token::Hex(hex_str) => {
@@ -609,18 +600,8 @@ impl PdfParser {
                         } else {
                             result += " ";
                         }
-                    } else {
-                        match text_op {
-                            Token::Op(b"TJ") => {
-                                // After the last literal, emit a space
-                                result += " ";
-                            }
-                            Token::Op(b"'" | b"\"") => {
-                                // Implicitly execute `T*`, so emit a newline
-                                result += "\n";
-                            }
-                            _ => {}
-                        }
+                    } else if text_op == Token::Op(b"TJ") {
+                        result += " ";
                     }
                 }
                 Token::Number(_) | Token::Op(_) | Token::Name(_) => {
@@ -830,6 +811,13 @@ impl PdfParser {
                             doc,
                             page_id,
                         );
+
+                        if matches!(*token, Token::Op(b"'" | b"\"")) {
+                            // These operators include an implicit `T*`, so emit a newline before
+                            // emitting text.
+                            parsed += "\n";
+                        }
+
                         parsed += &text;
                         skipped_chars += skipped;
                         tj_start_idx = None;
