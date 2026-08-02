@@ -172,24 +172,23 @@ pub(crate) fn tokenize(content: &[u8]) -> Vec<Token<'_>> {
                     tokens.push(Token::Op(&content[start..i]));
                     state = State::Normal;
 
-                    if &content[start..i] == b"BI" {
-                        is_inline_image = true;
-                    }
-                    if &content[start..i] == b"EI" {
-                        is_inline_image = false;
-                    }
-                    if &content[start..i] == b"ID" && is_inline_image {
-                        // Ignore inline images for now. We must be on a whitespace now based on the
-                        // PDF standard. Skip until we see a &[u8] window matching b" EI".
-                        let img_end = content[i + 1..]
-                            .windows(4)
-                            .position(|w| {
-                                is_whitespace(w[0])
-                                    && &w[1..3] == b"EI"
-                                    && (is_whitespace(w[3]) || is_delimiter(w[3]))
-                            })
-                            .map_or(len.saturating_sub(i + 1), |idx| idx);
-                        i = img_end + i + 1;
+                    match &content[start..i] {
+                        b"BI" => is_inline_image = true,
+                        b"EI" => is_inline_image = false,
+                        b"ID" if is_inline_image => {
+                            // Ignore inline images for now. We must be on a whitespace now based on the
+                            // PDF standard. Skip until we see a &[u8] window matching b" EI".
+                            let img_end = content[i + 1..]
+                                .windows(4)
+                                .position(|w| {
+                                    is_whitespace(w[0])
+                                        && &w[1..3] == b"EI"
+                                        && (is_whitespace(w[3]) || is_delimiter(w[3]))
+                                })
+                                .map_or(len.saturating_sub(i + 1), |idx| idx);
+                            i = img_end + i + 1;
+                        }
+                        _ => {}
                     }
                 }
             }
