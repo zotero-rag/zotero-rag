@@ -812,7 +812,7 @@ impl PdfParser {
                             page_id,
                         );
 
-                        if matches!(*token, Token::Op(b"'" | b"\"")) && !text.is_empty() {
+                        if matches!(*token, Token::Op(b"'" | b"\"")) {
                             // These operators include an implicit `T*`, so emit a newline before
                             // emitting text.
                             parsed += "\n";
