@@ -552,7 +552,7 @@ impl PdfParser {
                                 // After the last literal, emit a space
                                 result += " ";
                             }
-                            Token::Op(b"'") | Token::Op(b"\"") => {
+                            Token::Op(b"'" | b"\"") => {
                                 // Implicitly execute `T*`, so emit a newline
                                 result += "\n";
                             }
