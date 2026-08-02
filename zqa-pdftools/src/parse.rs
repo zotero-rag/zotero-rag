@@ -546,9 +546,18 @@ impl PdfParser {
                         } else {
                             result += " ";
                         }
-                    } else if text_op == Token::Op(b"TJ") {
-                        // After the last literal, emit a space, but only for arrays (`TJ`)
-                        result += " ";
+                    } else {
+                        match text_op {
+                            Token::Op(b"TJ") => {
+                                // After the last literal, emit a space
+                                result += " ";
+                            }
+                            Token::Op(b"'") | Token::Op(b"\"") => {
+                                // Implicitly execute `T*`, so emit a newline
+                                result += "\n";
+                            }
+                            _ => {}
+                        }
                     }
                 }
                 Token::Hex(hex_str) => {
@@ -600,7 +609,7 @@ impl PdfParser {
                         } else {
                             result += " ";
                         }
-                    } else {
+                    } else if text_op == Token::Op(b"TJ") {
                         result += " ";
                     }
                 }
@@ -804,13 +813,9 @@ impl PdfParser {
                     }
                 }
                 Token::Op(b"TJ" | b"Tj" | b"'" | b"\"") => {
-                    let Token::Op(op) = token else {
-                        unreachable!();
-                    };
-
                     if let Some(start_idx) = tj_start_idx {
                         let (text, skipped) = self.process_tj_tokens(
-                            Token::Op(op),
+                            *token,
                             &tokens[start_idx..token_idx],
                             doc,
                             page_id,
