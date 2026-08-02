@@ -237,7 +237,7 @@ fn parse_bfchar_block(
             .collect::<Result<_, _>>()?;
 
         cmap.insert(cid.to_string().to_lowercase(), unicode);
-        if cmap.len() >= MAX_CMAP_ENTRIES {
+        if cmap.len() > MAX_CMAP_ENTRIES {
             return Err(PdfError::EncodingError(format!(
                 "CMap for {font_key} exceeds maximum allowed entries."
             )));
@@ -336,7 +336,7 @@ fn parse_bfrange_block(
                 .collect::<Result<_, _>>()?;
             cmap.insert(format!("{i:04x}"), unicode);
 
-            if cmap.len() >= MAX_CMAP_ENTRIES {
+            if cmap.len() > MAX_CMAP_ENTRIES {
                 return Err(PdfError::EncodingError(format!(
                     "CMap for {font_key} exceeds maximum allowed entries."
                 )));
