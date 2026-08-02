@@ -467,6 +467,8 @@ impl PdfParser {
     ///
     /// # Arguments
     ///
+    /// * `text_op` - The token that caused this function to be called. There are subtle differences
+    ///   in how different text operators (such as `TJ` and `Tj`) need to be processed.
     /// * `tokens` - A slice of tokens from inside a TJ array (between [ and ])
     /// * `doc` - The PDF document
     /// * `page_id` - The current page ID
@@ -483,17 +485,18 @@ impl PdfParser {
     #[allow(clippy::too_many_lines)]
     fn process_tj_tokens(
         &mut self,
+        text_op: Token<'_>,
         tokens: &[Token<'_>],
         doc: &Document,
         page_id: PageID,
-    ) -> Result<(String, usize), PdfError> {
+    ) -> (String, usize) {
         let mut result = String::new();
         let mut skipped_chars = 0;
         let font_id = self.cur_font_id.clone();
 
         // Skip if we don't have a valid font ID yet
         if font_id.is_empty() {
-            return Ok((result, skipped_chars));
+            return (result, skipped_chars);
         }
 
         let cur_font = self.cur_font.clone();
@@ -543,7 +546,8 @@ impl PdfParser {
                         } else {
                             result += " ";
                         }
-                    } else {
+                    } else if text_op == Token::Op(b"TJ") {
+                        // After the last literal, emit a space, but only for arrays (`TJ`)
                         result += " ";
                     }
                 }
@@ -610,7 +614,7 @@ impl PdfParser {
             i += 1;
         }
 
-        Ok((result, skipped_chars))
+        (result, skipped_chars)
     }
 
     /// Given a token slice and an index `pos` of an `ET` token, look *around* `pos` and search for
@@ -799,10 +803,18 @@ impl PdfParser {
                         tj_start_idx = None;
                     }
                 }
-                Token::Op(b"TJ") => {
+                Token::Op(b"TJ" | b"Tj" | b"'" | b"\"") => {
+                    let Token::Op(op) = token else {
+                        unreachable!();
+                    };
+
                     if let Some(start_idx) = tj_start_idx {
-                        let (text, skipped) =
-                            self.process_tj_tokens(&tokens[start_idx..token_idx], doc, page_id)?;
+                        let (text, skipped) = self.process_tj_tokens(
+                            Token::Op(op),
+                            &tokens[start_idx..token_idx],
+                            doc,
+                            page_id,
+                        );
                         parsed += &text;
                         skipped_chars += skipped;
                         tj_start_idx = None;
@@ -1466,25 +1478,21 @@ mod tests {
         parser.cur_font_id = "F30".to_string();
         parser.cur_font = "CMMI7".to_string();
 
-        let result = parser.process_tj_tokens(&tokens, &doc, page_id);
-        assert!(result.is_ok(), "process_tj_tokens failed: {result:?}");
+        let (text, _) = parser.process_tj_tokens(Token::Op(b"TJ"), &tokens, &doc, page_id);
 
-        let (text, _) = result.unwrap();
         assert!(text.contains("Hello"));
         assert!(text.contains("World"));
     }
 
-    /// Build a minimal in-memory PDF with a single page whose content stream is `content`,
-    /// using a Type0 font (`F1`) with an Identity-H encoding and no `ToUnicode` CMap.
-    fn doc_with_unmappable_type0_font(content: &[u8]) -> (Document, PageID) {
+    /// Build a minimal in-memory PDF with a single page whose content stream is `content` and
+    /// whose resource dictionary has a single font `F1` described by `font_dict_entries`.
+    fn doc_with_font(
+        content: &[u8],
+        font_dict_entries: Vec<(&'static str, lopdf::Object)>,
+    ) -> (Document, PageID) {
         let mut doc = Document::with_version("1.5");
 
-        let font_id = doc.add_object(lopdf::Dictionary::from_iter(vec![
-            ("Type", lopdf::Object::Name(b"Font".to_vec())),
-            ("Subtype", lopdf::Object::Name(b"Type0".to_vec())),
-            ("BaseFont", lopdf::Object::Name(b"FakeFont".to_vec())),
-            ("Encoding", lopdf::Object::Name(b"Identity-H".to_vec())),
-        ]));
+        let font_id = doc.add_object(lopdf::Dictionary::from_iter(font_dict_entries));
 
         let content_id = doc.add_object(lopdf::Stream::new(
             lopdf::Dictionary::new(),
@@ -1523,6 +1531,137 @@ mod tests {
         doc.trailer.set("Root", catalog_id);
 
         (doc, page_obj_id)
+    }
+
+    /// Build a minimal in-memory PDF with a single page whose content stream is `content`,
+    /// using a Type0 font (`F1`) with an Identity-H encoding and no `ToUnicode` CMap.
+    fn doc_with_unmappable_type0_font(content: &[u8]) -> (Document, PageID) {
+        doc_with_font(
+            content,
+            vec![
+                ("Type", lopdf::Object::Name(b"Font".to_vec())),
+                ("Subtype", lopdf::Object::Name(b"Type0".to_vec())),
+                ("BaseFont", lopdf::Object::Name(b"FakeFont".to_vec())),
+                ("Encoding", lopdf::Object::Name(b"Identity-H".to_vec())),
+            ],
+        )
+    }
+
+    /// Build a minimal in-memory PDF with a single page whose content stream is `content`,
+    /// using a simple Type1 font (`F1`) that `parse_content` treats as directly mappable.
+    fn doc_with_simple_type1_font(content: &[u8]) -> (Document, PageID) {
+        doc_with_font(
+            content,
+            vec![
+                ("Type", lopdf::Object::Name(b"Font".to_vec())),
+                ("Subtype", lopdf::Object::Name(b"Type1".to_vec())),
+                ("BaseFont", lopdf::Object::Name(b"Helvetica".to_vec())),
+            ],
+        )
+    }
+
+    #[test]
+    fn test_wellformed_tj_extracted() {
+        // The common case: a simple string drawn with Tj.
+        let (doc, page_id) = doc_with_simple_type1_font(b"BT /F1 12 Tf (Hello World) Tj ET");
+
+        let mut parser = PdfParser::default();
+        let result = parser
+            .parse_content(&doc, page_id, 0, false)
+            .expect("Parsing a well-formed Tj should not be an error");
+
+        assert!(
+            result.content.contains("Hello World"),
+            "Expected extracted text to contain 'Hello World', got {:?}",
+            result.content
+        );
+    }
+
+    #[test]
+    fn test_tj_quote_operator_extracted() {
+        // `'` is equivalent to `T* Tj`; `"` additionally sets Tw and Tc. Text shown with
+        // these operators must be extracted like text shown with Tj.
+        let (doc, page_id) = doc_with_simple_type1_font(b"BT /F1 12 Tf (Hello) ' ET");
+
+        let mut parser = PdfParser::default();
+        let result = parser
+            .parse_content(&doc, page_id, 0, false)
+            .expect("Parsing should not be an error");
+
+        assert!(
+            result.content.contains("Hello"),
+            "Expected text shown with the ' operator to be extracted, got {:?}",
+            result.content
+        );
+    }
+
+    #[test]
+    fn test_actual_text_not_leaked_into_output() {
+        // Marked content with an /ActualText property list: the (mapped text) literal is an
+        // accessibility mapping, not drawn text, and must not appear in the output.
+        let content = b"BT /F1 12 Tf /Span <</ActualText (mapped text)>> BDC (real) Tj EMC ET";
+        let (doc, page_id) = doc_with_simple_type1_font(content);
+
+        let mut parser = PdfParser::default();
+        let result = parser
+            .parse_content(&doc, page_id, 0, false)
+            .expect("Parsing should not be an error");
+
+        assert!(
+            !result.content.contains("mapped text"),
+            "/ActualText literal leaked into extracted text: {:?}",
+            result.content
+        );
+        assert!(
+            result.content.contains("real"),
+            "Expected extracted text to contain 'real', got {:?}",
+            result.content
+        );
+    }
+
+    #[test]
+    fn test_inline_image_data_not_leaked_into_output() {
+        // Inline image data between ID and EI is raw bytes that can tokenize into strings;
+        // it must not be interpreted as text by a following Tj.
+        let content =
+            b"BT /F1 12 Tf BI /W 1 /H 1 /CS /DeviceGray /BPC 8 ID raw (junk) bytes EI (real) Tj ET";
+        let (doc, page_id) = doc_with_simple_type1_font(content);
+
+        let mut parser = PdfParser::default();
+        let result = parser
+            .parse_content(&doc, page_id, 0, false)
+            .expect("Parsing should not be an error");
+
+        assert!(
+            !result.content.contains("junk"),
+            "Inline image data leaked into extracted text: {:?}",
+            result.content
+        );
+        assert!(
+            result.content.contains("real"),
+            "Expected extracted text to contain 'real', got {:?}",
+            result.content
+        );
+    }
+
+    #[test]
+    fn test_adjacent_tj_ops_not_split_into_words() {
+        // Multi-font words drawn as consecutive Tj ops (common with e.g. bold infixes):
+        // these are one word on the same line and should not have spaces inserted between
+        // them.
+        let content = b"BT /F1 12 Tf (Hel) Tj /F1 12 Tf (lo) Tj ET";
+        let (doc, page_id) = doc_with_simple_type1_font(content);
+
+        let mut parser = PdfParser::default();
+        let result = parser
+            .parse_content(&doc, page_id, 0, false)
+            .expect("Parsing should not be an error");
+
+        assert!(
+            result.content.contains("Hello"),
+            "Expected adjacent Tj ops to form one word 'Hello', got {:?}",
+            result.content
+        );
     }
 
     #[test]
@@ -1572,7 +1711,7 @@ mod tests {
 
         // 8 hex digits = 2 CIDs; 4 literal bytes = 2 CIDs.
         let tokens = vec![Token::Hex(b"ABCD1234"), Token::Literal(b"ABCD")];
-        let (text, skipped) = parser.process_tj_tokens(&tokens, &doc, page_id).unwrap();
+        let (text, skipped) = parser.process_tj_tokens(Token::Op(b"TJ"), &tokens, &doc, page_id);
 
         test_eq!(skipped, 4);
         assert!(text.trim().is_empty(), "Expected no text, got {text:?}");
@@ -1580,7 +1719,7 @@ mod tests {
         // Whitespace inside a hex string is permitted by the PDF spec and must not inflate the
         // skipped count: this is still 8 hex digits = 2 CIDs.
         let tokens = vec![Token::Hex(b"AB CD 12\n34")];
-        let (_, skipped) = parser.process_tj_tokens(&tokens, &doc, page_id).unwrap();
+        let (_, skipped) = parser.process_tj_tokens(Token::Op(b"TJ"), &tokens, &doc, page_id);
 
         test_eq!(skipped, 2);
     }

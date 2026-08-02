@@ -1,6 +1,6 @@
 use std::str::FromStr;
 
-#[derive(PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Token<'a> {
     Op(&'a [u8]), // PDF operators, e.g., "TJ", "Td", "Tf"
     Number(&'a [u8]),
@@ -52,12 +52,26 @@ enum State {
     },
 }
 
+/// Checks whether `b` is a whitespace byte as specified by the PDF standard; see §7.2.2.
+fn is_whitespace(b: u8) -> bool {
+    matches!(b, b' ' | b'\t' | b'\n' | b'\x0c' | b'\r' | b'\x00')
+}
+
+/// Checks whether `b` is a delimiter byte as specified by the PDF standard; see §7.2.2.
+fn is_delimiter(b: u8) -> bool {
+    matches!(
+        b,
+        b'(' | b')' | b'<' | b'>' | b'[' | b']' | b'{' | b'}' | b'/' | b'%'
+    )
+}
+
 #[allow(clippy::too_many_lines)]
 pub(crate) fn tokenize(content: &[u8]) -> Vec<Token<'_>> {
     let mut tokens = Vec::with_capacity(content.len() / 5); // Heuristic
 
     let mut i = 0;
     let mut state = State::Normal;
+    let mut is_inline_image = false;
 
     let len = content.len();
     while i < len {
@@ -93,6 +107,10 @@ pub(crate) fn tokenize(content: &[u8]) -> Vec<Token<'_>> {
                     // Name
                     b'/' => {
                         state = State::Name { start: i + 1 };
+                        i += 1;
+                    }
+                    b'\'' | b'"' => {
+                        tokens.push(Token::Op(&content[i..=i]));
                         i += 1;
                     }
                     _ => i += 1,
@@ -153,6 +171,26 @@ pub(crate) fn tokenize(content: &[u8]) -> Vec<Token<'_>> {
                 } else {
                     tokens.push(Token::Op(&content[start..i]));
                     state = State::Normal;
+
+                    if &content[start..i] == b"BI" {
+                        is_inline_image = true;
+                    }
+                    if &content[start..i] == b"EI" {
+                        is_inline_image = false;
+                    }
+                    if &content[start..i] == b"ID" && is_inline_image {
+                        // Ignore inline images for now. We must be on a whitespace now based on the
+                        // PDF standard. Skip until we see a &[u8] window matching b" EI".
+                        let img_end = content[i + 1..]
+                            .windows(4)
+                            .position(|w| {
+                                is_whitespace(w[0])
+                                    && &w[1..3] == b"EI"
+                                    && (is_whitespace(w[3]) || is_delimiter(w[3]))
+                            })
+                            .map_or(len.saturating_sub(i + 1), |idx| idx);
+                        i = img_end + i + 1;
+                    }
                 }
             }
             State::Name { start } => {
@@ -160,24 +198,7 @@ pub(crate) fn tokenize(content: &[u8]) -> Vec<Token<'_>> {
                 // We'll accept any character that's not a delimiter or whitespace
                 // Delimiters: ( ) < > [ ] { } / %
                 // Whitespace: null, tab, newline, formfeed, carriage return, space
-                if matches!(
-                    content[i],
-                    b'(' | b')'
-                        | b'<'
-                        | b'>'
-                        | b'['
-                        | b']'
-                        | b'{'
-                        | b'}'
-                        | b'/'
-                        | b'%'
-                        | b'\x00'
-                        | b'\t'
-                        | b'\n'
-                        | b'\x0c'
-                        | b'\r'
-                        | b' '
-                ) {
+                if is_whitespace(content[i]) || is_delimiter(content[i]) {
                     tokens.push(Token::Name(&content[start..i]));
                     state = State::Normal;
                 } else {
