@@ -609,8 +609,18 @@ impl PdfParser {
                         } else {
                             result += " ";
                         }
-                    } else if text_op == Token::Op(b"TJ") {
-                        result += " ";
+                    } else {
+                        match text_op {
+                            Token::Op(b"TJ") => {
+                                // After the last literal, emit a space
+                                result += " ";
+                            }
+                            Token::Op(b"'" | b"\"") => {
+                                // Implicitly execute `T*`, so emit a newline
+                                result += "\n";
+                            }
+                            _ => {}
+                        }
                     }
                 }
                 Token::Number(_) | Token::Op(_) | Token::Name(_) => {
