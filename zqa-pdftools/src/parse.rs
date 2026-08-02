@@ -812,7 +812,7 @@ impl PdfParser {
                             page_id,
                         );
 
-                        if matches!(*token, Token::Op(b"'" | b"\"")) {
+                        if matches!(*token, Token::Op(b"'" | b"\"")) && !text.is_empty() {
                             // These operators include an implicit `T*`, so emit a newline before
                             // emitting text.
                             parsed += "\n";
@@ -1584,7 +1584,7 @@ mod tests {
     fn test_tj_quote_operator_extracted() {
         // `'` is equivalent to `T* Tj`; `"` additionally sets Tw and Tc. Text shown with
         // these operators must be extracted like text shown with Tj.
-        let (doc, page_id) = doc_with_simple_type1_font(b"BT /F1 12 Tf (Hello) ' ET");
+        let (doc, page_id) = doc_with_simple_type1_font(b"BT /F1 12 Tf (line1) ' (line2) ' ET");
 
         let mut parser = PdfParser::default();
         let result = parser
@@ -1592,8 +1592,8 @@ mod tests {
             .expect("Parsing should not be an error");
 
         assert!(
-            result.content.contains("Hello"),
-            "Expected text shown with the ' operator to be extracted, got {:?}",
+            result.content.contains("line1\nline2"),
+            "got {:?}",
             result.content
         );
     }
