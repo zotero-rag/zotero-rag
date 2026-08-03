@@ -17,15 +17,13 @@ use ordered_float::OrderedFloat;
 
 use crate::edits::{Edit, EditType, apply_edits};
 use crate::fonts::{
-    FONT_TRANSFORMS, FontEncoding, FontSizeMarker, compute_font_encoding, font_transform, get_font,
+    DEFAULT_SPACE_WIDTH, FONT_TRANSFORMS, FontEncoding, FontSizeMarker, SPACE_WIDTH_FRACTION,
+    compute_font_encoding, font_transform, get_font, get_space_width,
 };
 use crate::tokenizer::{Token, tokenize};
 
 const ASCII_PLUS: u8 = b'+';
 
-/// The default kerning tolerance between adjacent elements in a `TJ` to mark them as part of the same
-/// word.
-pub const DEFAULT_SAME_WORD_THRESHOLD: f32 = 60.0;
 /// The default distance threshold to check alignment efforts in a table.
 pub const DEFAULT_TABLE_EUCLIDEAN_THRESHOLD: f32 = 40.0;
 /// The default number of `Td`s within a `BT` after which the `BT..ET` block is declared to be a
@@ -64,8 +62,6 @@ impl From<Utf8Error> for PdfError {
 /// Configuration for PDF parsing
 #[derive(Debug)]
 struct PdfParserThresholds {
-    /// Threshold for determining when to join words
-    same_word: f32,
     /// Euclidean distance threshold between `Td` alignment to declare a table
     table_alignment: f32,
     /// Threshold number of `Td`s within a text block to declare a paragraph as opposed to a table
@@ -75,7 +71,6 @@ struct PdfParserThresholds {
 impl Default for PdfParserThresholds {
     fn default() -> Self {
         Self {
-            same_word: DEFAULT_SAME_WORD_THRESHOLD,
             table_alignment: DEFAULT_TABLE_EUCLIDEAN_THRESHOLD,
             tbl_td: DEFAULT_TBL_TD_THRESHOLD,
         }
@@ -328,13 +323,14 @@ impl PdfParser {
         doc: &Document,
         page_id: PageID,
         font_key: &str,
-    ) -> &FontEncoding {
+    ) -> Result<&FontEncoding, PdfError> {
         // Use the entry API to avoid borrow checker issues
+        let font_obj = get_font(doc, page_id, font_key)?;
         match self.font_type.entry((page_id, font_key.to_string())) {
-            Entry::Occupied(entry) => entry.into_mut(),
-            Entry::Vacant(entry) => entry.insert(
-                compute_font_encoding(doc, page_id, font_key).unwrap_or(FontEncoding::Unmappable),
-            ),
+            Entry::Occupied(entry) => Ok(entry.into_mut()),
+            Entry::Vacant(entry) => Ok(entry.insert(
+                compute_font_encoding(doc, &font_obj, font_key).unwrap_or(FontEncoding::Unmappable),
+            )),
         }
     }
 
@@ -489,21 +485,23 @@ impl PdfParser {
         tokens: &[Token<'_>],
         doc: &Document,
         page_id: PageID,
-    ) -> (String, usize) {
+    ) -> Result<(String, usize), PdfError> {
         let mut result = String::new();
         let mut skipped_chars = 0;
         let font_id = self.cur_font_id.clone();
 
         // Skip if we don't have a valid font ID yet
         if font_id.is_empty() {
-            return (result, skipped_chars);
+            return Ok((result, skipped_chars));
         }
 
         let cur_font = self.cur_font.clone();
-        let same_word_threshold = self.thresholds.same_word;
 
-        let font_encoding = self.is_cid_keyed_font(doc, page_id, &font_id);
         let mut i = 0;
+        let font_encoding = &self
+            .is_cid_keyed_font(doc, page_id, &font_id)
+            .unwrap_or(&FontEncoding::Unmappable)
+            .clone();
 
         while i < tokens.len() {
             match &tokens[i] {
@@ -518,7 +516,7 @@ impl PdfParser {
                                 result += text_str;
                             }
                         }
-                        FontEncoding::CIDKeyed(_) => {
+                        FontEncoding::CIDKeyed { .. } => {
                             // This shouldn't happen - CID-keyed fonts use Hex tokens
                             log::warn!("Unexpected Literal token in CID-keyed font");
                         }
@@ -537,14 +535,25 @@ impl PdfParser {
                     if i + 1 < tokens.len() {
                         if let Token::Number(spacing_bytes) = tokens[i + 1] {
                             let spacing_str = std::str::from_utf8(spacing_bytes).unwrap_or("0");
-                            let spacing = spacing_str.parse::<f32>().unwrap_or(0.0).abs();
+                            let spacing = spacing_str.parse::<f32>().unwrap_or(0.0);
+                            let font_key = &self.cur_font_id;
+                            let font_obj = get_font(doc, page_id, font_key)?;
+                            let space_threshold = get_space_width(
+                                doc,
+                                &font_obj,
+                                font_key,
+                                Some(font_encoding.clone()),
+                            )
+                            .unwrap_or(DEFAULT_SPACE_WIDTH)
+                                * SPACE_WIDTH_FRACTION;
 
-                            if !(0.0..=same_word_threshold).contains(&spacing) {
+                            // `spacing` < 0 opens a gap of |spacing|/1000 em; `spacing` > 0 is a kern.
+                            if spacing < -space_threshold
+                                && result.as_bytes().last().is_some_and(|c| *c != b' ')
+                            {
                                 result += " ";
                             }
                             i += 1; // Skip the number token
-                        } else {
-                            result += " ";
                         }
                     } else if text_op == Token::Op(b"TJ") {
                         // After the last literal, emit a space
@@ -554,12 +563,12 @@ impl PdfParser {
                 Token::Hex(hex_str) => {
                     // CID-keyed font - process hex string
                     match font_encoding {
-                        FontEncoding::CIDKeyed(cmap) => {
+                        FontEncoding::CIDKeyed { mappings, .. } => {
                             let hex_text = std::str::from_utf8(hex_str).unwrap_or("");
                             let mut j = 0;
                             while j + 4 <= hex_text.len() {
                                 let cid = hex_text[j..j + 4].to_lowercase();
-                                if let Some(unicode) = cmap.get(&cid) {
+                                if let Some(unicode) = mappings.get(&cid) {
                                     result += unicode;
                                 } else {
                                     log::warn!("CID {cid} not found in ToUnicode CMap");
@@ -591,14 +600,28 @@ impl PdfParser {
                     if i + 1 < tokens.len() {
                         if let Token::Number(spacing_bytes) = tokens[i + 1] {
                             let spacing_str = std::str::from_utf8(spacing_bytes).unwrap_or("0");
-                            let spacing = spacing_str.parse::<f32>().unwrap_or(0.0).abs();
+                            let spacing = spacing_str.parse::<f32>().unwrap_or(0.0);
+                            let font_key = self.cur_font_id.clone();
+                            let font_obj = get_font(doc, page_id, &font_key)?;
+                            let font_encoding = self
+                                .is_cid_keyed_font(doc, page_id, &font_id)
+                                .unwrap_or(&FontEncoding::Unmappable);
+                            let space_threshold = get_space_width(
+                                doc,
+                                &font_obj,
+                                &font_key,
+                                Some(font_encoding.clone()),
+                            )
+                            .unwrap_or(DEFAULT_SPACE_WIDTH)
+                                * SPACE_WIDTH_FRACTION;
 
-                            if !(0.0..=same_word_threshold).contains(&spacing) {
+                            // `spacing` < 0 opens a gap of |spacing|/1000 em; `spacing` > 0 is a kern.
+                            if spacing < -space_threshold
+                                && result.as_bytes().last().is_some_and(|c| *c != b' ')
+                            {
                                 result += " ";
                             }
                             i += 1; // Skip the number token
-                        } else {
-                            result += " ";
                         }
                     } else if text_op == Token::Op(b"TJ") {
                         result += " ";
@@ -614,7 +637,7 @@ impl PdfParser {
             i += 1;
         }
 
-        (result, skipped_chars)
+        Ok((result, skipped_chars))
     }
 
     /// Given a token slice and an index `pos` of an `ET` token, look *around* `pos` and search for
@@ -810,7 +833,7 @@ impl PdfParser {
                             &tokens[start_idx..token_idx],
                             doc,
                             page_id,
-                        );
+                        )?;
 
                         if matches!(*token, Token::Op(b"'" | b"\"")) {
                             // These operators include an implicit `T*`, so emit a newline before
@@ -1481,7 +1504,9 @@ mod tests {
         parser.cur_font_id = "F30".to_string();
         parser.cur_font = "CMMI7".to_string();
 
-        let (text, _) = parser.process_tj_tokens(Token::Op(b"TJ"), &tokens, &doc, page_id);
+        let (text, _) = parser
+            .process_tj_tokens(Token::Op(b"TJ"), &tokens, &doc, page_id)
+            .unwrap();
 
         assert!(text.contains("Hello"));
         assert!(text.contains("World"));
@@ -1673,7 +1698,8 @@ mod tests {
 
         let (doc, page_id) = doc_with_unmappable_type0_font(b"");
 
-        let encoding = compute_font_encoding(&doc, page_id, "F1")
+        let font_obj = get_font(&doc, page_id, "F1").unwrap();
+        let encoding = compute_font_encoding(&doc, &font_obj, "F1")
             .expect("A Type0 font without a ToUnicode CMap should not be an error");
 
         assert!(
@@ -1714,7 +1740,9 @@ mod tests {
 
         // 8 hex digits = 2 CIDs; 4 literal bytes = 2 CIDs.
         let tokens = vec![Token::Hex(b"ABCD1234"), Token::Literal(b"ABCD")];
-        let (text, skipped) = parser.process_tj_tokens(Token::Op(b"TJ"), &tokens, &doc, page_id);
+        let (text, skipped) = parser
+            .process_tj_tokens(Token::Op(b"TJ"), &tokens, &doc, page_id)
+            .unwrap();
 
         test_eq!(skipped, 4);
         assert!(text.trim().is_empty(), "Expected no text, got {text:?}");
@@ -1722,7 +1750,9 @@ mod tests {
         // Whitespace inside a hex string is permitted by the PDF spec and must not inflate the
         // skipped count: this is still 8 hex digits = 2 CIDs.
         let tokens = vec![Token::Hex(b"AB CD 12\n34")];
-        let (_, skipped) = parser.process_tj_tokens(Token::Op(b"TJ"), &tokens, &doc, page_id);
+        let (_, skipped) = parser
+            .process_tj_tokens(Token::Op(b"TJ"), &tokens, &doc, page_id)
+            .unwrap();
 
         test_eq!(skipped, 2);
     }
