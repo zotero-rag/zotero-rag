@@ -165,6 +165,9 @@ struct PdfParser {
     cur_baselineskip: f32,
     /// The current page's map of whether a font is a CID-keyed font or not.
     font_type: HashMap<(PageID, String), FontEncoding>,
+    /// Cache of each font's space width, since it is constant per font but used for every `TJ`
+    /// number token.
+    space_width: HashMap<(PageID, String), f32>,
 }
 
 /// `lopdf` references individual pages by a tuple of unsigned integers. Usually, the specific
@@ -285,6 +288,7 @@ impl PdfParser {
             cur_font_size: 12.0,   // Doesn't really matter
             cur_baselineskip: 1.2, // The pdflatex default
             font_type: HashMap::new(),
+            space_width: HashMap::new(),
         }
     }
 
@@ -292,9 +296,8 @@ impl PdfParser {
     ///
     /// If it is, returns the `ToUnicode` CMap for that font; otherwise, returns
     /// FontEncoding::Simple. This function is *not* pure: it updates `self.font_type`, which
-    /// acts as a cache for these results. Users of `parse_content` are responsible for emptying
-    /// this between pages. However, `extract_text`, which is meant for external users, does this
-    /// automatically.
+    /// acts as a cache for these results. Entries are keyed by `(page_id, font_key)`, so the
+    /// cache does not need to be cleared between pages.
     ///
     /// # Returns
     ///
@@ -332,6 +335,47 @@ impl PdfParser {
                 compute_font_encoding(doc, &font_obj, font_key).unwrap_or(FontEncoding::Unmappable),
             )),
         }
+    }
+
+    /// Get the word-break gap threshold for a font: its space width scaled by
+    /// [`SPACE_WIDTH_FRACTION`]. The space width is constant per font but consulted for every
+    /// `TJ` number token, so computed widths are cached. As with [`Self::font_type`], entries are
+    /// keyed by `(page_id, font_key)`, so the cache does not need to be cleared between pages.
+    ///
+    /// # Arguments
+    ///
+    /// * `doc` - The PDF document.
+    /// * `page_id` - The page the font appears on.
+    /// * `font_key` - The font's key in the page's font dictionary (e.g., "F19").
+    /// * `font_encoding` - The font's encoding, e.g. from [`Self::is_cid_keyed_font`].
+    ///
+    /// # Returns
+    ///
+    /// The word-break threshold in text-space units: a negative `TJ` adjustment whose magnitude
+    /// exceeds this value is emitted as a space.
+    ///
+    /// # Errors
+    ///
+    /// * `PdfError::PageFontError` if getting page fonts failed.
+    /// * `PdfError::FontNotFound` if the font key does not exist.
+    fn space_threshold(
+        &mut self,
+        doc: &Document,
+        page_id: PageID,
+        font_key: &str,
+        font_encoding: &FontEncoding,
+    ) -> Result<f32, PdfError> {
+        if let Some(&width) = self.space_width.get(&(page_id, font_key.to_string())) {
+            return Ok(width * SPACE_WIDTH_FRACTION);
+        }
+
+        let font_obj = get_font(doc, page_id, font_key)?;
+        let width = get_space_width(doc, &font_obj, font_key, Some(font_encoding.clone()))
+            .unwrap_or(DEFAULT_SPACE_WIDTH);
+        self.space_width
+            .insert((page_id, font_key.to_string()), width);
+
+        Ok(width * SPACE_WIDTH_FRACTION)
     }
 
     /// Extract N number tokens that appear immediately before an operator token.
@@ -536,16 +580,9 @@ impl PdfParser {
                         if let Token::Number(spacing_bytes) = tokens[i + 1] {
                             let spacing_str = std::str::from_utf8(spacing_bytes).unwrap_or("0");
                             let spacing = spacing_str.parse::<f32>().unwrap_or(0.0);
-                            let font_key = &self.cur_font_id;
-                            let font_obj = get_font(doc, page_id, font_key)?;
-                            let space_threshold = get_space_width(
-                                doc,
-                                &font_obj,
-                                font_key,
-                                Some(font_encoding.clone()),
-                            )
-                            .unwrap_or(DEFAULT_SPACE_WIDTH)
-                                * SPACE_WIDTH_FRACTION;
+                            let font_key = self.cur_font_id.clone();
+                            let space_threshold =
+                                self.space_threshold(doc, page_id, &font_key, font_encoding)?;
 
                             // `spacing` < 0 opens a gap of |spacing|/1000 em; `spacing` > 0 is a kern.
                             if spacing < -space_threshold
@@ -602,18 +639,12 @@ impl PdfParser {
                             let spacing_str = std::str::from_utf8(spacing_bytes).unwrap_or("0");
                             let spacing = spacing_str.parse::<f32>().unwrap_or(0.0);
                             let font_key = self.cur_font_id.clone();
-                            let font_obj = get_font(doc, page_id, &font_key)?;
                             let font_encoding = self
                                 .is_cid_keyed_font(doc, page_id, &font_id)
-                                .unwrap_or(&FontEncoding::Unmappable);
-                            let space_threshold = get_space_width(
-                                doc,
-                                &font_obj,
-                                &font_key,
-                                Some(font_encoding.clone()),
-                            )
-                            .unwrap_or(DEFAULT_SPACE_WIDTH)
-                                * SPACE_WIDTH_FRACTION;
+                                .unwrap_or(&FontEncoding::Unmappable)
+                                .clone();
+                            let space_threshold =
+                                self.space_threshold(doc, page_id, &font_key, &font_encoding)?;
 
                             // `spacing` < 0 opens a gap of |spacing|/1000 em; `spacing` > 0 is a kern.
                             if spacing < -space_threshold
