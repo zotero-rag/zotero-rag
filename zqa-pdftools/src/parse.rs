@@ -4,8 +4,8 @@
 //! LaTeX equivalents.
 
 use std::collections::HashMap;
-use std::collections::hash_map::Entry;
 use std::error::Error;
+use std::rc::Rc;
 use std::str::Utf8Error;
 use std::sync::LazyLock;
 use std::{f32, str};
@@ -164,7 +164,7 @@ struct PdfParser {
     /// TODO: Actually compute this; for now, this is set to the pdflatex default of 1.2
     cur_baselineskip: f32,
     /// The current page's map of whether a font is a CID-keyed font or not.
-    font_type: HashMap<(PageID, String), FontEncoding>,
+    font_type: HashMap<(PageID, String), Rc<FontEncoding>>,
     /// Cache of each font's space width, since it is constant per font but used for every `TJ`
     /// number token.
     space_width: HashMap<(PageID, String), f32>,
@@ -326,15 +326,18 @@ impl PdfParser {
         doc: &Document,
         page_id: PageID,
         font_key: &str,
-    ) -> Result<&FontEncoding, PdfError> {
-        // Use the entry API to avoid borrow checker issues
-        let font_obj = get_font(doc, page_id, font_key)?;
-        match self.font_type.entry((page_id, font_key.to_string())) {
-            Entry::Occupied(entry) => Ok(entry.into_mut()),
-            Entry::Vacant(entry) => Ok(entry.insert(
-                compute_font_encoding(doc, &font_obj, font_key).unwrap_or(FontEncoding::Unmappable),
-            )),
+    ) -> Result<Rc<FontEncoding>, PdfError> {
+        let key = (page_id, font_key.to_string());
+        if let Some(encoding) = self.font_type.get(&key) {
+            return Ok(encoding.clone());
         }
+
+        let font_obj = get_font(doc, page_id, font_key)?;
+        let encoding = Rc::new(
+            compute_font_encoding(doc, &font_obj, font_key).unwrap_or(FontEncoding::Unmappable),
+        );
+        self.font_type.insert(key, encoding.clone());
+        Ok(encoding)
     }
 
     /// Get the word-break gap threshold for a font: its space width scaled by
@@ -370,7 +373,7 @@ impl PdfParser {
         }
 
         let font_obj = get_font(doc, page_id, font_key)?;
-        let width = get_space_width(doc, &font_obj, font_key, Some(font_encoding.clone()))
+        let width = get_space_width(doc, &font_obj, font_key, Some(font_encoding))
             .unwrap_or(DEFAULT_SPACE_WIDTH);
         self.space_width
             .insert((page_id, font_key.to_string()), width);
@@ -542,16 +545,15 @@ impl PdfParser {
         let cur_font = self.cur_font.clone();
 
         let mut i = 0;
-        let font_encoding = &self
+        let font_encoding = self
             .is_cid_keyed_font(doc, page_id, &font_id)
-            .unwrap_or(&FontEncoding::Unmappable)
-            .clone();
+            .unwrap_or_else(|_| Rc::new(FontEncoding::Unmappable));
 
         while i < tokens.len() {
             match &tokens[i] {
                 Token::Literal(text) => {
                     // Simple font encoding - handle math fonts
-                    match font_encoding {
+                    match &*font_encoding {
                         FontEncoding::Simple => {
                             let text_str = std::str::from_utf8(text).unwrap_or("");
                             if let Some(transform) = FONT_TRANSFORMS.get(cur_font.as_str()) {
@@ -582,7 +584,7 @@ impl PdfParser {
                             let spacing = spacing_str.parse::<f32>().unwrap_or(0.0);
                             let font_key = self.cur_font_id.clone();
                             let space_threshold =
-                                self.space_threshold(doc, page_id, &font_key, font_encoding)?;
+                                self.space_threshold(doc, page_id, &font_key, &font_encoding)?;
 
                             // `spacing` < 0 opens a gap of |spacing|/1000 em; `spacing` > 0 is a kern.
                             if spacing < -space_threshold
@@ -599,7 +601,7 @@ impl PdfParser {
                 }
                 Token::Hex(hex_str) => {
                     // CID-keyed font - process hex string
-                    match font_encoding {
+                    match &*font_encoding {
                         FontEncoding::CIDKeyed { mappings, .. } => {
                             let hex_text = std::str::from_utf8(hex_str).unwrap_or("");
                             let mut j = 0;
@@ -639,10 +641,6 @@ impl PdfParser {
                             let spacing_str = std::str::from_utf8(spacing_bytes).unwrap_or("0");
                             let spacing = spacing_str.parse::<f32>().unwrap_or(0.0);
                             let font_key = self.cur_font_id.clone();
-                            let font_encoding = self
-                                .is_cid_keyed_font(doc, page_id, &font_id)
-                                .unwrap_or(&FontEncoding::Unmappable)
-                                .clone();
                             let space_threshold =
                                 self.space_threshold(doc, page_id, &font_key, &font_encoding)?;
 

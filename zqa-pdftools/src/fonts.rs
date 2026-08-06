@@ -1,5 +1,6 @@
 //! Functions and structs to handle fonts in PDFs.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::hash::Hash;
 use std::sync::LazyLock;
@@ -666,15 +667,18 @@ pub(crate) fn get_space_width(
     doc: &Document,
     font_dict: &HashMap<&str, &Object>,
     font_key: &str,
-    font_encoding: Option<FontEncoding>,
+    font_encoding: Option<&FontEncoding>,
 ) -> Result<f32, PdfError> {
-    let font_type = font_encoding.unwrap_or(compute_font_encoding(doc, font_dict, font_key)?);
+    let font_type = font_encoding.map_or_else(
+        || compute_font_encoding(doc, font_dict, font_key).map(Cow::Owned),
+        |encoding| Ok(Cow::Borrowed(encoding)),
+    )?;
     let first_char = font_dict
         .get("FirstChar")
         .and_then(|f| f.as_i64().ok())
         .unwrap_or(0_i64);
 
-    match font_type {
+    match *font_type {
         #[allow(clippy::cast_possible_truncation)]
         #[allow(clippy::cast_sign_loss)]
         FontEncoding::Simple => Ok(font_dict
