@@ -609,14 +609,29 @@ pub(crate) fn compute_font_encoding(
     }
 }
 
+/// Expand a CIDFont's `/W` array into a flat CID-to-width map.
+///
+/// Entries of the `/W` array are in one of two forms (see ISO 32000-2:2020 §9.7.4.3, "Glyph metrics
+/// in CIDFonts"): `c [w1 w2 ... wn]`, where consecutive CIDs starting at `c` take the listed widths,
+/// or `c_first c_last w`, where every CID in the inclusive range takes width `w`.
+///
+/// # Arguments
+///
+/// * `widths` - The `/W` array `Object` from the CIDFont dictionary.
+///
+/// # Returns
+///
+/// A map from CID to glyph width in text space units.
+///
+/// # Errors
+///
+/// * `PdfError::EncodingError` if `/W` is not an array, an entry head is not an integer CID, or a
+///   range-form entry's width is not a number.
 fn expand_cidfont_w(widths: &Object) -> Result<HashMap<i64, f32>, PdfError> {
     let entries = widths
         .as_array()
         .map_err(|e| PdfError::EncodingError(format!("/W was not an array: {e}")))?;
 
-    // Entries of the /W array are in one of two formats:
-    // c [w1 w2 ... wn]
-    // c_first c_last w
     let mut map = HashMap::new();
 
     let mut i = 0;

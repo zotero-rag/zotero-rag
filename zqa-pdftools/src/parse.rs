@@ -374,8 +374,7 @@ impl PdfParser {
         let font_obj = get_font(doc, page_id, font_key)?;
         let width = get_space_width(doc, &font_obj, font_key, Some(font_encoding))
             .unwrap_or(DEFAULT_SPACE_WIDTH);
-        self.space_width
-            .insert((page_id, font_key.clone()), width);
+        self.space_width.insert((page_id, font_key.clone()), width);
 
         Ok(width * SPACE_WIDTH_FRACTION)
     }
