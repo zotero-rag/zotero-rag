@@ -1,6 +1,5 @@
 //! Functions and structs to handle fonts in PDFs.
 
-use std::borrow::Cow;
 use std::collections::HashMap;
 use std::hash::Hash;
 use std::sync::LazyLock;
@@ -713,30 +712,36 @@ fn get_descendant_cidfont<'a>(
 /// positive `TJ` adjustments (see ISO 32000-2:2020 §9.4.4, "Text space details").
 ///
 /// # Arguments
+///
+/// * `doc` - The document being parsed.
+/// * `font_dict` - The font resource dictionary. For a Type0 (Composite) font, this is the root
+///   Type0 font, not its descendant CIDFont.
+/// * `font_key` - The font key, used for error messages.
+/// * `font_encoding` - The font's encoding, see [`compute_font_encoding`].
+///
+/// # Returns
+///
+/// The width of the space glyph in the font, or [`DEFAULT_SPACE_WIDTH`] if it could not be computed.
 pub(crate) fn get_space_width(
     doc: &Document,
     font_dict: &HashMap<&str, &Object>,
     font_key: &str,
-    font_encoding: Option<&FontEncoding>,
-) -> Result<f32, PdfError> {
-    let font_type = font_encoding.map_or_else(
-        || compute_font_encoding(doc, font_dict, font_key).map(Cow::Owned),
-        |encoding| Ok(Cow::Borrowed(encoding)),
-    )?;
+    font_encoding: &FontEncoding,
+) -> f32 {
     let first_char = font_dict
         .get("FirstChar")
         .and_then(|f| f.as_i64().ok())
         .unwrap_or(0_i64);
 
-    match *font_type {
+    match font_encoding {
         #[allow(clippy::cast_possible_truncation)]
         #[allow(clippy::cast_sign_loss)]
-        FontEncoding::Simple => Ok(font_dict
+        FontEncoding::Simple => font_dict
             .get("Widths")
             .and_then(|w| w.as_array().ok())
             .and_then(|ws| ws.get((32 - first_char) as usize))
             .and_then(|w| w.as_float().ok())
-            .unwrap_or(DEFAULT_SPACE_WIDTH)),
+            .unwrap_or(DEFAULT_SPACE_WIDTH),
         FontEncoding::CIDKeyed { space_cid, .. } => {
             // /W and /DW are defined using the CIDFont dictionary (ISO 32000-2:2020 §9.7.4.3);
             // the Type0 parent has no such entries.
@@ -753,16 +758,16 @@ pub(crate) fn get_space_width(
                         .ok()
                 });
 
-            Ok(widths
+            widths
                 .and_then(|map| space_cid.and_then(|cid| map.get(&cid).copied()))
                 .unwrap_or(
                     cidfont
                         .and_then(|d| d.get(b"DW".as_ref()).ok())
                         .and_then(|v| v.as_float().ok())
                         .unwrap_or(DEFAULT_SPACE_WIDTH),
-                ))
+                )
         }
-        FontEncoding::Unmappable => Ok(DEFAULT_SPACE_WIDTH),
+        FontEncoding::Unmappable => DEFAULT_SPACE_WIDTH,
     }
 }
 
@@ -1046,8 +1051,7 @@ endbfchar";
             space_cid: Some(32),
         };
 
-        let width = get_space_width(&doc, &font_dict, "F1", Some(&encoding))
-            .expect("space width should resolve");
+        let width = get_space_width(&doc, &font_dict, "F1", &encoding);
         test_eq!(Some(width), Some(250.0));
     }
 
@@ -1070,8 +1074,7 @@ endbfchar";
             space_cid: Some(32),
         };
 
-        let width = get_space_width(&doc, &font_dict, "F1", Some(&encoding))
-            .expect("space width should resolve");
+        let width = get_space_width(&doc, &font_dict, "F1", &encoding);
         test_eq!(Some(width), Some(600.0));
     }
 }
