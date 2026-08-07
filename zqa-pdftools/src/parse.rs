@@ -518,10 +518,6 @@ impl PdfParser {
     /// A tuple of the extracted text string with proper spacing applied, and the number of
     /// characters that were skipped because the current font is CID-keyed but has no usable
     /// `ToUnicode` CMap (an estimate based on the number of CIDs skipped).
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if font information cannot be retrieved
     #[allow(clippy::too_many_lines)]
     fn process_tj_tokens(
         &mut self,
@@ -529,14 +525,14 @@ impl PdfParser {
         tokens: &[Token<'_>],
         doc: &Document,
         page_id: PageID,
-    ) -> Result<(String, usize), PdfError> {
+    ) -> (String, usize) {
         let mut result = String::new();
         let mut skipped_chars = 0;
         let font_id = self.cur_font_id.clone();
 
         // Skip if we don't have a valid font ID yet
         if font_id.is_empty() {
-            return Ok((result, skipped_chars));
+            return (result, skipped_chars);
         }
 
         let cur_font = self.cur_font.clone();
@@ -663,7 +659,7 @@ impl PdfParser {
             i += 1;
         }
 
-        Ok((result, skipped_chars))
+        (result, skipped_chars)
     }
 
     /// Given a token slice and an index `pos` of an `ET` token, look *around* `pos` and search for
@@ -859,7 +855,7 @@ impl PdfParser {
                             &tokens[start_idx..token_idx],
                             doc,
                             page_id,
-                        )?;
+                        );
 
                         if matches!(*token, Token::Op(b"'" | b"\"")) {
                             // These operators include an implicit `T*`, so emit a newline before
@@ -1530,9 +1526,7 @@ mod tests {
         parser.cur_font_id = Rc::from("F30");
         parser.cur_font = "CMMI7".to_string();
 
-        let (text, _) = parser
-            .process_tj_tokens(Token::Op(b"TJ"), &tokens, &doc, page_id)
-            .unwrap();
+        let (text, _) = parser.process_tj_tokens(Token::Op(b"TJ"), &tokens, &doc, page_id);
 
         assert!(text.contains("Hello"));
         assert!(text.contains("World"));
@@ -1766,9 +1760,7 @@ mod tests {
 
         // 8 hex digits = 2 CIDs; 4 literal bytes = 2 CIDs.
         let tokens = vec![Token::Hex(b"ABCD1234"), Token::Literal(b"ABCD")];
-        let (text, skipped) = parser
-            .process_tj_tokens(Token::Op(b"TJ"), &tokens, &doc, page_id)
-            .unwrap();
+        let (text, skipped) = parser.process_tj_tokens(Token::Op(b"TJ"), &tokens, &doc, page_id);
 
         test_eq!(skipped, 4);
         assert!(text.trim().is_empty(), "Expected no text, got {text:?}");
@@ -1776,9 +1768,7 @@ mod tests {
         // Whitespace inside a hex string is permitted by the PDF spec and must not inflate the
         // skipped count: this is still 8 hex digits = 2 CIDs.
         let tokens = vec![Token::Hex(b"AB CD 12\n34")];
-        let (_, skipped) = parser
-            .process_tj_tokens(Token::Op(b"TJ"), &tokens, &doc, page_id)
-            .unwrap();
+        let (_, skipped) = parser.process_tj_tokens(Token::Op(b"TJ"), &tokens, &doc, page_id);
 
         test_eq!(skipped, 2);
     }
