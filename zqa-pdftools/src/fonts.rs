@@ -626,7 +626,15 @@ pub(crate) fn compute_font_encoding(
 ///
 /// * `PdfError::EncodingError` if `/W` is not an array, an entry head is not an integer CID, or a
 ///   range-form entry's width is not a number.
-fn expand_cidfont_w(widths: &Object) -> Result<HashMap<i64, f32>, PdfError> {
+fn expand_cidfont_w(doc: &Document, widths: &Object) -> Result<HashMap<i64, f32>, PdfError> {
+    let widths = if let Object::Reference(obj) = widths {
+        doc.get_object(*obj).map_err(|e| {
+            PdfError::EncodingError(format!("CIDFont /W specified an invalid reference: {e}"))
+        })?
+    } else {
+        widths
+    };
+
     let entries = widths
         .as_array()
         .map_err(|e| PdfError::EncodingError(format!("/W was not an array: {e}")))?;
@@ -658,6 +666,11 @@ fn expand_cidfont_w(widths: &Object) -> Result<HashMap<i64, f32>, PdfError> {
                 };
                 for cid in cid..=*end_cid {
                     map.insert(cid, w);
+                    if map.len() > MAX_CMAP_ENTRIES {
+                        return Err(PdfError::EncodingError(format!(
+                            "/W expands to more than {MAX_CMAP_ENTRIES} entries"
+                        )));
+                    }
                 }
                 i += 3;
             }
@@ -750,7 +763,7 @@ pub(crate) fn get_space_width(
             let widths = cidfont
                 .and_then(|d| d.get(b"W".as_ref()).ok())
                 .and_then(|w| {
-                    expand_cidfont_w(w)
+                    expand_cidfont_w(doc, w)
                         .map_err(|e| {
                             log::warn!("Font {font_key}: {e}; falling back to /DW.");
                             e
@@ -763,6 +776,13 @@ pub(crate) fn get_space_width(
                 .unwrap_or(
                     cidfont
                         .and_then(|d| d.get(b"DW".as_ref()).ok())
+                        .and_then(|obj| {
+                            if let Object::Reference(dw) = obj {
+                                doc.get_object(*dw).ok()
+                            } else {
+                                Some(obj)
+                            }
+                        })
                         .and_then(|v| v.as_float().ok())
                         .unwrap_or(DEFAULT_SPACE_WIDTH),
                 )
@@ -933,7 +953,8 @@ endbfchar";
             ]),
         ]);
 
-        let map = expand_cidfont_w(&widths).expect("array-form /W should expand");
+        let doc = &Document::new();
+        let map = expand_cidfont_w(doc, &widths).expect("array-form /W should expand");
 
         test_eq!(map.len(), 3);
         test_eq!(map.get(&1), Some(&500.0));
@@ -950,7 +971,8 @@ endbfchar";
             Object::Integer(250),
         ]);
 
-        let map = expand_cidfont_w(&widths).expect("range-form /W should expand");
+        let doc = &Document::new();
+        let map = expand_cidfont_w(doc, &widths).expect("range-form /W should expand");
 
         test_eq!(map.len(), 3);
         test_eq!(map.get(&3), Some(&250.0));
@@ -971,7 +993,8 @@ endbfchar";
             Object::Real(250.0),
         ]);
 
-        let map = expand_cidfont_w(&widths).expect("mixed-form /W should expand");
+        let doc = &Document::new();
+        let map = expand_cidfont_w(doc, &widths).expect("mixed-form /W should expand");
 
         test_eq!(map.len(), 5);
         test_eq!(map.get(&0), Some(&100.0));
@@ -984,7 +1007,9 @@ endbfchar";
 
     #[test]
     fn test_expand_cidfont_w_rejects_non_array() {
-        let err = expand_cidfont_w(&Object::Integer(42)).expect_err("non-array /W should error");
+        let doc = &Document::new();
+        let err =
+            expand_cidfont_w(doc, &Object::Integer(42)).expect_err("non-array /W should error");
         assert!(matches!(err, PdfError::EncodingError(_)));
     }
 
@@ -994,7 +1019,8 @@ endbfchar";
         // desynchronize the parse.
         let widths = Object::Array(vec![Object::Name(b"Foo".to_vec())]);
 
-        let err = expand_cidfont_w(&widths).expect_err("non-integer CID head should error");
+        let doc = &Document::new();
+        let err = expand_cidfont_w(doc, &widths).expect_err("non-integer CID head should error");
         assert!(matches!(err, PdfError::EncodingError(_)));
     }
 
