@@ -157,7 +157,7 @@ struct PdfParser {
     cur_font: String,
     /// The current font ID we're using. This is not the font string in the dictionary (e.g. "F28"),
     /// but rather the font's ID itself (e.g. "F28").
-    cur_font_id: String,
+    cur_font_id: Rc<str>,
     /// Current font size
     cur_font_size: f32,
     /// The \baselineskip set by the user.
@@ -167,7 +167,7 @@ struct PdfParser {
     font_type: HashMap<(PageID, String), Rc<FontEncoding>>,
     /// Cache of each font's space width, since it is constant per font but used for every `TJ`
     /// number token.
-    space_width: HashMap<(PageID, String), f32>,
+    space_width: HashMap<(PageID, Rc<str>), f32>,
 }
 
 /// `lopdf` references individual pages by a tuple of unsigned integers. Usually, the specific
@@ -284,7 +284,7 @@ impl PdfParser {
         Self {
             thresholds: config,
             cur_font: String::new(),
-            cur_font_id: String::new(),
+            cur_font_id: Rc::from(""),
             cur_font_size: 12.0,   // Doesn't really matter
             cur_baselineskip: 1.2, // The pdflatex default
             font_type: HashMap::new(),
@@ -580,8 +580,9 @@ impl PdfParser {
                         if let Token::Number(spacing_bytes) = tokens[i + 1] {
                             let spacing_str = std::str::from_utf8(spacing_bytes).unwrap_or("0");
                             let spacing = spacing_str.parse::<f32>().unwrap_or(0.0);
-                            let space_threshold =
-                                self.space_threshold(doc, page_id, &font_encoding)?;
+                            let space_threshold = self
+                                .space_threshold(doc, page_id, &font_encoding)
+                                .unwrap_or(DEFAULT_SPACE_WIDTH * SPACE_WIDTH_FRACTION);
 
                             // `spacing` < 0 opens a gap of |spacing|/1000 em; `spacing` > 0 is a kern.
                             if spacing < -space_threshold
@@ -1520,13 +1521,13 @@ mod tests {
         let page_id = doc.page_iter().next().unwrap();
 
         let mut parser = PdfParser {
-            cur_font_id: "F30".to_string(),
+            cur_font_id: Rc::from("F30"),
             cur_font: "CMMI7".to_string(),
             ..PdfParser::default()
         };
 
         // F30 is CMMI7
-        parser.cur_font_id = "F30".to_string();
+        parser.cur_font_id = Rc::from("F30");
         parser.cur_font = "CMMI7".to_string();
 
         let (text, _) = parser
@@ -1758,7 +1759,7 @@ mod tests {
         let (doc, page_id) = doc_with_unmappable_type0_font(b"");
 
         let mut parser = PdfParser {
-            cur_font_id: "F1".to_string(),
+            cur_font_id: Rc::from("F1"),
             cur_font: "FakeFont".to_string(),
             ..PdfParser::default()
         };
