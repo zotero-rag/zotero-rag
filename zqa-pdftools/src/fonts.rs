@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::hash::Hash;
 use std::sync::LazyLock;
 
-use lopdf::{Document, Object};
+use lopdf::{Dictionary, Document, Object};
 use ordered_float::OrderedFloat;
 
 use crate::math::{from_cmex, from_cmmi, from_cmsy, from_msbm};
@@ -669,6 +669,41 @@ fn expand_cidfont_w(widths: &Object) -> Result<HashMap<i64, f32>, PdfError> {
     Ok(map)
 }
 
+/// Resolve a Type0 font's descendant CIDFont dictionary.
+///
+/// CID fonts attach their glyph metrics (`/W`, `/DW`) to the descendant CIDFont rather than the
+/// Type0 parent dictionary. In PDF, a Type0 font has exactly one descendant, which is always a
+/// CIDFont (multiple descendants are a PostScript-only feature; see ISO 32000-2:2020 §9.7.1,
+/// "General").
+///
+/// # Arguments
+///
+/// * `doc` - The PDF document, used to resolve indirect references.
+/// * `font_dict` - The page-level font dictionary (a Type0 font).
+///
+/// # Returns
+///
+/// The descendant CIDFont dictionary, or `None` if the font has no readable `/DescendantFonts`
+/// entry.
+fn get_descendant_cidfont<'a>(
+    doc: &'a Document,
+    font_dict: &HashMap<&str, &'a Object>,
+) -> Option<&'a Dictionary> {
+    let descendants = match *font_dict.get("DescendantFonts")? {
+        Object::Array(arr) => arr,
+        Object::Reference(r) => doc.get_object(*r).ok()?.as_array().ok()?,
+        _ => return None,
+    };
+
+    let descendant = match descendants.first()? {
+        Object::Reference(r) => doc.get_object(*r).ok()?,
+        obj @ Object::Dictionary(_) => obj,
+        _ => return None,
+    };
+
+    descendant.as_dict().ok()
+}
+
 /// Get the width of a space for a given font in text space units.
 ///
 /// Text spacing operators specify widths in text-space units, so this is the unit most useful for
@@ -703,20 +738,26 @@ pub(crate) fn get_space_width(
             .and_then(|w| w.as_float().ok())
             .unwrap_or(DEFAULT_SPACE_WIDTH)),
         FontEncoding::CIDKeyed { space_cid, .. } => {
-            let widths = font_dict.get("W").and_then(|w| {
-                expand_cidfont_w(w)
-                    .map_err(|e| {
-                        log::warn!("Font {font_key}: {e}; falling back to /DW.");
-                        e
-                    })
-                    .ok()
-            });
+            // /W and /DW are defined using the CIDFont dictionary (ISO 32000-2:2020 §9.7.4.3);
+            // the Type0 parent has no such entries.
+            let cidfont = get_descendant_cidfont(doc, font_dict);
+
+            let widths = cidfont
+                .and_then(|d| d.get(b"W".as_ref()).ok())
+                .and_then(|w| {
+                    expand_cidfont_w(w)
+                        .map_err(|e| {
+                            log::warn!("Font {font_key}: {e}; falling back to /DW.");
+                            e
+                        })
+                        .ok()
+                });
 
             Ok(widths
                 .and_then(|map| space_cid.and_then(|cid| map.get(&cid).copied()))
                 .unwrap_or(
-                    font_dict
-                        .get("DW")
+                    cidfont
+                        .and_then(|d| d.get(b"DW".as_ref()).ok())
                         .and_then(|v| v.as_float().ok())
                         .unwrap_or(DEFAULT_SPACE_WIDTH),
                 ))
@@ -950,5 +991,87 @@ endbfchar";
 
         let err = expand_cidfont_w(&widths).expect_err("non-integer CID head should error");
         assert!(matches!(err, PdfError::EncodingError(_)));
+    }
+
+    /// Add a Type0 font object described by `font_entries`, plus a single descendant CIDFont
+    /// object described by `cidfont_entries`, to `doc`, returning the Type0 font's object ID.
+    fn add_type0_font(
+        doc: &mut Document,
+        font_entries: Vec<(&'static str, Object)>,
+        cidfont_entries: Vec<(&'static str, Object)>,
+    ) -> lopdf::ObjectId {
+        let mut font_entries = font_entries;
+        let cidfont_id = doc.add_object(Dictionary::from_iter(cidfont_entries));
+        font_entries.push((
+            "DescendantFonts",
+            Object::Array(vec![Object::Reference(cidfont_id)]),
+        ));
+        doc.add_object(Dictionary::from_iter(font_entries))
+    }
+
+    /// Build the `&str`-keyed dictionary map for font object `font_id`, mirroring [`get_font`]'s
+    /// output.
+    fn font_dict_map(doc: &Document, font_id: lopdf::ObjectId) -> HashMap<&str, &Object> {
+        doc.get_object(font_id)
+            .and_then(Object::as_dict)
+            .expect("font object should be a dictionary")
+            .iter()
+            .map(|(k, v)| {
+                (
+                    std::str::from_utf8(k).expect("font keys should be UTF-8"),
+                    v,
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn test_space_width_from_descendant_cidfont_w() {
+        // The /W lives on the descendant CIDFont, not the Type0 parent.
+        let mut doc = Document::with_version("1.5");
+        let font_id = add_type0_font(
+            &mut doc,
+            vec![("Subtype", Object::Name(b"Type0".to_vec()))],
+            vec![(
+                "W",
+                Object::Array(vec![
+                    Object::Integer(32),
+                    Object::Array(vec![Object::Integer(250)]),
+                ]),
+            )],
+        );
+        let font_dict = font_dict_map(&doc, font_id);
+        let encoding = FontEncoding::CIDKeyed {
+            mappings: HashMap::new(),
+            space_cid: Some(32),
+        };
+
+        let width = get_space_width(&doc, &font_dict, "F1", Some(&encoding))
+            .expect("space width should resolve");
+        test_eq!(Some(width), Some(250.0));
+    }
+
+    #[test]
+    fn test_space_width_from_descendant_cidfont_dw() {
+        // With no /W, the descendant's /DW is the fallback. A /DW on the Type0 parent has no
+        // meaning and must not be consulted.
+        let mut doc = Document::with_version("1.5");
+        let font_id = add_type0_font(
+            &mut doc,
+            vec![
+                ("Subtype", Object::Name(b"Type0".to_vec())),
+                ("DW", Object::Integer(777)),
+            ],
+            vec![("DW", Object::Integer(600))],
+        );
+        let font_dict = font_dict_map(&doc, font_id);
+        let encoding = FontEncoding::CIDKeyed {
+            mappings: HashMap::new(),
+            space_cid: Some(32),
+        };
+
+        let width = get_space_width(&doc, &font_dict, "F1", Some(&encoding))
+            .expect("space width should resolve");
+        test_eq!(Some(width), Some(600.0));
     }
 }
