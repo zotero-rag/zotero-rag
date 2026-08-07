@@ -637,8 +637,9 @@ impl PdfParser {
                         if let Token::Number(spacing_bytes) = tokens[i + 1] {
                             let spacing_str = std::str::from_utf8(spacing_bytes).unwrap_or("0");
                             let spacing = spacing_str.parse::<f32>().unwrap_or(0.0);
-                            let space_threshold =
-                                self.space_threshold(doc, page_id, &font_encoding)?;
+                            let space_threshold = self
+                                .space_threshold(doc, page_id, &font_encoding)
+                                .unwrap_or(DEFAULT_SPACE_WIDTH * SPACE_WIDTH_FRACTION);
 
                             // `spacing` < 0 opens a gap of |spacing|/1000 em; `spacing` > 0 is a kern.
                             if spacing < -space_threshold

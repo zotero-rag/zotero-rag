@@ -652,8 +652,15 @@ fn expand_cidfont_w(doc: &Document, widths: &Object) -> Result<HashMap<i64, f32>
 
         match entries.get(i + 1) {
             Some(Object::Array(ws)) => {
-                for (j, w) in ws.iter().filter_map(|w| w.as_float().ok()).enumerate() {
-                    map.insert(cid + j as i64, w);
+                for (j, w) in ws.iter().enumerate() {
+                    if let Ok(w) = w.as_float() {
+                        map.insert(cid + j as i64, w);
+                        if map.len() > MAX_CMAP_ENTRIES {
+                            return Err(PdfError::EncodingError(format!(
+                                "/W expands to more than {MAX_CMAP_ENTRIES} entries"
+                            )));
+                        }
+                    }
                 }
                 i += 2;
             }
