@@ -3,9 +3,7 @@
 
 use std::io::Write;
 
-use crate::capabilities::EmbeddingProvider;
-use crate::vector::backends::lance::LanceError;
-use crate::vector::checkhealth::lancedb_health_check;
+use crate::vector::checkhealth::{HealthCheckError, HealthCheckable};
 
 const HELP: &str = "\x1b[32;1m";
 const SYMPTOM: &str = "\x1b[33;1m";
@@ -21,7 +19,7 @@ const RESET: &str = "\x1b[0m";
 /// # Errors
 ///
 /// Returns an error if writing to the output stream fails.
-fn help(out: &mut impl Write, msg: &str) -> Result<(), LanceError> {
+fn help(out: &mut impl Write, msg: &str) -> Result<(), HealthCheckError> {
     writeln!(out, "{HELP}help:{RESET} {msg}")?;
 
     Ok(())
@@ -37,13 +35,13 @@ fn help(out: &mut impl Write, msg: &str) -> Result<(), LanceError> {
 /// # Errors
 ///
 /// Returns an error if writing to the output stream fails.
-fn symptom(out: &mut impl Write, msg: &str) -> Result<(), LanceError> {
+fn symptom(out: &mut impl Write, msg: &str) -> Result<(), HealthCheckError> {
     writeln!(out, "{SYMPTOM}symptom:{RESET} {msg}")?;
 
     Ok(())
 }
 
-/// Run health checks on the LanceDB database, and provide helpful suggestions to the user to fix
+/// Run health checks on a vector store, and provide helpful suggestions to the user to fix
 /// errors they may have gotten from a health check. Note that this does not actually run those
 /// fixes--this is so the user of this function has autonomy over that (e.g., the user may want to
 /// first print some message or ask for confirmation before proceeding). There are a few
@@ -53,9 +51,7 @@ fn symptom(out: &mut impl Write, msg: &str) -> Result<(), LanceError> {
 ///
 /// # Arguments:
 ///
-/// * `embeddings_provider`: The embedding provider. Must be one of `EmbeddingProviders`.
-/// * `db_uri`: The URI of the database to diagnose. Pass a store's own URI so diagnostics target
-///   the same database the store uses rather than the process-global `LANCEDB_URI`.
+/// * `backend`: The vector store backend to diagnose.
 /// * `stdout`: A writer object. This does not *have* to be `stdout`, but it is unlikely you would
 ///   want these messages going to an error stream, considering the messages printed here are meant
 ///   for end-users.
@@ -67,16 +63,16 @@ fn symptom(out: &mut impl Write, msg: &str) -> Result<(), LanceError> {
 ///
 /// # Errors
 ///
-/// Returns an error if writing to the output stream fails or if the health check is in an invalid state.
-pub async fn doctor(
-    embedding_provider: EmbeddingProvider,
-    db_uri: &str,
+/// Returns an error if writing to the output stream fails or if the health check is in an
+/// invalid state.
+pub async fn doctor<T: HealthCheckable>(
+    backend: &T,
     stdout: &mut impl Write,
-) -> Result<(), LanceError> {
-    let healthcheck_results = lancedb_health_check(embedding_provider, db_uri).await?;
+) -> Result<(), HealthCheckError> {
+    let healthcheck_results = backend.health_check().await;
 
-    if !healthcheck_results.directory_exists {
-        symptom(stdout, "database directory does not exist.")?;
+    if !healthcheck_results.storage_exists {
+        symptom(stdout, "database storage does not exist.")?;
         help(stdout, "maybe you are not in the right directory?")?;
 
         return Ok(());
@@ -85,14 +81,14 @@ pub async fn doctor(
     let tbl_accessible =
         healthcheck_results
             .table_accessible
-            .ok_or(LanceError::InvalidStateError(
-            "Invalid healthcheck result: if directory exists, `table_accessible` cannot be `None`."
+            .ok_or(HealthCheckError::InvalidState(
+            "Invalid healthcheck result: if storage exists, `table_accessible` cannot be `None`."
                 .into(),
         ))?;
 
     if tbl_accessible.is_err() {
         // Usually, there isn't much we can do here
-        symptom(stdout, "the LanceDB table is not accessible.")?;
+        symptom(stdout, "the database table is not accessible.")?;
         help(
             stdout,
             "check that the `data/` directory actually contains the DB and is not corrupted.",
@@ -103,7 +99,7 @@ pub async fn doctor(
 
     let row_count = healthcheck_results
         .num_rows
-        .ok_or(LanceError::InvalidStateError(
+        .ok_or(HealthCheckError::InvalidState(
             "Invalid healthcheck result: if the table is accessible, `num_rows` cannot be `None`."
                 .into(),
         ))?;
@@ -120,13 +116,13 @@ pub async fn doctor(
 
     let zero_embedding_items = healthcheck_results
         .zero_embedding_items
-        .ok_or(LanceError::InvalidStateError(
+        .ok_or(HealthCheckError::InvalidState(
             "Invalid healthcheck result: if the table is accessible, `zero_embedding_items` cannot be `None`."
                 .into(),
         ))?;
 
-    if let Ok(zero_batches) = zero_embedding_items
-        && !zero_batches.is_empty()
+    if let Ok(zero_records) = zero_embedding_items
+        && !zero_records.is_empty()
     {
         symptom(stdout, "some items have zero embedding vectors.")?;
         help(stdout, "run `/embed fix` to fix this.")?;
@@ -136,7 +132,7 @@ pub async fn doctor(
 
     let index_info = healthcheck_results
         .index_info
-        .ok_or(LanceError::InvalidStateError(
+        .ok_or(HealthCheckError::InvalidState(
         "Invalid healthcheck result: if the table is accessible, `index_info` cannot be `None`."
             .into(),
     ))?;
@@ -171,7 +167,6 @@ mod tests {
     use zqa_macros::test_ok;
 
     use super::doctor;
-    use crate::capabilities::EmbeddingProvider;
     use crate::config::VoyageAIConfig;
     use crate::constants::{
         DEFAULT_VOYAGE_EMBEDDING_DIM, DEFAULT_VOYAGE_EMBEDDING_MODEL, DEFAULT_VOYAGE_RERANK_MODEL,
@@ -180,11 +175,13 @@ mod tests {
     use crate::vector::backends::backend::VectorBackend;
     use crate::vector::backends::lance::LanceBackend;
 
-    /// Returns a URI inside a fresh temp directory whose `lancedb-table` subdirectory does not yet
-    /// exist. Pointing callers at an explicit URI (rather than the global `LANCEDB_URI`) keeps these
-    /// tests isolated, so they need no `#[serial]`. The returned [`tempfile::TempDir`] guard must be
-    /// kept alive for the test's duration.
-    fn temp_db_uri() -> (tempfile::TempDir, String) {
+    /// Builds a [`LanceBackend`] pointing at an isolated temp directory, along with the schema it
+    /// was constructed with. The returned [`tempfile::TempDir`] guard must be kept alive for the
+    /// test's duration. Because each backend points at its own URI, these tests need no
+    /// `#[serial]`.
+    fn temp_backend() -> (tempfile::TempDir, LanceBackend, Arc<arrow_schema::Schema>) {
+        dotenv().ok();
+
         let dir = tempfile::tempdir().unwrap();
         let uri = dir
             .path()
@@ -192,21 +189,39 @@ mod tests {
             .to_str()
             .unwrap()
             .to_string();
-        (dir, uri)
+
+        let schema = Arc::new(arrow_schema::Schema::new(vec![
+            arrow_schema::Field::new("pdf_text", arrow_schema::DataType::Utf8, false),
+            arrow_schema::Field::new("title", arrow_schema::DataType::Utf8, false),
+        ]));
+
+        let backend = LanceBackend::new(
+            EmbeddingProviderConfig::VoyageAI(VoyageAIConfig {
+                embedding_model: DEFAULT_VOYAGE_EMBEDDING_MODEL.into(),
+                embedding_dims: DEFAULT_VOYAGE_EMBEDDING_DIM as usize,
+                api_key: env::var("VOYAGE_AI_API_KEY").unwrap_or_default(),
+                reranker: DEFAULT_VOYAGE_RERANK_MODEL.into(),
+            }),
+            Arc::clone(&schema),
+            "pdf_text".into(),
+        )
+        .with_uri(&uri);
+
+        (dir, backend, schema)
     }
 
-    /// When the database directory does not exist, `doctor` should report that symptom and
-    /// short-circuit without running the remaining checks (and without any network access).
+    /// When the database does not exist, `doctor` should report that symptom and short-circuit
+    /// without running the remaining checks (and without any network access).
     #[tokio::test]
     async fn test_doctor_reports_missing_database() {
-        let (_dir, db_uri) = temp_db_uri();
+        let (_dir, backend, _) = temp_backend();
 
         let mut out: Vec<u8> = Vec::new();
-        let result = doctor(EmbeddingProvider::VoyageAI, &db_uri, &mut out).await;
+        let result = doctor(&backend, &mut out).await;
         test_ok!(result);
 
         let output = String::from_utf8(out).unwrap();
-        assert!(output.contains("database directory does not exist"));
+        assert!(output.contains("database storage does not exist"));
         assert!(output.contains("help:"));
         // The early return means the later checks (and their success marker) are never reached.
         assert!(!output.contains("Analysis completed."));
@@ -216,16 +231,10 @@ mod tests {
     /// every check through to completion without flagging a missing database.
     #[tokio::test]
     async fn test_doctor_healthy_database_completes() {
-        dotenv().ok();
+        let (_dir, backend, schema) = temp_backend();
 
-        let (_dir, db_uri) = temp_db_uri();
-
-        let schema = arrow_schema::Schema::new(vec![
-            arrow_schema::Field::new("pdf_text", arrow_schema::DataType::Utf8, false),
-            arrow_schema::Field::new("title", arrow_schema::DataType::Utf8, false),
-        ]);
         let record_batch = RecordBatch::try_new(
-            Arc::new(schema.clone()),
+            schema,
             vec![
                 Arc::new(StringArray::from(vec!["Hello world", "Test document"])),
                 Arc::new(StringArray::from(vec!["doc1.pdf", "doc2.pdf"])),
@@ -233,28 +242,17 @@ mod tests {
         )
         .unwrap();
 
-        let backend = LanceBackend::new(
-            EmbeddingProviderConfig::VoyageAI(VoyageAIConfig {
-                embedding_model: DEFAULT_VOYAGE_EMBEDDING_MODEL.into(),
-                embedding_dims: DEFAULT_VOYAGE_EMBEDDING_DIM as usize,
-                api_key: env::var("VOYAGE_AI_API_KEY").unwrap_or_default(),
-                reranker: DEFAULT_VOYAGE_RERANK_MODEL.into(),
-            }),
-            Arc::new(schema),
-            "pdf_text".into(),
-        )
-        .with_uri(&db_uri);
         backend
             .insert_items(vec![record_batch], None)
             .await
             .unwrap();
 
         let mut out: Vec<u8> = Vec::new();
-        let result = doctor(EmbeddingProvider::VoyageAI, &db_uri, &mut out).await;
+        let result = doctor(&backend, &mut out).await;
         test_ok!(result);
 
         let output = String::from_utf8(out).unwrap();
         assert!(output.contains("Analysis completed."));
-        assert!(!output.contains("database directory does not exist"));
+        assert!(!output.contains("database storage does not exist"));
     }
 }

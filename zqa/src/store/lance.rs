@@ -6,7 +6,8 @@ use async_trait::async_trait;
 use zqa_rag::embedding::common::EmbeddingProviderConfig;
 use zqa_rag::reranking::common::{RerankProviderConfig, get_reranking_provider_with_config};
 use zqa_rag::vector::backends::backend::VectorBackend;
-use zqa_rag::vector::backends::lance::{LanceBackend, LanceMetadata};
+use zqa_rag::vector::backends::lance::{LanceBackend, LanceError, LanceMetadata};
+use zqa_rag::vector::checkhealth::{HealthCheckResult, HealthCheckable};
 
 use crate::cli::errors::CLIError;
 use crate::config::Config;
@@ -52,6 +53,16 @@ impl LanceZoteroStore {
     pub fn with_uri(mut self, uri: impl Into<String>) -> Self {
         self.backend = self.backend.with_uri(uri);
         self
+    }
+
+    /// Run health checks on the underlying LanceDB database.
+    pub async fn health_check(&self) -> HealthCheckResult<RecordBatch, LanceError> {
+        self.backend.health_check().await
+    }
+
+    /// Get a reference to the underlying LanceDB backend.
+    pub(crate) fn backend(&self) -> &LanceBackend {
+        &self.backend
     }
 
     /// Get a read-only embedding config
