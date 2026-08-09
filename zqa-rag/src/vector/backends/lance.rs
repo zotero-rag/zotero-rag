@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Instant;
+use std::{fs, io};
 
 use arrow_array::cast::AsArray;
 use arrow_array::types::{Float32Type, Int64Type};
@@ -20,10 +21,12 @@ use lancedb::query::{ExecutableQuery, QueryBase};
 use lancedb::{Connection, Error as LanceDbError, connect};
 use thiserror::Error;
 
-use crate::embedding::common::EmbeddingProviderConfig;
+use crate::capabilities::EmbeddingProvider;
+use crate::embedding::common::{EmbeddingProviderConfig, get_embedding_dims_by_provider};
 use crate::providers::ProviderId;
 use crate::providers::registry::provider_registry;
 use crate::vector::backends::backend::VectorBackend;
+use crate::vector::checkhealth::{HealthCheckResult, HealthCheckable, RowCount};
 
 // NOTE: Maintainers: ensure that `LANCEDB_URI` begins with `LANCE_DATA_TABLE_NAME`
 
@@ -955,6 +958,206 @@ impl VectorBackend for LanceBackend {
     }
 }
 
+impl RowCount for RecordBatch {
+    fn row_count(&self) -> usize {
+        self.num_rows()
+    }
+}
+
+/// Calculate the size of a directory recursively.
+///
+/// # Arguments
+///
+/// * `path` - The directory whose size needs to be computed
+///
+/// # Returns
+///
+/// The size in bytes, if successful.
+fn calculate_directory_size(path: &std::path::Path) -> Result<u64, io::Error> {
+    let mut size = 0;
+    if path.is_dir() {
+        for entry in fs::read_dir(path)? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.is_dir() {
+                size += calculate_directory_size(&path)?;
+            } else {
+                size += entry.metadata()?.len();
+            }
+        }
+    }
+    Ok(size)
+}
+
+/// Given a table and a limit for the number of rows to query in the table, check if any rows have
+/// zero embeddings, which is a sign that something went wrong.
+///
+/// # Arguments
+///
+/// * `tbl` - The LanceDB table to query
+/// * `provider_id` - The embedding provider ID. Must correspond to a known embedding provider.
+/// * `query_limit` - Limit on the number of rows in the table to query
+///
+/// # Returns
+///
+/// * A list of complete RecordBatches for rows that have zero embeddings, if nothing went wrong
+/// * Otherwise, a `LanceError` detailing what went wrong and why:
+///     * A `QueryError` if some query failed
+///     * An `InvalidStateError` if the table is in some invalid state
+async fn get_zero_vectors(
+    tbl: &lancedb::table::Table,
+    provider_id: ProviderId,
+    query_limit: usize,
+) -> Result<Vec<RecordBatch>, LanceError> {
+    let embedding_provider: EmbeddingProvider =
+        provider_id.try_into().map_err(|message: String| {
+            LanceError::ParameterError(format!("Could not determine embedding provider: {message}"))
+        })?;
+    let embedding_size = get_embedding_dims_by_provider(embedding_provider);
+
+    let stream = tbl
+        .query()
+        .nearest_to(vec![0.0; embedding_size as usize])?
+        .distance_range(Some(0.0), Some(1e-8))
+        .limit(query_limit)
+        .execute()
+        .await
+        .map_err(|e| LanceError::QueryError(e.to_string()))?;
+
+    stream
+        .try_collect::<Vec<_>>()
+        .await
+        .map_err(|e| LanceError::QueryError(e.to_string()))
+}
+
+/// Given a LanceDB table, get basic index information. Note that LanceDB's Rust API does not
+/// expose all index information directly, so we'll use what's available.
+///
+/// # Arguments
+///
+/// * `tbl` - The LanceDB table to get info from
+///
+/// # Returns
+///
+/// Index information if we were able to list indices successfully.
+async fn check_indexes(tbl: &lancedb::table::Table) -> Result<Vec<(String, String)>, LanceError> {
+    match tbl.list_indices().await {
+        Ok(indices) => {
+            if indices.is_empty() {
+                return Ok(Vec::new());
+            }
+
+            Ok(indices
+                .iter()
+                .map(|index| (index.name.clone(), index.index_type.to_string()))
+                .collect::<Vec<_>>())
+        }
+        Err(e) => Err(LanceError::QueryError(format!(
+            "Failed to get indexes: {e}"
+        ))),
+    }
+}
+
+#[async_trait]
+impl HealthCheckable for LanceBackend {
+    /// Performs a comprehensive health check on the LanceDB database.
+    ///
+    /// This function checks for:
+    /// - Directory existence and reports size
+    /// - Table accessibility
+    /// - Row count (warns if zero rows)
+    /// - All-zero embeddings
+    /// - Index information (warns if missing or incomplete)
+    /// - Metadata version drift between the metadata and data tables
+    ///
+    /// Per-check failures are captured in the corresponding [`HealthCheckResult`] field.
+    ///
+    /// # Returns
+    ///
+    /// A `HealthCheckResult<RecordBatch, LanceError>` describing each check that ran.
+    async fn health_check(&self) -> HealthCheckResult<RecordBatch, LanceError> {
+        let db_uri = self.get_db_path();
+
+        let mut result = HealthCheckResult {
+            storage_exists: false,
+            storage_size: None,
+            table_accessible: None,
+            num_rows: None,
+            zero_embedding_items: None,
+            index_info: None,
+            version_drift: None,
+        };
+
+        // Check 1: Directory existence and size
+        let db_path = PathBuf::from(&db_uri);
+        result.storage_exists = db_path.exists();
+
+        if result.storage_exists {
+            result.storage_size = Some(calculate_directory_size(&db_path));
+        } else {
+            // If the directory doesn't exist, none of the other checks make sense.
+            return result;
+        }
+
+        // Check 2: Table connectivity
+        let db = match connect(&db_uri).execute().await {
+            Ok(conn) => conn,
+            Err(e) => {
+                // Capture the error
+                result.table_accessible = Some(Err(LanceError::ConnectionError(e.to_string())));
+
+                // None of the future checks make sense here.
+                return result;
+            }
+        };
+
+        // Check 3: Table opening
+        let tbl = match db.open_table(LANCE_DATA_TABLE_NAME).execute().await {
+            Ok(tbl) => tbl,
+            Err(e) => {
+                // Capture the error
+                result.table_accessible = Some(Err(LanceError::ConnectionError(e.to_string())));
+
+                // None of the future checks make sense here.
+                return result;
+            }
+        };
+
+        result.table_accessible = Some(Ok(()));
+
+        // Check 4: Row count
+        // If we get an error here, it may be a temporary error for just this query, so we won't stop
+        // our health checks.
+        result.num_rows = match tbl.count_rows(None).await {
+            Ok(count) => Some(Ok(count)),
+            Err(e) => Some(Err(LanceError::QueryError(e.to_string()))),
+        };
+
+        // Check 5: Check indexes
+        result.index_info = Some(check_indexes(&tbl).await);
+
+        // Check 6: All-zero embeddings
+        // We can't have `result.num_rows` be `None` at this point.
+        if let Some(query_limit) = &result.num_rows {
+            result.zero_embedding_items = match query_limit {
+                Ok(count) => Some(get_zero_vectors(&tbl, self.config.provider_id(), *count).await),
+                Err(e) => Some(Err(LanceError::QueryError(e.to_string()))),
+            }
+        }
+
+        // Check 7: Metadata version drift (stored vs live data table version)
+        result.version_drift = Some(match read_stored_data_table_version(&db).await {
+            Ok(stored) => match tbl.version().await {
+                Ok(live) => Ok((stored, live)),
+                Err(e) => Err(LanceError::QueryError(e.to_string())),
+            },
+            Err(e) => Err(e),
+        });
+
+        result
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::env;
@@ -1018,6 +1221,55 @@ mod tests {
         let schema = get_schema(source_col);
 
         LanceBackend::new(config, Arc::new(schema), source_col.into()).with_uri(uri)
+    }
+
+    fn get_test_voyage_embedding_config() -> EmbeddingProviderConfig {
+        EmbeddingProviderConfig::VoyageAI(VoyageAIConfig {
+            embedding_model: DEFAULT_VOYAGE_EMBEDDING_MODEL.into(),
+            embedding_dims: DEFAULT_VOYAGE_EMBEDDING_DIM as usize,
+            api_key: env::var("VOYAGE_AI_API_KEY").unwrap(),
+            reranker: DEFAULT_VOYAGE_RERANK_MODEL.into(),
+        })
+    }
+
+    #[tokio::test]
+    async fn test_health_check_no_database() {
+        dotenv().ok();
+
+        let (_db_dir, uri) = temp_db();
+        let backend = get_backend("pdf_text", get_test_voyage_embedding_config(), &uri);
+        let health_result = backend.health_check().await;
+
+        assert!(!health_result.storage_exists);
+        assert!(health_result.storage_size.is_none());
+        assert!(health_result.table_accessible.is_none());
+        assert!(health_result.num_rows.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_health_check_with_database() {
+        dotenv().ok();
+
+        let (_db_dir, uri) = temp_db();
+        let backend = get_backend("pdf_text", get_test_voyage_embedding_config(), &uri);
+
+        let pdf_text_data = StringArray::from(vec!["Hello world", "Test document"]);
+        let record_batch = RecordBatch::try_new(
+            Arc::new(get_schema("pdf_text")),
+            vec![Arc::new(pdf_text_data)],
+        )
+        .unwrap();
+        backend
+            .insert_items(vec![record_batch], None)
+            .await
+            .unwrap();
+
+        let health_result = backend.health_check().await;
+
+        assert!(health_result.storage_exists);
+        assert!(health_result.storage_size.unwrap().is_ok_and(|x| x > 0));
+        assert!(health_result.table_accessible.unwrap().is_ok());
+        assert!(health_result.num_rows.unwrap().is_ok_and(|x| x == 2));
     }
 
     #[tokio::test]

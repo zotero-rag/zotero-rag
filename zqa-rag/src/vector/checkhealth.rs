@@ -1,20 +1,13 @@
-//! Utilities for checking the health of the LanceDB database. This includes helpers to provide
-//! possible diagnostics for common issues.
+//! Backend-agnostic utilities for checking the health of a vector store. This module defines
+//! the neutral [`HealthCheckResult`] type and the [`HealthCheckable`] trait; each backend is
+//! responsible for implementing the checks that make sense for it.
 
-use std::path::PathBuf;
-use std::{fmt, fs, io};
+use std::fmt;
+use std::io;
 
-use arrow_array::RecordBatch;
-use futures::TryStreamExt;
-use lancedb::query::{ExecutableQuery, QueryBase};
-use lancedb::{Table, connect};
+use async_trait::async_trait;
 
-use super::backends::lance::{
-    LANCE_DATA_TABLE_NAME as TABLE_NAME, LanceError, read_stored_data_table_version,
-};
-use crate::capabilities::EmbeddingProvider;
-use crate::embedding::common::get_embedding_dims_by_provider;
-use crate::providers::ProviderId;
+use crate::vector::backends::backend::VectorBackend;
 
 /// ANSI color codes for console output
 const RED: &str = "\x1b[31m";
@@ -22,44 +15,107 @@ const YELLOW: &str = "\x1b[33m";
 const GREEN: &str = "\x1b[32m";
 const RESET: &str = "\x1b[0m";
 
-/// Health check result for LanceDB
+/// Errors from running health checks or diagnostics through [`HealthCheckable`] implementations.
+/// Individual check failures are captured inside [`HealthCheckResult`] rather than returned, so
+/// this error is only used when a fast path fails before the result object exists. `Backend`
+/// is meant to be produced by the caller who runs the health check on behalf of some other code
+/// (e.g., a CLI command handler).
+#[derive(Debug, thiserror::Error)]
+pub enum HealthCheckError {
+    /// An IO error, e.g. writing diagnostic output.
+    #[error(transparent)]
+    Io(#[from] io::Error),
+    /// The store is in a state the diagnostics did not expect (likely a bug).
+    #[error("The store is in an invalid state: {0}")]
+    InvalidState(String),
+    /// An error returned by the backend during a health check.
+    #[error("{0}")]
+    Backend(String),
+}
+
+/// A record type that can report how many rows it contains. Backends implement this for their
+/// record type so that health-check reporting can count zero-embedding rows without knowing
+/// anything about the record's shape.
+pub trait RowCount {
+    /// The number of rows in this record.
+    fn row_count(&self) -> usize;
+}
+
+/// Backend-agnostic health check result. Not every check applies to every backend: file-based
+/// stores can report storage size, while remote stores cannot, so checks are reported as
+/// `Option`s where `None` means "not run" or "not applicable" and `Some(Err(_))` means the check
+/// ran and failed.
+///
+/// The type is generic over the backend's record type `R` (used for the zero-embedding items,
+/// which callers may want to inspect or repair) and the backend's error type `E`.
 #[derive(Debug)]
 #[must_use = "You should probably use this; functions exposing this generally do not have side effects."]
-pub struct HealthCheckResult {
-    /// Directory exists
-    pub directory_exists: bool,
-    /// Directory size in bytes. `None` when the check hasn't run, `Some(Ok(size))` if
-    /// we could compute the size and `Some(Err(...))` when there was an error connecting
-    /// to the DB or opening the table.
-    pub directory_size: Option<Result<u64, io::Error>>,
-    /// Table can be opened. `None` when the check hasn't run, `Some(Ok())` if it is accessible,
-    /// and `Some(Err(...))` when there was an error connecting to the DB or opening the table.
-    pub table_accessible: Option<Result<(), LanceError>>,
-    /// Number of rows in the table. `None` when the check hasn't run, `Some(Ok())` if it is
-    /// accessible, and `Some(Err(...))` when there was an error connecting to the DB or opening
-    /// the table.
-    pub num_rows: Option<Result<usize, LanceError>>,
-    /// Rows with all-zero embeddings. `None` when the check hasn't run, `Some(Ok(batches))` if
-    /// we successfully computed the complete record batches with zero embeddings, and `Some(Err(...))` when
-    /// there was an error connecting to the DB or opening the table.
-    pub zero_embedding_items: Option<Result<Vec<RecordBatch>, LanceError>>,
-    /// Index information: (index_name, index_type). `None` when the check hasn't run,
-    /// `Some(Ok(index_info))` if we successfully got the index information, and `Some(Err(...))`
-    /// when there was an error connecting to the DB or opening the table.
-    pub index_info: Option<Result<Vec<(String, String)>, LanceError>>,
-    /// Metadata version drift, as `(stored, live)`: the data table version recorded in the
-    /// metadata table versus the live data table version. `None` when the check hasn't run,
-    /// `Some(Ok((stored, live)))` with the two versions (equal means in sync), and `Some(Err(...))`
-    /// when the versions could not be read.
-    pub version_drift: Option<Result<(u64, u64), LanceError>>,
+pub struct HealthCheckResult<R, E> {
+    /// The store's storage exists and is reachable. For file-based backends this is directory
+    /// existence; remote backends report whether the store endpoint/collection could be found.
+    pub storage_exists: bool,
+    /// Storage size in bytes, where meaningful. `None` when the check hasn't run or is not
+    /// applicable to the backend, `Some(Ok(size))` if the size was computed, and
+    /// `Some(Err(...))` on failure.
+    pub storage_size: Option<Result<u64, io::Error>>,
+    /// The store's primary table/collection can be opened. `None` when the check hasn't run,
+    /// `Some(Ok(()))` if it is accessible, and `Some(Err(...))` when it could not be opened.
+    pub table_accessible: Option<Result<(), E>>,
+    /// Number of rows in the store. `None` when the check hasn't run, `Some(Ok(count))` on
+    /// success, and `Some(Err(...))` on failure.
+    pub num_rows: Option<Result<usize, E>>,
+    /// Records with all-zero embeddings. `None` when the check hasn't run, `Some(Ok(records))`
+    /// with the complete records containing zero embeddings, and `Some(Err(...))` on failure.
+    pub zero_embedding_items: Option<Result<Vec<R>, E>>,
+    /// Index information: (index_name, index_type). `None` when the check hasn't run or is not
+    /// applicable, `Some(Ok(index_info))` on success, and `Some(Err(...))` on failure.
+    pub index_info: Option<Result<Vec<(String, String)>, E>>,
+    /// Metadata version drift, as `(stored, live)`, for backends that version writes.
+    /// `None` when the check hasn't run or is not applicable, `Some(Ok((stored, live)))` with the
+    /// two versions (equal means in sync), and `Some(Err(...))` when the versions could not be
+    /// read.
+    pub version_drift: Option<Result<(u64, u64), E>>,
+}
+
+impl<R, E> HealthCheckResult<R, E> {
+    /// Returns the total number of rows with zero embeddings, if the zero-embedding check ran
+    /// successfully.
+    pub fn zero_embedding_row_count(&self) -> Option<usize>
+    where
+        R: RowCount,
+    {
+        self.zero_embedding_items.as_ref().and_then(|items| {
+            items
+                .as_ref()
+                .ok()
+                .map(|records| records.iter().map(RowCount::row_count).sum())
+        })
+    }
+}
+
+/// A vector store backend that can report on its own health. Implementors should run every
+/// check that is meaningful for them, capture per-check failures in the corresponding
+/// [`HealthCheckResult`] field, and always produce a result object.
+#[async_trait]
+pub trait HealthCheckable: VectorBackend {
+    /// Run health checks on the store and return the collected results. Per-check failures are
+    /// captured in the corresponding [`HealthCheckResult`] field rather than returned, so this
+    /// is infallible by contract: implementations should always produce a result object.
+    ///
+    /// # Returns
+    ///
+    /// A [`HealthCheckResult`] describing each check that ran.
+    async fn health_check(&self) -> HealthCheckResult<Self::Record, Self::Error>;
 }
 
 /// Format file size in a human-readable format
 ///
-/// # Arguments:
+/// # Arguments
+///
 /// * `bytes` - Size in bytes
 ///
-/// # Returns:
+/// # Returns
+///
 /// A string with a human-readable file size.
 fn format_file_size(bytes: u64) -> String {
     const UNITS: &[&str] = &["B", "KB", "MB", "GB", "TB"];
@@ -78,16 +134,16 @@ fn format_file_size(bytes: u64) -> String {
     }
 }
 
-impl fmt::Display for HealthCheckResult {
+impl<R: RowCount, E: fmt::Display> fmt::Display for HealthCheckResult<R, E> {
     #[allow(clippy::too_many_lines)]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        writeln!(f, "LanceDB Health Check Results")?;
-        writeln!(f, "===============================")?;
+        writeln!(f, "Vector Store Health Check Results")?;
+        writeln!(f, "=================================")?;
 
-        // Check 1: Directory existence and size
-        if self.directory_exists {
-            writeln!(f, "{GREEN}✓ Database directory exists{RESET}")?;
-            match &self.directory_size {
+        // Check 1: Storage existence and size
+        if self.storage_exists {
+            writeln!(f, "{GREEN}✓ Database storage exists{RESET}")?;
+            match &self.storage_size {
                 Some(Ok(size)) => {
                     let size_str = format_file_size(*size);
                     writeln!(f, "\tSize: {size_str}")?;
@@ -98,7 +154,7 @@ impl fmt::Display for HealthCheckResult {
                 None => writeln!(f)?,
             }
         } else {
-            writeln!(f, "{RED}✗ Database directory does not exist{RESET}")?;
+            writeln!(f, "{RED}✗ Database storage does not exist{RESET}")?;
             writeln!(f, "{YELLOW}  → Subsequent checks will be skipped{RESET}")?;
             return Ok(());
         }
@@ -140,8 +196,8 @@ impl fmt::Display for HealthCheckResult {
 
         // Check 4: Zero embeddings
         match &self.zero_embedding_items {
-            Some(Ok(zero_batches)) => {
-                let total_zero_rows: usize = zero_batches.iter().map(RecordBatch::num_rows).sum();
+            Some(Ok(zero_records)) => {
+                let total_zero_rows: usize = zero_records.iter().map(RowCount::row_count).sum();
                 if total_zero_rows == 0 {
                     writeln!(f, "{GREEN}✓ No zero embeddings found{RESET}")?;
                 } else {
@@ -218,291 +274,5 @@ impl fmt::Display for HealthCheckResult {
         }
 
         Ok(())
-    }
-}
-
-/// Calculate the size of a directory recursively.
-///
-/// # Arguments:
-/// * `path` - The directory whose size needs to be computed
-///
-/// # Returns
-/// The size in bytes, if successful.
-fn calculate_directory_size(path: &std::path::Path) -> Result<u64, std::io::Error> {
-    let mut size = 0;
-    if path.is_dir() {
-        for entry in fs::read_dir(path)? {
-            let entry = entry?;
-            let path = entry.path();
-            if path.is_dir() {
-                size += calculate_directory_size(&path)?;
-            } else {
-                size += entry.metadata()?.len();
-            }
-        }
-    }
-    Ok(size)
-}
-
-/// Given a table, an expected schema, and a limit for the number of rows to query in the table,
-/// check if any rows have zero embeddings, which is a sign that something went wrong.
-///
-/// # Arguments:
-/// * `tbl` - The LanceDB table to query
-/// * `embeddings_provider` - The embedding provider used. Must be one of `EmbeddingProviders`.
-/// * `query_limit` - Limit on the number of rows in the table to query
-///
-/// # Returns:
-/// * A list of complete RecordBatches for rows that have zero embeddings, if nothing went wrong
-/// * Otherwise, a `LanceError` detailing what went wrong and why:
-///     * A `QueryError` if some query failed
-///     * An `InvalidStateError` if the table is in some invalid state
-pub(crate) async fn get_zero_vectors(
-    tbl: &Table,
-    provider_id: ProviderId,
-    query_limit: usize,
-) -> Result<Vec<RecordBatch>, LanceError> {
-    let embedding_provider = provider_id.try_into().map_err(|message: String| {
-        LanceError::ParameterError(format!("Could not determine embedding provider: {message}"))
-    })?;
-    let embedding_size = get_embedding_dims_by_provider(embedding_provider);
-
-    let stream = tbl
-        .query()
-        .nearest_to(vec![0.0; embedding_size as usize])?
-        .distance_range(Some(0.0), Some(1e-8))
-        .limit(query_limit)
-        .execute()
-        .await
-        .map_err(|e| LanceError::QueryError(e.to_string()))?;
-
-    stream
-        .try_collect::<Vec<_>>()
-        .await
-        .map_err(|e| LanceError::QueryError(e.to_string()))
-}
-
-/// Given a LanceDB table, get basic index information. Note that LanceDB's Rust API does not
-/// expose all index information directly, so we'll use what's available.
-///
-/// # Arguments:
-/// * `tbl` - The LanceDB table to get info from
-///
-/// # Returns:
-/// Index information if we were able to list indices successfully.
-async fn check_indexes(tbl: &lancedb::table::Table) -> Result<Vec<(String, String)>, LanceError> {
-    match tbl.list_indices().await {
-        Ok(indices) => {
-            if indices.is_empty() {
-                return Ok(Vec::new());
-            }
-
-            Ok(indices
-                .iter()
-                .map(|index| (index.name.clone(), index.index_type.to_string()))
-                .collect::<Vec<_>>())
-        }
-        Err(e) => Err(LanceError::QueryError(format!(
-            "Failed to get indexes: {e}"
-        ))),
-    }
-}
-
-/// Performs a comprehensive health check on the LanceDB database.
-///
-/// This function checks for:
-/// - Directory existence and reports size
-/// - Table accessibility
-/// - Row count (errors if zero rows)
-/// - All-zero embeddings (errors if found, writes titles to bad_embeddings.txt)
-/// - Index information (warns if missing or incomplete)
-///
-/// # Arguments:
-/// * `embedding_provider` - The embedding provider. Must be one of `EmbeddingProviders`.
-/// * `db_uri` - The URI of the database to check. Pass a store's own URI (e.g. via
-///   `LanceZoteroStore::db_uri`) so the check targets the same database the store uses, rather than
-///   relying on the process-global `LANCEDB_URI`.
-///
-/// # Returns:
-///
-/// A `Result<HealthCheckResult, LanceError>` indicating success and whether issues were found
-///
-/// # Errors
-///
-/// * `LanceError::ParameterError` - If the embedding provider is not recognized
-/// * `LanceError::QueryError` - If querying for zero vectors or index information fails
-#[must_use = "This function has no side-effects, so you likely want to inspect this value."]
-pub async fn lancedb_health_check(
-    embedding_provider: EmbeddingProvider,
-    db_uri: &str,
-) -> Result<HealthCheckResult, LanceError> {
-    let mut result = HealthCheckResult {
-        directory_exists: false,
-        directory_size: None,
-        table_accessible: None,
-        num_rows: None,
-        zero_embedding_items: None,
-        index_info: None,
-        version_drift: None,
-    };
-
-    // Check 1: Directory existence and size
-    let db_path = PathBuf::from(db_uri);
-    result.directory_exists = db_path.exists();
-
-    if result.directory_exists {
-        result.directory_size = Some(calculate_directory_size(&db_path));
-    } else {
-        // If the directory doesn't exist, none of the other checks make sense.
-        return Ok(result);
-    }
-
-    // Check 2: Table connectivity
-    let db = match connect(db_uri).execute().await {
-        Ok(conn) => conn,
-        Err(e) => {
-            // Capture the error
-            result.table_accessible = Some(Err(LanceError::ConnectionError(e.to_string())));
-
-            // None of the future checks make sense here.
-            return Ok(result);
-        }
-    };
-
-    // Check 3: Table opening
-    let tbl = match db.open_table(TABLE_NAME).execute().await {
-        Ok(tbl) => tbl,
-        Err(e) => {
-            // Capture the error
-            result.table_accessible = Some(Err(LanceError::ConnectionError(e.to_string())));
-
-            // None of the future checks make sense here.
-            return Ok(result);
-        }
-    };
-
-    result.table_accessible = Some(Ok(()));
-
-    // Check 4: Row count
-    // If we get an error here, it may be a temporary error for just this query, so we won't stop
-    // our health checks.
-    result.num_rows = match tbl.count_rows(None).await {
-        Ok(count) => Some(Ok(count)),
-        Err(e) => Some(Err(LanceError::QueryError(e.to_string()))),
-    };
-
-    // Check 5: Check indexes
-    result.index_info = Some(check_indexes(&tbl).await);
-
-    // Check 6: All-zero embeddings
-    // We can't have `result.num_rows` be `None` at this point.
-    if let Some(query_limit) = &result.num_rows {
-        result.zero_embedding_items = match query_limit {
-            Ok(count) => Some(Ok(get_zero_vectors(
-                &tbl,
-                ProviderId::from(&embedding_provider),
-                *count,
-            )
-            .await?)),
-            Err(e) => Some(Err(LanceError::QueryError(e.to_string()))),
-        }
-    }
-
-    // Check 7: Metadata version drift (stored vs live data table version)
-    result.version_drift = Some(match read_stored_data_table_version(&db).await {
-        Ok(stored) => match tbl.version().await {
-            Ok(live) => Ok((stored, live)),
-            Err(e) => Err(LanceError::QueryError(e.to_string())),
-        },
-        Err(e) => Err(e),
-    });
-
-    Ok(result)
-}
-
-#[cfg(test)]
-mod tests {
-    use std::env;
-    use std::sync::Arc;
-
-    use arrow_array::{RecordBatch, StringArray};
-    use dotenv::dotenv;
-    use serial_test::serial;
-    use zqa_macros::test_ok;
-
-    use super::lancedb_health_check;
-    use crate::capabilities::EmbeddingProvider;
-    use crate::config::VoyageAIConfig;
-    use crate::constants::{
-        DEFAULT_VOYAGE_EMBEDDING_DIM, DEFAULT_VOYAGE_EMBEDDING_MODEL, DEFAULT_VOYAGE_RERANK_MODEL,
-    };
-    use crate::embedding::common::EmbeddingProviderConfig;
-    use crate::vector::backends::backend::VectorBackend;
-    use crate::vector::backends::lance::{LanceBackend, get_db_uri};
-
-    #[tokio::test]
-    #[serial]
-    async fn test_perform_health_check_no_database() {
-        dotenv().ok();
-
-        // Clean up any existing data
-        let _ = std::fs::remove_dir_all(get_db_uri());
-        let _ = std::fs::remove_dir_all(format!("zqa-rag/{}", get_db_uri()));
-
-        let result = lancedb_health_check(EmbeddingProvider::VoyageAI, &get_db_uri()).await;
-        test_ok!(result);
-
-        let health_result = result.unwrap();
-        assert!(!health_result.directory_exists);
-        assert!(health_result.directory_size.is_none());
-        assert!(health_result.table_accessible.is_none());
-        assert!(health_result.num_rows.is_none());
-    }
-
-    #[tokio::test]
-    #[serial]
-    async fn test_perform_health_check_with_database() {
-        dotenv().ok();
-
-        // Clean up any existing data
-        let _ = std::fs::remove_dir_all(get_db_uri());
-
-        // Create a test database first
-        let schema = arrow_schema::Schema::new(vec![
-            arrow_schema::Field::new("pdf_text", arrow_schema::DataType::Utf8, false),
-            arrow_schema::Field::new("title", arrow_schema::DataType::Utf8, false),
-        ]);
-        let pdf_text_data = StringArray::from(vec!["Hello world", "Test document"]);
-        let title_data = StringArray::from(vec!["doc1.pdf", "doc2.pdf"]);
-        let record_batch = RecordBatch::try_new(
-            Arc::new(schema.clone()),
-            vec![Arc::new(pdf_text_data), Arc::new(title_data)],
-        )
-        .unwrap();
-        let batches = vec![record_batch.clone()];
-
-        let backend = LanceBackend::new(
-            EmbeddingProviderConfig::VoyageAI(VoyageAIConfig {
-                embedding_model: DEFAULT_VOYAGE_EMBEDDING_MODEL.into(),
-                embedding_dims: DEFAULT_VOYAGE_EMBEDDING_DIM as usize,
-                api_key: env::var("VOYAGE_AI_API_KEY").unwrap_or_default(),
-                reranker: DEFAULT_VOYAGE_RERANK_MODEL.into(),
-            }),
-            Arc::new(schema),
-            "pdf_text".into(),
-        );
-        backend.insert_items(batches, None).await.unwrap();
-
-        // Now test health check
-        let result = lancedb_health_check(EmbeddingProvider::VoyageAI, &get_db_uri()).await;
-        test_ok!(result);
-
-        let health_result = result.unwrap();
-        assert!(health_result.directory_exists);
-        assert!(health_result.directory_size.is_some());
-        assert!(health_result.directory_size.unwrap().is_ok_and(|x| x > 0));
-        assert!(health_result.table_accessible.is_some());
-        assert!(health_result.num_rows.is_some());
-        assert!(health_result.num_rows.unwrap().is_ok_and(|x| x == 2));
     }
 }

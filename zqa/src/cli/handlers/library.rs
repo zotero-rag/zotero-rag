@@ -6,7 +6,6 @@ use std::io::Write;
 use arrow_array::RecordBatch;
 use arrow_ipc::reader::FileReader;
 use arrow_ipc::writer::FileWriter;
-use zqa_rag::vector::checkhealth::lancedb_health_check;
 use zqa_rag::vector::doctor::doctor as rag_doctor;
 
 use crate::cli::errors::CLIError;
@@ -299,10 +298,9 @@ where
 pub(crate) async fn handle_checkhealth_cmd<O: Write, E: Write>(
     ctx: &mut Context<O, E>,
 ) -> Result<(), CLIError> {
-    let _ = match lancedb_health_check(ctx.config.embedding_provider, &ctx.store.db_uri()).await {
-        Ok(result) => writeln!(ctx.out, "{result}"),
-        Err(e) => writeln!(ctx.err, "{e}"),
-    };
+    if let Err(e) = writeln!(ctx.out, "{}", ctx.store.health_check().await) {
+        let _ = writeln!(ctx.err, "{e}");
+    }
 
     Ok(())
 }
@@ -329,8 +327,7 @@ where
     O: Write,
     E: Write,
 {
-    let db_uri = ctx.store.db_uri();
-    if let Err(e) = rag_doctor(ctx.config.embedding_provider, &db_uri, &mut ctx.out).await {
+    if let Err(e) = rag_doctor(ctx.store.backend(), &mut ctx.out).await {
         writeln!(ctx.err, "{e}")?;
     }
 
@@ -357,8 +354,7 @@ where
 /// Returns a [`CLIError`] if configuration is invalid, database operations fail,
 /// embedding regeneration fails, or writing output fails.
 async fn fix_zero_embeddings<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Result<(), CLIError> {
-    let healthcheck =
-        lancedb_health_check(ctx.config.embedding_provider, &ctx.store.db_uri()).await?;
+    let healthcheck = ctx.store.health_check().await;
 
     let zero_batches = match healthcheck.zero_embedding_items {
         Some(Ok(zero_items)) => {
@@ -511,7 +507,7 @@ mod tests {
         handle_checkhealth_cmd(&mut ctx).await.unwrap();
         let output = String::from_utf8(ctx.out.into_inner()).unwrap();
 
-        assert!(output.contains("directory does not exist"));
+        assert!(output.contains("storage does not exist"));
     }
 
     #[retry(3)]
@@ -528,8 +524,8 @@ mod tests {
         handle_checkhealth_cmd(&mut ctx).await.unwrap();
         let output = String::from_utf8(ctx.out.into_inner()).unwrap();
 
-        test_contains!(output, "LanceDB Health Check Results");
-        test_contains!(output, "directory exists");
+        test_contains!(output, "Vector Store Health Check Results");
+        test_contains!(output, "storage exists");
         test_contains!(output, "Table is accessible");
         test_contains!(output, "Table has");
     }
