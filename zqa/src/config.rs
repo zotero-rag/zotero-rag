@@ -32,14 +32,14 @@ use zqa_rag::reranking::common::RerankProviderConfig;
 /// # Provider-specific configs. This allows you to merely change the `model_provider`
 /// # above and have the settings for that provider applied.
 /// [anthropic]
-/// model = "claude-sonnet-4-5"
+/// model = "claude-sonnet-5"
 /// model_small = "claude-haiku-4-5"
 /// api_key = "sk-ant-..."
 /// max_tokens = 64000
 /// reasoning_budget = 2048
 ///
 /// [ollama]
-/// model = "qwen3.5"  # Defaults to the 9B version
+/// model = "qwen3.5:latest"  # Defaults to the 9B version
 /// model_small = "qwen3.5:0.8b"
 /// max_tokens = 8192
 /// embedding_model = "qwen3-embedding"
@@ -48,8 +48,8 @@ use zqa_rag::reranking::common::RerankProviderConfig;
 /// base_url = "http://localhost:11434"  # Defaults to local ollama instance
 ///
 /// [openai]
-/// model = "gpt-5.2"
-/// model_small = "gpt-5-mini"
+/// model = "gpt-5.6-terra"
+/// model_small = "gpt-5.6-luna"
 /// api_key = "sk-proj-..."
 /// max_tokens = 8192
 /// embedding_model = "text-embedding-3-small"
@@ -58,20 +58,20 @@ use zqa_rag::reranking::common::RerankProviderConfig;
 ///
 /// [gemini]
 /// model = "gemini-3.1-pro-preview"
-/// model_small = "gemini-3-flash-preview"
+/// model_small = "gemini-3.1-flash-lite-preview"
 /// api_key = "AI..."
-/// embedding_model = "gemini-embedding-001"
+/// embedding_model = "gemini-embedding-2-preview"
 /// embedding_dims = 3072
 /// reasoning_budget = 2048
 ///
 /// [voyageai]
 /// reranker = "rerank-2.5"
-/// embedding_model = "voyage-3-large"
+/// embedding_model = "voyage-4-large"
 /// embedding_dims = 2048
 /// api_key = "..."
 ///
 /// [cohere]
-/// reranker = "rerank-v3.5"
+/// reranker = "rerank-v4.0-pro"
 /// embedding_model = "embed-v4.0"
 /// embedding_dims = 1536
 /// api_key = "..."
@@ -84,8 +84,8 @@ use zqa_rag::reranking::common::RerankProviderConfig;
 ///
 /// [openrouter]
 /// api_key = "..."
-/// model = "anthropic/claude-sonnet-4.5"
-/// model_small = "anthropic/claude-haiku-4.5"
+/// model = "moonshotai/kimi-k3"
+/// model_small = "openai/gpt-5.6-luna"
 /// max_tokens = 32000
 /// reasoning_effort = "high"
 /// reasoning_budget = 2048
@@ -554,7 +554,7 @@ pub enum ConfigError {
 /// Anthropic provider configuration
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct AnthropicConfig {
-    /// Model name (e.g., "claude-sonnet-4-5")
+    /// Model name (e.g., "claude-sonnet-5")
     pub model: Option<String>,
 
     /// Small model name, used for generating conversation titles
@@ -619,7 +619,7 @@ impl Default for OllamaConfig {
 /// `OpenAI` provider configuration
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct OpenAIConfig {
-    /// Model name (e.g., "gpt-5.2")
+    /// Model name (e.g., "gpt-5.6-terra")
     pub model: Option<String>,
 
     /// Small model name, used for generating conversation titles
