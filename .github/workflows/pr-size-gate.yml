@@ -19,15 +19,23 @@ jobs:
           script: |
             const pr = context.payload.pull_request;
             const net = pr.additions - pr.deletions;
-            if (net < 1000) return;
+            const hugeBoth = pr.additions > 1000 && pr.deletions > 1000;
+            if (Math.abs(net) <= 1000 && !hugeBoth) return;
+
+            let message;
+            if (Math.abs(net) > 1000) {
+              message = `This PR has a net size of **${net > 0 ? '+' : ''}${net} lines** (${pr.additions} added, ${pr.deletions} deleted), which exceeds the limit of 1000.`;
+            } else {
+              message = `This PR has (${pr.additions} lines added, ${pr.deletions} lines deleted), which both exceed the limit of 1000. Large refactors of this size require maintainer approval.`;
+            }
 
             await github.rest.issues.createComment({
               ...context.repo,
               issue_number: pr.number,
               body: [
-                `This PR has a net size of **+${net} lines** (${pr.additions} added, ${pr.deletions} deleted), which exceeds the limit of 1000.`,
+                message,
                 '',
-                'Please split it into smaller PRs. A maintainer can reopen this and apply the `size-exempt` label if the size is justified.',
+                'Consider using a stacked PR. A maintainer can reopen this and apply the `size-exempt` label if the size is justified.',
               ].join('\n'),
             });
 
