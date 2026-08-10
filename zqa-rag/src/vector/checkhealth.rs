@@ -28,9 +28,6 @@ pub enum HealthCheckError {
     /// The store is in a state the diagnostics did not expect (likely a bug).
     #[error("The store is in an invalid state: {0}")]
     InvalidState(String),
-    /// An error returned by the backend during a health check.
-    #[error("{0}")]
-    Backend(String),
 }
 
 /// A record type that can report how many rows it contains. Backends implement this for their
@@ -77,27 +74,14 @@ pub struct HealthCheckResult<R, E> {
     pub version_drift: Option<Result<(u64, u64), E>>,
 }
 
-impl<R, E> HealthCheckResult<R, E> {
-    /// Returns the total number of rows with zero embeddings, if the zero-embedding check ran
-    /// successfully.
-    pub fn zero_embedding_row_count(&self) -> Option<usize>
-    where
-        R: RowCount,
-    {
-        self.zero_embedding_items.as_ref().and_then(|items| {
-            items
-                .as_ref()
-                .ok()
-                .map(|records| records.iter().map(RowCount::row_count).sum())
-        })
-    }
-}
-
 /// A vector store backend that can report on its own health. Implementors should run every
 /// check that is meaningful for them, capture per-check failures in the corresponding
 /// [`HealthCheckResult`] field, and always produce a result object.
 #[async_trait]
-pub trait HealthCheckable: VectorBackend {
+pub trait HealthCheckable: VectorBackend
+where
+    Self::Record: RowCount,
+{
     /// Run health checks on the store and return the collected results. Per-check failures are
     /// captured in the corresponding [`HealthCheckResult`] field rather than returned, so this
     /// is infallible by contract: implementations should always produce a result object.

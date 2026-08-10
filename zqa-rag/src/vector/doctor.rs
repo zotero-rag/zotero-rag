@@ -3,7 +3,7 @@
 
 use std::io::Write;
 
-use crate::vector::checkhealth::{HealthCheckError, HealthCheckable};
+use crate::vector::checkhealth::{HealthCheckError, HealthCheckable, RowCount};
 
 const HELP: &str = "\x1b[32;1m";
 const SYMPTOM: &str = "\x1b[33;1m";
@@ -68,7 +68,10 @@ fn symptom(out: &mut impl Write, msg: &str) -> Result<(), HealthCheckError> {
 pub async fn doctor<T: HealthCheckable>(
     backend: &T,
     stdout: &mut impl Write,
-) -> Result<(), HealthCheckError> {
+) -> Result<(), HealthCheckError>
+where
+    T::Record: RowCount,
+{
     let healthcheck_results = backend.health_check().await;
 
     if !healthcheck_results.storage_exists {
@@ -130,12 +133,11 @@ pub async fn doctor<T: HealthCheckable>(
         writeln!(stdout)?;
     }
 
-    let index_info = healthcheck_results
-        .index_info
-        .ok_or(HealthCheckError::InvalidState(
-        "Invalid healthcheck result: if the table is accessible, `index_info` cannot be `None`."
-            .into(),
-    ))?;
+    // `None` means the backend doesn't support it or the check has not run
+    let Some(index_info) = healthcheck_results.index_info else {
+        writeln!(stdout, "Analysis completed.")?;
+        return Ok(());
+    };
 
     if let Ok(indices) = index_info {
         if indices.is_empty()

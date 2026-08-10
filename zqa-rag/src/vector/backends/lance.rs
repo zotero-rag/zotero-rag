@@ -1227,7 +1227,7 @@ mod tests {
         EmbeddingProviderConfig::VoyageAI(VoyageAIConfig {
             embedding_model: DEFAULT_VOYAGE_EMBEDDING_MODEL.into(),
             embedding_dims: DEFAULT_VOYAGE_EMBEDDING_DIM as usize,
-            api_key: env::var("VOYAGE_AI_API_KEY").unwrap(),
+            api_key: env::var("VOYAGE_AI_API_KEY").unwrap_or_default(),
             reranker: DEFAULT_VOYAGE_RERANK_MODEL.into(),
         })
     }
