@@ -101,7 +101,10 @@ where
     }
 
     let Some(row_count) = healthcheck_results.num_rows else {
-        symptom(stdout, "there are no rows in the database.")?;
+        symptom(
+            stdout,
+            "row count check was skipped; the database may not support this operation.",
+        )?;
         return Ok(());
     };
 
