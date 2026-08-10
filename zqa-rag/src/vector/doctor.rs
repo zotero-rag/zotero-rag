@@ -100,12 +100,10 @@ where
         return Ok(());
     }
 
-    let row_count = healthcheck_results
-        .num_rows
-        .ok_or(HealthCheckError::InvalidState(
-            "Invalid healthcheck result: if the table is accessible, `num_rows` cannot be `None`."
-                .into(),
-        ))?;
+    let Some(row_count) = healthcheck_results.num_rows else {
+        symptom(stdout, "there are no rows in the database.")?;
+        return Ok(());
+    };
 
     if row_count.is_err() {
         symptom(stdout, "row count cannot be obtained.")?;
@@ -117,14 +115,9 @@ where
         writeln!(stdout)?;
     }
 
-    let zero_embedding_items = healthcheck_results
-        .zero_embedding_items
-        .ok_or(HealthCheckError::InvalidState(
-            "Invalid healthcheck result: if the table is accessible, `zero_embedding_items` cannot be `None`."
-                .into(),
-        ))?;
-
-    if let Ok(zero_records) = zero_embedding_items
+    // `None` means the backend doesn't support it or the check has not run
+    if let Some(zero_embedding_items) = healthcheck_results.zero_embedding_items
+        && let Ok(zero_records) = zero_embedding_items
         && !zero_records.is_empty()
     {
         symptom(stdout, "some items have zero embedding vectors.")?;
@@ -133,7 +126,6 @@ where
         writeln!(stdout)?;
     }
 
-    // `None` means the backend doesn't support it or the check has not run
     let Some(index_info) = healthcheck_results.index_info else {
         writeln!(stdout, "Analysis completed.")?;
         return Ok(());

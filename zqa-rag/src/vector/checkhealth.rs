@@ -17,9 +17,7 @@ const RESET: &str = "\x1b[0m";
 
 /// Errors from running health checks or diagnostics through [`HealthCheckable`] implementations.
 /// Individual check failures are captured inside [`HealthCheckResult`] rather than returned, so
-/// this error is only used when a fast path fails before the result object exists. `Backend`
-/// is meant to be produced by the caller who runs the health check on behalf of some other code
-/// (e.g., a CLI command handler).
+/// this error is only used when a fast path fails before the result object exists.
 #[derive(Debug, thiserror::Error)]
 pub enum HealthCheckError {
     /// An IO error, e.g. writing diagnostic output.
