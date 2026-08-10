@@ -2,7 +2,7 @@
 
 use async_trait::async_trait;
 
-use crate::{providers::ProviderId, vector::checkhealth::RowCount};
+use crate::providers::ProviderId;
 
 /// Registration methods for embedding providers to interface with a backend.
 pub trait VectorBackendRegistrar<T: VectorBackend>: Send + Sync {
@@ -24,9 +24,9 @@ pub trait VectorBackendRegistrar<T: VectorBackend>: Send + Sync {
 /// A vector database backend.
 #[async_trait]
 pub trait VectorBackend: Send + Sync {
-    /// The record type for the backend. Implementers of the trait should make sure that the
-    /// `Record` type implements the [`crate::vector::checkhealth::RowCount`] trait.
-    type Record: Send + RowCount;
+    /// The record type for the backend. Implementers of the trait should implement the
+    /// [`crate::vector::checkhealth::RowCount`] trait to get health checks implemented.
+    type Record: Send;
     /// The error type for the backend.
     type Error: std::error::Error + Send;
     /// The connection config type for the backend. A backend may not need such a config at all, in which
