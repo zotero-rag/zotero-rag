@@ -17,8 +17,8 @@ use ordered_float::OrderedFloat;
 
 use crate::edits::{Edit, EditType, apply_edits};
 use crate::fonts::{
-    CMap, DEFAULT_SPACE_WIDTH, FONT_TRANSFORMS, FontEncoding, FontSizeMarker, SPACE_WIDTH_FRACTION,
-    compute_font_encoding, font_transform, get_font, get_space_width,
+    CMap, DEFAULT_SPACE_WIDTH, FONT_TRANSFORMS, FontEncoding, FontSizeMarker, IterCodepoints,
+    SPACE_WIDTH_FRACTION, compute_font_encoding, font_transform, get_font, get_space_width,
 };
 use crate::tokenizer::{Token, tokenize};
 
@@ -277,9 +277,20 @@ struct ParseResult {
 /// Look up a one-byte character code in a simple font's `ToUnicode` CMap without allocating a key.
 fn simple_cmap_mapping(mappings: &CMap, code: u8) -> Option<&str> {
     const HEX: &[u8; 16] = b"0123456789abcdef";
-    let key = [HEX[usize::from(code >> 4)], HEX[usize::from(code & 0x0f)]];
-    let key = std::str::from_utf8(&key).expect("hexadecimal digits are always valid UTF-8");
-    mappings.get(key).map(String::as_str)
+    let high = HEX[usize::from(code >> 4)];
+    let low = HEX[usize::from(code & 0x0f)];
+    let short_key = [high, low];
+    let short_key =
+        std::str::from_utf8(&short_key).expect("hexadecimal digits are always valid UTF-8");
+    mappings
+        .get(short_key)
+        .or_else(|| {
+            let padded_key = [b'0', b'0', high, low];
+            let padded_key = std::str::from_utf8(&padded_key)
+                .expect("hexadecimal digits are always valid UTF-8");
+            mappings.get(padded_key)
+        })
+        .map(String::as_str)
 }
 
 /// Append unmapped simple-font bytes as UTF-8, applying a configured math-font transformation.
@@ -633,7 +644,7 @@ impl PdfParser {
                     match &*font_encoding {
                         FontEncoding::Simple { mappings, .. } => {
                             if let Some(mappings) = mappings {
-                                for &code in *text {
+                                for code in IterCodepoints::new(text) {
                                     append_simple_code(
                                         &mut result,
                                         code,
@@ -1725,13 +1736,8 @@ mod tests {
         )
     }
 
-    /// Build a minimal in-memory PDF using a simple Type1 font with a `ToUnicode` CMap.
-    fn doc_with_simple_type1_tounicode_font(content: &[u8]) -> (Document, PageID) {
-        let cmap = b"\
-1 beginbfchar
-<41> <03a9>
-<42> <03b2>
-endbfchar";
+    /// Build a minimal in-memory PDF using a simple Type1 font with the provided `ToUnicode` CMap.
+    fn doc_with_simple_type1_tounicode_font(content: &[u8], cmap: &[u8]) -> (Document, PageID) {
         doc_with_font(
             content,
             vec![
@@ -1766,7 +1772,12 @@ endbfchar";
         // A and B would decode literally under WinAnsiEncoding, but ToUnicode has priority for both
         // literal and hexadecimal PDF string syntax.
         let content = b"BT /F1 12 Tf (A) Tj <42> Tj ET";
-        let (doc, page_id) = doc_with_simple_type1_tounicode_font(content);
+        let cmap = b"\
+1 beginbfchar
+<41> <03a9>
+<42> <03b2>
+endbfchar";
+        let (doc, page_id) = doc_with_simple_type1_tounicode_font(content, cmap);
 
         let mut parser = PdfParser::default();
         let result = parser
@@ -1781,6 +1792,73 @@ endbfchar";
         assert!(
             !result.content.contains('A') && !result.content.contains('B'),
             "Raw character codes leaked into extracted text: {:?}",
+            result.content
+        );
+    }
+
+    #[test]
+    fn test_simple_font_tounicode_accepts_padded_source_codes() {
+        let content = b"BT /F1 12 Tf (A) Tj ET";
+        let cmap = b"\
+1 beginbfchar
+<0041> <03a9>
+endbfchar";
+        let (doc, page_id) = doc_with_simple_type1_tounicode_font(content, cmap);
+
+        let mut parser = PdfParser::default();
+        let result = parser
+            .parse_content(&doc, page_id, 0, false)
+            .expect("A padded simple-font source code should be mapped");
+
+        assert!(
+            result.content.contains('Ω'),
+            "Expected padded ToUnicode source code to map, got {:?}",
+            result.content
+        );
+    }
+
+    #[test]
+    fn test_simple_font_tounicode_decodes_literal_escapes() {
+        let content = b"BT /F1 12 Tf (\\101\\(B\\)\\\\) Tj ET";
+        let cmap = b"\
+5 beginbfchar
+<28> <005b>
+<29> <005d>
+<41> <03a9>
+<42> <03b2>
+<5c> <002f>
+endbfchar";
+        let (doc, page_id) = doc_with_simple_type1_tounicode_font(content, cmap);
+
+        let mut parser = PdfParser::default();
+        let result = parser
+            .parse_content(&doc, page_id, 0, false)
+            .expect("Literal escapes should decode before ToUnicode lookup");
+
+        assert!(
+            result.content.contains("Ω[β]/"),
+            "Expected decoded literal character codes, got {:?}",
+            result.content
+        );
+    }
+
+    #[test]
+    fn test_simple_font_with_unusable_tounicode_uses_fallback() {
+        let content = b"BT /F1 12 Tf (Readable) Tj ET";
+        let cmap = b"\
+1 beginbfrange
+<41> <42> [<03a9> <03b2>]
+endbfrange";
+        let (doc, page_id) = doc_with_simple_type1_tounicode_font(content, cmap);
+
+        let mut parser = PdfParser::default();
+        let result = parser
+            .parse_content(&doc, page_id, 0, false)
+            .expect("An unusable optional ToUnicode CMap should not prevent fallback extraction");
+
+        assert!(
+            result.content.contains("Readable"),
+            "Expected simple-font fallback text, got {:?}",
             result.content
         );
     }
