@@ -48,7 +48,7 @@ pub(crate) struct FontSizeMarker {
 }
 
 /// A type to convert from bytes in math fonts to LaTeX code
-type ByteTransformFn = fn(u8) -> std::borrow::Cow<'static, str>;
+type ByteTransformFn = fn(u8) -> Option<std::borrow::Cow<'static, str>>;
 
 /// A zero-allocation iterator for octal escape sequences and raw bytes. This is useful for parsing
 /// octal escape codes that are used in math fonts when non-printable characters are used to
@@ -97,7 +97,9 @@ pub(crate) fn font_transform(input: &str, transform: ByteTransformFn) -> String 
         bytes: input.as_bytes(),
         pos: 0,
     }
-    .map(transform)
+    .map(|code| {
+        transform(code).unwrap_or_else(|| std::borrow::Cow::Owned(char::from(code).to_string()))
+    })
     .collect::<String>()
 }
 
@@ -137,13 +139,16 @@ pub(crate) static FONT_TRANSFORMS: LazyLock<HashMap<&'static str, ByteTransformF
 /// The mappings of a ToUnicode CMap. For now, we do not support other kinds of CMaps.
 pub(crate) type CMap = HashMap<String, String>;
 
-/// The type of encoding used by a font. Either `SIMPLE` (human-readable) or `CID_KEYED`
-/// (Unicode/glyph ID-encoded)
+/// The type of encoding used by a font.
 #[derive(Clone, Debug)]
 pub(crate) enum FontEncoding {
-    /// Human-readable, "simple" encoding. Under this encoding, each TJ block has contents that can
-    /// be parsed as plain text.
-    Simple,
+    /// A simple font whose character codes are one byte wide.
+    Simple {
+        /// The character-code-to-Unicode mappings parsed from the optional `ToUnicode` CMap.
+        mappings: Option<CMap>,
+        /// The character code that maps to a space (U+0020), if the CMap defines one.
+        space_code: Option<i64>,
+    },
     /// CID-keyed, or glyph ID-encoded font. For this encoding, the font usually is a subsetted
     /// embedded font (i.e., a CID-keyed subset of a font that's embedded), and we need to check
     /// the `ToUnicode` CMap for that font. It is possible to also use non-ToUnicode CMaps; we do
@@ -476,15 +481,66 @@ pub(crate) fn parse_cmap(
     Ok((mappings, space_cid))
 }
 
-/// Attempt to get the font encoding for a font key on a specific page.
+/// Read and parse a font's `ToUnicode` CMap.
 ///
-/// This function uses heuristics to determine whether a font is likely to be "simple" (i.e.,
-/// can be parsed as plain-text), or needs to be translated via a corresponding CMap.
+/// # Arguments
+///
+/// * `doc` - The PDF document containing the CMap.
+/// * `to_unicode` - The font dictionary's `ToUnicode` entry.
+/// * `font_key` - The font key, used to provide context in errors.
 ///
 /// # Returns
 ///
-/// If the specified font is a CID-keyed font, returns `FontEncoding::CIDKeyed` with a
-/// reference to the `ToUnicode` CMap. Otherwise, returns `FontEncoding::Simple`.
+/// The parsed character-code mappings and the code mapped to U+0020, if present.
+///
+/// # Errors
+///
+/// * `PdfError::EncodingError` if the CMap cannot be read, decompressed, or parsed.
+/// * `PdfError::InternalError` if the CMap reference does not point to a valid object.
+/// * `PdfError::InvalidUtf8` if the decompressed CMap is not valid UTF-8.
+fn read_to_unicode_cmap(
+    doc: &Document,
+    to_unicode: &Object,
+    font_key: &str,
+) -> Result<(CMap, Option<i64>), PdfError> {
+    let cmap_ref = to_unicode.as_reference().map_err(|_| {
+        PdfError::EncodingError(format!(
+            "Font {font_key}'s ToUnicode CMap could not be read."
+        ))
+    })?;
+
+    let decompressed = doc
+        .get_object(cmap_ref)
+        .map_err(|_| {
+            PdfError::InternalError(format!(
+                "Font {font_key}'s ToUnicode CMap points to invalid reference.",
+            ))
+        })?
+        .as_stream()
+        .map_err(|_| {
+            PdfError::EncodingError(format!(
+                "Font {font_key}'s ToUnicode CMap could not be read."
+            ))
+        })?
+        .decompressed_content()
+        .map_err(|_| {
+            PdfError::EncodingError(format!(
+                "Font {font_key}'s ToUnicode CMap could not be deflated."
+            ))
+        })?;
+
+    let cmap = String::from_utf8(decompressed).map_err(|_| PdfError::InvalidUtf8)?;
+    parse_cmap(&cmap, font_key)
+}
+
+/// Attempt to get the font encoding for a font key on a specific page.
+///
+/// This function uses the font subtype and encoding to distinguish simple fonts from CID-keyed
+/// fonts. A `ToUnicode` CMap takes priority for Unicode extraction for either kind of font.
+///
+/// # Returns
+///
+/// The font encoding and any available `ToUnicode` mappings.
 ///
 /// # Errors
 ///
@@ -510,8 +566,11 @@ pub(crate) fn compute_font_encoding(
 ) -> Result<FontEncoding, PdfError> {
     // Test 1: if the font has:
     //   /Subtype /Type1
+    //   /Subtype /MMType1
     //   /Subtype /TrueType
-    // then it is likely a "simple" font.
+    //   /Subtype /Type3
+    // then it is a simple font. ISO 32000-1:2008, §9.10.2, "Mapping character codes to Unicode
+    // values", gives a ToUnicode CMap priority over the font's Encoding when both are present.
     let font_subtype = str::from_utf8(
         font_obj
             .get("Subtype")
@@ -529,8 +588,18 @@ pub(crate) fn compute_font_encoding(
         ))
     })?;
 
-    if ["Type1", "TrueType"].contains(&font_subtype) {
-        return Ok(FontEncoding::Simple);
+    if ["Type1", "MMType1", "TrueType", "Type3"].contains(&font_subtype) {
+        let (mappings, space_code) = match font_obj.get("ToUnicode") {
+            Some(to_unicode) => {
+                let (mappings, space_code) = read_to_unicode_cmap(doc, to_unicode, font_key)?;
+                (Some(mappings), space_code)
+            }
+            None => (None, None),
+        };
+        return Ok(FontEncoding::Simple {
+            mappings,
+            space_code,
+        });
     }
 
     // Test 2: if the font has:
@@ -544,7 +613,10 @@ pub(crate) fn compute_font_encoding(
         log::warn!(
             "Could not determine font type for {font_key}, assuming simple. This may be wrong."
         );
-        return Ok(FontEncoding::Simple);
+        return Ok(FontEncoding::Simple {
+            mappings: None,
+            space_code: None,
+        });
     };
     let font_encoding = str::from_utf8(font_encoding.as_name().map_err(|_| {
         PdfError::EncodingError(format!(
@@ -558,7 +630,10 @@ pub(crate) fn compute_font_encoding(
     })?;
 
     if ["WinAnsiEncoding", "MacRomanEncoding"].contains(&font_encoding) {
-        Ok(FontEncoding::Simple)
+        Ok(FontEncoding::Simple {
+            mappings: None,
+            space_code: None,
+        })
     } else if ["Identity-H", "Identity-V"].contains(&font_encoding) || font_encoding == "Type0" {
         // Test 3: if the font has:
         //   /Subtype /Type0
@@ -570,34 +645,7 @@ pub(crate) fn compute_font_encoding(
             return Ok(FontEncoding::Unmappable);
         };
 
-        let cmap_ref = to_unicode.as_reference().map_err(|_| {
-            PdfError::EncodingError(format!(
-                "CID-keyed font {font_key}'s ToUnicode CMap could not be read."
-            ))
-        })?;
-
-        let decompressed = doc
-            .get_object(cmap_ref)
-            .map_err(|_| {
-                PdfError::InternalError(format!(
-                    "Font {font_key}'s ToUnicode CMap points to invalid reference.",
-                ))
-            })?
-            .as_stream()
-            .map_err(|_| {
-                PdfError::EncodingError(format!(
-                    "CID-keyed font {font_key}'s ToUnicode CMap could not be read."
-                ))
-            })?
-            .decompressed_content()
-            .map_err(|_| {
-                PdfError::EncodingError(format!(
-                    "CID-keyed font {font_key}'s ToUnicode CMap could not be deflated."
-                ))
-            })?;
-
-        let cmap = String::from_utf8(decompressed).map_err(|_| PdfError::InvalidUtf8)?;
-        let (mappings, space_cid) = parse_cmap(&cmap, font_key)?;
+        let (mappings, space_cid) = read_to_unicode_cmap(doc, to_unicode, font_key)?;
 
         Ok(FontEncoding::CIDKeyed {
             mappings,
@@ -608,7 +656,10 @@ pub(crate) fn compute_font_encoding(
         log::warn!(
             "No heuristic matched for font {font_key}; assuming simple. This is likely wrong."
         );
-        Ok(FontEncoding::Simple)
+        Ok(FontEncoding::Simple {
+            mappings: None,
+            space_code: None,
+        })
     }
 }
 
@@ -758,14 +809,20 @@ pub(crate) fn get_space_width(
         .unwrap_or(0_i64);
 
     match font_encoding {
-        #[allow(clippy::cast_possible_truncation)]
-        #[allow(clippy::cast_sign_loss)]
-        FontEncoding::Simple => font_dict
-            .get("Widths")
-            .and_then(|w| w.as_array().ok())
-            .and_then(|ws| ws.get((32 - first_char) as usize))
-            .and_then(|w| w.as_float().ok())
-            .unwrap_or(DEFAULT_SPACE_WIDTH),
+        FontEncoding::Simple { space_code, .. } => {
+            let space_code = space_code.unwrap_or(32);
+            font_dict
+                .get("Widths")
+                .and_then(|w| w.as_array().ok())
+                .and_then(|ws| {
+                    space_code
+                        .checked_sub(first_char)
+                        .and_then(|index| usize::try_from(index).ok())
+                        .and_then(|index| ws.get(index))
+                })
+                .and_then(|w| w.as_float().ok())
+                .unwrap_or(DEFAULT_SPACE_WIDTH)
+        }
         FontEncoding::CIDKeyed { space_cid, .. } => {
             // /W and /DW are defined using the CIDFont dictionary (ISO 32000-2:2020 §9.7.4.3);
             // the Type0 parent has no such entries.
