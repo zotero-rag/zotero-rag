@@ -185,7 +185,7 @@ pub(crate) fn tokenize(content: &[u8]) -> Vec<Token<'_>> {
                                         && &w[1..3] == b"EI"
                                         && (is_whitespace(w[3]) || is_delimiter(w[3]))
                                 })
-                                .map_or(len.saturating_sub(i + 1), |idx| idx);
+                                .unwrap_or(len.saturating_sub(i + 1));
                             i = img_end + i + 1;
                         }
                         _ => {}

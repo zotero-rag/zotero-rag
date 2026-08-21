@@ -997,6 +997,7 @@ where
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::future::{Future, ready};
     use std::io::Cursor;
 
     use chrono::{Duration, Utc};
@@ -1119,26 +1120,29 @@ mod tests {
     }
 
     impl BatchAPIProvider for MockBatchProvider {
-        async fn submit_batch(
+        fn submit_batch(
             &self,
             _request: BatchEmbeddingRequest,
-        ) -> Result<BatchSubmission, LLMError> {
-            Ok(make_submission("mock-batch"))
+        ) -> impl Future<Output = Result<BatchSubmission, LLMError>> {
+            ready(Ok(make_submission("mock-batch")))
         }
 
-        async fn get_batch_status(&self, _batch_id: &str) -> Result<BatchJobState, LLMError> {
-            Ok(BatchJobState::Completed)
-        }
-
-        async fn get_batch_results(
+        fn get_batch_status(
             &self,
             _batch_id: &str,
-        ) -> Result<BatchEmbeddingResults, LLMError> {
-            Ok(self.results.clone())
+        ) -> impl Future<Output = Result<BatchJobState, LLMError>> {
+            ready(Ok(BatchJobState::Completed))
         }
 
-        async fn cancel_batch(&self, _batch_id: &str) -> Result<(), LLMError> {
-            Ok(())
+        fn get_batch_results(
+            &self,
+            _batch_id: &str,
+        ) -> impl Future<Output = Result<BatchEmbeddingResults, LLMError>> {
+            ready(Ok(self.results.clone()))
+        }
+
+        fn cancel_batch(&self, _batch_id: &str) -> impl Future<Output = Result<(), LLMError>> {
+            ready(Ok(()))
         }
     }
 

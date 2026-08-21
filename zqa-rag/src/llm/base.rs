@@ -339,6 +339,7 @@ where
 #[cfg(test)]
 mod tests {
     use std::collections::VecDeque;
+    use std::future::{Future, ready};
     use std::sync::{Arc, Mutex};
 
     use super::*;
@@ -366,20 +367,20 @@ mod tests {
             Vec::new()
         }
 
-        async fn send_once(
+        fn send_once(
             &self,
             _: &[Self::HistoryItem],
             system_prompt: Option<&str>,
             tools: Option<&[SerializedTool<'_>]>,
             _: Option<&ReasoningConfig>,
             _: Option<u32>,
-        ) -> Result<ProviderTurn<Self::HistoryItem>, LLMError> {
+        ) -> impl Future<Output = Result<ProviderTurn<Self::HistoryItem>, LLMError>> {
             self.system_prompts_seen
                 .lock()
                 .unwrap()
                 .push(system_prompt.map(ToOwned::to_owned));
             self.tools_seen.lock().unwrap().push(tools.map(<[_]>::len));
-            Ok(self.turns.lock().unwrap().pop_front().unwrap())
+            ready(Ok(self.turns.lock().unwrap().pop_front().unwrap()))
         }
     }
 

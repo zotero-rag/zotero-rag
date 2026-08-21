@@ -103,7 +103,7 @@ pub fn get_title_prompt(query: &str) -> String {
     format!(
         "<user_query>
 {query}
-    </user_query>"
+</user_query>"
     )
 }
 
@@ -169,7 +169,7 @@ pub fn get_summarize_prompt(query: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{get_summarize_prompt, get_summarize_system_prompt};
+    use super::{get_summarize_prompt, get_summarize_system_prompt, get_title_prompt};
     use crate::tools::retrieval::RETRIEVAL_TOOL_NAME;
     use crate::tools::summarization::SUMMARIZATION_TOOL_NAME;
 
@@ -193,6 +193,14 @@ mod tests {
         assert!(
             prompt
                 .contains("<user_query>How does retrieval-augmented generation work?</user_query>")
+        );
+    }
+
+    #[test]
+    fn title_prompt_has_symmetric_tags() {
+        assert_eq!(
+            get_title_prompt("How does RAG work?"),
+            "<user_query>\nHow does RAG work?\n</user_query>"
         );
     }
 }

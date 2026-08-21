@@ -254,7 +254,9 @@ fn parse_bfchar_block(
         let code_units: Vec<u16> = parts[1]
             .trim_matches(|c| c == '<' || c == '>')
             .as_bytes()
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .map(|chunk| u16::from_str_radix(std::str::from_utf8(chunk).unwrap(), 16))
             .collect::<Result<_, _>>()
             .map_err(|_| PdfError::InvalidUtf8)?;
@@ -346,7 +348,9 @@ fn parse_bfrange_block(
         let mut code_units: Vec<u16> = parts[2]
             .trim_matches(|c| c == '<' || c == '>')
             .as_bytes()
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .map(|chunk| u16::from_str_radix(std::str::from_utf8(chunk).unwrap(), 16))
             .collect::<Result<_, _>>()
             .map_err(|_| PdfError::InvalidUtf8)?;
