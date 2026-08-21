@@ -50,57 +50,86 @@ pub(crate) struct FontSizeMarker {
 /// A type to convert from bytes in math fonts to LaTeX code
 type ByteTransformFn = fn(u8) -> Option<std::borrow::Cow<'static, str>>;
 
-/// A zero-allocation iterator for octal escape sequences and raw bytes. This is useful for parsing
-/// octal escape codes that are used in math fonts when non-printable characters are used to
-/// represent symbols.
+/// A zero-allocation iterator that decodes PDF literal-string escape sequences into character
+/// codes.
 pub(crate) struct IterCodepoints<'a> {
     bytes: &'a [u8],
     pos: usize,
+}
+
+impl<'a> IterCodepoints<'a> {
+    /// Create an iterator over the decoded character codes in a PDF literal string.
+    ///
+    /// # Arguments
+    ///
+    /// * `bytes` - The bytes between the literal string's parentheses.
+    ///
+    /// # Returns
+    ///
+    /// An iterator that decodes escaped control characters, delimiters, octal codes, and line
+    /// continuations without allocating.
+    pub(crate) const fn new(bytes: &'a [u8]) -> Self {
+        Self { bytes, pos: 0 }
+    }
 }
 
 impl Iterator for IterCodepoints<'_> {
     type Item = u8;
 
     fn next(&mut self) -> Option<u8> {
-        if self.pos >= self.bytes.len() {
-            return None;
-        }
-        let b = self.bytes[self.pos];
-        if b == b'\\' {
-            // Possible octal escape
-            let rem = self.bytes.len() - self.pos;
-            if rem >= 4  // Length of octal escape sequence
-                && self.bytes[self.pos + 1] == b'0'
-                && self.bytes[self.pos + 2].is_ascii_digit()
-                && self.bytes[self.pos + 2] < b'8'
-                && self.bytes[self.pos + 3].is_ascii_digit()
-                && self.bytes[self.pos + 3] < b'8'
-            {
-                let oct = &self.bytes[self.pos + 1..=self.pos + 3];
-                let code = (oct[1] - b'0') * 8 + (oct[2] - b'0');
-                self.pos += 4;
-                Some(code)
-            } else {
-                // Just a backslash or malformed escape
-                self.pos += 1;
-                Some(b'\\')
-            }
-        } else {
+        loop {
+            let &byte = self.bytes.get(self.pos)?;
             self.pos += 1;
-            Some(b)
+            if byte != b'\\' {
+                return Some(byte);
+            }
+
+            let Some(&escaped) = self.bytes.get(self.pos) else {
+                return Some(b'\\');
+            };
+            self.pos += 1;
+
+            match escaped {
+                b'n' => return Some(b'\n'),
+                b'r' => return Some(b'\r'),
+                b't' => return Some(b'\t'),
+                b'b' => return Some(0x08),
+                b'f' => return Some(0x0c),
+                b'\n' => {}
+                b'\r' => {
+                    if self.bytes.get(self.pos) == Some(&b'\n') {
+                        self.pos += 1;
+                    }
+                }
+                b'0'..=b'7' => {
+                    let mut value = escaped - b'0';
+                    let mut digits = 1;
+                    while digits < 3 {
+                        let Some(&digit @ b'0'..=b'7') = self.bytes.get(self.pos) else {
+                            break;
+                        };
+                        let candidate = u16::from(value) * 8 + u16::from(digit - b'0');
+                        let Ok(candidate) = u8::try_from(candidate) else {
+                            break;
+                        };
+                        value = candidate;
+                        self.pos += 1;
+                        digits += 1;
+                    }
+                    return Some(value);
+                }
+                _ => return Some(escaped),
+            }
         }
     }
 }
 
 pub(crate) fn font_transform(input: &str, transform: ByteTransformFn) -> String {
-    IterCodepoints {
-        bytes: input.as_bytes(),
-        pos: 0,
-    }
-    .map(|code| {
-        transform(code).unwrap_or_else(|| std::borrow::Cow::Owned(char::from(code).to_string()))
-    })
-    .collect::<String>()
+    IterCodepoints::new(input.as_bytes())
+        .map(|code| {
+            transform(code).unwrap_or_else(|| std::borrow::Cow::Owned(char::from(code).to_string()))
+        })
+        .collect::<String>()
 }
 
 /// A lazy-loaded hashmap storing conversions from math fonts to LaTeX code
@@ -590,10 +619,15 @@ pub(crate) fn compute_font_encoding(
 
     if ["Type1", "MMType1", "TrueType", "Type3"].contains(&font_subtype) {
         let (mappings, space_code) = match font_obj.get("ToUnicode") {
-            Some(to_unicode) => {
-                let (mappings, space_code) = read_to_unicode_cmap(doc, to_unicode, font_key)?;
-                (Some(mappings), space_code)
-            }
+            Some(to_unicode) => match read_to_unicode_cmap(doc, to_unicode, font_key) {
+                Ok((mappings, space_code)) => (Some(mappings), space_code),
+                Err(error) => {
+                    log::warn!(
+                        "Ignoring unusable ToUnicode CMap for simple font {font_key}: {error}"
+                    );
+                    (None, None)
+                }
+            },
             None => (None, None),
         };
         return Ok(FontEncoding::Simple {
@@ -863,6 +897,20 @@ pub(crate) fn get_space_width(
 mod tests {
     use super::*;
     use zqa_macros::test_eq;
+
+    #[test]
+    fn test_iter_codepoints_decodes_pdf_literal_escapes() {
+        let input = b"\\(A\\)\\\\\\n\\r\\t\\b\\f\\101\\12\\1x\\\r\nB";
+        let decoded: Vec<u8> = IterCodepoints::new(input).collect();
+
+        assert_eq!(
+            decoded,
+            vec![
+                b'(', b'A', b')', b'\\', b'\n', b'\r', b'\t', 0x08, 0x0c, b'A', b'\n', 1, b'x',
+                b'B'
+            ]
+        );
+    }
 
     #[test]
     fn test_parse_cmap_ranged() {
