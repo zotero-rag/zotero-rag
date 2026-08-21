@@ -1260,7 +1260,18 @@ mod tests {
         check_pdf_contains("test1.pdf", &["Oversampling", "GHOST", "Deep Learning"]);
 
         // Test 2: "ntk.pdf"
-        check_pdf_contains("ntk.pdf", &["\\theta", "\\otimes", "\\sum", "\\mathbb{E}"]);
+        check_pdf_contains(
+            "ntk.pdf",
+            &[
+                "\\theta",
+                "\\otimes",
+                "\\sum",
+                "\\mathbb{E}",
+                "\\in",
+                "\\partial",
+                "\\nabla",
+            ],
+        );
 
         // Test 3: "manifold.pdf", contains CID-keyed fonts
         check_pdf_contains("manifold.pdf", &["Manifold", "Dimension"]);
