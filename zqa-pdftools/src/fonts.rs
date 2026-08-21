@@ -122,14 +122,6 @@ impl Iterator for IterCodepoints<'_> {
     }
 }
 
-pub(crate) fn font_transform(input: &str, transform: ByteTransformFn) -> String {
-    IterCodepoints::new(input.as_bytes())
-        .map(|code| {
-            transform(code).unwrap_or_else(|| std::borrow::Cow::Owned(char::from(code).to_string()))
-        })
-        .collect::<String>()
-}
-
 /// A lazy-loaded hashmap storing conversions from math fonts to LaTeX code
 /// Handles most common math fonts, but does not yet support specialized math fonts.
 pub(crate) static FONT_TRANSFORMS: LazyLock<HashMap<&'static str, ByteTransformFn>> =
