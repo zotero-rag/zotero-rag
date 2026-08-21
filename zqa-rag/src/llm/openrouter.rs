@@ -1,6 +1,7 @@
 //! Functions, structs, and trait implementations for interacting with the OpenRouter API. This
 //! module includes support for text generation only.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::env;
 
@@ -361,20 +362,25 @@ impl<T: HttpClient> AgenticClient for OpenRouterClient<T> {
                 })
                 .collect::<Vec<_>>()
         });
-        let system_message = system_prompt.map(|content| OpenRouterMessage {
-            role: OpenRouterMessageRole::System,
-            content: Some(content.to_owned()),
-            tool_calls: None,
-            tool_call_id: None,
-        });
-        let messages = system_message
-            .iter()
-            .chain(history)
-            .cloned()
-            .collect::<Vec<_>>();
+        let messages = match system_prompt {
+            Some(content) => {
+                let system_message = OpenRouterMessage {
+                    role: OpenRouterMessageRole::System,
+                    content: Some(content.to_owned()),
+                    tool_calls: None,
+                    tool_call_id: None,
+                };
+                Cow::Owned(
+                    std::iter::once(system_message)
+                        .chain(history.iter().cloned())
+                        .collect(),
+                )
+            }
+            None => Cow::Borrowed(history),
+        };
         let request_body = OpenRouterRequest {
             model: &model,
-            messages: &messages,
+            messages: messages.as_ref(),
             reasoning: reasoning.map(Into::into),
             tools: wrapped_tools,
             max_tokens: max_tokens.unwrap_or(config_max_tokens),
