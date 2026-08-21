@@ -18,7 +18,7 @@ use ordered_float::OrderedFloat;
 use crate::edits::{Edit, EditType, apply_edits};
 use crate::fonts::{
     CMap, DEFAULT_SPACE_WIDTH, FONT_TRANSFORMS, FontEncoding, FontSizeMarker, IterCodepoints,
-    SPACE_WIDTH_FRACTION, compute_font_encoding, font_transform, get_font, get_space_width,
+    SPACE_WIDTH_FRACTION, compute_font_encoding, get_font, get_space_width,
 };
 use crate::tokenizer::{Token, tokenize};
 
@@ -293,29 +293,19 @@ fn simple_cmap_mapping(mappings: &CMap, code: u8) -> Option<&str> {
         .map(String::as_str)
 }
 
-/// Append unmapped simple-font bytes as UTF-8, applying a configured math-font transformation.
-///
-/// A simple font may have no `ToUnicode` CMap or one that does not cover every character code.
-/// This fallback preserves direct text extraction and math-to-LaTeX normalization for those
-/// unmapped codes.
-fn append_simple_fallback(result: &mut String, text: &[u8], font_name: &str) {
-    let text = std::str::from_utf8(text).unwrap_or("");
-    if let Some(transform) = FONT_TRANSFORMS.get(font_name) {
-        result.push_str(&font_transform(text, *transform));
-    } else {
-        let decoded = text
-            .as_bytes()
-            .contains(&b'\\')
-            .then(|| IterCodepoints::new(text.as_bytes()).collect::<Vec<_>>());
-        let bytes = decoded.as_deref().unwrap_or(text.as_bytes());
-        result.push_str(std::str::from_utf8(bytes).unwrap_or(""));
-    }
-}
-
 /// Append one simple-font character code using the available decoding methods in priority order.
 ///
 /// Explicit math-to-LaTeX mappings take priority over `ToUnicode` so mathematical output retains
-/// its normalized representation. Codes without either mapping use [`append_simple_fallback`].
+/// its normalized representation. PDF literal and hexadecimal strings contain font character
+/// codes rather than UTF-8, so each code is decoded independently. This prevents one unmapped
+/// high-byte code from suppressing adjacent text. For example, `\377abc` contains the four
+/// character codes `0xff`, `a`, `b`, and `c`; an unmapped `0xff` does not suppress `abc`.
+///
+/// Until simple-font `/Encoding` and `/Differences` entries are supported, a code without a math
+/// transform or `ToUnicode` mapping is preserved by interpreting its numeric byte value as the same
+/// Unicode scalar value.
+///
+/// TODO(ZOT-216): Resolve unmapped codes through the simple font's `/Encoding` and `/Differences`.
 ///
 /// # Arguments
 ///
@@ -333,8 +323,7 @@ fn append_simple_code(result: &mut String, code: u8, mappings: Option<&CMap>, fo
         // `ToUnicode` mapping available
         result.push_str(unicode);
     } else {
-        // push the raw byte as-is
-        append_simple_fallback(result, std::slice::from_ref(&code), font_name);
+        result.push(char::from(code));
     }
 }
 
@@ -648,18 +637,13 @@ impl PdfParser {
                     // Simple font encoding - handle math fonts
                     match &*font_encoding {
                         FontEncoding::Simple { mappings, .. } => {
-                            if let Some(mappings) = mappings {
-                                for code in IterCodepoints::new(text) {
-                                    append_simple_code(
-                                        &mut result,
-                                        code,
-                                        Some(mappings),
-                                        cur_font.as_str(),
-                                    );
-                                }
-                            } else {
-                                // Decode the complete string so contiguous UTF-8 remains intact.
-                                append_simple_fallback(&mut result, text, cur_font.as_str());
+                            for code in IterCodepoints::new(text) {
+                                append_simple_code(
+                                    &mut result,
+                                    code,
+                                    mappings.as_ref(),
+                                    cur_font.as_str(),
+                                );
                             }
                         }
                         FontEncoding::CIDKeyed { .. } => {
@@ -1774,7 +1758,7 @@ mod tests {
 
     #[test]
     fn test_simple_font_fallback_decodes_literal_escapes() {
-        let content = b"BT /F1 12 Tf (\\(A\\)\\\\\\102) Tj ET";
+        let content = b"BT /F1 12 Tf (\\(A\\)\\\\\\102\\377abc) Tj ET";
         let (doc, page_id) = doc_with_simple_type1_font(content);
 
         let mut parser = PdfParser::default();
@@ -1783,8 +1767,47 @@ mod tests {
             .expect("Simple-font fallback should decode literal escapes");
 
         assert!(
-            result.content.contains("(A)\\B"),
+            result.content.contains("(A)\\Bÿabc"),
             "Expected decoded fallback literal, got {:?}",
+            result.content
+        );
+    }
+
+    #[test]
+    fn test_simple_font_fallback_preserves_high_bytes_in_literal_and_hex_strings() {
+        let content = b"BT /F1 12 Tf (\xffabc) Tj <ff616263> Tj ET";
+        let (doc, page_id) = doc_with_simple_type1_font(content);
+
+        let mut parser = PdfParser::default();
+        let result = parser
+            .parse_content(&doc, page_id, 0, false)
+            .expect("High-byte character codes should not suppress adjacent text");
+
+        assert!(
+            result.content.contains("ÿabcÿabc"),
+            "Expected literal and hexadecimal fallbacks to preserve every code, got {:?}",
+            result.content
+        );
+    }
+
+    #[test]
+    fn test_simple_font_partial_tounicode_preserves_unmapped_codes() {
+        let content = b"BT /F1 12 Tf (a\\377b) Tj ET";
+        let cmap = b"\
+2 beginbfchar
+<61> <03b1>
+<62> <03b2>
+endbfchar";
+        let (doc, page_id) = doc_with_simple_type1_tounicode_font(content, cmap);
+
+        let mut parser = PdfParser::default();
+        let result = parser
+            .parse_content(&doc, page_id, 0, false)
+            .expect("An unmapped code should not prevent adjacent ToUnicode mappings");
+
+        assert!(
+            result.content.contains("αÿβ"),
+            "Expected mapped and fallback codes to be preserved independently, got {:?}",
             result.content
         );
     }
