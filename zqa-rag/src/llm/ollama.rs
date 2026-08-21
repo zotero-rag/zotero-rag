@@ -45,6 +45,7 @@ impl<T: HttpClient> AgenticClient for OllamaClient<T> {
     async fn send_once(
         &self,
         history: &[Self::HistoryItem],
+        system_prompt: Option<&str>,
         tools: Option<&[SerializedTool<'_>]>,
         reasoning: Option<&ReasoningConfig>,
         max_tokens: Option<u32>,
@@ -68,6 +69,7 @@ impl<T: HttpClient> AgenticClient for OllamaClient<T> {
             model: &model,
             max_tokens: max_tokens.unwrap_or(config_max_tokens),
             messages: history,
+            system: system_prompt,
             thinking: reasoning.map(Into::into),
             tools,
         };
@@ -101,7 +103,7 @@ mod tests {
 
     use super::*;
     use crate::clients::ollama::OllamaClient;
-    use crate::http_client::{ReqwestClient, SequentialMockHttpClient};
+    use crate::http_client::{RecordingSequentialMockHttpClient, ReqwestClient};
     use crate::llm::anthropic::{
         AnthropicOutputTokensDetails, AnthropicResponseContent, AnthropicTextResponseContent,
         AnthropicToolUseResponseContent, AnthropicUsageStats,
@@ -125,6 +127,7 @@ mod tests {
             chat_history: Vec::new(),
             max_tokens: Some(1024),
             message: "Hello!".to_owned(),
+            system_prompt: None,
             reasoning: None,
             tools: None,
             on_tool_call: None,
@@ -157,6 +160,7 @@ mod tests {
             max_tokens: Some(1024),
             message: "Call the mock_tool function with the name parameter set to 'Alice'"
                 .to_owned(),
+            system_prompt: None,
             reasoning: None,
             tools: Some(&[Box::new(tool)]),
             on_tool_call: None,
@@ -236,6 +240,7 @@ mod tests {
             chat_history: Vec::new(),
             max_tokens: Some(1024),
             message: "Test".into(),
+            system_prompt: Some("Follow the system instructions.".into()),
             reasoning: None,
             tools: Some(&[Box::new(tool)]),
             on_tool_call: Some(Arc::new(move |_| {
@@ -247,8 +252,10 @@ mod tests {
             tool_iteration_limit: None,
         };
 
+        let http_client =
+            RecordingSequentialMockHttpClient::new([tool_call_response, text_response]);
         let mock_client = OllamaClient {
-            client: SequentialMockHttpClient::new([tool_call_response, text_response]),
+            client: http_client.clone(),
             config: None,
         };
         let res = mock_client.send_message(&request).await;
@@ -261,6 +268,9 @@ mod tests {
         let texts = text_segments.lock().unwrap();
         test_eq!(texts.len(), 1);
         test_eq!(texts[0].as_str(), "Done!");
+        for request in http_client.requests() {
+            test_eq!(request["system"], "Follow the system instructions.");
+        }
     }
 
     #[tokio::test]

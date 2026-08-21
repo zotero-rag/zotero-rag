@@ -82,6 +82,12 @@ pub(crate) struct GeminiContent {
     parts: Vec<GeminiPart>,
 }
 
+/// Instructions that guide Gemini for the entire request.
+#[derive(Serialize, Clone)]
+struct GeminiSystemInstruction {
+    parts: Vec<GeminiPart>,
+}
+
 impl From<ChatHistoryItem> for Vec<GeminiContent> {
     fn from(value: ChatHistoryItem) -> Self {
         vec![value.into()]
@@ -180,6 +186,8 @@ struct GeminiToolDeclaration<'a> {
 #[serde(rename_all = "camelCase")]
 struct GeminiRequestBody<'a> {
     contents: &'a [GeminiContent],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    system_instruction: Option<GeminiSystemInstruction>,
     #[serde(skip_serializing_if = "Option::is_none")]
     generation_config: Option<GeminiGenerationConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -324,6 +332,7 @@ impl<T: HttpClient> AgenticClient for GeminiClient<T> {
     async fn send_once(
         &self,
         history: &[Self::HistoryItem],
+        system_prompt: Option<&str>,
         tools: Option<&[SerializedTool<'_>]>,
         reasoning: Option<&ReasoningConfig>,
         max_tokens: Option<u32>,
@@ -344,6 +353,12 @@ impl<T: HttpClient> AgenticClient for GeminiClient<T> {
         // Create the initial request borrowing
         let request = GeminiRequestBody {
             contents: history,
+            system_instruction: system_prompt.map(|text| GeminiSystemInstruction {
+                parts: vec![GeminiPart::Text {
+                    text: text.to_owned(),
+                    thought_signature: None,
+                }],
+            }),
             generation_config: generation_config.clone(),
             tools: tools.as_ref(),
         };
@@ -386,7 +401,7 @@ mod tests {
     use super::*;
     use crate::clients::gemini::GeminiClient;
     use crate::constants::DEFAULT_GEMINI_EMBEDDING_DIM;
-    use crate::http_client::{MockHttpClient, ReqwestClient, SequentialMockHttpClient};
+    use crate::http_client::{MockHttpClient, RecordingSequentialMockHttpClient, ReqwestClient};
     use crate::llm::base::{AgenticClient, ChatHistoryItem, ChatRequest, ContentType};
     use crate::llm::tools::test_utils::MockTool;
 
@@ -429,6 +444,7 @@ mod tests {
                 content: vec![ChatHistoryContent::Text("Prior".into())],
             }],
             max_tokens: Some(256),
+            system_prompt: None,
             reasoning: None,
             tools: None,
             on_tool_call: None,
@@ -519,6 +535,7 @@ mod tests {
             chat_history: Vec::new(),
             max_tokens: Some(1024),
             message: "Hello!".to_owned(),
+            system_prompt: None,
             reasoning: None,
             tools: None,
             on_tool_call: None,
@@ -543,6 +560,7 @@ mod tests {
             chat_history: Vec::new(),
             max_tokens: Some(1024),
             message: "This is a test. Call the `mock_tool`, passing in a `name`, and ensure it returns a greeting".into(),
+            system_prompt: None,
             reasoning: None,
             tools: Some(&[Box::new(tool)]),
             on_tool_call: None,
@@ -620,6 +638,7 @@ mod tests {
             chat_history: Vec::new(),
             max_tokens: Some(1024),
             message: "Test".into(),
+            system_prompt: Some("Follow the system instructions.".into()),
             reasoning: None,
             tools: Some(&[Box::new(tool)]),
             on_tool_call: Some(Arc::new(move |_| {
@@ -631,8 +650,10 @@ mod tests {
             tool_iteration_limit: None,
         };
 
+        let http_client =
+            RecordingSequentialMockHttpClient::new([tool_call_response, text_response]);
         let mock_client = GeminiClient {
-            client: SequentialMockHttpClient::new([tool_call_response, text_response]),
+            client: http_client.clone(),
             config: None,
         };
         let res = mock_client.send_message(&request).await;
@@ -642,6 +663,12 @@ mod tests {
         let texts = text_segments.lock().unwrap();
         test_eq!(texts.len(), 1);
         test_eq!(texts[0].as_str(), "Done!");
+        for request in http_client.requests() {
+            test_eq!(
+                request["systemInstruction"]["parts"][0]["text"],
+                "Follow the system instructions."
+            );
+        }
     }
 
     #[tokio::test]

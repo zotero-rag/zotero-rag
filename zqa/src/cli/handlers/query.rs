@@ -17,7 +17,9 @@ use crate::cli::errors::CLIError;
 use crate::cli::handlers::documents::{
     get_document_mentions, get_user_document_tools, import_document,
 };
-use crate::cli::prompts::{get_summarize_prompt, get_title_prompt};
+use crate::cli::prompts::{
+    get_summarize_prompt, get_summarize_system_prompt, get_title_prompt, get_title_system_prompt,
+};
 use crate::common::Context;
 use crate::state::UsageMetadata;
 use crate::store::common::ZoteroStore;
@@ -181,6 +183,7 @@ where
                 chat_history: Vec::new(),
                 max_tokens: Some(20),
                 message: prompt,
+                system_prompt: Some(get_title_system_prompt().to_owned()),
                 reasoning: None,
                 tools: None,
                 on_tool_call: None,
@@ -263,6 +266,7 @@ where
             chat_history: history.clone(),
             max_tokens: None,
             message: get_summarize_prompt(&query),
+            system_prompt: Some(get_summarize_system_prompt()),
             reasoning: ctx.config.get_reasoning_config(),
             tools: Some(&tools),
             on_tool_call: None,

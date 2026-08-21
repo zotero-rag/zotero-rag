@@ -2,6 +2,44 @@ use crate::tools::retrieval::RETRIEVAL_TOOL_NAME;
 use crate::tools::summarization::SUMMARIZATION_TOOL_NAME;
 use crate::utils::library::ZoteroItemMetadata;
 
+/// Get the system prompt used to extract relevant passages from a paper.
+///
+/// # Returns
+///
+/// Instructions for extracting and formatting relevant passages.
+#[must_use]
+pub fn get_extraction_system_prompt() -> &'static str {
+    "Given a question from a user and the full text from a research paper, extract the relevant
+parts that are suitable for answering the question. Wrap each relevant excerpt from the paper in
+<excerpt></excerpt> tags. Here are some guidelines:
+
+1. It is best to quote excerpts verbatim. You may correct spelling errors, but do not modify other
+parts of the text.
+2. Some parts of the text, especially equations, may appear as hard to understand text. This is a
+currently-known limitation: for now, repeat these verbatim. You may add a best-guess of what the
+equation was supposed to be, in LaTeX form and wrapped in double-dollar signs ($$...$$), inside
+parentheses after such malformed text. Inside the parentheses, indicate that this is a \"possible fix\".
+Aside from this, do not modify the source text.
+3. You are encouraged to also cite excerpts from the paper that cite other papers, *if these excerpts
+are relevant*. In such cases, if the citation uses numbers, change the numbering to be an author-year
+format, preferably in the APA style. Write all your references at the end of your response, after a
+\"References:\" header. If the user specifically requests a different citation style such as
+MLA, you should use that instead.
+4. Some text from the paper's Appendix or Supplementary Material may be in this text. Do not use
+excerpts from this material.
+
+Format your response in exactly the below format:
+
+<title>Paper title here</title>
+<authors>Author list</authors>
+<reference>An APA-style citation to the current paper</reference>
+<excerpt>An excerpt here</excerpt>
+<excerpt>Another excerpt here</excerpt>
+
+Note that if the user requests references to be in a different format (e.g., MLA, Chicago), you should use that
+reference format instead of APA."
+}
+
 /// Get the "extraction" prompt, which extracts the relevant parts of a retrieved paper. This is
 /// the first step of the question-answering process.
 ///
@@ -21,26 +59,8 @@ pub fn get_extraction_prompt(query: &str, pdf_text: &str, metadata: &ZoteroItemM
     );
     let title = &metadata.title;
 
-    format!("Given a question from a user and the full text from a research paper, extract the relevant
-parts that are suitable for answering the question. Wrap each relevant excerpt from the paper in
-<excerpt></excerpt> tags. Here are some guidelines:
-
-1. It is best to quote excerpts verbatim. You may correct spelling errors, but do not modify other
-parts of the text.
-2. Some parts of the text, especially equations, may appear as hard to understand text. This is a
-currently-known limitation: for now, repeat these verbatim. You may add a best-guess of what the
-equation was supposed to be, in LaTeX form and wrapped in double-dollar signs ($$...$$), inside
-parentheses after such malformed text. Inside the parentheses, indicate that this is a \"possible fix\".
-Aside from this, do not modify the source text.
-3. You are encouraged to also cite excerpts from the paper that cite other papers, *if these excerpts
-are relevant*. In such cases, if the citation uses numbers, change the numbering to be an author-year
-format, preferably in the APA style. Write all your references at the end of your response, after a
-\"References:\" header. If the user specifically requests a different citation style such as
-MLA, you should use that instead.
-4. Some text from the paper's Appendix or Supplementary Material may be in this text. Do not use
-excerpts from this material.
-
-Here is the user query: <user_query>{query}</user_query>.
+    format!(
+        "Here is the user query: <user_query>{query}</user_query>.
 
 Below is some information about the paper:
 <metadata>
@@ -52,18 +72,20 @@ Below is the full text of the paper:
 
 <pdf_text>
 {pdf_text}
-</pdf_text>
+</pdf_text>"
+    )
+}
 
-Format your response in exactly the below format:
-
-<title>Paper title here</title>
-<authors>Author list</authors>
-<reference>An APA-style citation to the current paper</reference>
-<excerpt>An excerpt here</excerpt>
-<excerpt>Another excerpt here</excerpt>
-
-Note that if the user requests references to be in a different format (e.g., MLA, Chicago), you should use that
-reference format instead of APA.")
+/// Get the system prompt used to generate a conversation title.
+///
+/// # Returns
+///
+/// Instructions for generating a short conversation title.
+#[must_use]
+pub fn get_title_system_prompt() -> &'static str {
+    "You are given a user query to an AI assistant that grounds its response in the user's
+Zotero library. Generate a short, descriptive title for this conversation in 10 words or fewer.
+The title should capture the main topic. Respond with only the title text, no quotes or punctuation."
 }
 
 /// Get the "title" prompt, which generates a short title for a conversation based on the user
@@ -79,28 +101,19 @@ reference format instead of APA.")
 #[must_use]
 pub fn get_title_prompt(query: &str) -> String {
     format!(
-        "You are given a user query to an AI assistant that grounds its response in the user's
-Zotero library. Generate a short, descriptive title for this conversation in 10 words or fewer. \
-The title should capture the main topic. Respond with only the title text, no quotes or punctuation.
-
-<user_query>
+        "<user_query>
 {query}
-</user_query>"
+    </user_query>"
     )
 }
 
-/// Get the "summarization" prompt, which directs the LLM to retrieve evidence from the user's
-/// Zotero library before generating a researched answer to the user query.
-///
-/// # Arguments
-///
-/// * `query` - The user query to answer
+/// Get the system prompt used to answer questions from the user's Zotero library.
 ///
 /// # Returns
 ///
-/// * `prompt` - The prompt for answering the user query
+/// Instructions for retrieving evidence and writing a grounded response.
 #[must_use]
-pub fn get_summarize_prompt(query: &str) -> String {
+pub fn get_summarize_system_prompt() -> String {
     format!(
         "You answer questions grounded in the user's Zotero library. You have tools to search the library and
 extract relevant passages; your answer MUST be grounded in what they return. No excerpts are provided with
@@ -135,33 +148,48 @@ straightforward answer (based on the search results). In this case, it is usuall
 directly.
 8. Not all search results and excerpts may be relevant. You do *not* need to use *all* the excerpts and search results.
 Instead, use excerpts and search results that have relevant information to the user's query. If you are unsure, err
-on the side of *inclusion*. It is better to erroneously include a paper than to falsely ignore one.
+on the side of *inclusion*. It is better to erroneously include a paper than to falsely ignore one."
+    )
+}
 
-Here is the user query: <user_query>{query}</user_query>.")
+/// Get the "summarization" prompt, which directs the LLM to retrieve evidence from the user's
+/// Zotero library before generating a researched answer to the user query.
+///
+/// # Arguments
+///
+/// * `query` - The user query to answer
+///
+/// # Returns
+///
+/// * `prompt` - The prompt for answering the user query
+#[must_use]
+pub fn get_summarize_prompt(query: &str) -> String {
+    format!("Here is the user query: <user_query>{query}</user_query>.")
 }
 
 #[cfg(test)]
 mod tests {
-    use super::get_summarize_prompt;
+    use super::{get_summarize_prompt, get_summarize_system_prompt};
     use crate::tools::retrieval::RETRIEVAL_TOOL_NAME;
     use crate::tools::summarization::SUMMARIZATION_TOOL_NAME;
 
     #[test]
     fn summarize_prompt_requires_retrieval_before_answering() {
+        let system_prompt = get_summarize_system_prompt();
         let prompt = get_summarize_prompt("How does retrieval-augmented generation work?");
         let retrieval_instruction = format!("Start by calling `{RETRIEVAL_TOOL_NAME}`");
         let summarization_instruction = format!("Then call `{SUMMARIZATION_TOOL_NAME}`");
-        let retrieval_position = prompt
+        let retrieval_position = system_prompt
             .find(&retrieval_instruction)
             .expect("prompt should instruct retrieval first");
-        let summarization_position = prompt
+        let summarization_position = system_prompt
             .find(&summarization_instruction)
             .expect("prompt should instruct passage extraction second");
 
-        assert!(prompt.contains("MUST be grounded in what they return."));
-        assert!(prompt.contains("No excerpts are provided"));
+        assert!(system_prompt.contains("MUST be grounded in what they return."));
+        assert!(system_prompt.contains("No excerpts are provided"));
         assert!(retrieval_position < summarization_position);
-        assert!(prompt.contains("do not keep searching."));
+        assert!(system_prompt.contains("do not keep searching."));
         assert!(
             prompt
                 .contains("<user_query>How does retrieval-augmented generation work?</user_query>")

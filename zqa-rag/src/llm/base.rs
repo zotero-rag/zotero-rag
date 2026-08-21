@@ -134,6 +134,8 @@ pub struct ChatRequest<'a> {
     pub max_tokens: Option<u32>,
     /// The message to send
     pub message: String,
+    /// Instructions that guide the model for the entire request
+    pub system_prompt: Option<String>,
     /// Reasoning config. Optional.
     pub reasoning: Option<ReasoningConfig>,
     /// The tools to use
@@ -220,6 +222,7 @@ where
     async fn send_once(
         &self,
         history: &[Self::HistoryItem],
+        system_prompt: Option<&str>,
         tools: Option<&[SerializedTool<'_>]>,
         reasoning: Option<&ReasoningConfig>,
         max_tokens: Option<u32>,
@@ -266,6 +269,7 @@ where
             let turn = self
                 .send_once(
                     &history,
+                    request.system_prompt.as_deref(),
                     tools_passed,
                     request.reasoning.as_ref(),
                     request.max_tokens,
@@ -350,6 +354,7 @@ mod tests {
 
     struct TestClient {
         turns: Mutex<VecDeque<ProviderTurn<TestHistoryItem>>>,
+        system_prompts_seen: Arc<Mutex<Vec<Option<String>>>>,
         tools_seen: Arc<Mutex<Vec<Option<usize>>>>,
     }
 
@@ -364,10 +369,15 @@ mod tests {
         async fn send_once(
             &self,
             _: &[Self::HistoryItem],
+            system_prompt: Option<&str>,
             tools: Option<&[SerializedTool<'_>]>,
             _: Option<&ReasoningConfig>,
             _: Option<u32>,
         ) -> Result<ProviderTurn<Self::HistoryItem>, LLMError> {
+            self.system_prompts_seen
+                .lock()
+                .unwrap()
+                .push(system_prompt.map(ToOwned::to_owned));
             self.tools_seen.lock().unwrap().push(tools.map(<[_]>::len));
             Ok(self.turns.lock().unwrap().pop_front().unwrap())
         }
@@ -409,6 +419,7 @@ mod tests {
                     },
                 },
             ])),
+            system_prompts_seen: Arc::new(Mutex::new(Vec::new())),
             tools_seen: Arc::clone(&tools_seen),
         };
         let call_count = Arc::new(Mutex::new(0));
@@ -416,6 +427,7 @@ mod tests {
             call_count: Arc::clone(&call_count),
         };
         let request = ChatRequest {
+            system_prompt: Some("Follow the system instructions.".into()),
             tools: Some(&[Box::new(tool)]),
             tool_iteration_limit: Some(2),
             ..ChatRequest::default()
@@ -424,6 +436,13 @@ mod tests {
         let response = client.send_message(&request).await.unwrap();
 
         assert_eq!(*tools_seen.lock().unwrap(), vec![Some(1), None]);
+        assert_eq!(
+            *client.system_prompts_seen.lock().unwrap(),
+            vec![
+                Some("Follow the system instructions.".into()),
+                Some("Follow the system instructions.".into())
+            ]
+        );
         assert_eq!(*call_count.lock().unwrap(), 1);
         assert_eq!(response.usage.input_tokens, 30);
         assert_eq!(response.usage.input_cache_written, 6);
@@ -445,6 +464,7 @@ mod tests {
                 contents: vec![ChatHistoryContent::Text("done".into())],
                 usage: ModelUsage::default(),
             }])),
+            system_prompts_seen: Arc::new(Mutex::new(Vec::new())),
             tools_seen: Arc::clone(&tools_seen),
         };
         let tool = MockTool {
