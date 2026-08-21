@@ -17,7 +17,7 @@ use ordered_float::OrderedFloat;
 
 use crate::edits::{Edit, EditType, apply_edits};
 use crate::fonts::{
-    DEFAULT_SPACE_WIDTH, FONT_TRANSFORMS, FontEncoding, FontSizeMarker, SPACE_WIDTH_FRACTION,
+    CMap, DEFAULT_SPACE_WIDTH, FONT_TRANSFORMS, FontEncoding, FontSizeMarker, SPACE_WIDTH_FRACTION,
     compute_font_encoding, font_transform, get_font, get_space_width,
 };
 use crate::tokenizer::{Token, tokenize};
@@ -274,6 +274,92 @@ struct ParseResult {
     skipped_chars: usize,
 }
 
+/// Look up a one-byte character code in a simple font's `ToUnicode` CMap without allocating a key.
+fn simple_cmap_mapping(mappings: &CMap, code: u8) -> Option<&str> {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let key = [HEX[usize::from(code >> 4)], HEX[usize::from(code & 0x0f)]];
+    let key = std::str::from_utf8(&key).expect("hexadecimal digits are always valid UTF-8");
+    mappings.get(key).map(String::as_str)
+}
+
+/// Append unmapped simple-font bytes as UTF-8, applying a configured math-font transformation.
+///
+/// A simple font may have no `ToUnicode` CMap or one that does not cover every character code.
+/// This fallback preserves direct text extraction and math-to-LaTeX normalization for those
+/// unmapped codes.
+fn append_simple_fallback(result: &mut String, text: &[u8], font_name: &str) {
+    let text = std::str::from_utf8(text).unwrap_or("");
+    if let Some(transform) = FONT_TRANSFORMS.get(font_name) {
+        result.push_str(&font_transform(text, *transform));
+    } else {
+        result.push_str(text);
+    }
+}
+
+/// Append one simple-font character code using the available decoding methods in priority order.
+///
+/// Explicit math-to-LaTeX mappings take priority over `ToUnicode` so mathematical output retains
+/// its normalized representation. Codes without either mapping use [`append_simple_fallback`].
+///
+/// # Arguments
+///
+/// * `result` - The extracted text buffer to append the decoded character to.
+/// * `code` - The one-byte character code to decode.
+/// * `mappings` - The font's parsed `ToUnicode` mappings, if it has a usable CMap.
+/// * `font_name` - The font's base name, used to select any configured math-font transformation.
+fn append_simple_code(result: &mut String, code: u8, mappings: Option<&CMap>, font_name: &str) {
+    if let Some(transform) = FONT_TRANSFORMS.get(font_name)
+        && let Some(transformed) = transform(code)
+    {
+        // known math symbol
+        result.push_str(&transformed);
+    } else if let Some(unicode) = mappings.and_then(|map| simple_cmap_mapping(map, code)) {
+        // `ToUnicode` mapping available
+        result.push_str(unicode);
+    } else {
+        // push the raw byte as-is
+        append_simple_fallback(result, std::slice::from_ref(&code), font_name);
+    }
+}
+
+/// Decode a hexadecimal string for a simple font, giving `ToUnicode` mappings priority.
+///
+/// Whitespace between hexadecimal digits is ignored. Character codes present in `mappings` are
+/// converted to Unicode, while unmapped codes use the simple-font fallback decoder. As required by
+/// ISO 32000-1:2008, §7.3.4.3, "Hexadecimal strings", an odd final digit is padded with a zero.
+///
+/// # Arguments
+///
+/// * `result` - The extracted text buffer to append decoded text to.
+/// * `hex` - The hexadecimal digits from the PDF string, with optional ASCII whitespace.
+/// * `mappings` - The font's parsed `ToUnicode` mappings, if it has a usable CMap.
+/// * `font_name` - The font's base name, used to select any configured math-font transformation.
+fn append_simple_hex(result: &mut String, hex: &[u8], mappings: Option<&CMap>, font_name: &str) {
+    let mut high_nibble = None;
+    for &digit in hex.iter().filter(|digit| !digit.is_ascii_whitespace()) {
+        let Some(nibble) = char::from(digit)
+            .to_digit(16)
+            .and_then(|value| u8::try_from(value).ok())
+        else {
+            log::warn!("Invalid hexadecimal digit in simple-font text string");
+            return;
+        };
+
+        if let Some(high) = high_nibble.take() {
+            let code = high << 4 | nibble;
+            append_simple_code(result, code, mappings, font_name);
+        } else {
+            high_nibble = Some(nibble);
+        }
+    }
+
+    // The standard pads an odd final hexadecimal digit with a low-order zero.
+    if let Some(high) = high_nibble {
+        let code = high << 4;
+        append_simple_code(result, code, mappings, font_name);
+    }
+}
+
 impl PdfParser {
     /// Creates a new parser with the given configuration
     ///
@@ -292,17 +378,15 @@ impl PdfParser {
         }
     }
 
-    /// Checks if a given font in a specific page of a document is a CID-keyed font.
+    /// Gets the encoding for a font on a specific page.
     ///
-    /// If it is, returns the `ToUnicode` CMap for that font; otherwise, returns
-    /// FontEncoding::Simple. This function is *not* pure: it updates `self.font_type`, which
-    /// acts as a cache for these results. Entries are keyed by `(page_id, font_key)`, so the
-    /// cache does not need to be cleared between pages.
+    /// This function is *not* pure: it updates `self.font_type`, which acts as a cache for these
+    /// results. Entries are keyed by `(page_id, font_key)`, so the cache does not need to be cleared
+    /// between pages.
     ///
     /// # Returns
     ///
-    /// If the specified font is a CID-keyed font, returns `FontEncoding::CIDKeyed` with a
-    /// reference to the `ToUnicode` CMap. Otherwise, returns `FontEncoding::Simple`.
+    /// The font encoding and any available `ToUnicode` mappings.
     ///
     /// # Errors
     ///
@@ -321,7 +405,7 @@ impl PdfParser {
     ///
     /// * If any of the keys in the font dictionary are not valid UTF-8.
     #[allow(clippy::too_many_lines)]
-    fn is_cid_keyed_font(
+    fn font_encoding(
         &mut self,
         doc: &Document,
         page_id: PageID,
@@ -349,7 +433,7 @@ impl PdfParser {
     ///
     /// * `doc` - The PDF document.
     /// * `page_id` - The page the font appears on.
-    /// * `font_encoding` - The font's encoding, e.g. from [`Self::is_cid_keyed_font`].
+    /// * `font_encoding` - The font's encoding, e.g. from [`Self::font_encoding`].
     ///
     /// # Returns
     ///
@@ -539,7 +623,7 @@ impl PdfParser {
 
         let mut i = 0;
         let font_encoding = self
-            .is_cid_keyed_font(doc, page_id, &font_id)
+            .font_encoding(doc, page_id, &font_id)
             .unwrap_or_else(|_| Rc::new(FontEncoding::Unmappable));
 
         while i < tokens.len() {
@@ -547,12 +631,19 @@ impl PdfParser {
                 Token::Literal(text) => {
                     // Simple font encoding - handle math fonts
                     match &*font_encoding {
-                        FontEncoding::Simple => {
-                            let text_str = std::str::from_utf8(text).unwrap_or("");
-                            if let Some(transform) = FONT_TRANSFORMS.get(cur_font.as_str()) {
-                                result += &font_transform(text_str, *transform);
+                        FontEncoding::Simple { mappings, .. } => {
+                            if let Some(mappings) = mappings {
+                                for &code in *text {
+                                    append_simple_code(
+                                        &mut result,
+                                        code,
+                                        Some(mappings),
+                                        cur_font.as_str(),
+                                    );
+                                }
                             } else {
-                                result += text_str;
+                                // Decode the complete string so contiguous UTF-8 remains intact.
+                                append_simple_fallback(&mut result, text, cur_font.as_str());
                             }
                         }
                         FontEncoding::CIDKeyed { .. } => {
@@ -608,8 +699,13 @@ impl PdfParser {
                                 j += 4;
                             }
                         }
-                        FontEncoding::Simple => {
-                            log::warn!("Unexpected Hex token in simple font");
+                        FontEncoding::Simple { mappings, .. } => {
+                            append_simple_hex(
+                                &mut result,
+                                hex_str,
+                                mappings.as_ref(),
+                                cur_font.as_str(),
+                            );
                         }
                         FontEncoding::Unmappable => {
                             // CIDs are two bytes each, encoded as four hex digits; use the
@@ -1536,10 +1632,18 @@ mod tests {
     /// whose resource dictionary has a single font `F1` described by `font_dict_entries`.
     fn doc_with_font(
         content: &[u8],
-        font_dict_entries: Vec<(&'static str, lopdf::Object)>,
+        mut font_dict_entries: Vec<(&'static str, lopdf::Object)>,
+        to_unicode: Option<&[u8]>,
     ) -> (Document, PageID) {
         let mut doc = Document::with_version("1.5");
 
+        if let Some(to_unicode) = to_unicode {
+            let cmap_id = doc.add_object(lopdf::Stream::new(
+                lopdf::Dictionary::new(),
+                to_unicode.to_vec(),
+            ));
+            font_dict_entries.push(("ToUnicode", lopdf::Object::Reference(cmap_id)));
+        }
         let font_id = doc.add_object(lopdf::Dictionary::from_iter(font_dict_entries));
 
         let content_id = doc.add_object(lopdf::Stream::new(
@@ -1592,6 +1696,7 @@ mod tests {
                 ("BaseFont", lopdf::Object::Name(b"FakeFont".to_vec())),
                 ("Encoding", lopdf::Object::Name(b"Identity-H".to_vec())),
             ],
+            None,
         )
     }
 
@@ -1605,6 +1710,26 @@ mod tests {
                 ("Subtype", lopdf::Object::Name(b"Type1".to_vec())),
                 ("BaseFont", lopdf::Object::Name(b"Helvetica".to_vec())),
             ],
+            None,
+        )
+    }
+
+    /// Build a minimal in-memory PDF using a simple Type1 font with a `ToUnicode` CMap.
+    fn doc_with_simple_type1_tounicode_font(content: &[u8]) -> (Document, PageID) {
+        let cmap = b"\
+1 beginbfchar
+<41> <03a9>
+<42> <03b2>
+endbfchar";
+        doc_with_font(
+            content,
+            vec![
+                ("Type", lopdf::Object::Name(b"Font".to_vec())),
+                ("Subtype", lopdf::Object::Name(b"Type1".to_vec())),
+                ("BaseFont", lopdf::Object::Name(b"Helvetica".to_vec())),
+                ("Encoding", lopdf::Object::Name(b"WinAnsiEncoding".to_vec())),
+            ],
+            Some(cmap),
         )
     }
 
@@ -1621,6 +1746,30 @@ mod tests {
         assert!(
             result.content.contains("Hello World"),
             "Expected extracted text to contain 'Hello World', got {:?}",
+            result.content
+        );
+    }
+
+    #[test]
+    fn test_simple_font_tounicode_overrides_encoding() {
+        // A and B would decode literally under WinAnsiEncoding, but ToUnicode has priority for both
+        // literal and hexadecimal PDF string syntax.
+        let content = b"BT /F1 12 Tf (A) Tj <42> Tj ET";
+        let (doc, page_id) = doc_with_simple_type1_tounicode_font(content);
+
+        let mut parser = PdfParser::default();
+        let result = parser
+            .parse_content(&doc, page_id, 0, false)
+            .expect("A simple font's ToUnicode CMap should be used");
+
+        assert!(
+            result.content.contains("Ωβ"),
+            "Expected ToUnicode mappings to override WinAnsiEncoding, got {:?}",
+            result.content
+        );
+        assert!(
+            !result.content.contains('A') && !result.content.contains('B'),
+            "Raw character codes leaked into extracted text: {:?}",
             result.content
         );
     }
