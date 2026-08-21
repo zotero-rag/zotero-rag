@@ -2,7 +2,7 @@ use std::{env, fs};
 
 use dotenv::dotenv;
 use log::LevelFilter;
-use zqa::cli::prompts::get_extraction_prompt;
+use zqa::cli::prompts::{get_extraction_prompt, get_extraction_system_prompt};
 use zqa::common::setup_logger;
 use zqa::config::{AnthropicConfig, GeminiConfig, OpenAIConfig};
 use zqa::utils::library::ZoteroItemMetadata;
@@ -33,6 +33,7 @@ async fn run_extraction_test(client: zqa_rag::llm::factory::LLMClient, provider_
         chat_history: Vec::new(),
         max_tokens: None,
         message: prompt,
+        system_prompt: Some(get_extraction_system_prompt().to_owned()),
         reasoning: None,
         tools: None,
         on_tool_call: None,

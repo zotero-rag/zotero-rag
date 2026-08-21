@@ -12,7 +12,7 @@ use zqa_rag::llm::factory::LLMClient;
 use zqa_rag::llm::tools::Tool;
 use zqa_rag::pricing::ModelUsage;
 
-use crate::cli::prompts::get_extraction_prompt;
+use crate::cli::prompts::{get_extraction_prompt, get_extraction_system_prompt};
 use crate::store::common::ZoteroStore;
 use crate::tools::retrieval::RETRIEVAL_TOOL_NAME;
 use crate::utils::library::ZoteroItem;
@@ -113,6 +113,7 @@ where
                         chat_history: Vec::new(),
                         max_tokens: None,
                         message: get_extraction_prompt(&query_cloned, &text, &metadata),
+                        system_prompt: Some(get_extraction_system_prompt().to_owned()),
                         reasoning: client.get_reasoning_config(),
                         tools: None, // We ARE the tool :3
                         on_tool_call: None,

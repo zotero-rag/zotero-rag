@@ -100,6 +100,9 @@ pub(crate) struct AnthropicRequest<'a> {
     pub(crate) max_tokens: u32,
     /// The conversation history and current message
     pub(crate) messages: &'a [AnthropicChatHistoryItem],
+    /// Instructions that guide the model for the entire request
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) system: Option<&'a str>,
     /// Thinking/reasoning configuration
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) thinking: Option<AnthropicThinkingConfig>,
@@ -331,6 +334,7 @@ impl<T: HttpClient> AgenticClient for AnthropicClient<T> {
     async fn send_once(
         &self,
         history: &[Self::HistoryItem],
+        system_prompt: Option<&str>,
         tools: Option<&[SerializedTool<'_>]>,
         reasoning: Option<&ReasoningConfig>,
         max_tokens: Option<u32>,
@@ -354,6 +358,7 @@ impl<T: HttpClient> AgenticClient for AnthropicClient<T> {
             model: &model,
             max_tokens: max_tokens.unwrap_or(config_max_tokens),
             messages: history,
+            system: system_prompt,
             thinking: reasoning.map(Into::into),
             tools,
         };
@@ -395,9 +400,7 @@ mod tests {
         AnthropicToolUseResponseContent, AnthropicUsageStats,
     };
     use crate::config::AnthropicConfig;
-    use crate::http_client::{
-        MockHttpClient, RecordingSequentialMockHttpClient, ReqwestClient, SequentialMockHttpClient,
-    };
+    use crate::http_client::{MockHttpClient, RecordingSequentialMockHttpClient, ReqwestClient};
     use crate::llm::anthropic::{
         AnthropicOutputTokensDetails, AnthropicTextResponseContent, DEFAULT_CLAUDE_MODEL,
     };
@@ -485,6 +488,7 @@ mod tests {
             chat_history: Vec::new(),
             max_tokens: Some(1024),
             message: "Hello!".to_owned(),
+            system_prompt: None,
             reasoning: None,
             tools: None,
             on_tool_call: None,
@@ -535,6 +539,7 @@ mod tests {
             chat_history: Vec::new(),
             max_tokens: Some(1024),
             message: "Hello!".to_owned(),
+            system_prompt: None,
             reasoning: None,
             tools: None,
             on_tool_call: None,
@@ -571,6 +576,7 @@ mod tests {
             chat_history: Vec::new(),
             max_tokens: Some(1024),
             message: "This is a test. Call the `mock_tool`, passing in a `name`, and ensure it returns a greeting".into(),
+            system_prompt: None,
             reasoning: None,
             tools: Some(&[Box::new(tool)]),
             on_tool_call: None,
@@ -649,6 +655,7 @@ mod tests {
             chat_history: Vec::new(),
             max_tokens: Some(1024),
             message: "Test".into(),
+            system_prompt: Some("Follow the system instructions.".into()),
             reasoning: None,
             tools: Some(&[Box::new(tool)]),
             on_tool_call: Some(Arc::new(move |_| {
@@ -660,8 +667,10 @@ mod tests {
             tool_iteration_limit: None,
         };
 
+        let http_client =
+            RecordingSequentialMockHttpClient::new([tool_call_response, text_response]);
         let mock_client = AnthropicClient {
-            client: SequentialMockHttpClient::new([tool_call_response, text_response]),
+            client: http_client.clone(),
             config: None,
         };
         let res = mock_client.send_message(&request).await;
@@ -671,6 +680,9 @@ mod tests {
         let texts = text_segments.lock().unwrap();
         test_eq!(texts.len(), 1);
         test_eq!(texts[0].as_str(), "Done!");
+        for request in http_client.requests() {
+            test_eq!(request["system"], "Follow the system instructions.");
+        }
     }
 
     #[test]
@@ -753,6 +765,7 @@ mod tests {
             chat_history: Vec::new(),
             max_tokens: Some(2048),
             message: "Test".into(),
+            system_prompt: None,
             reasoning: Some(ReasoningConfig {
                 max_tokens: Some(1024),
                 effort: None,

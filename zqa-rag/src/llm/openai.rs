@@ -210,6 +210,10 @@ pub(crate) struct OpenAIRequest<'a> {
     /// The flattened chat history and current message.
     input: &'a [OpenAIRequestInput],
 
+    /// Instructions that guide the model for the entire request.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    instructions: Option<&'a str>,
+
     #[serde(skip_serializing_if = "Option::is_none")]
     reasoning: Option<OpenAIReasoning>,
 
@@ -443,6 +447,7 @@ impl<T: HttpClient> AgenticClient for OpenAIClient<T> {
     async fn send_once(
         &self,
         history: &[Self::HistoryItem],
+        system_prompt: Option<&str>,
         tools: Option<&[SerializedTool<'_>]>,
         reasoning: Option<&ReasoningConfig>,
         max_tokens: Option<u32>,
@@ -461,6 +466,7 @@ impl<T: HttpClient> AgenticClient for OpenAIClient<T> {
         let request_body = OpenAIRequest {
             model: &model,
             input: history,
+            instructions: system_prompt,
             reasoning: reasoning.map(Into::into),
             max_output_tokens: max_tokens,
             tools: wrapped_tools.as_deref(),
@@ -547,8 +553,8 @@ mod tests {
     use zqa_macros::{test_eq, test_ok};
 
     use super::{
-        OpenAIClient, OpenAIContent, OpenAIOutput, OpenAIOutputReasoningSummary, OpenAIResponse,
-        OpenAIUsage,
+        OpenAIClient, OpenAIContent, OpenAIOutput, OpenAIOutputReasoningSummary, OpenAIRequest,
+        OpenAIResponse, OpenAIUsage,
     };
     use crate::config::OpenAIConfig;
     use crate::constants::DEFAULT_OPENAI_EMBEDDING_DIM;
@@ -569,6 +575,7 @@ mod tests {
             chat_history: Vec::new(),
             max_tokens: Some(1024),
             message: "Hello!".to_owned(),
+            system_prompt: None,
             reasoning: None,
             tools: None,
             on_tool_call: None,
@@ -624,6 +631,7 @@ mod tests {
             chat_history: Vec::new(),
             max_tokens: Some(1024),
             message: "Hello!".to_owned(),
+            system_prompt: None,
             reasoning: None,
             tools: None,
             on_tool_call: None,
@@ -682,6 +690,7 @@ mod tests {
             chat_history: Vec::new(),
             max_tokens: Some(1024),
             message: "This is a test. Call the `mock_tool`, passing in a `name`, and ensure it returns a greeting".into(),
+            system_prompt: None,
             reasoning: None,
             tools: Some(&[Box::new(tool)]),
             on_tool_call: None,
@@ -754,6 +763,26 @@ mod tests {
         assert_eq!(request["tools"][0]["type"].as_str(), Some("function"));
     }
 
+    #[test]
+    fn request_serializes_system_prompt_as_instructions() {
+        let input = Vec::new();
+        let request = OpenAIRequest {
+            model: "gpt-5",
+            input: &input,
+            instructions: Some("Follow the system instructions."),
+            reasoning: None,
+            max_output_tokens: None,
+            tools: None,
+        };
+
+        let serialized = serde_json::to_value(request).unwrap();
+
+        test_eq!(
+            serialized["instructions"],
+            "Follow the system instructions."
+        );
+    }
+
     fn input_item<'a>(input: &'a [serde_json::Value], item_type: &str) -> &'a serde_json::Value {
         input
             .iter()
@@ -797,7 +826,6 @@ mod tests {
         let tool_call_count = Arc::new(Mutex::new(0_usize));
         let text_segments = Arc::new(Mutex::new(Vec::new()));
         let request = ChatRequest {
-            chat_history: Vec::new(),
             max_tokens: Some(1024),
             message: "Test".into(),
             reasoning: Some(ReasoningConfig {
@@ -814,7 +842,7 @@ mod tests {
                 let text_segments = Arc::clone(&text_segments);
                 move |text| text_segments.lock().unwrap().push(text.to_string())
             })),
-            tool_iteration_limit: None,
+            ..ChatRequest::default()
         };
         let http_client =
             RecordingSequentialMockHttpClient::new([tool_call_response, text_response]);

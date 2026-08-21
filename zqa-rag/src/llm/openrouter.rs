@@ -21,10 +21,30 @@ use crate::pricing::ModelUsage;
 
 const DEFAULT_MODEL: &str = "anthropic/claude-sonnet-4.5";
 
+/// Roles accepted by OpenRouter's chat completions API.
+#[derive(Copy, Clone, Debug, Serialize)]
+#[serde(rename_all = "lowercase")]
+enum OpenRouterMessageRole {
+    System,
+    User,
+    Assistant,
+    Tool,
+}
+
+impl From<MessageRole> for OpenRouterMessageRole {
+    fn from(role: MessageRole) -> Self {
+        match role {
+            MessageRole::User => Self::User,
+            MessageRole::Assistant => Self::Assistant,
+            MessageRole::Tool => Self::Tool,
+        }
+    }
+}
+
 /// OpenRouter-specific message format
 #[derive(Clone, Debug, Serialize)]
 pub(crate) struct OpenRouterMessage {
-    role: MessageRole,
+    role: OpenRouterMessageRole,
     #[serde(skip_serializing_if = "Option::is_none")]
     content: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -113,7 +133,7 @@ fn convert_to_openrouter_messages(item: &ChatHistoryItem) -> Vec<OpenRouterMessa
             ChatHistoryContent::ToolCallResponse(res) => {
                 // Tool responses in OpenRouter are sent as a separate message with role "tool"
                 messages.push(OpenRouterMessage {
-                    role: MessageRole::Tool,
+                    role: OpenRouterMessageRole::Tool,
                     content: Some(serde_json::to_string(&res.result).unwrap_or_default()),
                     tool_calls: None,
                     tool_call_id: Some(res.id.clone()),
@@ -127,7 +147,7 @@ fn convert_to_openrouter_messages(item: &ChatHistoryItem) -> Vec<OpenRouterMessa
         messages.insert(
             0,
             OpenRouterMessage {
-                role: item.role,
+                role: item.role.into(),
                 content: if content_text.is_empty() {
                     None
                 } else {
@@ -300,7 +320,7 @@ impl<T: HttpClient> AgenticClient for OpenRouterClient<T> {
             .collect();
 
         messages.push(OpenRouterMessage {
-            role: MessageRole::User,
+            role: OpenRouterMessageRole::User,
             content: Some(request.message.clone()),
             tool_calls: None,
             tool_call_id: None,
@@ -312,6 +332,7 @@ impl<T: HttpClient> AgenticClient for OpenRouterClient<T> {
     async fn send_once(
         &self,
         history: &[Self::HistoryItem],
+        system_prompt: Option<&str>,
         tools: Option<&[SerializedTool<'_>]>,
         reasoning: Option<&ReasoningConfig>,
         max_tokens: Option<u32>,
@@ -340,9 +361,20 @@ impl<T: HttpClient> AgenticClient for OpenRouterClient<T> {
                 })
                 .collect::<Vec<_>>()
         });
+        let system_message = system_prompt.map(|content| OpenRouterMessage {
+            role: OpenRouterMessageRole::System,
+            content: Some(content.to_owned()),
+            tool_calls: None,
+            tool_call_id: None,
+        });
+        let messages = system_message
+            .iter()
+            .chain(history)
+            .cloned()
+            .collect::<Vec<_>>();
         let request_body = OpenRouterRequest {
             model: &model,
-            messages: history,
+            messages: &messages,
             reasoning: reasoning.map(Into::into),
             tools: wrapped_tools,
             max_tokens: max_tokens.unwrap_or(config_max_tokens),
@@ -369,7 +401,7 @@ impl<T: HttpClient> AgenticClient for OpenRouterClient<T> {
         Ok(ProviderTurn {
             contents,
             native_items: vec![OpenRouterMessage {
-                role: choice.message.role,
+                role: choice.message.role.into(),
                 content: choice.message.content,
                 tool_calls: choice.message.tool_calls,
                 tool_call_id: None,
@@ -392,6 +424,21 @@ mod tests {
     use crate::llm::base::{AgenticClient, ChatRequest, ContentType, ToolCallResponse};
     use crate::llm::tools::test_utils::MockTool;
 
+    #[test]
+    fn system_message_serializes_with_system_role() {
+        let message = OpenRouterMessage {
+            role: OpenRouterMessageRole::System,
+            content: Some("Follow the system instructions.".into()),
+            tool_calls: None,
+            tool_call_id: None,
+        };
+
+        let serialized = serde_json::to_value(message).unwrap();
+
+        test_eq!(serialized["role"], "system");
+        test_eq!(serialized["content"], "Follow the system instructions.");
+    }
+
     #[tokio::test]
     async fn test_request_works() {
         dotenv().ok();
@@ -401,6 +448,7 @@ mod tests {
             chat_history: Vec::new(),
             max_tokens: Some(1024),
             message: "Hello!".to_owned(),
+            system_prompt: None,
             reasoning: None,
             tools: None,
             on_tool_call: None,
@@ -456,6 +504,7 @@ mod tests {
             chat_history: Vec::new(),
             max_tokens: Some(1024),
             message: "Hello!".to_owned(),
+            system_prompt: None,
             reasoning: None,
             tools: None,
             on_tool_call: None,
@@ -521,6 +570,7 @@ mod tests {
             max_tokens: Some(1024),
             message: "Call the mock_tool function with the name parameter set to 'Alice'"
                 .to_owned(),
+            system_prompt: None,
             reasoning: None,
             tools: Some(&[Box::new(tool)]),
             on_tool_call: None,
@@ -612,6 +662,7 @@ mod tests {
             chat_history: Vec::new(),
             max_tokens: Some(1024),
             message: "Test".into(),
+            system_prompt: None,
             reasoning: None,
             tools: Some(&[Box::new(tool)]),
             on_tool_call: Some(Arc::new(move |_| {
