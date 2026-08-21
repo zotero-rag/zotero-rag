@@ -108,11 +108,9 @@ impl Iterator for IterCodepoints<'_> {
                         let Some(&digit @ b'0'..=b'7') = self.bytes.get(self.pos) else {
                             break;
                         };
-                        let candidate = u16::from(value) * 8 + u16::from(digit - b'0');
-                        let Ok(candidate) = u8::try_from(candidate) else {
-                            break;
-                        };
-                        value = candidate;
+                        // ISO 32000-1:2008, §7.3.4.2, "Literal strings", specifies that
+                        // high-order overflow in three-digit octal escapes is ignored.
+                        value = value.wrapping_mul(8).wrapping_add(digit - b'0');
                         self.pos += 1;
                         digits += 1;
                     }
@@ -900,14 +898,14 @@ mod tests {
 
     #[test]
     fn test_iter_codepoints_decodes_pdf_literal_escapes() {
-        let input = b"\\(A\\)\\\\\\n\\r\\t\\b\\f\\101\\12\\1x\\\r\nB";
+        let input = b"\\(A\\)\\\\\\n\\r\\t\\b\\f\\101\\12\\1x\\400\\777\\\r\nB";
         let decoded: Vec<u8> = IterCodepoints::new(input).collect();
 
         assert_eq!(
             decoded,
             vec![
-                b'(', b'A', b')', b'\\', b'\n', b'\r', b'\t', 0x08, 0x0c, b'A', b'\n', 1, b'x',
-                b'B'
+                b'(', b'A', b')', b'\\', b'\n', b'\r', b'\t', 0x08, 0x0c, b'A', b'\n', 1, b'x', 0,
+                255, b'B'
             ]
         );
     }
