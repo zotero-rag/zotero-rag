@@ -1,0 +1,27 @@
+[package]
+name = "zqa-gui"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+license = "MIT"
+description = "Native GUI front-end for the zqa Zotero RAG QA system."
+# Not publishable: gpui is a git-only dependency, which crates.io rejects. Keeping this
+# crate unpublished is what lets `zqa` itself stay publishable.
+publish = false
+
+[[bin]]
+name = "zqa-gui"
+path = "src/main.rs"
+
+[dependencies]
+zqa = { path = "../zqa" }
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros"] }
+futures = "0.3"
+
+# gpui/gpui_platform track Zed's `main`; gpui-component tracks its own `main` against
+# that. They are intentionally left unpinned here so the first resolve records exact,
+# mutually compatible commits in Cargo.lock. Pin explicit `rev`s once the build is green.
+gpui = { git = "https://github.com/zed-industries/zed" }
+gpui_platform = { git = "https://github.com/zed-industries/zed", features = ["font-kit"] }
+gpui-component = { git = "https://github.com/longbridge/gpui-component" }
+gpui-component-assets = { git = "https://github.com/longbridge/gpui-component" }

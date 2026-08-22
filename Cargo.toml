@@ -1,5 +1,5 @@
 [workspace]
-members = ["zqa", "zqa-rag", "zqa-pdftools", "zqa-macros", "zqa-macros-proc"]
+members = ["zqa", "zqa-rag", "zqa-pdftools", "zqa-macros", "zqa-macros-proc", "zqa-gui"]
 resolver = "2"
 
 [workspace.dependencies]
