@@ -10,6 +10,7 @@ use clap::Parser;
 pub mod cli;
 pub mod common;
 pub mod config;
+pub mod session;
 pub mod state;
 pub mod store;
 pub mod tools;
@@ -30,7 +31,17 @@ use crate::cli::errors::CLIError;
 use crate::common::{PathOptions, State};
 use crate::utils::terminal::{RED, RED_BOLD, RESET, YELLOW, YELLOW_BOLD};
 
-fn load_config() -> Result<Config, CLIError> {
+/// Load the application configuration from the TOML config file (if present) and the
+/// environment, in priority order: TOML < env.
+///
+/// # Errors
+///
+/// Returns a [`CLIError`] if the config file exists but cannot be parsed.
+///
+/// # Panics
+///
+/// Panics if reading configuration from the environment fails.
+pub fn load_config() -> Result<Config, CLIError> {
     // Load the configs in priority order: TOML < env < CLI args
     let mut config = Config::default();
     if let Some(user_dirs) = directories::UserDirs::new() {
