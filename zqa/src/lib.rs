@@ -62,6 +62,28 @@ pub fn load_config() -> Result<Config, CLIError> {
     Ok(config)
 }
 
+/// Point LanceDB at the XDG state directory unless the caller has already set `LANCEDB_URI`.
+///
+/// The vector store resolves its location from the `LANCEDB_URI` environment variable, falling
+/// back to a path relative to the current working directory (see
+/// [`zqa_rag::vector::backends::lance::get_db_uri`]). Every front-end (the CLI and the GUI)
+/// must call this at startup so they all open the same database; otherwise a front-end launched
+/// from a different working directory would open an empty relative path and report a missing
+/// table.
+///
+/// This sets a process-global environment variable, so it must be called while the process is
+/// still single-threaded, i.e. before spawning any threads or async tasks.
+pub fn set_default_lancedb_uri() {
+    if std::env::var("LANCEDB_URI").is_err()
+        && let Ok(state_dir) = state::get_state_dir()
+    {
+        let db_path = state_dir.join(zqa_rag::vector::backends::lance::LANCEDB_URI);
+
+        // Safety: callers invoke this at startup, before any threads/async tasks spawn.
+        unsafe { std::env::set_var("LANCEDB_URI", db_path) };
+    }
+}
+
 /// Check that API keys exist for generation, embedding, and reranking for the given `config`.
 fn check_api_keys_exist(config: &Config, log_level: log::LevelFilter) {
     if config.get_generation_config().is_none_or(|c| {
@@ -144,15 +166,8 @@ fn check_api_keys_exist(config: &Config, log_level: log::LevelFilter) {
 /// * If the logger could not be set up
 /// * If the input could not be read from `stdin`.
 pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
-    // Set LANCEDB_URI to the XDG state dir if the caller hasn't already overridden it.
-    if std::env::var("LANCEDB_URI").is_err()
-        && let Ok(state_dir) = state::get_state_dir()
-    {
-        let db_path = state_dir.join(zqa_rag::vector::backends::lance::LANCEDB_URI);
-
-        // Safety: single-threaded at this point (before any async tasks spawn).
-        unsafe { std::env::set_var("LANCEDB_URI", db_path) };
-    }
+    // Point LanceDB at the XDG state dir if the caller hasn't already overridden it.
+    set_default_lancedb_uri();
 
     let mut config = load_config()?;
     let args = Args::parse();
