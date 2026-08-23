@@ -166,6 +166,11 @@ impl Render for ZqaApp {
 }
 
 fn main() {
+    // Resolve the LanceDB location the same way the CLI does, before spawning any threads.
+    // Otherwise the engine thread opens the default relative path instead of the state-dir
+    // database and every query reports a missing table.
+    zqa::set_default_lancedb_uri();
+
     let (cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
     let (cancel_tx, cancel_rx) = tokio::sync::mpsc::unbounded_channel::<()>();
     let (event_tx, event_rx) = futures::channel::mpsc::unbounded::<UiEvent>();
