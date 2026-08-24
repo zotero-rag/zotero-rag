@@ -166,9 +166,13 @@ pub fn spawn_engine(
 
                     match result {
                         Some(result) => {
-                            let keep_running = matches!(result, Ok(true));
+                            // Only a deliberate exit (`/quit` returns `Ok(false)`) stops the
+                            // engine. A command error keeps the engine alive so the UI stays
+                            // usable; exiting on errors would strand the window with a dead
+                            // channel and a permanently "running" state.
+                            let should_exit = matches!(result, Ok(false));
                             let _ = event_tx.unbounded_send(UiEvent::Done(result));
-                            if !keep_running {
+                            if should_exit {
                                 break;
                             }
                         }
@@ -180,4 +184,31 @@ pub fn spawn_engine(
             });
         })
         .expect("failed to spawn zqa engine thread");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::strip_ansi;
+
+    #[test]
+    fn leaves_plain_text_untouched() {
+        assert_eq!(strip_ansi("hello world"), "hello world");
+    }
+
+    #[test]
+    fn strips_sgr_sequences() {
+        // Dim + reset (the handlers' most common colorization).
+        assert_eq!(strip_ansi("\x1b[2mdim\x1b[0m"), "dim");
+        // Multi-parameter sequence with surrounding text preserved.
+        assert_eq!(
+            strip_ansi("\x1b[31;1mred bold\x1b[0m done"),
+            "red bold done"
+        );
+    }
+
+    #[test]
+    fn handles_trailing_escape() {
+        // A lone trailing ESC with no sequence body is dropped without panicking.
+        assert_eq!(strip_ansi("text\x1b"), "text");
+    }
 }
