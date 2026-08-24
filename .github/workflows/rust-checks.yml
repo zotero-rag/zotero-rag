@@ -25,7 +25,14 @@ jobs:
     
     steps:
     - name: Dependencies
-      run: sudo apt-get update && sudo apt-get install protobuf-compiler
+      # protobuf-compiler is for the zqa-rag build; the rest are GPUI's Linux system
+      # dependencies needed to compile zqa-gui (font-kit/fontconfig plus the x11/wayland
+      # display backends). See zqa-gui/README.md.
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y protobuf-compiler \
+          clang libfontconfig-dev libwayland-dev \
+          libxkbcommon-x11-dev libx11-xcb-dev libzstd-dev libvulkan1
 
     - uses: rui314/setup-mold@v1
 

@@ -22,6 +22,10 @@ futures = "0.3"
 # that. They are intentionally left unpinned here so the first resolve records exact,
 # mutually compatible commits in Cargo.lock. Pin explicit `rev`s once the build is green.
 gpui = { git = "https://github.com/zed-industries/zed" }
-gpui_platform = { git = "https://github.com/zed-industries/zed", features = ["font-kit"] }
+# `x11`/`wayland` select the Linux display backends and are required to build there; they are
+# target-gated inside gpui_platform, so enabling them unconditionally is safe on macOS (this
+# mirrors gpui-component's own workspace). Linux builds also need system libraries; see the
+# CI "Dependencies" steps and zqa-gui/README.md.
+gpui_platform = { git = "https://github.com/zed-industries/zed", features = ["font-kit", "x11", "wayland", "runtime_shaders"] }
 gpui-component = { git = "https://github.com/longbridge/gpui-component" }
 gpui-component-assets = { git = "https://github.com/longbridge/gpui-component" }
