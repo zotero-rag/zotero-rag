@@ -1,10 +1,9 @@
 [workspace]
-members = ["zqa", "zqa-rag", "zqa-pdftools", "zqa-macros", "zqa-macros-proc", "zqa-gui"]
+members = ["crates/zqa", "crates/zqa-rag", "crates/zqa-pdftools", "crates/zqa-macros", "crates/zqa-macros-proc", "crates/zqa-gui"]
 resolver = "2"
 
 [workspace.dependencies]
-zqa-macros = { path = "./zqa-macros", version = "0.1" }
-zqa-macros-proc = { path = "./zqa-macros-proc", version = "0.1" }
-zqa-rag = { path = "./zqa-rag", version = "0.2" }
-zqa-pdftools = { path = "./zqa-pdftools", version = "0.2" }
-
+zqa-macros = { path = "./crates/zqa-macros", version = "0.1" }
+zqa-macros-proc = { path = "./crates/zqa-macros-proc", version = "0.1" }
+zqa-rag = { path = "./crates/zqa-rag", version = "0.2" }
+zqa-pdftools = { path = "./crates/zqa-pdftools", version = "0.2" }

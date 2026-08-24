@@ -194,7 +194,7 @@ coverage:
     # Generate coverage in multiple formats
     # - Cobertura XML for GitLab's coverage visualization
     # - LCOV for Codecov
-    - cargo tarpaulin --out Xml --out lcov --output-dir . --timeout 300 --rustflags="-C opt-level=0" --exclude-files 'zqa/tests/*'
+    - cargo tarpaulin --out Xml --out lcov --output-dir . --timeout 300 --rustflags="-C opt-level=0" --exclude-files 'crates/zqa/tests/*'
     - |
       # Upload to Codecov
       curl -Os https://uploader.codecov.io/latest/linux/codecov

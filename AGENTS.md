@@ -92,15 +92,15 @@ Run them via: `cargo test -p zqa-pdftools <test_name> -- --ignored --nocapture`
 
 # Important Files
 
-- `zqa-rag/src/llm/`: LLM client implementations
-- `zqa-rag/src/embedding/`: Embedding client implementations
-- `zqa-rag/src/vector/`: Vector database operations
-- `zqa-pdftools/src/`: PDF parsing utilities
-- `zqa/src/`: CLI interface (work in progress)
+- `crates/zqa-rag/src/llm/`: LLM client implementations
+- `crates/zqa-rag/src/embedding/`: Embedding client implementations
+- `crates/zqa-rag/src/vector/`: Vector database operations
+- `crates/zqa-pdftools/src/`: PDF parsing utilities
+- `crates/zqa/src/`: CLI interface (work in progress)
 
 # Testing Notes
 
-- Integration tests in `zqa/tests/`--currently disabled
+- Integration tests in `crates/zqa/tests/`--currently disabled
 - Use `cargo test` to run available tests. If you are debugging, use `RUST_BACKTRACE=1`.
 
 # Commit & Pull Request Guidelines
