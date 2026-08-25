@@ -58,7 +58,7 @@ impl LLMClient {
         match self {
             LLMClient::Anthropic(client) => client.config.as_ref().map(|c| ReasoningConfig {
                 max_tokens: c.reasoning_budget,
-                effort: None,
+                effort: c.reasoning_effort.clone(),
                 summary: None,
             }),
             LLMClient::Ollama(client) => client.config.as_ref().map(|c| ReasoningConfig {

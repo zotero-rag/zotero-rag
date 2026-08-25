@@ -71,6 +71,7 @@ impl<T: HttpClient> AgenticClient for OllamaClient<T> {
             messages: history,
             system: system_prompt,
             thinking: reasoning.map(Into::into),
+            output_config: None,
             tools,
         };
 

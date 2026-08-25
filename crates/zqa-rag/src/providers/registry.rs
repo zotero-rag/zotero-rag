@@ -252,6 +252,7 @@ mod tests {
             model: "claude-test".into(),
             max_tokens: 1024,
             reasoning_budget: None,
+            reasoning_effort: None,
         })
     }
 

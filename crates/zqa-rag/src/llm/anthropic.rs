@@ -70,24 +70,113 @@ impl From<&ChatHistoryItem> for AnthropicChatHistoryItem {
 }
 
 #[derive(Serialize)]
-pub(crate) struct AnthropicThinkingConfig {
-    /// "summarized" or "omitted"
-    display: &'static str,
-    /// Token budget for thinking
-    budget_tokens: u32,
-    /// Always "enabled"
-    r#type: &'static str,
+#[serde(tag = "type", rename_all = "snake_case")]
+pub(crate) enum AnthropicThinkingConfig {
+    /// Manual extended thinking with a fixed token budget (older models).
+    Enabled {
+        /// "summarized" or "omitted"
+        display: &'static str,
+        /// Token budget for thinking
+        budget_tokens: u32,
+    },
+    /// Adaptive thinking: the model decides when and how deeply to think. This is the only
+    /// thinking mode supported by Claude Opus 4.6+ and Claude 5 models; depth is steered via
+    /// `output_config.effort` instead of a token budget.
+    Adaptive {
+        /// "summarized" or "omitted"
+        display: &'static str,
+    },
+}
+
+/// Output-level request configuration, currently only the reasoning effort.
+#[derive(Serialize)]
+pub(crate) struct AnthropicOutputConfig {
+    /// Effort level ("low", "medium", "high", "xhigh", "max") used to steer adaptive thinking.
+    effort: String,
 }
 
 impl From<&ReasoningConfig> for AnthropicThinkingConfig {
     fn from(value: &ReasoningConfig) -> Self {
-        Self {
+        Self::Enabled {
             display: "summarized",
             budget_tokens: value
                 .max_tokens
                 .unwrap_or(DEFAULT_ANTHROPIC_REASONING_BUDGET),
-            r#type: "enabled",
         }
+    }
+}
+
+/// Whether the given Claude model supports adaptive thinking (`thinking.type: "adaptive"`)
+/// rather than manual extended thinking (`thinking.type: "enabled"`).
+///
+/// # Arguments
+///
+/// * `model` - The model name (e.g., "claude-opus-4-8")
+///
+/// # Returns
+///
+/// `true` for Claude Opus 4.6+, Sonnet 4.6+, Haiku 4.5, and all Claude 5 models.
+fn supports_adaptive_thinking(model: &str) -> bool {
+    const ADAPTIVE_MODELS: &[&str] = &[
+        "opus-4-6",
+        "opus-4-7",
+        "opus-4-8",
+        "sonnet-4-6",
+        "opus-5",
+        "sonnet-5",
+        "haiku-4-5",
+        "fable-5",
+        "mythos-5",
+        "mythos-preview",
+    ];
+
+    let model = model.to_lowercase();
+    ADAPTIVE_MODELS.iter().any(|m| model.contains(m))
+}
+
+/// Build the thinking and output configuration for a request. Adaptive-thinking models use
+/// `output_config.effort` to steer thinking; older models use a fixed `budget_tokens`.
+///
+/// # Arguments
+///
+/// * `model` - The model the request will be sent to
+/// * `reasoning` - The reasoning configuration, if thinking is enabled
+///
+/// # Returns
+///
+/// The `(thinking, output_config)` pair for the request; both `None` when thinking is disabled.
+fn make_thinking_config(
+    model: &str,
+    reasoning: Option<&ReasoningConfig>,
+) -> (
+    Option<AnthropicThinkingConfig>,
+    Option<AnthropicOutputConfig>,
+) {
+    let Some(reasoning) = reasoning else {
+        return (None, None);
+    };
+
+    if supports_adaptive_thinking(model) {
+        let output_config = reasoning
+            .effort
+            .clone()
+            .map(|effort| AnthropicOutputConfig { effort });
+        (
+            Some(AnthropicThinkingConfig::Adaptive {
+                display: "summarized",
+            }),
+            output_config,
+        )
+    } else {
+        (
+            Some(AnthropicThinkingConfig::Enabled {
+                display: "summarized",
+                budget_tokens: reasoning
+                    .max_tokens
+                    .unwrap_or(DEFAULT_ANTHROPIC_REASONING_BUDGET),
+            }),
+            None,
+        )
     }
 }
 
@@ -106,6 +195,9 @@ pub(crate) struct AnthropicRequest<'a> {
     /// Thinking/reasoning configuration
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) thinking: Option<AnthropicThinkingConfig>,
+    /// Output configuration (reasoning effort) for adaptive-thinking models
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) output_config: Option<AnthropicOutputConfig>,
     /// The tools passed in
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) tools: Option<&'a [SerializedTool<'a>]>,
@@ -354,12 +446,14 @@ impl<T: HttpClient> AgenticClient for AnthropicClient<T> {
             )
         };
 
+        let (thinking, output_config) = make_thinking_config(&model, reasoning);
         let request = AnthropicRequest {
             model: &model,
             max_tokens: max_tokens.unwrap_or(config_max_tokens),
             messages: history,
             system: system_prompt,
-            thinking: reasoning.map(Into::into),
+            thinking,
+            output_config,
             tools,
         };
 
@@ -397,7 +491,8 @@ mod tests {
     use super::{
         AnthropicClient, AnthropicRedactedThinkingResponseContent, AnthropicResponse,
         AnthropicResponseContent, AnthropicThinkingResponseContent,
-        AnthropicToolUseResponseContent, AnthropicUsageStats,
+        AnthropicToolUseResponseContent, AnthropicUsageStats, make_thinking_config,
+        supports_adaptive_thinking,
     };
     use crate::config::AnthropicConfig;
     use crate::http_client::{MockHttpClient, RecordingSequentialMockHttpClient, ReqwestClient};
@@ -436,8 +531,79 @@ mod tests {
     }
 
     fn assert_thinking_config(request: &serde_json::Value) {
-        assert_eq!(request["thinking"]["type"].as_str(), Some("enabled"));
-        assert_eq!(request["thinking"]["budget_tokens"].as_u64(), Some(1024));
+        test_eq!(request["thinking"]["type"].as_str(), Some("adaptive"));
+        assert!(request["thinking"].get("budget_tokens").is_none());
+    }
+
+    #[test]
+    fn test_supports_adaptive_thinking() {
+        for model in [
+            "claude-opus-4-6",
+            "claude-opus-4-7",
+            "claude-opus-4-8",
+            "claude-sonnet-4-6",
+            "claude-opus-5",
+            "claude-sonnet-5",
+            "claude-haiku-4-5",
+        ] {
+            assert!(supports_adaptive_thinking(model), "{model}");
+        }
+        for model in [
+            "claude-opus-4-5",
+            "claude-sonnet-4-5",
+            "claude-opus-4-1",
+            "claude-opus-4",
+            "claude-sonnet-4",
+            "claude-3-7-sonnet",
+        ] {
+            assert!(!supports_adaptive_thinking(model), "{model}");
+        }
+    }
+
+    #[test]
+    fn test_thinking_config_extended_only_model_uses_budget() {
+        let reasoning = ReasoningConfig {
+            max_tokens: Some(1024),
+            effort: Some("high".into()),
+            summary: None,
+        };
+        let (thinking, output_config) = make_thinking_config("claude-opus-4-5", Some(&reasoning));
+        let thinking = serde_json::to_value(thinking).unwrap();
+        test_eq!(thinking["type"].as_str(), Some("enabled"));
+        test_eq!(thinking["budget_tokens"].as_u64(), Some(1024));
+        test_eq!(thinking["display"].as_str(), Some("summarized"));
+        assert!(output_config.is_none());
+    }
+
+    #[test]
+    fn test_thinking_config_adaptive_model_uses_effort() {
+        let reasoning = ReasoningConfig {
+            max_tokens: Some(1024),
+            effort: Some("low".into()),
+            summary: None,
+        };
+        let (thinking, output_config) = make_thinking_config("claude-opus-4-8", Some(&reasoning));
+        let thinking = serde_json::to_value(thinking).unwrap();
+        test_eq!(thinking["type"].as_str(), Some("adaptive"));
+        assert!(thinking.get("budget_tokens").is_none());
+        let output_config = serde_json::to_value(output_config).unwrap();
+        test_eq!(output_config["effort"].as_str(), Some("low"));
+    }
+
+    #[test]
+    fn test_thinking_config_adaptive_model_without_effort_omits_output_config() {
+        let reasoning = ReasoningConfig {
+            max_tokens: Some(1024),
+            effort: None,
+            summary: None,
+        };
+        let (thinking, output_config) = make_thinking_config("claude-sonnet-5", Some(&reasoning));
+        assert!(thinking.is_some());
+        assert!(output_config.is_none());
+
+        let (thinking, output_config) = make_thinking_config("claude-sonnet-5", None);
+        assert!(thinking.is_none());
+        assert!(output_config.is_none());
     }
 
     fn content_block<'a>(
@@ -759,6 +925,7 @@ mod tests {
                 model: DEFAULT_CLAUDE_MODEL.into(),
                 max_tokens: 2048,
                 reasoning_budget: None,
+                reasoning_effort: None,
             }),
         };
         let request = ChatRequest {
