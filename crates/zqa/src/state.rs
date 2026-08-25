@@ -501,6 +501,7 @@ mod tests {
 
     use chrono::Local;
     use clap::builder::OsStr;
+    use serial_test::serial;
     use zqa_macros::test_ok;
     use zqa_rag::llm::base::{ChatHistoryContent, ChatHistoryItem, MessageRole};
 
@@ -510,6 +511,7 @@ mod tests {
     };
 
     #[test]
+    #[serial]
     fn test_get_state_dir() {
         let state_dir = get_state_dir();
 
@@ -528,6 +530,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_get_conversation_history() {
         let temp_dir = tempfile::tempdir().unwrap();
         temp_env::with_var("ZQA_STATE_DIR", Some(temp_dir.path()), || {
@@ -542,6 +545,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_save_conversation_creates_dirs() {
         let temp_dir = tempfile::tempdir().unwrap();
         temp_env::with_var("ZQA_STATE_DIR", Some(temp_dir.path()), || {
@@ -563,6 +567,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_get_conversation_history_works() {
         let temp_dir = tempfile::tempdir().unwrap();
         temp_env::with_var("ZQA_STATE_DIR", Some(temp_dir.path()), || {
@@ -610,6 +615,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_oobe_interactive() {
         // Create temp directories
         let temp_home = std::env::temp_dir().join("zqa_test_home");

@@ -27,7 +27,7 @@ where
     O: Write,
     E: Write,
 {
-    save_current_conversation(ctx)
+    save_current_conversation(ctx).map(|_| ())
 }
 
 /// Print the active CLI configuration.
@@ -67,13 +67,18 @@ where
 ///
 /// # Errors
 ///
-/// Returns a [`CLIError`] if conversation state could not be persisted.
+/// Returns [`CLIError::CommandError`] if the conversation could not be saved; the
+/// in-memory conversation is then kept so no data is lost.
 pub(crate) fn handle_new_conversation_cmd<O, E>(ctx: &mut Context<O, E>) -> Result<(), CLIError>
 where
     O: Write,
     E: Write,
 {
-    save_current_conversation(ctx)?;
+    if !save_current_conversation(ctx)? {
+        return Err(CLIError::CommandError(
+            "could not save the current conversation; keeping it active".into(),
+        ));
+    }
 
     ctx.state.dirty.store(false, atomic::Ordering::Relaxed);
     ctx.state.chat_history = Arc::new(Mutex::new(Vec::new()));
@@ -191,7 +196,12 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+    use std::sync::{Arc, Mutex, atomic};
+
+    use serial_test::serial;
     use zqa_macros::test_contains;
+    use zqa_rag::llm::base::{ChatHistoryContent, ChatHistoryItem, MessageRole};
 
     use super::handle_help_cmd;
     use crate::common::test_support::create_test_context;
@@ -219,5 +229,28 @@ mod tests {
         test_contains!(output, "/docs list");
         test_contains!(output, "/batch check");
         test_contains!(output, "/batch create");
+    }
+
+    #[test]
+    #[serial]
+    fn test_new_conversation_keeps_history_when_save_fails() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        // A regular file where the state dir should be makes `create_dir_all` fail.
+        let blocker = temp_dir.path().join("blocker");
+        fs::write(&blocker, b"not a directory").unwrap();
+        temp_env::with_var("ZQA_STATE_DIR", Some(blocker.as_path()), || {
+            let mut ctx = create_test_context(vec![]);
+            ctx.state.chat_history = Arc::new(Mutex::new(vec![ChatHistoryItem {
+                role: MessageRole::User,
+                content: vec![ChatHistoryContent::Text("What is attention?".into())],
+            }]));
+            ctx.state.dirty.store(true, atomic::Ordering::Relaxed);
+
+            let result = super::handle_new_conversation_cmd(&mut ctx);
+
+            assert!(result.is_err());
+            let history = ctx.state.chat_history.lock().unwrap();
+            assert_eq!(history.len(), 1);
+        });
     }
 }

@@ -105,7 +105,24 @@ pub(crate) fn handle_resume_cmd<O: Write, E: Write>(
     Ok(())
 }
 
-pub(crate) fn save_current_conversation<O, E>(ctx: &mut Context<O, E>) -> Result<(), CLIError>
+/// Save the current conversation if it has unsaved changes.
+///
+/// # Arguments
+///
+/// * `ctx` - A `Context` object that contains CLI state and objects that implement
+///   [`std::io::Write`] for `stdout` and `stderr`.
+///
+/// # Returns
+///
+/// Whether the conversation is safe to discard: `true` when there was nothing to
+/// save or the save succeeded, `false` when saving failed. On failure the cause is
+/// reported on stderr and the caller should keep the conversation alive.
+///
+/// # Errors
+///
+/// Returns a [`CLIError`] if a state lock could not be obtained or the failure
+/// could not be written to stderr.
+pub(crate) fn save_current_conversation<O, E>(ctx: &mut Context<O, E>) -> Result<bool, CLIError>
 where
     O: Write,
     E: Write,
@@ -127,9 +144,10 @@ where
 
         if let Err(e) = save_conversation(&conversation) {
             writeln!(&mut ctx.err, "Error saving conversation: {e}")?;
+            return Ok(false);
         }
     }
-    Ok(())
+    Ok(true)
 }
 
 #[cfg(test)]
@@ -137,6 +155,7 @@ mod tests {
     use std::io::Cursor;
 
     use chrono::Local;
+    use serial_test::serial;
     use temp_env;
     use zqa_macros::{test_contains, test_eq};
     use zqa_rag::llm::base::{ChatHistoryContent, ChatHistoryItem, MessageRole};
@@ -146,6 +165,7 @@ mod tests {
     use crate::state::{SavedChatHistory, UsageMetadata, save_conversation};
 
     #[test]
+    #[serial]
     fn test_resume_no_conversations() {
         let temp_dir = tempfile::tempdir().unwrap();
         temp_env::with_var("ZQA_STATE_DIR", Some(temp_dir.path()), || {
@@ -159,6 +179,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_resume_loads_selected_conversation() {
         let temp_dir = tempfile::tempdir().unwrap();
         temp_env::with_var("ZQA_STATE_DIR", Some(temp_dir.path()), || {
@@ -231,6 +252,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_resume_invalid_selection() {
         let temp_dir = tempfile::tempdir().unwrap();
         temp_env::with_var("ZQA_STATE_DIR", Some(temp_dir.path()), || {
