@@ -249,4 +249,4 @@ To report a bug, please re-run using `--log-level debug` and add the logs to you
 
 # License
 
-MIT License - See [LICENSE](LICENSE) for details.
+MIT License - See [LICENSE](LICENSE) for details. Exception: the `zqa-gui` crate is GPL-3.0-or-later because it statically links GPL-licensed crates from the Zed ecosystem (see `crates/zqa-gui/LICENSE` and `deny.toml`).

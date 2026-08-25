@@ -3,7 +3,11 @@ name = "zqa-gui"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.95"
-license = "MIT"
+# GPL-3.0-or-later: the gpui stack statically links GPL-3.0-or-later crates
+# (zlog, ztracing, ztracing_macro from zed-industries/zed), so this crate and
+# any binary built from it are GPL-covered. The other workspace crates do not
+# link those and remain MIT.
+license = "GPL-3.0-or-later"
 description = "Native GUI front-end for the zqa Zotero RAG QA system."
 # Not publishable: gpui is a git-only dependency, which crates.io rejects. Keeping this
 # crate unpublished is what lets `zqa` itself stay publishable.

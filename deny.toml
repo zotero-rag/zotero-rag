@@ -47,7 +47,24 @@ ignore = [
     { id = "RUSTSEC-2024-0436", reason = "transitive via datafusion/lance; awaiting ecosystem migration" },
 
     # ttf-parser: unmaintained
-    { id = "RUSTSEC-2026-0192", reason = "transitive via lopdf" }
+    { id = "RUSTSEC-2026-0192", reason = "transitive via lopdf" },
+
+    # bincode: unmaintained (upstream ceased development). Pulled in by
+    # syntect, which gpui-base uses for syntax highlighting; we don't use
+    # bincode directly and cannot swap syntect's backend. The advisory itself
+    # notes 1.3.3 is considered complete.
+    # https://rustsec.org/advisories/RUSTSEC-2025-0141
+    { id = "RUSTSEC-2025-0141", reason = "transitive via syntect/gpui-base; upstream considers 1.3.3 complete" },
+
+    # instant: unmaintained. Pulled in by gpui and notify-types in the gpui
+    # stack; migrating to web-time is upstream's call.
+    # https://rustsec.org/advisories/RUSTSEC-2024-0384
+    { id = "RUSTSEC-2024-0384", reason = "transitive via gpui/notify-types; awaiting upstream migration to web-time" },
+
+    # rustybuzz: unmaintained. Pulled in by usvg in the gpui stack. No
+    # actionable replacement on our side; gpui would need to move to harfrust.
+    # https://rustsec.org/advisories/RUSTSEC-2026-0206
+    { id = "RUSTSEC-2026-0206", reason = "transitive via usvg/gpui; awaiting upstream migration" }
 ]
 
 [licenses]
@@ -69,8 +86,30 @@ allow = [
     # upstream crate.
     "MPL-2.0",
     "Zlib",
+    # CC0-1.0 is effectively public domain; used by hexf-parse (naga),
+    # notify (gpui-component), tiny-keccak (ahash), and zed's workspace-hack.
+    "CC0-1.0",
+    # The LLVM exception to Apache-2.0 explicitly permits static linking
+    # without GPL-style constraints; used by ar_archive_writer (via stacker).
+    "Apache-2.0 WITH LLVM-exception",
+    # The bzip2 license is permissive (BSD-like); used by libbz2-rs-sys.
+    "bzip2-1.0.6",
 ]
 confidence-threshold = 0.8
+
+# Per-crate license exceptions. zlog / ztracing / ztracing_macro are the only
+# GPL-3.0-or-later crates in the tree; they arrive via gpui (ztracing through
+# sum_tree, zlog through gpui_util). Because Rust statically links, the
+# distributed zqa-gui binary is GPL-3.0-covered, and zqa-gui itself is
+# licensed GPL-3.0-or-later accordingly. The other workspace crates do not
+# link these and remain MIT/Apache-2.0. Regularly re-check whether upstream
+# has relicensed; see https://github.com/zed-industries/zed.
+exceptions = [
+    { allow = ["GPL-3.0-or-later"], crate = "zlog" },          # transitive via gpui_util
+    { allow = ["GPL-3.0-or-later"], crate = "ztracing" },      # transitive via sum_tree
+    { allow = ["GPL-3.0-or-later"], crate = "ztracing_macro" }, # transitive via ztracing
+    { allow = ["GPL-3.0-or-later"], crate = "zqa-gui" },        # links the three crates above
+]
 
 [bans]
 # Warn (not deny) on duplicate versions of the same crate. The datafusion /
@@ -92,8 +131,26 @@ allow-wildcard-paths = true
 # errors are not appropriate for a library. `anyhow` is still allowed when it
 # arrives transitively through `prost-derive` (a build-time proc-macro in the
 # lance protobuf stack), which we don't control.
+# anyhow is also pulled in pervasively by the gpui stack (gpui and its
+# platform crates, longbridge's gpui-component, and zed's internal helper
+# crates). Those wrappers are third-party code we don't control; the ban
+# still applies to first-party workspace crates.
 deny = [
-    { crate = "anyhow", wrappers = ["prost-derive"], reason = "prefer thiserror for typed errors; anyhow only tolerated transitively via prost-derive" },
+    { crate = "anyhow", wrappers = [
+        "prost-derive",
+        "gpui",
+        "gpui_apple",
+        "gpui_linux",
+        "gpui_macos",
+        "gpui_util",
+        "gpui_wgpu",
+        "gpui-base",
+        "gpui-component",
+        "gpui-component-assets",
+        "http_client",
+        "media",
+        "zlog",
+    ], reason = "prefer thiserror for typed errors; anyhow only tolerated transitively via third-party deps we don't control" },
 ]
 
 # Crates to skip when checking for duplicate versions.
@@ -106,9 +163,20 @@ skip-tree = []
 # Deny any registry other than the ones explicitly listed below.
 unknown-registry = "deny"
 
-# Deny any git dependency whose host isn't in the allow-list below. We
-# currently have no git dependencies, so any that appear should be reviewed.
+# Deny any git dependency whose host isn't in the allow-list below. Git
+# dependencies are pinned but receive no crates.io review, so additions to
+# allow-git should be deliberate.
 unknown-git = "deny"
 
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
-allow-git = []
+allow-git = [
+    # gpui / gpui_platform (zqa-gui's UI framework) are git-only; Zed does
+    # not publish them to crates.io.
+    "https://github.com/zed-industries/zed",
+    # Zed's fork of font-kit, pulled in by gpui_platform.
+    "https://github.com/zed-industries/font-kit",
+    # Zed's fork of xim-rs, pulled in by gpui_linux.
+    "https://github.com/zed-industries/xim-rs.git",
+    # longbridge's gpui-component widget library used by zqa-gui.
+    "https://github.com/longbridge/gpui-component",
+]
