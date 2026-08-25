@@ -131,6 +131,7 @@ async fn test_extraction_prompt_anthropic() {
         api_key: Some(api_key),
         max_tokens: 8192,
         reasoning_budget: None,
+        reasoning_effort: None,
     };
 
     let client = get_client_with_config(&LLMClientConfig::Anthropic(config.into()))

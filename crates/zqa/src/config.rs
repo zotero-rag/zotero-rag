@@ -568,7 +568,12 @@ pub struct AnthropicConfig {
     pub max_tokens: u32,
 
     /// Token budget for extended thinking. Omit to disable thinking.
+    /// Only used on models with manual extended thinking (Claude Opus 4.5 and earlier).
     pub reasoning_budget: Option<u32>,
+
+    /// Reasoning effort ("low", "medium", "high", "xhigh", "max") for models with adaptive
+    /// thinking (Claude Opus 4.6+ and Claude 5 models). Omit to use the model default.
+    pub reasoning_effort: Option<String>,
 }
 
 impl Default for AnthropicConfig {
@@ -579,6 +584,7 @@ impl Default for AnthropicConfig {
             max_tokens: DEFAULT_ANTHROPIC_MAX_TOKENS,
             api_key: None,
             reasoning_budget: None,
+            reasoning_effort: None,
         }
     }
 }
@@ -923,6 +929,7 @@ impl From<AnthropicConfig> for zqa_rag::config::AnthropicConfig {
             model: config.model.unwrap_or(DEFAULT_ANTHROPIC_MODEL.into()),
             max_tokens: config.max_tokens,
             reasoning_budget: config.reasoning_budget,
+            reasoning_effort: config.reasoning_effort,
         }
     }
 }

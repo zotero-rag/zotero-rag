@@ -24,7 +24,11 @@ pub struct AnthropicConfig {
     /// Maximum tokens for generation
     pub max_tokens: u32,
     /// Token budget for extended thinking. `None` disables thinking.
+    /// Only used on models with manual extended thinking (Claude Opus 4.5 and earlier).
     pub reasoning_budget: Option<u32>,
+    /// Reasoning effort level ("low", "medium", "high", "xhigh", "max") for models with
+    /// adaptive thinking (Claude Opus 4.6+ and Claude 5 models). `None` uses the model default.
+    pub reasoning_effort: Option<String>,
 }
 
 impl Default for AnthropicConfig {
@@ -34,6 +38,7 @@ impl Default for AnthropicConfig {
             model: DEFAULT_ANTHROPIC_MODEL.into(),
             max_tokens: DEFAULT_ANTHROPIC_MAX_TOKENS,
             reasoning_budget: None,
+            reasoning_effort: None,
         }
     }
 }

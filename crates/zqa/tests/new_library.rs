@@ -41,6 +41,7 @@ async fn test_integration_works() {
             api_key: env::var("ANTHROPIC_API_KEY").unwrap().into(),
             max_tokens: 8192,
             reasoning_budget: None,
+            reasoning_effort: None,
         }),
         voyageai: Some(VoyageAIConfig {
             reranker: Some("rerank-2.5".into()),
