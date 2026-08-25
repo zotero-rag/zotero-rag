@@ -15,7 +15,6 @@ use crate::capabilities::EmbeddingProvider;
 use crate::constants::{
     DEFAULT_COHERE_EMBEDDING_DIM, DEFAULT_GEMINI_EMBEDDING_DIM, DEFAULT_MAX_CONCURRENT_REQUESTS,
     DEFAULT_OLLAMA_EMBEDDING_DIM, DEFAULT_OPENAI_EMBEDDING_DIM, DEFAULT_VOYAGE_EMBEDDING_DIM,
-    DEFAULT_ZEROENTROPY_EMBEDDING_DIM,
 };
 use crate::http_client::HttpClient;
 use crate::llm::errors::LLMError;
@@ -69,7 +68,6 @@ pub fn get_embedding_dims_by_provider(embedding_provider: EmbeddingProvider) -> 
         EmbeddingProvider::Gemini => DEFAULT_GEMINI_EMBEDDING_DIM,
         EmbeddingProvider::Ollama => DEFAULT_OLLAMA_EMBEDDING_DIM as u32,
         EmbeddingProvider::Cohere => DEFAULT_COHERE_EMBEDDING_DIM,
-        EmbeddingProvider::ZeroEntropy => DEFAULT_ZEROENTROPY_EMBEDDING_DIM,
     }
 }
 
@@ -106,8 +104,6 @@ pub enum EmbeddingProviderConfig {
     Cohere(crate::config::CohereConfig),
     /// Configuration for `ollama` embedding provider
     Ollama(crate::config::OllamaConfig),
-    /// Configuration for ZeroEntropy embedding provider
-    ZeroEntropy(crate::config::ZeroEntropyConfig),
 }
 
 impl EmbeddingProviderConfig {
@@ -120,7 +116,6 @@ impl EmbeddingProviderConfig {
             Self::Gemini(_) => ProviderId::Gemini,
             Self::VoyageAI(_) => ProviderId::VoyageAI,
             Self::Cohere(_) => ProviderId::Cohere,
-            Self::ZeroEntropy(_) => ProviderId::ZeroEntropy,
         }
     }
 
@@ -148,7 +143,6 @@ impl EmbeddingProviderConfig {
             Self::Gemini(c) => &c.embedding_model,
             Self::Cohere(c) => &c.embedding_model,
             Self::Ollama(c) => &c.embedding_model,
-            Self::ZeroEntropy(c) => &c.embedding_model,
         }
     }
 
@@ -161,7 +155,6 @@ impl EmbeddingProviderConfig {
             Self::Gemini(c) => c.embedding_dims,
             Self::Cohere(c) => c.embedding_dims,
             Self::Ollama(c) => c.embedding_dims,
-            Self::ZeroEntropy(c) => c.embedding_dims,
         }
     }
 }

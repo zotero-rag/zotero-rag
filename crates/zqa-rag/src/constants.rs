@@ -90,15 +90,6 @@ pub const DEFAULT_VOYAGE_EMBEDDING_MODEL: &str = "voyage-4-large";
 /// Default Voyage AI embedding dimension
 pub const DEFAULT_VOYAGE_EMBEDDING_DIM: u32 = 2048;
 
-/// Default ZeroEntropy embedding model
-pub const DEFAULT_ZEROENTROPY_EMBEDDING_MODEL: &str = "zembed-1";
-
-/// Default ZeroEntropy embedding dimension
-pub const DEFAULT_ZEROENTROPY_EMBEDDING_DIM: u32 = 2560;
-
-/// Default ZeroEntropy rerank model
-pub const DEFAULT_ZEROENTROPY_RERANK_MODEL: &str = "zerank-2";
-
 /// Default reasoning token budget for Anthropic
 pub const DEFAULT_ANTHROPIC_REASONING_BUDGET: u32 = 2048;
 

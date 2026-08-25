@@ -12,6 +12,5 @@ pub mod registry;
 #[cfg(any(test, feature = "mock"))]
 pub mod test;
 pub mod voyage;
-pub mod zeroentropy;
 
 pub use provider_id::ProviderId;

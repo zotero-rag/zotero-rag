@@ -54,8 +54,6 @@ pub enum RerankProviderConfig {
     VoyageAI(crate::config::VoyageAIConfig),
     /// Configuration for Cohere reranking provider
     Cohere(crate::config::CohereConfig),
-    /// Configuration for ZeroEntropy reranking provider
-    ZeroEntropy(crate::config::ZeroEntropyConfig),
 }
 
 impl RerankProviderConfig {
@@ -65,7 +63,6 @@ impl RerankProviderConfig {
         match self {
             Self::VoyageAI(_) => ProviderId::VoyageAI,
             Self::Cohere(_) => ProviderId::Cohere,
-            Self::ZeroEntropy(_) => ProviderId::ZeroEntropy,
         }
     }
 
@@ -90,7 +87,6 @@ impl RerankProviderConfig {
         match self {
             Self::VoyageAI(c) => &c.reranker,
             Self::Cohere(c) => &c.reranker,
-            Self::ZeroEntropy(c) => &c.reranker,
         }
     }
 }
