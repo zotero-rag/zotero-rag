@@ -28,8 +28,8 @@ variables or a local `.env` file instead.
 | Reranking | Optionally refines retrieved results before they reach the answer model. |
 
 The provider registry supports Anthropic, OpenAI, OpenRouter, Gemini, and
-Ollama for generation; OpenAI, Voyage AI, Cohere, ZeroEntropy, Gemini, and
-Ollama for embeddings; and Voyage AI, Cohere, and ZeroEntropy for reranking.
+Ollama for generation; OpenAI, Voyage AI, Cohere, Gemini, and
+Ollama for embeddings; and Voyage AI, and Cohere for reranking.
 Reranking is disabled when `reranker_provider` is omitted. Model names,
 dimensions, token limits, and provider-specific options belong to each
 provider's configuration section. See [zqa-rag](/rag.md) for the provider and

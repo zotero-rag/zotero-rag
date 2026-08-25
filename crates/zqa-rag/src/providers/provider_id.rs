@@ -20,7 +20,6 @@ pub enum ProviderId {
     Ollama,
     VoyageAI,
     Cohere,
-    ZeroEntropy,
     #[cfg(any(test, feature = "mock"))]
     Mock,
 }
@@ -43,7 +42,6 @@ impl ProviderId {
             Self::Ollama => "ollama",
             Self::VoyageAI => "voyageai",
             Self::Cohere => "cohere",
-            Self::ZeroEntropy => "zeroentropy",
             #[cfg(any(test, feature = "mock"))]
             Self::Mock => "mock",
         }
@@ -62,7 +60,6 @@ impl FromStr for ProviderId {
             "ollama" => Ok(Self::Ollama),
             "voyageai" => Ok(Self::VoyageAI),
             "cohere" => Ok(Self::Cohere),
-            "zeroentropy" => Ok(Self::ZeroEntropy),
             #[cfg(any(test, feature = "mock"))]
             "mock" => Ok(Self::Mock),
             _ => Err(format!("Invalid provider name: {s}")),
@@ -92,7 +89,6 @@ impl From<&EmbeddingProvider> for ProviderId {
             EmbeddingProvider::Ollama => Self::Ollama,
             EmbeddingProvider::VoyageAI => Self::VoyageAI,
             EmbeddingProvider::Gemini => Self::Gemini,
-            EmbeddingProvider::ZeroEntropy => Self::ZeroEntropy,
         }
     }
 }
@@ -102,7 +98,6 @@ impl From<&RerankerProvider> for ProviderId {
         match value {
             RerankerProvider::Cohere => Self::Cohere,
             RerankerProvider::VoyageAI => Self::VoyageAI,
-            RerankerProvider::ZeroEntropy => Self::ZeroEntropy,
         }
     }
 }
@@ -113,7 +108,6 @@ impl TryFrom<ProviderId> for EmbeddingProvider {
     fn try_from(value: ProviderId) -> Result<Self, Self::Error> {
         match value {
             ProviderId::VoyageAI => Ok(EmbeddingProvider::VoyageAI),
-            ProviderId::ZeroEntropy => Ok(EmbeddingProvider::ZeroEntropy),
             ProviderId::Gemini => Ok(EmbeddingProvider::Gemini),
             ProviderId::OpenAI => Ok(EmbeddingProvider::OpenAI),
             ProviderId::Ollama => Ok(EmbeddingProvider::Ollama),
@@ -129,7 +123,6 @@ impl TryFrom<ProviderId> for RerankerProvider {
     fn try_from(value: ProviderId) -> Result<Self, Self::Error> {
         match value {
             ProviderId::VoyageAI => Ok(RerankerProvider::VoyageAI),
-            ProviderId::ZeroEntropy => Ok(RerankerProvider::ZeroEntropy),
             ProviderId::Cohere => Ok(RerankerProvider::Cohere),
             _ => Err(format!("Provider {value} does not support reranking.")),
         }
@@ -172,10 +165,6 @@ mod tests {
         assert_eq!(ProviderId::from_str("ollama"), Ok(ProviderId::Ollama));
         assert_eq!(ProviderId::from_str("voyageai"), Ok(ProviderId::VoyageAI));
         assert_eq!(ProviderId::from_str("cohere"), Ok(ProviderId::Cohere));
-        assert_eq!(
-            ProviderId::from_str("zeroentropy"),
-            Ok(ProviderId::ZeroEntropy)
-        );
         assert_eq!(ProviderId::from_str("mock"), Ok(ProviderId::Mock));
     }
 
@@ -190,10 +179,6 @@ mod tests {
         assert_eq!(
             ProviderId::from(&EmbeddingProvider::Gemini),
             ProviderId::Gemini
-        );
-        assert_eq!(
-            ProviderId::from(&RerankerProvider::ZeroEntropy),
-            ProviderId::ZeroEntropy
         );
         assert_eq!(ProviderId::from(&ModelProvider::Mock), ProviderId::Mock);
     }

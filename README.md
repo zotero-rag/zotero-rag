@@ -9,7 +9,7 @@ This project provides a command-line interface for querying your Zotero library 
 ### Features
 
 * Extracts text from PDFs and ignores tables/figures (they're unlikely to have useful context for LLMs)
-* Support for OpenAI, Ollama, Anthropic, Gemini, and OpenRouter models for text generation, Cohere, Gemini, Voyage AI, and ZeroEntropy models for embedding, and Cohere, Voyage AI, and ZeroEntropy models for reranking.
+* Support for OpenAI, Ollama, Anthropic, Gemini, and OpenRouter models for text generation, Cohere, Gemini, and Voyage AI models for embedding, and Cohere, and Voyage AI models for reranking.
 * Locally-stored embeddings using LanceDB.
 * Search-only mode retrieves papers
 
@@ -201,10 +201,6 @@ OLLAMA_MODEL_SMALL=
 OLLAMA_BASE_URL=
 OLLAMA_EMBEDDING_MODEL=
 OLLAMA_EMBEDDING_DIMS=
-
-ZEROENTROPY_API_KEY=
-ZEROENTROPY_RERANK_MODEL=
-ZEROENTROPY_EMBEDDING_MODEL=
 
 MAX_CONCURRENT_REQUESTS=5
 ```

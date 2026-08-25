@@ -23,8 +23,8 @@ these objects:
 | Capability | Registered providers |
 | --- | --- |
 | Generation | Anthropic, OpenAI, OpenRouter, Gemini, Ollama |
-| Embeddings | OpenAI, Voyage AI, Cohere, ZeroEntropy, Gemini, Ollama |
-| Reranking | Voyage AI, Cohere, ZeroEntropy |
+| Embeddings | OpenAI, Voyage AI, Cohere, Gemini, Ollama |
+| Reranking | Voyage AI, Cohere |
 | Batch embeddings | Voyage AI |
 
 The registry also registers embedding implementations with LanceDB. This keeps

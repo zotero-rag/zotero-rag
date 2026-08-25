@@ -65,8 +65,6 @@ pub enum EmbeddingProvider {
     VoyageAI,
     /// Gemini embedding provider
     Gemini,
-    /// ZeroEntropy embedding provider
-    ZeroEntropy,
 }
 
 impl EmbeddingProvider {
@@ -80,9 +78,9 @@ impl EmbeddingProvider {
     #[must_use]
     pub fn recommended_chunking_strategy(&self) -> ChunkingStrategy {
         match self {
-            EmbeddingProvider::Cohere
-            | EmbeddingProvider::VoyageAI
-            | EmbeddingProvider::ZeroEntropy => ChunkingStrategy::WholeDocument,
+            EmbeddingProvider::Cohere | EmbeddingProvider::VoyageAI => {
+                ChunkingStrategy::WholeDocument
+            }
             // include a buffer for approximation errors
             EmbeddingProvider::OpenAI => ChunkingStrategy::SectionBased(7500),
             // include a buffer for approximation errors; actual limit is 2048
@@ -234,8 +232,6 @@ pub enum RerankerProvider {
     Cohere,
     /// VoyageAI reranking provider
     VoyageAI,
-    /// ZeroEntropy reranking provider
-    ZeroEntropy,
 }
 
 impl RerankerProvider {
@@ -317,7 +313,6 @@ mod tests {
     use crate::clients::openrouter::OpenRouterClient;
     use crate::embedding::cohere::CohereClient;
     use crate::embedding::voyage::VoyageAIClient;
-    use crate::embedding::zeroentropy::ZeroEntropyClient;
     use crate::http_client::ReqwestClient;
     use crate::llm::base::{AgenticClient, ChatHistoryItem};
     use crate::reranking::common::Rerank;
@@ -353,7 +348,6 @@ mod tests {
         assert_embedding_fn::<GeminiClient<ReqwestClient>>();
         assert_embedding_fn::<CohereClient<ReqwestClient>>();
         assert_embedding_fn::<VoyageAIClient<ReqwestClient>>();
-        assert_embedding_fn::<ZeroEntropyClient<ReqwestClient>>();
     }
 
     /// Verify that [`super::BatchEmbeddingProvider::VoyageAI`] has a corresponding client that
@@ -369,6 +363,5 @@ mod tests {
     fn reranker_providers_implement_rerank() {
         assert_reranker::<CohereClient<ReqwestClient>>();
         assert_reranker::<VoyageAIClient<ReqwestClient>>();
-        assert_reranker::<ZeroEntropyClient<ReqwestClient>>();
     }
 }

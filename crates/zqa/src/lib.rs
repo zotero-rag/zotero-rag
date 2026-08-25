@@ -114,7 +114,6 @@ fn check_api_keys_exist(config: &Config, log_level: log::LevelFilter) {
             EmbeddingProviderConfig::Cohere(cfg) => cfg.api_key,
             EmbeddingProviderConfig::VoyageAI(cfg) => cfg.api_key,
             EmbeddingProviderConfig::Gemini(cfg) => cfg.api_key,
-            EmbeddingProviderConfig::ZeroEntropy(cfg) => cfg.api_key,
             // Ollama doesn't need an API key so we force a false condition
             EmbeddingProviderConfig::Ollama(_) => String::from("foo"),
             _ => unimplemented!("unsupported embedding provider: {}", c.provider_id()),
@@ -137,7 +136,6 @@ fn check_api_keys_exist(config: &Config, log_level: log::LevelFilter) {
             (match c {
                 RerankProviderConfig::VoyageAI(cfg) => cfg.api_key,
                 RerankProviderConfig::Cohere(cfg) => cfg.api_key,
-                RerankProviderConfig::ZeroEntropy(cfg) => cfg.api_key,
                 _ => unimplemented!("unsupported reranking provider: {}", c.provider_id()),
             })
             .is_empty()

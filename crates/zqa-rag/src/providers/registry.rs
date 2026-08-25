@@ -19,7 +19,6 @@ use crate::providers::provider_id::ProviderId;
 #[cfg(any(test, feature = "mock"))]
 use crate::providers::test::MockProvider;
 use crate::providers::voyage::VoyageAIProvider;
-use crate::providers::zeroentropy::ZeroEntropyProvider;
 use crate::reranking::common::{Rerank, RerankProviderConfig};
 use crate::vector::backends::backend::VectorBackendRegistrar;
 use crate::vector::backends::lance::{LanceBackend, LanceError};
@@ -189,7 +188,6 @@ pub fn default_provider_registry() -> ProviderRegistry {
     registry.register_embedding(Arc::new(OpenAIProvider));
     registry.register_embedding(Arc::new(VoyageAIProvider));
     registry.register_embedding(Arc::new(CohereProvider));
-    registry.register_embedding(Arc::new(ZeroEntropyProvider));
     registry.register_embedding(Arc::new(GeminiProvider));
     registry.register_embedding(Arc::new(OllamaProvider));
 
@@ -197,12 +195,10 @@ pub fn default_provider_registry() -> ProviderRegistry {
 
     registry.register_rerank(Arc::new(VoyageAIProvider));
     registry.register_rerank(Arc::new(CohereProvider));
-    registry.register_rerank(Arc::new(ZeroEntropyProvider));
 
     registry.register_lance_embedding(Arc::new(OpenAIProvider));
     registry.register_lance_embedding(Arc::new(VoyageAIProvider));
     registry.register_lance_embedding(Arc::new(CohereProvider));
-    registry.register_lance_embedding(Arc::new(ZeroEntropyProvider));
     registry.register_lance_embedding(Arc::new(GeminiProvider));
     registry.register_lance_embedding(Arc::new(OllamaProvider));
 
@@ -227,7 +223,7 @@ mod tests {
     use super::ProviderRegistry;
     use crate::config::{
         AnthropicConfig, CohereConfig, GeminiConfig, OllamaConfig, OpenAIConfig, OpenRouterConfig,
-        VoyageAIConfig, ZeroEntropyConfig,
+        VoyageAIConfig,
     };
     use crate::embedding::common::EmbeddingProviderConfig;
     use crate::llm::factory::LLMClient;
@@ -337,15 +333,6 @@ mod tests {
         })
     }
 
-    fn zeroentropy_embedding_config() -> EmbeddingProviderConfig {
-        EmbeddingProviderConfig::ZeroEntropy(ZeroEntropyConfig {
-            api_key: "test-key".into(),
-            embedding_model: "zembed-test".into(),
-            embedding_dims: 1024,
-            reranker: "zerank-test".into(),
-        })
-    }
-
     fn voyage_rerank_config() -> RerankProviderConfig {
         RerankProviderConfig::VoyageAI(VoyageAIConfig {
             api_key: "test-key".into(),
@@ -361,15 +348,6 @@ mod tests {
             embedding_model: "embed-test".into(),
             embedding_dims: 1024,
             reranker: "rerank-test".into(),
-        })
-    }
-
-    fn zeroentropy_rerank_config() -> RerankProviderConfig {
-        RerankProviderConfig::ZeroEntropy(ZeroEntropyConfig {
-            api_key: "test-key".into(),
-            embedding_model: "zembed-test".into(),
-            embedding_dims: 1024,
-            reranker: "zerank-test".into(),
         })
     }
 
@@ -420,11 +398,6 @@ mod tests {
         );
         assert!(
             registry
-                .create_embedding(&zeroentropy_embedding_config())
-                .is_ok()
-        );
-        assert!(
-            registry
                 .create_embedding(&gemini_embedding_config())
                 .is_ok()
         );
@@ -441,11 +414,6 @@ mod tests {
 
         assert!(registry.create_reranker(&voyage_rerank_config()).is_ok());
         assert!(registry.create_reranker(&cohere_rerank_config()).is_ok());
-        assert!(
-            registry
-                .create_reranker(&zeroentropy_rerank_config())
-                .is_ok()
-        );
     }
 
     #[tokio::test]
