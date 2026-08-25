@@ -11,7 +11,7 @@ use crate::utils::terminal::{DIM_TEXT, RESET};
 ///
 /// The wrappers in this module send their lines over a channel rather than printing, so the
 /// consumer decides where they land: the query handler forwards them to the context's error
-/// stream, which is the terminal in the CLI and the transcript in the TUI.
+/// stream, which is the terminal in the CLI and the transcript in the GUI.
 pub struct Verbose<T: Tool> {
     inner: T,
     status_tx: UnboundedSender<String>,

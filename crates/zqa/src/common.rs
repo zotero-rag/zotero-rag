@@ -17,11 +17,6 @@ use crate::store::lance::LanceZoteroStore;
 #[derive(Parser, Clone, Debug)]
 #[command(version, about, long_about = None)]
 pub struct Args {
-    /// Whether to use the tui interface. This is very unstable and is not feature-complete, and it
-    /// should not be used for regular tasks.
-    #[arg(long, default_value_t = false)]
-    pub tui: bool,
-
     /// Log level. Options: debug, info, warn, error, off (default)
     #[arg(long, default_value = "off")]
     pub log_level: log::LevelFilter,

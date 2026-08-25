@@ -237,11 +237,9 @@ To report a bug, please re-run using `--log-level debug` and add the logs to you
 
 **Does this support vim motions?** Yes, obviously. Set up your `.inputrc` accordingly (on macOS, the program will also respect `.editrc`, and this takes precedence over `.inputrc`, which acts as a fallback).
 
-**Will you make a GUI?** No, but there is an [open issue](https://github.com/zotero-rag/zotero-rag/issues/61) for a headless mode that will let you, or anyone else develop a UI easier (but this is a *very* low priority at the moment). However, this project is open-source, so feel free to build on top of it. Might I recommend [Dioxus](https://github.com/dioxuslabs/dioxus)?
+**Will you make a GUI?** A GUI is currently a work-in-progress: see `crates/zqa-gui`. This is built on GPUI, so is GPL 3.0-licensed.
 
 **I'm getting a 400 Forbidden!** Check that you set an API key in your `config.toml`, `.env`, or in your environment variables. Then, check that the API key has access to the API and is valid. Finally, check that your account has credits loaded.
-
-**What does the `--tui` option do?** Right now, nothing; it's disabled. A TUI is planned, but it's relatively low on priorities.
 
 **How do I write a config file for this?** Read [the docs](./README.md).
 
