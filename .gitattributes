@@ -1,2 +1,2 @@
-zqa/assets/** linguist-vendored
+crates/zqa/assets/** linguist-vendored
 *.tmpl linguist-generated=true
