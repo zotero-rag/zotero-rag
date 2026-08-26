@@ -200,7 +200,7 @@ impl ReasoningConfig {
     /// other is automatically filled in based on [Inspect's mapping](https://inspect.aisi.org.uk/reasoning.html#anthropic-claude-3.7-4.0-4.1-4.5).
     /// In other cases, no changes are made.
     pub(crate) fn normalize(&mut self) {
-        match (self.max_tokens, self.effort.as_ref()) {
+        match (self.max_tokens, self.effort.as_deref()) {
             (Some(token_budget), None) => {
                 self.effort = Some(
                     TOKENS_TO_EFFORT
@@ -210,8 +210,9 @@ impl ReasoningConfig {
                         .to_string(),
                 );
             }
+            (None, Some("none")) => self.effort = None,
             (None, Some(effort)) => {
-                self.max_tokens = ReasoningEffort::try_from(effort.clone())
+                self.max_tokens = ReasoningEffort::try_from(effort.to_string())
                     .ok()
                     .map(|e| *EFFORT_TO_TOKENS.get(&e).unwrap());
             }
