@@ -88,7 +88,10 @@ Run them via: `cargo test -p zqa-pdftools <test_name> -- --ignored --nocapture`
 - Do not leave inline comments unless you have specific recommendations for improvements.
 - Do not leave inline comments to state that something has improved or is better than before.
 - Keep your overall comment concise. In a paragraph or two, describe the overall PR quality and the recommendations in your comments.
-- If an inline comment you leave is pedantic or otherwise minor, prefix it with "nit: ", and keep it short, about one sentence.
+- If an inline comment you leave is pedantic or otherwise minor, prefix it with "nit: ", and keep it short, about one sentence. This is not to discourage pedantry, but nits should be non-blocking. The sentence immediately following "nit: " should not start with a capital letter. Example: "nit: prefer `is_some_and(..)` over `is_some(..) && ..`".
+- In general, the repo favors using tests to ensure that things that can go out of sync don't. See `test_all_reasoning_effort_values_mapped` in `crates/zqa-rag/src/llm/base.rs` or the various tests in `crates/zqa-rag/src/capabilities.rs`. This isn't strictly necessary, or blocking, however.
+- When two files have code that is shared, similar, or otherwise would need to be updated together, if it would not be obvious to a maintainer that the two locations should be kept in sync, the repo uses `NOTE:` comments in *both* places. Such a comment must use the word "maintainers".
+- When reviewing a revision of a PR, you should check not only whether the previous comments were addressed, but also whether the changed code itself follows the style guides, introduces new bugs, has inefficiencies, etc.
 
 # Important Files
 
