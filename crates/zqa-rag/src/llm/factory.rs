@@ -53,6 +53,7 @@ impl LLMClient {
     }
 
     /// Get the reasoning config from the client's config.
+    // NOTE: Maintainers: if you change this, you should also update zqa/src/config.rs
     #[must_use]
     pub fn get_reasoning_config(&self) -> Option<ReasoningConfig> {
         match self {
