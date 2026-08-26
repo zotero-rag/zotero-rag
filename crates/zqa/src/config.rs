@@ -352,7 +352,7 @@ impl Config {
                 }
                 Some(ReasoningConfig {
                     max_tokens: c.reasoning_budget,
-                    effort: c.reasoning_effort.clone(),
+                    effort: c.reasoning_effort.map(|r| r.to_string()),
                     summary: None,
                 })
             }),
@@ -932,7 +932,7 @@ impl From<AnthropicConfig> for zqa_rag::config::AnthropicConfig {
             model: config.model.unwrap_or(DEFAULT_ANTHROPIC_MODEL.into()),
             max_tokens: config.max_tokens,
             reasoning_budget: config.reasoning_budget,
-            reasoning_effort: config.reasoning_effort,
+            reasoning_effort: config.reasoning_effort.map(|r| r.to_string()),
         }
     }
 }
