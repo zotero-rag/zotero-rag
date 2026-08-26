@@ -145,7 +145,7 @@ impl Display for ReasoningEffort {
             ReasoningEffort::Medium => f.write_str("medium"),
             ReasoningEffort::High => f.write_str("high"),
             ReasoningEffort::Xhigh => f.write_str("xhigh"),
-            ReasoningEffort::Max => f.write_str("Max"),
+            ReasoningEffort::Max => f.write_str("max"),
         }
     }
 }

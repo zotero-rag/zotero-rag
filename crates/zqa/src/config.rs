@@ -347,8 +347,11 @@ impl Config {
     pub fn get_reasoning_config(&self) -> Option<ReasoningConfig> {
         match self.model_provider {
             ModelProvider::Anthropic => self.anthropic.as_ref().and_then(|c| {
-                c.reasoning_budget.map(|budget| ReasoningConfig {
-                    max_tokens: Some(budget),
+                if c.reasoning_budget.is_none() && c.reasoning_effort.is_none() {
+                    return None;
+                }
+                Some(ReasoningConfig {
+                    max_tokens: c.reasoning_budget,
                     effort: c.reasoning_effort.clone(),
                     summary: None,
                 })
