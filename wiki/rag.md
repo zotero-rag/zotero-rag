@@ -3,7 +3,7 @@ type: Crate
 title: zqa-rag
 description: The reusable library for provider clients, embeddings, reranking, and LanceDB-backed vector retrieval.
 tags: [rag, providers, lancedb]
-timestamp: 2026-08-26T00:59:13-04:00
+timestamp: 2026-08-26T01:32:28-04:00
 ---
 
 # Responsibilities
@@ -46,7 +46,15 @@ that neutral form to their native API: Anthropic maps effort onto the
 output-level `effort` parameter of its adaptive-thinking models (Claude Opus
 4.6+ and Claude 5), OpenAI always requests a reasoning summary (defaulting
 to `auto`), and Gemini preserves model `thought` content when replaying
-history. Each
+history. Reasoning text returned by providers surfaces as a dedicated
+`ContentType::Reasoning` response variant, distinct from regular text, so
+consumers can render or ignore it separately: Anthropic reports non-empty
+thinking-block text (redacted thinking is dropped), and OpenRouter reports
+the `reasoning` field of each choice. OpenRouter also captures the opaque
+`reasoning_details` attached to a response and replays them unchanged on the
+next request, so reasoning models that require reasoning continuity (for
+example, Anthropic models routed through OpenRouter) can keep thinking
+across turns. Each
 tool supplies a name, description, JSON Schema for its arguments, and an
 asynchronous call.
 
@@ -82,8 +90,14 @@ memoizes them in-process.
 
 Embedding providers implement LanceDB's embedding-function interface. The
 common embedding layer selects a provider from `EmbeddingProviderConfig` and
-handles shared batching behavior. Rerankers implement the `Rerank` trait,
-which returns result ordering for a query and candidate texts.
+handles shared batching behavior. Voyage AI and Cohere use asymmetric
+`input_type` parameters: stored chunks are embedded as documents
+(`"document"` / `"search_document"`) and incoming queries as search queries
+(`"query"` / `"search_query"`). OpenAI embeddings accept a configurable
+output width (`embedding_dims`, or the `OPENAI_EMBEDDING_DIMS` environment
+variable), which is passed to the API as the `dimensions` parameter and used
+as the vector schema width. Rerankers implement the `Rerank` trait, which
+returns result ordering for a query and candidate texts.
 
 `VectorBackend` is the generic persistence boundary: it defines connection,
 indexing, insertion, deduplication, metadata, and vector-search operations.

@@ -3,7 +3,7 @@ type: Crate
 title: zqa CLI
 description: The interactive application that processes Zotero libraries, manages sessions, and orchestrates search and RAG queries.
 tags: [cli, zotero, rag]
-timestamp: 2026-08-26T00:59:13-04:00
+timestamp: 2026-08-26T01:32:28-04:00
 ---
 
 # Startup and state
@@ -50,8 +50,8 @@ PDF text.
 reranks them. A natural-language query constructs an LLM request with retrieval
 and summarization tools, plus tools for any session-imported PDFs. The request
 applies the configured [tool iteration limit](/configuration.md) from
-[zqa-rag](/rag.md). The CLI streams model text and tool status to the
-terminal, then accumulates the turn's token usage (including cached-input and
+[zqa-rag](/rag.md). The CLI streams model text, reasoning summaries (rendered
+dimmed), and tool status to the terminal, then accumulates the turn's token usage (including cached-input and
 reasoning tokens) and estimated cost, in cents, into persisted session state.
 
 Imported PDFs are parsed with [zqa-pdftools](/pdf-processing.md), but live only

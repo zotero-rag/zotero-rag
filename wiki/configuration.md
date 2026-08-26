@@ -3,7 +3,7 @@ type: Configuration
 title: Runtime Configuration
 description: Provider settings, API credentials, and runtime defaults loaded from user configuration and environment variables.
 tags: [configuration, providers, security]
-timestamp: 2026-08-26T00:59:13-04:00
+timestamp: 2026-08-26T01:32:28-04:00
 ---
 
 # Configuration sources
@@ -32,7 +32,12 @@ Ollama for generation; OpenAI, Voyage AI, Cohere, Gemini, and
 Ollama for embeddings; and Voyage AI, and Cohere for reranking.
 Reranking is disabled when `reranker_provider` is omitted. Model names,
 dimensions, token limits, and provider-specific options belong to each
-provider's configuration section. See [zqa-rag](/rag.md) for the provider and
+provider's configuration section. `embedding_dims` (for OpenAI, also the
+`OPENAI_EMBEDDING_DIMS` environment variable) must match the embedding
+model's output width, or a reduced width for models that support dimension
+reduction (OpenAI's text-embedding-3 family, Voyage AI); changing it or the
+embedding model requires rebuilding the index under `data/lancedb-table/`,
+since old and new vectors are incompatible. See [zqa-rag](/rag.md) for the provider and
 retrieval abstractions.
 
 # Reasoning settings
