@@ -203,6 +203,7 @@ pub(crate) async fn process_tool_calls(
     let futures = contents.iter().map(|content| async move {
         match content {
             ChatHistoryContent::Text(s) => (Some(ContentType::Text(s.clone())), None),
+            ChatHistoryContent::Reasoning(s) => (Some(ContentType::Reasoning(s.clone())), None),
             ChatHistoryContent::ToolCallResponse(tool_result) => {
                 // This is invalid, but technically we can recover by just ignoring it--so
                 // we will.
@@ -284,6 +285,7 @@ pub(crate) async fn process_tool_calls(
                         cb(s);
                     }
                 }
+                ContentType::Reasoning(_) => {}
             }
             new_contents.push(content);
         }

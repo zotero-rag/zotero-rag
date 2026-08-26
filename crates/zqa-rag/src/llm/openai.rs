@@ -142,23 +142,24 @@ impl From<ChatHistoryItem> for Vec<OpenAIRequestInput> {
         value
             .content
             .into_iter()
-            .map(|content| match content {
+            .filter_map(|content| match content {
                 ChatHistoryContent::Text(text) => {
-                    OpenAIRequestInput::Message(OpenAIChatHistoryItem {
+                    Some(OpenAIRequestInput::Message(OpenAIChatHistoryItem {
                         role,
                         r#type: "message".into(),
                         content: OpenAIRequestInputItem::Text(text),
-                    })
+                    }))
                 }
-                ChatHistoryContent::ToolCallRequest(request) => {
+                ChatHistoryContent::Reasoning(_) => None,
+                ChatHistoryContent::ToolCallRequest(request) => Some(
                     OpenAIRequestInput::FunctionCall(OpenAIRequestToolCallInputItem {
                         call_id: request.id,
                         r#type: "function_call".into(),
                         name: request.tool_name,
                         arguments: request.args,
-                    })
-                }
-                ChatHistoryContent::ToolCallResponse(response) => {
+                    }),
+                ),
+                ChatHistoryContent::ToolCallResponse(response) => Some(
                     OpenAIRequestInput::ToolResult(OpenAIRequestToolResultInputItem {
                         call_id: response.id,
                         r#type: "function_call_output".into(),
@@ -168,8 +169,8 @@ impl From<ChatHistoryItem> for Vec<OpenAIRequestInput> {
                             serde_json::to_string(&response.result)
                                 .unwrap_or_else(|_| "null".to_string())
                         },
-                    })
-                }
+                    }),
+                ),
             })
             .collect()
     }
@@ -364,9 +365,7 @@ fn map_response_to_chat_contents(response: &OpenAIResponse) -> Vec<ChatHistoryCo
                 if summary.is_empty() {
                     None
                 } else {
-                    Some(ChatHistoryContent::Text(format!(
-                        "<reasoning>{summary}</reasoning>"
-                    )))
+                    Some(ChatHistoryContent::Reasoning(summary))
                 }
             }
             OpenAIOutput::Message { content, .. } => map_message_to_chat_content(content),
@@ -794,6 +793,15 @@ mod tests {
             .unwrap()
     }
 
+    /// Extract the text from a reasoning content part, for assertions.
+    fn as_reasoning_text(content: &ContentType) -> Option<&str> {
+        if let ContentType::Reasoning(s) = content {
+            Some(s.as_str())
+        } else {
+            None
+        }
+    }
+
     #[tokio::test]
     async fn test_callbacks_fire_and_reasoning_is_replayed() {
         let mut reasoning_fields = serde_json::Map::new();
@@ -866,13 +874,11 @@ mod tests {
         test_eq!(res.usage.output_tokens, 13);
         test_eq!(*call_count.lock().unwrap(), 1_usize);
         test_eq!(*tool_call_count.lock().unwrap(), 1_usize);
+        assert_eq!(*text_segments.lock().unwrap(), ["Done!"]);
+        let reasoning: Vec<_> = res.content.iter().filter_map(as_reasoning_text).collect();
         assert_eq!(
-            *text_segments.lock().unwrap(),
-            [
-                "<reasoning>I need the tool result first.</reasoning>",
-                "<reasoning>I can now answer.</reasoning>",
-                "Done!"
-            ]
+            reasoning,
+            ["I need the tool result first.", "I can now answer."]
         );
 
         let requests = http_client.requests();

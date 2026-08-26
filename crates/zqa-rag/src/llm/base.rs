@@ -66,6 +66,10 @@ pub struct ToolCallResponse {
 pub enum ChatHistoryContent {
     /// A plain-text message
     Text(String),
+    /// A reasoning summary (e.g. a thinking block). Providers that support reasoning surface
+    /// this separately from the answer text; it is dropped when converting to native request
+    /// formats, since native replay preserves the real reasoning items.
+    Reasoning(String),
     /// A tool call request
     ToolCallRequest(ToolCallRequest),
     /// A tool call response
@@ -95,6 +99,7 @@ impl From<Vec<ContentType>> for ChatHistoryItem {
             .into_iter()
             .map(|ct| match ct {
                 ContentType::Text(s) => ChatHistoryContent::Text(s),
+                ContentType::Reasoning(s) => ChatHistoryContent::Reasoning(s),
                 ContentType::ToolCall(stats) => {
                     ChatHistoryContent::ToolCallResponse(ToolCallResponse {
                         id: stats.tool_call_id,
@@ -274,6 +279,8 @@ pub struct ToolUseStats {
 pub enum ContentType {
     /// A plain-text message
     Text(String),
+    /// A reasoning summary (e.g. a thinking block)
+    Reasoning(String),
     /// A tool call
     ToolCall(ToolUseStats),
 }

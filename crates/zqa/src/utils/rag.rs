@@ -34,6 +34,9 @@ impl fmt::Display for ModelResponse<'_> {
                     f.write_str(s)?;
                     f.write_char('\n')?;
                 }
+                ContentType::Reasoning(s) => {
+                    f.write_fmt(format_args!("{DIM_TEXT}{s}{RESET}\n"))?;
+                }
                 ContentType::ToolCall(stats) => {
                     f.write_fmt(format_args!("{}🗸 {}{}\n", DIM_TEXT, stats.tool_name, RESET))?;
 

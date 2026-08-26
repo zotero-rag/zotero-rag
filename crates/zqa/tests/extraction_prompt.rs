@@ -59,10 +59,17 @@ async fn run_extraction_test(client: zqa_rag::llm::factory::LLMClient, provider_
         "Response content should not be empty"
     );
 
-    let content = response.content.first().unwrap();
+    let content = response
+        .content
+        .iter()
+        .find(|c| matches!(c, ContentType::Text(_)))
+        .unwrap_or_else(|| response.content.first().unwrap());
     match content {
         ContentType::ToolCall(_) => {
             panic!("failed assertion: content is a tool call");
+        }
+        ContentType::Reasoning(_) => {
+            panic!("failed assertion: content is a reasoning block only");
         }
         ContentType::Text(s) => {
             // Verify the response contains expected XML tags from the prompt format
