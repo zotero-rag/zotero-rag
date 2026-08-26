@@ -642,7 +642,7 @@ mod tests {
         let (thinking, output_config) = make_thinking_config("claude-sonnet-5", Some(&reasoning));
         assert!(thinking.is_some());
         let output_config = serde_json::to_value(output_config).unwrap();
-        test_eq!(output_config["effort"].as_str(), Some("minimal"));
+        test_eq!(output_config["effort"].as_str(), Some("low"));
     }
 
     #[test]
