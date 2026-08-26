@@ -71,9 +71,12 @@ where
     /// * `LLMError::DeserializationError` - If the API response cannot be parsed
     /// * `LLMError::InvalidHeaderError` - If header values cannot be parsed
     /// * `LLMError::GenericLLMError` - If other HTTP errors occur or Arrow array creation fails
+    ///
+    /// * `input_type` - The Voyage AI `input_type` specialization ("query" or "document").
     pub(crate) fn compute_embeddings_internal(
         &self,
         source: Arc<dyn arrow_array::Array>,
+        input_type: &'static str,
     ) -> Result<Arc<dyn arrow_array::Array>, LLMError> {
         // Wait for two seconds after each batch to avoid RPM and TPM throttling. At the base
         // tier, Voyage AI has a 3M TPM and a 2K RPM. However, although the context of their
@@ -114,7 +117,7 @@ where
                 |texts| VoyageAIRequest {
                     input: texts,
                     model: model.clone(),
-                    input_type: None, // Directly convert to vector
+                    input_type: Some(input_type.into()),
                     truncation: true,
                     output_dimension, // Matryoshka embeddings
                     output_dtype: "float".to_string(),
@@ -245,7 +248,7 @@ impl<T: HttpClient + Default + Clone + std::fmt::Debug> EmbeddingFunction for Vo
         &self,
         source: Arc<dyn arrow_array::Array>,
     ) -> Result<Arc<dyn arrow_array::Array>, lancedb::Error> {
-        match self.compute_embeddings_internal(source) {
+        match self.compute_embeddings_internal(source, "document") {
             Ok(result) => Ok(result),
             Err(e) => Err(lancedb::Error::Other {
                 message: e.to_string(),
@@ -258,7 +261,7 @@ impl<T: HttpClient + Default + Clone + std::fmt::Debug> EmbeddingFunction for Vo
         &self,
         input: Arc<dyn arrow_array::Array>,
     ) -> Result<Arc<dyn arrow_array::Array>, lancedb::Error> {
-        match self.compute_embeddings_internal(input) {
+        match self.compute_embeddings_internal(input, "query") {
             Ok(result) => Ok(result),
             Err(e) => Err(lancedb::Error::Other {
                 message: e.to_string(),
@@ -808,7 +811,7 @@ mod tests {
         ]);
 
         let client = VoyageAIClient::<ReqwestClient>::default();
-        let embeddings = client.compute_embeddings_internal(Arc::new(array));
+        let embeddings = client.compute_embeddings_internal(Arc::new(array), "document");
 
         test_ok!(embeddings);
 
