@@ -43,18 +43,19 @@ impl From<ChatHistoryItem> for AnthropicChatHistoryItem {
             content: value
                 .content
                 .into_iter()
-                .map(|ct| match ct {
-                    ChatHistoryContent::Text(s) => {
-                        AnthropicResponseContent::Text(AnthropicTextResponseContent {
+                .filter_map(|ct| match ct {
+                    ChatHistoryContent::Text(s) => Some(AnthropicResponseContent::Text(
+                        AnthropicTextResponseContent {
                             r#type: "text".into(),
                             text: s,
-                        })
-                    }
+                        },
+                    )),
+                    ChatHistoryContent::Reasoning(_) => None,
                     ChatHistoryContent::ToolCallRequest(req) => {
-                        AnthropicResponseContent::ToolCall(req.into())
+                        Some(AnthropicResponseContent::ToolCall(req.into()))
                     }
                     ChatHistoryContent::ToolCallResponse(res) => {
-                        AnthropicResponseContent::ToolResult(res.into())
+                        Some(AnthropicResponseContent::ToolResult(res.into()))
                     }
                 })
                 .collect(),
@@ -418,8 +419,12 @@ pub(crate) fn map_response_to_chat_contents(
                     "Got a tool result from the API response. This is not expected, and will be ignored."
                 );
             }
-            AnthropicResponseContent::Thinking(_)
-            | AnthropicResponseContent::RedactedThinking(_) => {}
+            AnthropicResponseContent::Thinking(t) => {
+                if !t.thinking.is_empty() {
+                    out.push(ChatHistoryContent::Reasoning(t.thinking.clone()));
+                }
+            }
+            AnthropicResponseContent::RedactedThinking(_) => {}
         }
     }
     out

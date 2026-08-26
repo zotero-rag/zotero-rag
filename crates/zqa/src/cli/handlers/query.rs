@@ -7,7 +7,9 @@ use std::sync::{Arc, Mutex, atomic};
 use std::time::Instant;
 
 use tokio::sync::mpsc;
-use zqa_rag::llm::base::{ChatHistoryContent, ChatHistoryItem, ChatRequest, MessageRole};
+use zqa_rag::llm::base::{
+    ChatHistoryContent, ChatHistoryItem, ChatRequest, ContentType, MessageRole,
+};
 use zqa_rag::llm::factory::get_client_with_config;
 use zqa_rag::llm::tools::{CallbackFn, Tool};
 use zqa_rag::pricing::{ModelUsage, get_model_pricing};
@@ -305,7 +307,15 @@ where
                 "{DIM_TEXT}Final draft completed in {final_draft_duration:.2?}{RESET}"
             )?;
 
-            let model_response_text = ModelResponse::from(&response.content).to_string();
+            let model_response_text = response
+                .content
+                .iter()
+                .filter_map(|c| match c {
+                    ContentType::Text(s) => Some(s.as_str()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
 
             // Accumulate token usage counts, then compute pricing using `UsageMetadata::from_rag_usage`
             let total_usage = response.usage + summarization_usage.lock().map(|u| *u)?;

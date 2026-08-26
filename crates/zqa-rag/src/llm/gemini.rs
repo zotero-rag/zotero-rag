@@ -107,20 +107,23 @@ impl From<ChatHistoryItem> for GeminiContent {
             parts: value
                 .content
                 .into_iter()
-                .map(|c| match c {
-                    ChatHistoryContent::Text(text) => GeminiPart::Text {
+                .filter_map(|c| match c {
+                    ChatHistoryContent::Text(text) => Some(GeminiPart::Text {
                         text,
                         thought: None,
                         thought_signature: None,
-                    },
-                    ChatHistoryContent::ToolCallRequest(tool_call) => GeminiPart::FunctionCall {
-                        function_call: GeminiFunctionCall {
-                            id: Some(tool_call.id),
-                            name: tool_call.tool_name,
-                            args: tool_call.args,
-                        },
-                        thought_signature: None,
-                    },
+                    }),
+                    ChatHistoryContent::Reasoning(_) => None,
+                    ChatHistoryContent::ToolCallRequest(tool_call) => {
+                        Some(GeminiPart::FunctionCall {
+                            function_call: GeminiFunctionCall {
+                                id: Some(tool_call.id),
+                                name: tool_call.tool_name,
+                                args: tool_call.args,
+                            },
+                            thought_signature: None,
+                        })
+                    }
                     ChatHistoryContent::ToolCallResponse(tool_res) => {
                         // Wrap the result in an object with a "result" field if it's not already an object
                         let response = if tool_res.result.is_object() {
@@ -129,14 +132,14 @@ impl From<ChatHistoryItem> for GeminiContent {
                             serde_json::json!({ "result": tool_res.result })
                         };
 
-                        GeminiPart::FunctionResult {
+                        Some(GeminiPart::FunctionResult {
                             function_response: GeminiFunctionResult {
                                 id: tool_res.id,
                                 name: tool_res.tool_name,
                                 response,
                             },
                             thought_signature: None,
-                        }
+                        })
                     }
                 })
                 .collect::<Vec<_>>(),

@@ -121,6 +121,7 @@ fn convert_to_openrouter_messages(item: &ChatHistoryItem) -> Vec<OpenRouterMessa
                 }
                 content_text.push_str(text);
             }
+            ChatHistoryContent::Reasoning(_) => {}
             ChatHistoryContent::ToolCallRequest(req) => {
                 tool_calls.push(OpenRouterToolCall {
                     id: req.id.clone(),
