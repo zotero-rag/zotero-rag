@@ -167,6 +167,7 @@ impl GeminiEmbeddingRequest {
             content: GeminiEmbeddingRequestContent {
                 parts: vec![GeminiPart::Text {
                     text,
+                    thought: None,
                     thought_signature: None,
                 }],
             },

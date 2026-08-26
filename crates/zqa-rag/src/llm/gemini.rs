@@ -47,6 +47,9 @@ pub(crate) struct GeminiFunctionResult {
 pub(crate) enum GeminiPart {
     Text {
         text: String,
+        /// Whether this part is a thought summary rather than regular response text.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        thought: Option<bool>,
         #[serde(rename = "thoughtSignature", skip_serializing_if = "Option::is_none")]
         thought_signature: Option<String>,
     },
@@ -107,6 +110,7 @@ impl From<ChatHistoryItem> for GeminiContent {
                 .map(|c| match c {
                     ChatHistoryContent::Text(text) => GeminiPart::Text {
                         text,
+                        thought: None,
                         thought_signature: None,
                     },
                     ChatHistoryContent::ToolCallRequest(tool_call) => GeminiPart::FunctionCall {
@@ -288,7 +292,15 @@ struct GeminiResponseBody {
 fn map_response_to_chat_contents(contents: &[GeminiPart]) -> Vec<ChatHistoryContent> {
     contents.iter().enumerate().filter_map(|(idx, c)| {
         match c {
-            GeminiPart::Text{text, ..} => Some(ChatHistoryContent::Text(text.clone())),
+            GeminiPart::Text{text, thought, ..} => {
+                if *thought == Some(true) {
+                    Some(ChatHistoryContent::Text(format!(
+                        "<reasoning>{text}</reasoning>"
+                    )))
+                } else {
+                    Some(ChatHistoryContent::Text(text.clone()))
+                }
+            },
             GeminiPart::FunctionCall{function_call: fc, ..} => Some(ChatHistoryContent::ToolCallRequest(ToolCallRequest {
                     // Generate an ID if not provided by the API
                     id: fc.id.clone().unwrap_or_else(|| format!("{}_{}", fc.name, idx)),
@@ -322,6 +334,7 @@ impl<T: HttpClient> AgenticClient for GeminiClient<T> {
             role: GeminiMessageRole::User,
             parts: vec![GeminiPart::Text {
                 text: request.message.clone(),
+                thought: None,
                 thought_signature: None,
             }],
         });
@@ -356,6 +369,7 @@ impl<T: HttpClient> AgenticClient for GeminiClient<T> {
             system_instruction: system_prompt.map(|text| GeminiSystemInstruction {
                 parts: vec![GeminiPart::Text {
                     text: text.to_owned(),
+                    thought: None,
                     thought_signature: None,
                 }],
             }),
@@ -415,6 +429,7 @@ mod tests {
                     role: GeminiMessageRole::Model,
                     parts: vec![GeminiPart::Text {
                         text: "Hello from Gemini!".into(),
+                        thought: None,
                         thought_signature: None,
                     }],
                 },
@@ -608,6 +623,7 @@ mod tests {
                     role: GeminiMessageRole::Model,
                     parts: vec![GeminiPart::Text {
                         text: "Done!".into(),
+                        thought: None,
                         thought_signature: None,
                     }],
                 },
