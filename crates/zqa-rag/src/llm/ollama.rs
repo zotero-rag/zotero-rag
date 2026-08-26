@@ -11,7 +11,8 @@ use crate::clients::ollama::OllamaClient;
 use crate::constants::{DEFAULT_OLLAMA_BASE_URL, DEFAULT_OLLAMA_MAX_TOKENS, DEFAULT_OLLAMA_MODEL};
 use crate::http_client::HttpClient;
 use crate::llm::anthropic::{
-    AnthropicChatHistoryItem, AnthropicRequest, AnthropicResponse, map_response_to_chat_contents,
+    AnthropicChatHistoryItem, AnthropicRequest, AnthropicResponse, make_thinking_config,
+    map_response_to_chat_contents,
 };
 use crate::llm::base::{
     AgenticClient, MessageRole, ProviderTurn, ReasoningConfig, send_generation_request,
@@ -65,13 +66,14 @@ impl<T: HttpClient> AgenticClient for OllamaClient<T> {
             )
         };
 
+        let (thinking, output_config) = make_thinking_config(&model, reasoning);
         let request_body = OllamaRequest {
             model: &model,
             max_tokens: max_tokens.unwrap_or(config_max_tokens),
             messages: history,
             system: system_prompt,
-            thinking: reasoning.map(Into::into),
-            output_config: None,
+            thinking,
+            output_config,
             tools,
         };
 

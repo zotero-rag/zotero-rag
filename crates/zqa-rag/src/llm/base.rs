@@ -204,7 +204,7 @@ impl ReasoningConfig {
                 self.effort = Some(
                     TOKENS_TO_EFFORT
                         .iter()
-                        .find(|tup| tup.0 > token_budget)
+                        .find(|tup| tup.0 >= token_budget)
                         .map_or(ReasoningEffort::Max, |tup| tup.1)
                         .to_string(),
                 );
