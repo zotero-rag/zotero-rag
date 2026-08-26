@@ -8,10 +8,13 @@ use http::HeaderMap;
 use super::base::ChatRequest;
 use super::errors::LLMError;
 use crate::clients::ollama::OllamaClient;
-use crate::constants::{DEFAULT_OLLAMA_BASE_URL, DEFAULT_OLLAMA_MAX_TOKENS, DEFAULT_OLLAMA_MODEL};
+use crate::constants::{
+    DEFAULT_ANTHROPIC_REASONING_BUDGET, DEFAULT_OLLAMA_BASE_URL, DEFAULT_OLLAMA_MAX_TOKENS,
+    DEFAULT_OLLAMA_MODEL,
+};
 use crate::http_client::HttpClient;
 use crate::llm::anthropic::{
-    AnthropicChatHistoryItem, AnthropicRequest, AnthropicResponse, make_thinking_config,
+    AnthropicChatHistoryItem, AnthropicRequest, AnthropicResponse, AnthropicThinkingConfig,
     map_response_to_chat_contents,
 };
 use crate::llm::base::{
@@ -66,14 +69,16 @@ impl<T: HttpClient> AgenticClient for OllamaClient<T> {
             )
         };
 
-        let (thinking, output_config) = make_thinking_config(&model, reasoning);
         let request_body = OllamaRequest {
             model: &model,
             max_tokens: max_tokens.unwrap_or(config_max_tokens),
             messages: history,
             system: system_prompt,
-            thinking,
-            output_config,
+            thinking: reasoning.map(|r| AnthropicThinkingConfig::Enabled {
+                display: "summarized",
+                budget_tokens: r.max_tokens.unwrap_or(DEFAULT_ANTHROPIC_REASONING_BUDGET),
+            }),
+            output_config: None,
             tools,
         };
 
