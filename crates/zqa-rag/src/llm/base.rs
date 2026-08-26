@@ -1,7 +1,9 @@
 //! User-facing types for working with LLMs, including tool calling support. Most structs used by
 //! the clients can be converted to/from the structs here.
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::fmt::Display;
+use std::sync::{Arc, LazyLock};
 
 use http::HeaderMap;
 use serde::de::DeserializeOwned;
@@ -119,6 +121,102 @@ pub struct ReasoningConfig {
     pub effort: Option<String>,
     /// Thinking summary length, for providers that support it.
     pub summary: Option<String>,
+}
+
+/// Reasoning effort levels
+#[derive(Copy, Debug, Clone, PartialEq, Eq, Hash)]
+#[allow(missing_docs)]
+pub enum ReasoningEffort {
+    r#None,
+    Minimal,
+    Low,
+    Medium,
+    High,
+    Xhigh,
+    Max,
+}
+
+impl Display for ReasoningEffort {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ReasoningEffort::None => f.write_str("none"),
+            ReasoningEffort::Minimal => f.write_str("minimal"),
+            ReasoningEffort::Low => f.write_str("low"),
+            ReasoningEffort::Medium => f.write_str("medium"),
+            ReasoningEffort::High => f.write_str("high"),
+            ReasoningEffort::Xhigh => f.write_str("xhigh"),
+            ReasoningEffort::Max => f.write_str("Max"),
+        }
+    }
+}
+
+impl TryFrom<String> for ReasoningEffort {
+    type Error = String;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        match value.as_str() {
+            "none" => Ok(ReasoningEffort::None),
+            "minimal" => Ok(ReasoningEffort::Minimal),
+            "low" => Ok(ReasoningEffort::Low),
+            "medium" => Ok(ReasoningEffort::Medium),
+            "high" => Ok(ReasoningEffort::High),
+            "xhigh" => Ok(ReasoningEffort::Xhigh),
+            "max" => Ok(ReasoningEffort::Max),
+            val => Err(format!(
+                "invalid 'effort' parameter {val}, expected one of {}",
+                "'none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'"
+            )),
+        }
+    }
+}
+
+pub(crate) static EFFORT_TO_TOKENS: LazyLock<HashMap<ReasoningEffort, u32>> = LazyLock::new(|| {
+    let mut map = HashMap::new();
+
+    map.insert(ReasoningEffort::None, 0);
+    map.insert(ReasoningEffort::Minimal, 2048);
+    map.insert(ReasoningEffort::Low, 4096);
+    map.insert(ReasoningEffort::Medium, 10_000);
+    map.insert(ReasoningEffort::High, 16_000);
+    map.insert(ReasoningEffort::Xhigh, 32_000);
+    map.insert(ReasoningEffort::Max, 32_000);
+
+    map
+});
+
+pub(crate) static TOKENS_TO_EFFORT: [(u32, ReasoningEffort); 7] = [
+    (0_u32, ReasoningEffort::None),
+    (2048_u32, ReasoningEffort::Minimal),
+    (4096_u32, ReasoningEffort::Low),
+    (10_000_u32, ReasoningEffort::Medium),
+    (16_000_u32, ReasoningEffort::High),
+    (32_000_u32, ReasoningEffort::Xhigh),
+    (32_000_u32, ReasoningEffort::Max),
+];
+
+impl ReasoningConfig {
+    /// Normalize reasoning "effort" and token counts. If only one of the two is specified, then the
+    /// other is automatically filled in based on [Inspect's mapping](https://inspect.aisi.org.uk/reasoning.html#anthropic-claude-3.7-4.0-4.1-4.5).
+    /// In other cases, no changes are made.
+    pub(crate) fn normalize(&mut self) {
+        match (self.max_tokens, self.effort.as_ref()) {
+            (Some(token_budget), None) => {
+                self.effort = Some(
+                    TOKENS_TO_EFFORT
+                        .iter()
+                        .find(|tup| tup.0 > token_budget)
+                        .map_or(ReasoningEffort::Max, |tup| tup.1)
+                        .to_string(),
+                );
+            }
+            (None, Some(effort)) => {
+                self.max_tokens = ReasoningEffort::try_from(effort.clone())
+                    .ok()
+                    .map(|e| *EFFORT_TO_TOKENS.get(&e).unwrap());
+            }
+            _ => {}
+        }
+    }
 }
 
 // TODO: The driver options probably don't belong here; it might at some point make sense to make a
@@ -342,6 +440,8 @@ mod tests {
     use std::future::{Future, ready};
     use std::sync::{Arc, Mutex};
 
+    use zqa_macros::test_eq;
+
     use super::*;
     use crate::llm::tools::test_utils::MockTool;
 
@@ -481,5 +581,40 @@ mod tests {
 
         assert_eq!(*tools_seen.lock().unwrap(), vec![None]);
         assert_eq!(response.content.len(), 1);
+    }
+
+    #[test]
+    fn test_all_reasoning_effort_values_mapped() {
+        for effort in [
+            ReasoningEffort::None,
+            ReasoningEffort::Minimal,
+            ReasoningEffort::Low,
+            ReasoningEffort::Medium,
+            ReasoningEffort::High,
+            ReasoningEffort::Xhigh,
+            ReasoningEffort::Max,
+        ] {
+            assert!(
+                EFFORT_TO_TOKENS.contains_key(&effort),
+                "{effort:?} missing from EFFORT_TO_TOKENS"
+            );
+        }
+
+        // Exhaustiveness guard: a new `ReasoningEffort` variant fails to compile
+        // here until it is added to the array above as well.
+        match ReasoningEffort::None {
+            ReasoningEffort::None
+            | ReasoningEffort::Minimal
+            | ReasoningEffort::Low
+            | ReasoningEffort::Medium
+            | ReasoningEffort::High
+            | ReasoningEffort::Xhigh
+            | ReasoningEffort::Max => {}
+        }
+    }
+
+    #[test]
+    fn test_effort_token_maps_have_same_length() {
+        test_eq!(EFFORT_TO_TOKENS.len(), TOKENS_TO_EFFORT.len());
     }
 }
