@@ -198,13 +198,7 @@ pub(crate) async fn compute_openai_embeddings_async(
     // Batch size of 100 to respect API limits and efficiency
     let batch_size = 100;
     let futures = texts.chunks(batch_size).map(|chunk| {
-        get_openai_embeddings(
-            client,
-            chunk.to_vec(),
-            api_key.clone(),
-            model.clone(),
-            dims,
-        )
+        get_openai_embeddings(client, chunk.to_vec(), api_key.clone(), model.clone(), dims)
     });
 
     // Convert to a stream and process with buffered to limit concurrency but preserve order
