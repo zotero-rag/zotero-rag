@@ -120,6 +120,7 @@ ANTHROPIC_MODEL_SMALL=
 
 OPENAI_API_KEY=
 OPENAI_EMBEDDING_MODEL=
+OPENAI_EMBEDDING_DIMS=
 OPENAI_MODEL=
 OPENAI_MODEL_SMALL=
 
@@ -152,6 +153,8 @@ MAX_CONCURRENT_REQUESTS=5
 ```
 
 The model choices and the maximum concurrent requests above are defaults, and you can omit them. By default, the app uses Anthropic for generation and Voyage AI for embedding. This is currently the recommended settings (and so you won't need an OpenAI API key set up). Note that Voyage AI embeddings are the only ones that are known to work in a real setting; it is quite unlikely for the OpenAI embeddings to work at this moment, because we do not perform any chunking. Cohere embeddings should also work.
+
+`OPENAI_EMBEDDING_DIMS` (and each provider's `embedding_dims` config key) must match the embedding model's output width, or a reduced width for models that support dimension reduction (OpenAI's text-embedding-3 family, Voyage AI). If you change your embedding model or dimensions, delete `data/lancedb-table/` to rebuild the index, since old and new vectors are incompatible.
 
 You likely don't need _all_ of these set (or even mentioned) in your `.env` file: add just the ones you need, and defaults will be used for all the others.
 

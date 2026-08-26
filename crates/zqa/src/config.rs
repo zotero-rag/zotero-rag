@@ -19,6 +19,12 @@ use zqa_rag::reranking::common::RerankProviderConfig;
 /// overridden by environment variables. Note that reasoning defaults to off for all
 /// providers; the example below shows you how you can set reasoning parameters.
 ///
+/// Note on `embedding_dims`: this must match the embedding model's output width (or a
+/// reduced, Matryoshka-style width for models that support dimension reduction, such as
+/// OpenAI's text-embedding-3 family and Voyage AI's models). Changing `embedding_model` or
+/// `embedding_dims` changes the vectors produced, so existing indexes must be rebuilt
+/// (delete `data/lancedb-table/`) after such a change.
+///
 /// ```toml
 /// model_provider = "anthropic"  # Generation model provider
 /// embedding_provider = "voyageai"  # Embedding/reranker model provider
@@ -215,7 +221,7 @@ impl Config {
 
         // OpenAI options
         if let Some(openai_config) = &mut self.openai {
-            // The max tokens and embedding dims are not exposed as env options.
+            // The max tokens option is not exposed as an env option.
             openai_config.model.replace_with_env("OPENAI_MODEL");
             openai_config
                 .model_small
@@ -224,6 +230,9 @@ impl Config {
             openai_config
                 .embedding_model
                 .replace_with_env("OPENAI_EMBEDDING_MODEL");
+            openai_config
+                .embedding_dims
+                .replace_with_env("OPENAI_EMBEDDING_DIMS");
         }
 
         // Gemini options

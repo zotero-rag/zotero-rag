@@ -77,12 +77,16 @@ async fn get_openai_embeddings(
     texts: Vec<String>,
     api_key: String,
     model: String,
+    dims: usize,
 ) -> Result<Vec<Vec<f32>>, LLMError> {
     #[derive(Serialize)]
     struct EmbeddingRequest {
         model: String,
         input: Vec<String>,
         encoding_format: String,
+        /// Requested embedding width. Supported by the text-embedding-3 family; older models
+        /// (e.g. text-embedding-ada-002) reject this field.
+        dimensions: usize,
     }
 
     // Adding #[allow(dead_code)] to suppress warnings for fields required by the API
@@ -115,6 +119,7 @@ async fn get_openai_embeddings(
         model,
         input: texts,
         encoding_format: "float".to_string(),
+        dimensions: dims,
     };
 
     let mut headers = HeaderMap::new();
@@ -171,22 +176,36 @@ pub(crate) async fn compute_openai_embeddings_async(
         .filter_map(|s| Some(s?.to_owned()))
         .collect();
 
-    let (api_key, model) = if let Some(config) = config {
-        (config.api_key.clone(), config.embedding_model.clone())
+    let (api_key, model, dims) = if let Some(config) = config {
+        (
+            config.api_key.clone(),
+            config.embedding_model.clone(),
+            config.embedding_dims,
+        )
     } else {
         (
             env::var("OPENAI_API_KEY")?,
             env::var("OPENAI_EMBEDDING_MODEL")
                 .unwrap_or(DEFAULT_OPENAI_EMBEDDING_MODEL.to_string()),
+            env::var("OPENAI_EMBEDDING_DIMS")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(DEFAULT_OPENAI_EMBEDDING_DIM as usize),
         )
     };
 
     // Create a stream of futures
     // Batch size of 100 to respect API limits and efficiency
     let batch_size = 100;
-    let futures = texts
-        .chunks(batch_size)
-        .map(|chunk| get_openai_embeddings(client, chunk.to_vec(), api_key.clone(), model.clone()));
+    let futures = texts.chunks(batch_size).map(|chunk| {
+        get_openai_embeddings(
+            client,
+            chunk.to_vec(),
+            api_key.clone(),
+            model.clone(),
+            dims,
+        )
+    });
 
     // Convert to a stream and process with buffered to limit concurrency but preserve order
     let max_concurrent = env::var("MAX_CONCURRENT_REQUESTS")
@@ -209,12 +228,8 @@ pub(crate) async fn compute_openai_embeddings_async(
         }
     }
 
-    // Convert to Arrow FixedSizeListArray
-    let embedding_dim = if embeddings.is_empty() {
-        DEFAULT_OPENAI_EMBEDDING_DIM as usize // default for text-embedding-3-small
-    } else {
-        embeddings[0].len()
-    };
+    // The requested `dimensions` matches the configured dims, so the schema width is exact.
+    let embedding_dim = dims;
 
     let flattened: Vec<f32> = embeddings.iter().flatten().copied().collect();
     let values = arrow_array::Float32Array::from(flattened);

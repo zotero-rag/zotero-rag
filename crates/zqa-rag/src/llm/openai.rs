@@ -506,13 +506,22 @@ impl<T: HttpClient + Default + Debug> EmbeddingFunction for OpenAIClient<T> {
     }
 
     fn dest_type(&self) -> Result<Cow<'_, DataType>, lancedb::Error> {
+        let dim = self.config.as_ref().map_or_else(
+            || {
+                env::var("OPENAI_EMBEDDING_DIMS")
+                    .ok()
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(DEFAULT_OPENAI_EMBEDDING_DIM as usize)
+            },
+            |c| c.embedding_dims,
+        );
         Ok(Cow::Owned(DataType::FixedSizeList(
             Arc::new(lancedb::arrow::arrow_schema::Field::new(
                 "item",
                 DataType::Float32,
                 true,
             )),
-            DEFAULT_OPENAI_EMBEDDING_DIM as i32, // text-embedding-3-small size
+            dim as i32,
         )))
     }
 

@@ -174,6 +174,7 @@ ANTHROPIC_MODEL_SMALL=
 
 OPENAI_API_KEY=
 OPENAI_EMBEDDING_MODEL=
+OPENAI_EMBEDDING_DIMS=
 OPENAI_MODEL=
 OPENAI_MODEL_SMALL=
 
@@ -206,6 +207,8 @@ MAX_CONCURRENT_REQUESTS=5
 ```
 
 The model choices and the maximum concurrent requests above are defaults, and you can omit them. By default, the app uses Anthropic for generation and Voyage AI for embedding. This is currently the recommended settings (and so you won't need an OpenAI API key set up).
+
+`OPENAI_EMBEDDING_DIMS` (and each provider's `embedding_dims` config key) must match the embedding model's output width, or a reduced width for models that support dimension reduction (OpenAI's text-embedding-3 family, Voyage AI). If you change your embedding model or dimensions, delete `data/lancedb-table/` to rebuild the index, since old and new vectors are incompatible.
 
 You can set `OLLAMA_BASE_URL` to any server running locally, *as long as it supports the Anthropic Messages API format*. Fortunately, this seems to be most such projects. For example, if you use an Apple Silicon Mac (i.e., one with an M-series chip), then you may prefer to use LM Studio over `ollama`, since it supports using the Apple Neural Engine and you will get *much* faster results with the same models. LM Studio's server also supports the Anthropic Messages API format out of the box, so all you would need to do is to load the models, start the server, and set `OLLAMA_BASE_URL=http://127.0.0.1:1234`.
 
