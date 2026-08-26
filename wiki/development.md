@@ -3,20 +3,24 @@ type: Development Guide
 title: Development Workflow
 description: Workspace layout, local requirements, and commands for building, testing, and linting the project.
 tags: [development, rust, ci]
-timestamp: 2026-07-12T19:49:45-07:00
+timestamp: 2026-08-26T00:59:13-04:00
 ---
 
 # Workspace
 
-The Cargo workspace contains five crates:
+The Cargo workspace contains six crates, all under `crates/`:
 
 | Crate | Role |
 | --- | --- |
 | `zqa` | Command-line application. |
+| `zqa-gui` | Native GPUI desktop front-end (unpublished, GPL-3.0-or-later). |
 | `zqa-rag` | RAG, provider, and vector-storage library. |
 | `zqa-pdftools` | PDF parsing and text-extraction library. |
 | `zqa-macros` | Declarative macro crate. |
 | `zqa-macros-proc` | Procedural macro crate. |
+
+Building `zqa-gui` needs platform GUI dependencies; see [zqa-gui](/gui.md)
+for the macOS and Linux requirements.
 
 See [system overview](/system-overview.md) for their runtime relationship and
 [macros](/macros.md) for the supporting crates.
@@ -38,6 +42,7 @@ integration checks also run formatting, Clippy with warnings denied, and
 | --- | --- |
 | Build a release binary | `cargo build --release` |
 | Run the CLI | `cargo run --bin zqa` |
+| Run the GUI | `cargo run -p zqa-gui` |
 | Test the workspace | `cargo test --workspace` |
 | Test one crate | `cargo test -p zqa-rag` |
 | Format | `cargo fmt --all` |
@@ -47,7 +52,7 @@ integration checks also run formatting, Clippy with warnings denied, and
 
 # Test notes
 
-Integration tests in `zqa/tests/` are disabled by default and use the
+Integration tests in `crates/zqa/tests/` are disabled by default and use the
 `INTEGRATION_TESTS` environment variable. When debugging PDF behavior, the
 ignored PDF diagnostics can be run with `cargo test -p zqa-pdftools <test_name>
 -- --ignored --nocapture`.

@@ -1,16 +1,17 @@
 ---
 okf_version: "0.1"
-source_commit: 05287d75707100ce586548c9eb9fb19cfa86d697
+source_commit: 349c3fb4bea81a10d2be676f70df71f150ae2d62
 ---
 
 # Zotero RAG QA System
 
-* [Zotero RAG QA System](system-overview.md) - A Rust command-line system that indexes a local Zotero library and answers grounded questions over its PDFs.
+* [Zotero RAG QA System](system-overview.md) - A Rust system that indexes a local Zotero library and answers grounded questions over its PDFs, through a CLI and a native GUI.
 
 # Application and libraries
 
 * [zqa CLI](cli.md) - The interactive application that processes Zotero libraries, manages sessions, and orchestrates search and RAG queries.
 * [zqa-rag](rag.md) - The reusable library for provider clients, embeddings, reranking, and LanceDB-backed vector retrieval.
+* [zqa-gui](gui.md) - The native GPUI desktop front-end that reuses the zqa engine, configuration, and LanceDB database.
 * [zqa-pdftools](pdf-processing.md) - The academic-PDF parser that extracts structured text, detects sections, and produces retrieval chunks.
 * [zqa Test Macros](macros.md) - Test-support crates that provide diagnostic assertions and retrying asynchronous test helpers.
 

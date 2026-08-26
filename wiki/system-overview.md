@@ -1,9 +1,9 @@
 ---
 type: System
 title: Zotero RAG QA System
-description: A Rust command-line system that indexes a local Zotero library and answers grounded questions over its PDFs.
+description: A Rust system that indexes a local Zotero library and answers grounded questions over its PDFs, through a CLI and a native GUI.
 tags: [zotero, rag, rust]
-timestamp: 2026-07-12T19:56:20-07:00
+timestamp: 2026-08-26T00:59:13-04:00
 ---
 
 # Purpose
@@ -11,6 +11,8 @@ timestamp: 2026-07-12T19:56:20-07:00
 `zqa` makes a local Zotero library searchable and queryable with natural-language
 questions. It combines PDF text extraction, semantic indexing, optional
 reranking, and model-generated answers grounded in retrieved library content.
+There are two front-ends: the interactive `zqa` CLI and the [zqa-gui](/gui.md)
+desktop application, which reuses the CLI's engine and database.
 
 # End-to-end flow
 
@@ -27,7 +29,8 @@ reranking, and model-generated answers grounded in retrieved library content.
 
 | Crate | Responsibility |
 | --- | --- |
-| [zqa](/cli.md) | Interactive command-line application, session state, library processing, and query orchestration. |
+| [zqa](/cli.md) | Interactive command-line application, session state, library processing, and query orchestration. Also exposes an embeddable `Session` driver for other front-ends. |
+| [zqa-gui](/gui.md) | Native GPUI desktop application; a chat-style harness over the same engine, configuration, and LanceDB database as the CLI. |
 | [zqa-rag](/rag.md) | Reusable provider clients, embeddings, reranking, and vector retrieval. |
 | [zqa-pdftools](/pdf-processing.md) | PDF parsing, text extraction, and chunking for academic papers. |
 | [zqa-macros](/macros.md) | Declarative test assertions with diagnostic output. |

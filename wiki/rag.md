@@ -3,7 +3,7 @@ type: Crate
 title: zqa-rag
 description: The reusable library for provider clients, embeddings, reranking, and LanceDB-backed vector retrieval.
 tags: [rag, providers, lancedb]
-timestamp: 2026-07-30T01:14:36-04:00
+timestamp: 2026-08-26T00:59:13-04:00
 ---
 
 # Responsibilities
@@ -32,8 +32,21 @@ provider selection in configuration rather than in application-specific code.
 
 # LLM and tool interface
 
-`ChatRequest` carries chat history, reasoning settings, streaming callbacks,
-a list of `Tool` trait objects, and an optional `tool_iteration_limit`. Each
+`ChatRequest` carries chat history, an optional system prompt, reasoning
+settings, streaming callbacks, a list of `Tool` trait objects, and an
+optional `tool_iteration_limit`. The system prompt is mapped onto each
+provider's native system-instruction field (Anthropic's `system`, Gemini's
+`system_instruction`, OpenAI's first-message roles, and so on).
+
+Reasoning is configured through `ReasoningConfig`, which accepts a token
+budget, an effort level (`none` through `max`), and a summary preference.
+`normalize` fills in whichever of budget or effort is missing using a fixed
+mapping, so providers can consume either representation. Providers adapt
+that neutral form to their native API: Anthropic maps effort onto the
+output-level `effort` parameter of its adaptive-thinking models (Claude Opus
+4.6+ and Claude 5), OpenAI always requests a reasoning summary (defaulting
+to `auto`), and Gemini preserves model `thought` content when replaying
+history. Each
 tool supplies a name, description, JSON Schema for its arguments, and an
 asynchronous call.
 
@@ -80,9 +93,15 @@ drift so health checks can detect out-of-band updates.
 
 # Storage operations
 
-The LanceDB URI is configurable through `LANCEDB_URI`. The library exposes
-health and doctor modules for checking table access, size, row counts,
-zero-vector rows, index state, and version drift. The CLI surfaces these
+The LanceDB URI is configurable through `LANCEDB_URI`. Health checking is
+backend-agnostic: `checkhealth` defines the neutral `HealthCheckResult`
+type and the `HealthCheckable` trait, and each backend implements the checks
+that make sense for it. Checks that do not apply to a backend (for example,
+storage size for a remote store) are reported as absent rather than assumed,
+and the same `Option`/`Result` fields distinguish \"not run\", \"succeeded\",
+and \"failed\". `LanceBackend`'s implementation reports table access, size,
+row counts, zero-vector rows, index state, and version drift; the `doctor`
+module provides deeper diagnostics. [The CLI](/cli.md) surfaces these
 operations through `/checkhealth` and `/doctor`.
 
 # Related concepts

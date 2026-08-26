@@ -3,7 +3,7 @@ type: Crate
 title: zqa-pdftools
 description: The academic-PDF parser that extracts structured text, detects sections, and produces retrieval chunks.
 tags: [pdf, parsing, chunking]
-timestamp: 2026-07-30T01:14:36-04:00
+timestamp: 2026-08-26T00:59:13-04:00
 ---
 
 # Purpose
@@ -19,12 +19,22 @@ font-derived section boundaries.
 | --- | --- |
 | Load pages | `extract_text` loads the PDF with `lopdf` and processes each page. |
 | Tokenize content streams | `tokenizer` recognizes PDF literals, hex strings, names, numbers, and operators. |
-| Decode text | `parse` handles text operators and spacing; `fonts` resolves simple and CID-keyed encodings, including one or more ToUnicode CMaps per font. |
+| Decode text | `parse` handles text operators and spacing; `fonts` resolves simple and CID-keyed encodings, preferring each font's ToUnicode CMap where one exists. |
 | Repair and classify | Edits repair ligatures and script markers; font size and boldness identify section boundaries. |
 | Produce content | `ExtractedContent` returns text, section boundaries, and page count. |
 
+All four text-showing operators (`TJ`, `Tj`, and the quote forms `'` and `"`)
+are decoded the same way; the quote forms include an implicit line break, so
+the parser emits a newline before their text regardless of whether the string
+arrived as a literal or hex token. Word boundaries are derived from each
+font's own space width (scaled by a fixed fraction, with a fallback default)
+rather than a global threshold, and space widths are cached per page and font.
+Literal-string escapes, octal escapes, and unmapped simple-font codes are
+preserved rather than dropped.
+
 For supported Computer Modern fonts, math mappings convert selected symbols to
-LaTeX. Section levels are inferred from font sizes, and only the first four
+LaTeX; the transform table covers a broad range of CM fonts and symbols.
+Section levels are inferred from font sizes, and only the first four
 levels are retained.
 
 # Chunking
@@ -46,8 +56,9 @@ session-imported PDFs for [zqa-rag](/rag.md).
 
 Table detection relies on text-position operators and alignment thresholds, so
 unusual tables or multi-column layouts can be misclassified. Font and CMap
-coverage varies by PDF; text drawn in CID-keyed fonts without a usable
-ToUnicode CMap is skipped rather than misdecoded. CMaps are capped at 8192
+coverage varies by PDF; fonts without a usable ToUnicode CMap (including
+fonts whose CMap cannot be parsed) are marked unmappable and their text is
+skipped rather than misdecoded. CMaps are capped at 8192
 entries to bound malformed inputs, and whitespace inside hex strings is
 ignored when counting skipped characters. Unrecognized `beginbf` blocks are
 rejected as unparsed. Spacing, superscripts, and subscripts are heuristic, and

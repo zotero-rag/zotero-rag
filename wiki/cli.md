@@ -3,12 +3,12 @@ type: Crate
 title: zqa CLI
 description: The interactive application that processes Zotero libraries, manages sessions, and orchestrates search and RAG queries.
 tags: [cli, zotero, rag]
-timestamp: 2026-07-30T01:14:36-04:00
+timestamp: 2026-08-26T00:59:13-04:00
 ---
 
 # Startup and state
 
-`zqa/src/main.rs` loads `.env` and starts the Tokio runtime. `zqa::run` sets a
+`crates/zqa/src/main.rs` loads `.env` and starts the Tokio runtime. `zqa::run` sets a
 state-directory LanceDB location when `LANCEDB_URI` is not already set, loads
 [runtime configuration](/configuration.md), performs first-run setup when
 needed, creates a `LanceZoteroStore`, and enters the interactive CLI.
@@ -57,6 +57,16 @@ reasoning tokens) and estimated cost, in cents, into persisted session state.
 Imported PDFs are parsed with [zqa-pdftools](/pdf-processing.md), but live only
 for the current session. This lets a question refer to a local PDF without
 adding it to Zotero or the vector index.
+
+# Embeddable sessions
+
+`zqa::session::Session` is a minimal, embeddable driver around the same
+command dispatcher the REPL uses. It owns the application context and
+forwards command strings to it, writing output to caller-supplied streams so
+out-of-crate front-ends can reuse the full retrieval and generation pipeline
+without depending on crate internals. The type is deliberately not `Send`;
+it is meant to live on a single owning thread that drives it, such as the
+dedicated engine thread in [zqa-gui](/gui.md).
 
 # Related concepts
 
