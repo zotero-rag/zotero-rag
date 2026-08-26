@@ -349,7 +349,7 @@ impl Config {
             ModelProvider::Anthropic => self.anthropic.as_ref().and_then(|c| {
                 c.reasoning_budget.map(|budget| ReasoningConfig {
                     max_tokens: Some(budget),
-                    effort: None,
+                    effort: c.reasoning_effort.clone(),
                     summary: None,
                 })
             }),
