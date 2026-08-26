@@ -109,29 +109,54 @@ impl From<&ReasoningConfig> for AnthropicThinkingConfig {
 /// Whether the given Claude model supports adaptive thinking (`thinking.type: "adaptive"`)
 /// rather than manual extended thinking (`thinking.type: "enabled"`).
 ///
+/// The model name is parsed into a model family (Opus, Sonnet, or Haiku) and a version, and
+/// adaptive thinking is enabled for versions above the per-family threshold (Opus and
+/// Sonnet 4.6+, Haiku 4.5+, and all 5.x+ models); the thresholds should not need updating as
+/// new models are released. Unrecognized model names are assumed to support adaptive thinking.
+///
 /// # Arguments
 ///
 /// * `model` - The model name (e.g., "claude-opus-4-8")
 ///
 /// # Returns
 ///
-/// `true` for Claude Opus 4.6+, Sonnet 4.6+, Haiku 4.5, and all Claude 5 models.
+/// `true` if the model supports adaptive thinking.
 fn supports_adaptive_thinking(model: &str) -> bool {
-    const ADAPTIVE_MODELS: &[&str] = &[
-        "opus-4-6",
-        "opus-4-7",
-        "opus-4-8",
-        "sonnet-4-6",
-        "opus-5",
-        "sonnet-5",
-        "haiku-4-5",
-        "fable-5",
-        "mythos-5",
-        "mythos-preview",
-    ];
+    let lower = model.to_lowercase();
+    let tokens: Vec<&str> = lower.split('-').collect();
+    let Some(i) = tokens
+        .iter()
+        .position(|t| matches!(*t, "opus" | "sonnet" | "haiku"))
+    else {
+        return true;
+    };
+    let family = tokens[i];
 
-    let model = model.to_lowercase();
-    ADAPTIVE_MODELS.iter().any(|m| model.contains(m))
+    // The version can follow the family ("claude-opus-4-5") or precede it
+    // ("claude-3-7-sonnet"); a date suffix ("claude-opus-4-5-20251001") is ignored.
+    let version = |a: usize, b: usize| {
+        Some((
+            tokens.get(a)?.parse::<u32>().ok()?,
+            tokens.get(b)?.parse::<u32>().ok()?,
+        ))
+    };
+    let Some((major, minor)) = i
+        .checked_sub(2)
+        .and_then(|j| version(j, j + 1))
+        .or_else(|| version(i + 1, i + 2))
+        // A bare major version ("claude-opus-4") has minor 0.
+        .or_else(|| tokens.get(i + 1)?.parse::<u32>().ok().map(|m| (m, 0)))
+    else {
+        return true;
+    };
+
+    if major >= 5 {
+        return true;
+    }
+    if major == 4 {
+        return minor >= if family == "haiku" { 5 } else { 6 };
+    }
+    false
 }
 
 /// Build the thinking and output configuration for a request. Adaptive-thinking models use
@@ -152,9 +177,11 @@ fn make_thinking_config(
     Option<AnthropicThinkingConfig>,
     Option<AnthropicOutputConfig>,
 ) {
-    let Some(reasoning) = reasoning else {
+    let Some(mut reasoning) = reasoning.cloned() else {
         return (None, None);
     };
+
+    reasoning.normalize();
 
     if supports_adaptive_thinking(model) {
         let output_config = reasoning
@@ -545,6 +572,13 @@ mod tests {
             "claude-opus-5",
             "claude-sonnet-5",
             "claude-haiku-4-5",
+            // Future and dated models work without changes to this function.
+            "claude-opus-4-9-20260101",
+            "claude-5-7-opus",
+            "claude-haiku-5",
+            "Claude-Opus-6",
+            // Unrecognized names are assumed to support adaptive thinking.
+            "claude-mythos-preview",
         ] {
             assert!(supports_adaptive_thinking(model), "{model}");
         }
@@ -591,9 +625,35 @@ mod tests {
     }
 
     #[test]
-    fn test_thinking_config_adaptive_model_without_effort_omits_output_config() {
+    fn test_thinking_config_extended_only_model_derives_budget_from_effort() {
+        let reasoning = ReasoningConfig {
+            max_tokens: None,
+            effort: Some("low".into()),
+            summary: None,
+        };
+        let (thinking, output_config) = make_thinking_config("claude-opus-4-5", Some(&reasoning));
+        let thinking = serde_json::to_value(thinking).unwrap();
+        test_eq!(thinking["budget_tokens"].as_u64(), Some(4096));
+        assert!(output_config.is_none());
+    }
+
+    #[test]
+    fn test_thinking_config_adaptive_model_derives_effort_from_budget() {
         let reasoning = ReasoningConfig {
             max_tokens: Some(1024),
+            effort: None,
+            summary: None,
+        };
+        let (thinking, output_config) = make_thinking_config("claude-sonnet-5", Some(&reasoning));
+        assert!(thinking.is_some());
+        let output_config = serde_json::to_value(output_config).unwrap();
+        test_eq!(output_config["effort"].as_str(), Some("minimal"));
+    }
+
+    #[test]
+    fn test_thinking_config_adaptive_model_without_effort_omits_output_config() {
+        let reasoning = ReasoningConfig {
+            max_tokens: None,
             effort: None,
             summary: None,
         };
