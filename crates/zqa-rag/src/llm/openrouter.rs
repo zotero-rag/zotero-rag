@@ -53,6 +53,10 @@ pub(crate) struct OpenRouterMessage {
     /// Tool call ID (only for tool role messages)
     #[serde(skip_serializing_if = "Option::is_none")]
     tool_call_id: Option<String>,
+    /// Opaque reasoning details returned by the API, replayed unchanged so providers that need
+    /// reasoning continuity (e.g. Anthropic via OpenRouter) can continue reasoning.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reasoning_details: Option<serde_json::Value>,
 }
 
 impl From<ChatHistoryItem> for Vec<OpenRouterMessage> {
@@ -139,6 +143,7 @@ fn convert_to_openrouter_messages(item: &ChatHistoryItem) -> Vec<OpenRouterMessa
                     content: Some(serde_json::to_string(&res.result).unwrap_or_default()),
                     tool_calls: None,
                     tool_call_id: Some(res.id.clone()),
+                    reasoning_details: None,
                 });
             }
         }
@@ -161,6 +166,7 @@ fn convert_to_openrouter_messages(item: &ChatHistoryItem) -> Vec<OpenRouterMessa
                     Some(tool_calls)
                 },
                 tool_call_id: None,
+                reasoning_details: None,
             },
         );
     }
@@ -249,6 +255,12 @@ struct OpenRouterResponseMessage {
     tool_calls: Option<Vec<OpenRouterToolCall>>,
     /// Information on why a response was refused, if any
     refusal: Option<String>,
+    /// Reasoning text returned by reasoning models, when enabled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    reasoning: Option<String>,
+    /// Opaque reasoning details to be returned unchanged in subsequent requests.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    reasoning_details: Option<serde_json::Value>,
 }
 
 /// Content block in an OpenRouter API response
@@ -288,6 +300,12 @@ struct OpenRouterResponse {
 fn map_response_to_chat_contents(message: &OpenRouterResponseMessage) -> Vec<ChatHistoryContent> {
     let mut contents = Vec::new();
 
+    if let Some(reasoning) = &message.reasoning
+        && !reasoning.is_empty()
+    {
+        contents.push(ChatHistoryContent::Reasoning(reasoning.clone()));
+    }
+
     if let Some(text) = &message.content
         && !text.is_empty()
     {
@@ -326,6 +344,7 @@ impl<T: HttpClient> AgenticClient for OpenRouterClient<T> {
             content: Some(request.message.clone()),
             tool_calls: None,
             tool_call_id: None,
+            reasoning_details: None,
         });
 
         messages
@@ -370,6 +389,7 @@ impl<T: HttpClient> AgenticClient for OpenRouterClient<T> {
                     content: Some(content.to_owned()),
                     tool_calls: None,
                     tool_call_id: None,
+                    reasoning_details: None,
                 };
                 Cow::Owned(
                     std::iter::once(system_message)
@@ -412,6 +432,7 @@ impl<T: HttpClient> AgenticClient for OpenRouterClient<T> {
                 content: choice.message.content,
                 tool_calls: choice.message.tool_calls,
                 tool_call_id: None,
+                reasoning_details: choice.message.reasoning_details,
             }],
             usage,
         })
@@ -427,7 +448,9 @@ mod tests {
 
     use super::*;
     use crate::clients::openrouter::OpenRouterClient;
-    use crate::http_client::{MockHttpClient, ReqwestClient, SequentialMockHttpClient};
+    use crate::http_client::{
+        MockHttpClient, RecordingSequentialMockHttpClient, ReqwestClient, SequentialMockHttpClient,
+    };
     use crate::llm::base::{AgenticClient, ChatRequest, ContentType, ToolCallResponse};
     use crate::llm::tools::test_utils::MockTool;
 
@@ -438,6 +461,7 @@ mod tests {
             content: Some("Follow the system instructions.".into()),
             tool_calls: None,
             tool_call_id: None,
+            reasoning_details: None,
         };
 
         let serialized = serde_json::to_value(message).unwrap();
@@ -494,6 +518,8 @@ mod tests {
                     content: Some(String::from("Hi there! How can I help you today?")),
                     tool_calls: None,
                     refusal: Some(String::new()),
+                    reasoning: None,
+                    reasoning_details: None,
                 },
                 finish_reason: String::from("stop"),
                 logprobs: Some(HashMap::new()),
@@ -622,6 +648,8 @@ mod tests {
                         },
                     }]),
                     refusal: None,
+                    reasoning: None,
+                    reasoning_details: None,
                 },
                 finish_reason: "tool_calls".into(),
                 logprobs: None,
@@ -648,6 +676,8 @@ mod tests {
                     content: Some("Done!".into()),
                     tool_calls: None,
                     refusal: None,
+                    reasoning: None,
+                    reasoning_details: None,
                 },
                 finish_reason: "stop".into(),
                 logprobs: None,
@@ -695,6 +725,110 @@ mod tests {
         let texts = text_segments.lock().unwrap();
         test_eq!(texts.len(), 1);
         test_eq!(texts[0].as_str(), "Done!");
+    }
+
+    #[tokio::test]
+    async fn test_reasoning_is_surfaced_and_replayed() {
+        let reasoning_details =
+            serde_json::json!([{"type": "reasoning.text", "text": "Thinking hard."}]);
+        let usage = || OpenRouterUsageStats {
+            prompt_tokens: 10,
+            completion_tokens: 5,
+            total_tokens: 15,
+            completion_tokens_details: None,
+            prompt_tokens_details: None,
+            cost: None,
+        };
+        let tool_call_response = OpenRouterResponse {
+            id: "resp-1".into(),
+            model: "openai/gpt-5.2".into(),
+            provider: "OpenAI".into(),
+            object: "chat.completion".into(),
+            created: 0,
+            usage: usage(),
+            choices: vec![OpenRouterResponseChoices {
+                message: OpenRouterResponseMessage {
+                    role: MessageRole::Assistant,
+                    content: None,
+                    tool_calls: Some(vec![OpenRouterToolCall {
+                        id: "call-1".into(),
+                        r#type: "function".into(),
+                        function: OpenRouterFunction {
+                            name: "mock_tool".into(),
+                            arguments: r#"{"name":"Alice"}"#.into(),
+                        },
+                    }]),
+                    refusal: None,
+                    reasoning: Some("Thinking hard.".into()),
+                    reasoning_details: Some(reasoning_details.clone()),
+                },
+                finish_reason: "tool_calls".into(),
+                logprobs: None,
+                index: 0,
+            }],
+        };
+        let text_response = OpenRouterResponse {
+            choices: vec![OpenRouterResponseChoices {
+                message: OpenRouterResponseMessage {
+                    role: MessageRole::Assistant,
+                    content: Some("Done!".into()),
+                    tool_calls: None,
+                    refusal: None,
+                    reasoning: None,
+                    reasoning_details: None,
+                },
+                finish_reason: "stop".into(),
+                logprobs: None,
+                index: 0,
+            }],
+            ..tool_call_response.clone()
+        };
+        let mut text_response = text_response;
+        text_response.id = "resp-2".into();
+
+        let tool = MockTool {
+            call_count: Arc::new(Mutex::new(0)),
+        };
+        let request = ChatRequest {
+            chat_history: Vec::new(),
+            max_tokens: Some(1024),
+            message: "Test".into(),
+            system_prompt: None,
+            reasoning: None,
+            tools: Some(&[Box::new(tool)]),
+            on_tool_call: None,
+            on_text: None,
+            tool_iteration_limit: None,
+        };
+
+        let http_client =
+            RecordingSequentialMockHttpClient::new([tool_call_response, text_response]);
+        let mock_client = OpenRouterClient {
+            client: http_client.clone(),
+            config: None,
+        };
+        let res = mock_client.send_message(&request).await;
+        test_ok!(res);
+        let res = res.unwrap();
+
+        let reasoning: Vec<_> = res
+            .content
+            .iter()
+            .filter_map(|c| match c {
+                ContentType::Reasoning(s) => Some(s.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(reasoning, ["Thinking hard."]);
+
+        let requests = http_client.requests();
+        test_eq!(requests.len(), 2);
+        let messages = requests[1]["messages"].as_array().unwrap();
+        let assistant = messages
+            .iter()
+            .find(|m| m["role"].as_str() == Some("assistant"))
+            .unwrap();
+        test_eq!(assistant["reasoning_details"], reasoning_details);
     }
 
     #[tokio::test]
