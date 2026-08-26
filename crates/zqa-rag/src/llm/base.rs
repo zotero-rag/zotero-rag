@@ -124,7 +124,8 @@ pub struct ReasoningConfig {
 }
 
 /// Reasoning effort levels
-#[derive(Copy, Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Copy, Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 #[allow(missing_docs)]
 pub enum ReasoningEffort {
     r#None,

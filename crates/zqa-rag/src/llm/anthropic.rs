@@ -13,8 +13,8 @@ use crate::constants::{
 };
 use crate::http_client::HttpClient;
 use crate::llm::base::{
-    AgenticClient, ChatHistoryContent, MessageRole, ProviderTurn, ReasoningConfig, ToolCallRequest,
-    ToolCallResponse, send_generation_request,
+    AgenticClient, ChatHistoryContent, MessageRole, ProviderTurn, ReasoningConfig, ReasoningEffort,
+    ToolCallRequest, ToolCallResponse, send_generation_request,
 };
 use crate::llm::tools::{ANTHROPIC_SCHEMA_KEY, SerializedTool};
 use crate::pricing::ModelUsage;
@@ -171,6 +171,12 @@ pub(crate) fn make_thinking_config(
     };
 
     reasoning.normalize();
+    // Handle invalid values
+    match reasoning.effort.as_deref() {
+        Some("minimal") => reasoning.effort = Some(ReasoningEffort::Low.to_string()),
+        Some("none") => reasoning.effort = None,
+        _ => {}
+    }
 
     if supports_adaptive_thinking(model) {
         let output_config = reasoning
