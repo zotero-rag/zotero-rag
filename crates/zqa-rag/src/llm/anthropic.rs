@@ -95,17 +95,6 @@ pub(crate) struct AnthropicOutputConfig {
     effort: String,
 }
 
-impl From<&ReasoningConfig> for AnthropicThinkingConfig {
-    fn from(value: &ReasoningConfig) -> Self {
-        Self::Enabled {
-            display: "summarized",
-            budget_tokens: value
-                .max_tokens
-                .unwrap_or(DEFAULT_ANTHROPIC_REASONING_BUDGET),
-        }
-    }
-}
-
 /// Whether the given Claude model supports adaptive thinking (`thinking.type: "adaptive"`)
 /// rather than manual extended thinking (`thinking.type: "enabled"`).
 ///
@@ -170,7 +159,7 @@ fn supports_adaptive_thinking(model: &str) -> bool {
 /// # Returns
 ///
 /// The `(thinking, output_config)` pair for the request; both `None` when thinking is disabled.
-fn make_thinking_config(
+pub(crate) fn make_thinking_config(
     model: &str,
     reasoning: Option<&ReasoningConfig>,
 ) -> (

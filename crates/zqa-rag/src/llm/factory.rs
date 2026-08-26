@@ -57,10 +57,15 @@ impl LLMClient {
     #[must_use]
     pub fn get_reasoning_config(&self) -> Option<ReasoningConfig> {
         match self {
-            LLMClient::Anthropic(client) => client.config.as_ref().map(|c| ReasoningConfig {
-                max_tokens: c.reasoning_budget,
-                effort: c.reasoning_effort.clone(),
-                summary: None,
+            LLMClient::Anthropic(client) => client.config.as_ref().and_then(|c| {
+                if c.reasoning_budget.is_none() && c.reasoning_effort.is_none() {
+                    return None;
+                }
+                Some(ReasoningConfig {
+                    max_tokens: c.reasoning_budget,
+                    effort: c.reasoning_effort.clone(),
+                    summary: None,
+                })
             }),
             LLMClient::Ollama(client) => client.config.as_ref().map(|c| ReasoningConfig {
                 max_tokens: c.reasoning_budget,
