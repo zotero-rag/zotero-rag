@@ -11,7 +11,7 @@ use zqa_rag::config::LLMClientConfig;
 use zqa_rag::constants::*;
 use zqa_rag::constants::{DEFAULT_OPENAI_EMBEDDING_DIM, DEFAULT_OPENAI_EMBEDDING_MODEL};
 use zqa_rag::embedding::common::EmbeddingProviderConfig;
-use zqa_rag::llm::base::ReasoningConfig;
+use zqa_rag::llm::base::{ReasoningConfig, ReasoningEffort};
 use zqa_rag::providers::ProviderId;
 use zqa_rag::reranking::common::RerankProviderConfig;
 
@@ -576,7 +576,7 @@ pub struct AnthropicConfig {
 
     /// Reasoning effort ("low", "medium", "high", "xhigh", "max") for models with adaptive
     /// thinking (Claude Opus 4.6+ and Claude 5 models). Omit to use the model default.
-    pub reasoning_effort: Option<String>,
+    pub reasoning_effort: Option<ReasoningEffort>,
 }
 
 impl Default for AnthropicConfig {
