@@ -57,6 +57,7 @@ where
     fn compute_embeddings_internal(
         &self,
         source: Arc<dyn arrow_array::Array>,
+        input_type: &'static str,
     ) -> Result<Arc<dyn arrow_array::Array>, LLMError> {
         // For a non-trial API key, Cohere's RPM is 2000 and the Embed model has a 128k context
         // window. It does not appear that there is a TPM limit. In theory, we could therefore send
@@ -82,7 +83,7 @@ where
                 |texts| CohereEmbedRequest {
                     texts,
                     model: DEFAULT_COHERE_EMBEDDING_MODEL.to_string(),
-                    input_type: "search_document".into(),
+                    input_type: input_type.into(),
                     output_dimension: DEFAULT_COHERE_EMBEDDING_DIM,
                     // Requesting float vectors explicitly for newer APIs; ignored by older
                     embedding_types: Some(vec!["float".into()]),
@@ -176,7 +177,7 @@ impl<T: HttpClient + Default + Clone + std::fmt::Debug> EmbeddingFunction for Co
         &self,
         source: Arc<dyn arrow_array::Array>,
     ) -> Result<Arc<dyn arrow_array::Array>, lancedb::Error> {
-        match self.compute_embeddings_internal(source) {
+        match self.compute_embeddings_internal(source, "search_document") {
             Ok(result) => Ok(result),
             Err(e) => Err(lancedb::Error::Other {
                 message: e.to_string(),
@@ -189,7 +190,7 @@ impl<T: HttpClient + Default + Clone + std::fmt::Debug> EmbeddingFunction for Co
         &self,
         input: Arc<dyn arrow_array::Array>,
     ) -> Result<Arc<dyn arrow_array::Array>, lancedb::Error> {
-        match self.compute_embeddings_internal(input) {
+        match self.compute_embeddings_internal(input, "search_query") {
             Ok(result) => Ok(result),
             Err(e) => Err(lancedb::Error::Other {
                 message: e.to_string(),
@@ -224,7 +225,7 @@ mod tests {
         ]);
 
         let client = CohereClient::<ReqwestClient>::default();
-        let embeddings = client.compute_embeddings_internal(Arc::new(array));
+        let embeddings = client.compute_embeddings_internal(Arc::new(array), "search_document");
 
         test_ok!(embeddings);
 
