@@ -197,7 +197,7 @@ impl From<&ReasoningConfig> for OpenAIReasoning {
                 .effort
                 .clone()
                 .unwrap_or(DEFAULT_OPENAI_REASONING_EFFORT.into()),
-            summary: value.summary.clone(),
+            summary: Some(value.summary.clone().unwrap_or_else(|| "auto".into())),
         }
     }
 }
@@ -361,9 +361,13 @@ fn map_response_to_chat_contents(response: &OpenAIResponse) -> Vec<ChatHistoryCo
                     .collect::<Vec<_>>()
                     .join("\n");
 
-                Some(ChatHistoryContent::Text(format!(
-                    "<reasoning>{summary}</reasoning>"
-                )))
+                if summary.is_empty() {
+                    None
+                } else {
+                    Some(ChatHistoryContent::Text(format!(
+                        "<reasoning>{summary}</reasoning>"
+                    )))
+                }
             }
             OpenAIOutput::Message { content, .. } => map_message_to_chat_content(content),
             OpenAIOutput::FunctionCall {
