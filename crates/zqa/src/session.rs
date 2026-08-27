@@ -10,8 +10,10 @@ use std::io::{Cursor, Write};
 
 use crate::cli::app::dispatch_command;
 use crate::cli::errors::CLIError;
+use crate::cli::handlers::conversation::resume_conversation;
 use crate::common::{Context, PathOptions, State};
 use crate::config::Config;
+use crate::state::SavedChatHistory;
 use crate::store::lance::LanceZoteroStore;
 
 /// An embeddable driver around the zqa command handlers.
@@ -77,5 +79,22 @@ impl<O: Write, E: Write> Session<O, E> {
     /// unrecoverably.
     pub async fn dispatch(&mut self, command: &str) -> Result<bool, CLIError> {
         dispatch_command(command, &mut self.ctx).await
+    }
+
+    /// Resume a saved conversation without interactive input.
+    ///
+    /// The current conversation is saved before state is replaced. If that save fails, the current
+    /// conversation remains active.
+    ///
+    /// # Arguments
+    ///
+    /// * `conversation` - The saved conversation to resume.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`CLIError`] if the current conversation cannot be saved or conversation state
+    /// cannot be locked.
+    pub fn resume_conversation(&mut self, conversation: &SavedChatHistory) -> Result<(), CLIError> {
+        resume_conversation(&mut self.ctx, conversation)
     }
 }
