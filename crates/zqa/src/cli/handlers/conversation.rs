@@ -41,9 +41,7 @@ pub(crate) fn handle_resume_cmd<O: Write, E: Write>(
         Ok(Some(ref v)) if v.is_empty() => {
             writeln!(&mut ctx.out, "No saved conversations found.")?;
         }
-        Ok(Some(mut histories)) => {
-            histories.sort_by_key(|b| std::cmp::Reverse(b.date));
-
+        Ok(Some(histories)) => {
             writeln!(&mut ctx.out)?;
             writeln!(&mut ctx.out, "Saved conversations:")?;
             for (i, h) in histories.iter().enumerate() {
@@ -67,33 +65,9 @@ pub(crate) fn handle_resume_cmd<O: Write, E: Write>(
 
             match input.parse::<usize>() {
                 Ok(n) if n >= 1 && n <= histories.len() => {
-                    if ctx.state.dirty.load(atomic::Ordering::Relaxed) {
-                        let chat_history = Arc::clone(&ctx.state.chat_history);
-                        let history = chat_history.lock()?;
-                        let date = Local::now();
-                        let conversation = SavedChatHistory {
-                            history: history.clone(),
-                            date,
-                            title: ctx.state.title.lock()?.clone().unwrap_or_else(|| {
-                                format!("Conversation on {}", date.format("%Y-%m-%d %H:%M"))
-                            }),
-                            usage: ctx.state.usage,
-                        };
-                        if let Err(e) = save_conversation(&conversation)
-                            && let Err(write_err) =
-                                writeln!(&mut ctx.err, "Error saving conversation: {e}")
-                        {
-                            log::error!("Failed to write to stderr: {write_err}");
-                        }
-                    }
-
-                    let selected = histories.swap_remove(n - 1);
-                    let title = selected.title.clone();
-                    ctx.state.chat_history = Arc::new(Mutex::new(selected.history));
-                    *ctx.state.title.lock()? = Some(title.clone());
-                    ctx.state.dirty.store(false, atomic::Ordering::Relaxed);
-                    ctx.state.usage = selected.usage;
-                    writeln!(&mut ctx.out, "Resumed: {title}")?;
+                    let selected = &histories[n - 1];
+                    resume_conversation(ctx, selected)?;
+                    writeln!(&mut ctx.out, "Resumed: {}", selected.title)?;
                 }
                 _ => {
                     writeln!(&mut ctx.err, "Invalid selection.")?;
@@ -101,6 +75,42 @@ pub(crate) fn handle_resume_cmd<O: Write, E: Write>(
             }
         }
     }
+
+    Ok(())
+}
+
+/// Resume a saved conversation without prompting for input.
+///
+/// The current conversation is saved before state is replaced. If that save fails, the current
+/// state remains active.
+///
+/// # Arguments
+///
+/// * `ctx` - The application context whose conversation state will be replaced.
+/// * `conversation` - The saved conversation to resume.
+///
+/// # Errors
+///
+/// Returns a [`CLIError`] if the current conversation cannot be saved or conversation state cannot
+/// be locked.
+pub(crate) fn resume_conversation<O, E>(
+    ctx: &mut Context<O, E>,
+    conversation: &SavedChatHistory,
+) -> Result<(), CLIError>
+where
+    O: Write,
+    E: Write,
+{
+    if !save_current_conversation(ctx)? {
+        return Err(CLIError::CommandError(
+            "could not save the current conversation; keeping it active".into(),
+        ));
+    }
+
+    *ctx.state.title.lock()? = Some(conversation.title.clone());
+    ctx.state.chat_history = Arc::new(Mutex::new(conversation.history.clone()));
+    ctx.state.dirty.store(false, atomic::Ordering::Relaxed);
+    ctx.state.usage = conversation.usage;
 
     Ok(())
 }
@@ -153,6 +163,7 @@ where
 #[cfg(test)]
 mod tests {
     use std::io::Cursor;
+    use std::sync::atomic::Ordering;
 
     use chrono::Local;
     use serial_test::serial;
@@ -160,7 +171,7 @@ mod tests {
     use zqa_macros::{test_contains, test_eq};
     use zqa_rag::llm::base::{ChatHistoryContent, ChatHistoryItem, MessageRole};
 
-    use super::handle_resume_cmd;
+    use super::{handle_resume_cmd, resume_conversation};
     use crate::common::test_support::create_test_context;
     use crate::state::{SavedChatHistory, UsageMetadata, save_conversation};
 
@@ -176,6 +187,35 @@ mod tests {
             let output = String::from_utf8(ctx.out.into_inner()).unwrap();
             test_contains!(output, "No saved conversations found.");
         });
+    }
+
+    #[test]
+    fn resume_conversation_replaces_session_state() {
+        let history = vec![ChatHistoryItem {
+            role: MessageRole::User,
+            content: vec![ChatHistoryContent::Text("What is attention?".into())],
+        }];
+        let saved = SavedChatHistory {
+            history: history.clone(),
+            date: Local::now(),
+            title: "Attention".into(),
+            usage: UsageMetadata {
+                input_tokens: 1000,
+                output_tokens: 500,
+                ..UsageMetadata::default()
+            },
+        };
+
+        let mut ctx = create_test_context(vec![]);
+        resume_conversation(&mut ctx, &saved).unwrap();
+
+        assert_eq!(*ctx.state.chat_history.lock().unwrap(), history);
+        assert_eq!(
+            *ctx.state.title.lock().unwrap(),
+            Some("Attention".to_string())
+        );
+        assert_eq!(ctx.state.usage.input_tokens, 1000);
+        assert!(!ctx.state.dirty.load(Ordering::Relaxed));
     }
 
     #[test]

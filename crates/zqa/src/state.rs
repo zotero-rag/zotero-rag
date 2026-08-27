@@ -1,5 +1,6 @@
 //!  NOTE: This is not state management! The `state` module is actually a way to interact with `XDG_STATE_HOME`.
 
+use std::cmp::Reverse;
 use std::fs;
 use std::io::{self, BufRead};
 use std::ops::{Add, AddAssign};
@@ -9,7 +10,7 @@ use chrono::{DateTime, Local};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use zqa_rag::capabilities::{EmbeddingProvider, ModelProvider, RerankerProvider};
-use zqa_rag::llm::base::ChatHistoryItem;
+use zqa_rag::llm::base::{ChatHistoryContent, ChatHistoryItem};
 use zqa_rag::pricing::{ModelUsage, PricingCacheOptions, get_model_pricing};
 
 use crate::config::{BaseDirError, Config, get_config_dir};
@@ -159,16 +160,38 @@ impl UsageMetadata {
 /// `Vec<ChatHistoryItem>` under the hood, but also includes some metadata such as when the chat
 /// occurred.
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
-pub(crate) struct SavedChatHistory {
+pub struct SavedChatHistory {
     /// The chat history
-    pub(crate) history: Vec<ChatHistoryItem>,
+    pub history: Vec<ChatHistoryItem>,
     /// When this conversation occurred
-    pub(crate) date: DateTime<Local>,
+    pub date: DateTime<Local>,
     /// A brief title
-    pub(crate) title: String,
+    pub title: String,
     /// Tracked usage metadata so far
     #[serde(default)]
     pub(crate) usage: UsageMetadata,
+}
+
+impl SavedChatHistory {
+    /// Return the latest non-empty text message as a conversation preview.
+    ///
+    /// Reasoning and tool-call content are skipped because they are implementation details rather
+    /// than useful conversation summaries.
+    ///
+    /// # Returns
+    ///
+    /// The trimmed message text, or `None` when the conversation has no text content.
+    #[must_use]
+    pub fn preview(&self) -> Option<&str> {
+        self.history
+            .iter()
+            .rev()
+            .flat_map(|item| item.content.iter().rev())
+            .find_map(|content| match content {
+                ChatHistoryContent::Text(text) if !text.trim().is_empty() => Some(text.trim()),
+                _ => None,
+            })
+    }
 }
 
 /// Attempt to get all previous conversations if they exist.
@@ -186,7 +209,7 @@ pub(crate) struct SavedChatHistory {
 ///
 /// * `StateErrors::DirectoryError` when the state dir could not be obtained.
 /// * `StateError::FileWriteError` if the conversations directory could not be created.
-pub(crate) fn get_conversation_history() -> Result<Option<Vec<SavedChatHistory>>, StateError> {
+pub fn get_conversation_history() -> Result<Option<Vec<SavedChatHistory>>, StateError> {
     let state_dir = get_state_dir()?;
     let conversations_dir = state_dir.join("conversations");
 
@@ -195,13 +218,14 @@ pub(crate) fn get_conversation_history() -> Result<Option<Vec<SavedChatHistory>>
         return Ok(None);
     }
 
-    let histories = conversations_dir
+    let mut histories = conversations_dir
         .read_dir()?
         .filter_map(std::result::Result::ok)
         .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "json"))
         .filter_map(|entry| fs::read_to_string(entry.path()).ok())
         .filter_map(|s| serde_json::from_str::<SavedChatHistory>(&s).ok())
         .collect::<Vec<_>>();
+    histories.sort_by_key(|history| Reverse(history.date));
 
     Ok(Some(histories))
 }
@@ -481,7 +505,7 @@ mod tests {
     use std::io::Cursor;
     use std::path::Component;
 
-    use chrono::Local;
+    use chrono::{Duration, Local};
     use clap::builder::OsStr;
     use serial_test::serial;
     use zqa_macros::test_ok;
@@ -593,6 +617,59 @@ mod tests {
             assert_eq!(conversations[0].usage.input_cache_read, 100);
             assert_eq!(conversations[0].usage.output_tokens, 1000);
             assert_eq!(conversations[0].usage.estimated_cost, 5);
+        });
+    }
+
+    #[test]
+    fn saved_conversation_preview_uses_latest_text() {
+        let conversation = SavedChatHistory {
+            date: Local::now(),
+            title: "Preview test".into(),
+            history: vec![
+                ChatHistoryItem {
+                    role: MessageRole::User,
+                    content: vec![ChatHistoryContent::Text("Initial question".into())],
+                },
+                ChatHistoryItem {
+                    role: MessageRole::Assistant,
+                    content: vec![
+                        ChatHistoryContent::Text("  Latest response  ".into()),
+                        ChatHistoryContent::Reasoning("Internal reasoning".into()),
+                    ],
+                },
+            ],
+            usage: UsageMetadata::default(),
+        };
+
+        assert_eq!(conversation.preview(), Some("Latest response"));
+    }
+
+    #[test]
+    #[serial]
+    fn conversation_history_is_newest_first() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        temp_env::with_var("ZQA_STATE_DIR", Some(temp_dir.path()), || {
+            let now = Local::now();
+            for (title, date) in [
+                ("Older conversation", now - Duration::hours(1)),
+                ("Newer conversation", now),
+            ] {
+                save_conversation(&SavedChatHistory {
+                    date,
+                    title: title.into(),
+                    history: Vec::new(),
+                    usage: UsageMetadata::default(),
+                })
+                .unwrap();
+            }
+
+            let conversations = get_conversation_history().unwrap().unwrap();
+            let titles = conversations
+                .iter()
+                .map(|conversation| conversation.title.as_str())
+                .collect::<Vec<_>>();
+
+            assert_eq!(titles, ["Newer conversation", "Older conversation"]);
         });
     }
 
