@@ -136,6 +136,7 @@ impl From<&SavedChatHistory> for ChatRows {
 enum Phase {
     Ready,
     Running,
+    Resuming,
     Stopping,
     Ended,
 }
@@ -633,7 +634,7 @@ impl ZqaApp {
             }
             SidebarAction::ResumeConversation(conversation) => {
                 self.pane = Pane::Chat;
-                self.phase = Phase::Running;
+                self.phase = Phase::Resuming;
                 let _ = self
                     .cmd_tx
                     .send(EngineCommand::ResumeConversation(Arc::clone(conversation)));
@@ -799,6 +800,7 @@ impl ZqaApp {
             let (dot, label) = match self.phase {
                 Phase::Ready => (cx.theme().success, "Ready"),
                 Phase::Running => (cx.theme().info, "Working"),
+                Phase::Resuming => (cx.theme().info, "Resuming"),
                 Phase::Stopping => (cx.theme().warning, "Stopping"),
                 Phase::Ended => (cx.theme().muted_foreground, "Session ended"),
             };
@@ -855,7 +857,10 @@ impl ZqaApp {
 
     /// Render the scrolling transcript of conversation turns.
     fn render_transcript(&self, cx: &Context<Self>) -> AnyElement {
-        let busy = matches!(self.phase, Phase::Running | Phase::Stopping);
+        let busy = matches!(
+            self.phase,
+            Phase::Running | Phase::Resuming | Phase::Stopping
+        );
 
         let scroll = || {
             div()
@@ -895,10 +900,10 @@ impl ZqaApp {
                             div()
                                 .text_size(px(13.))
                                 .text_color(cx.theme().muted_foreground)
-                                .child(if self.phase == Phase::Stopping {
-                                    "Stopping..."
-                                } else {
-                                    "Working..."
+                                .child(match self.phase {
+                                    Phase::Resuming => "Resuming...",
+                                    Phase::Stopping => "Stopping...",
+                                    _ => "Working...",
                                 }),
                         ),
                 )
@@ -1072,10 +1077,18 @@ impl ZqaApp {
                 .into_any_element();
         }
 
-        let busy = matches!(self.phase, Phase::Running | Phase::Stopping);
+        let stoppable = matches!(self.phase, Phase::Running | Phase::Stopping);
+        let resuming = self.phase == Phase::Resuming;
+        let busy = stoppable || resuming;
 
         let action = div()
-            .id(if busy { "stop-button" } else { "send-button" })
+            .id(if stoppable {
+                "stop-button"
+            } else if resuming {
+                "resume-progress"
+            } else {
+                "send-button"
+            })
             .size_8()
             .rounded_full()
             .flex()
@@ -1087,20 +1100,25 @@ impl ZqaApp {
                     .hover(|style| style.bg(cx.theme().primary_hover))
                     .active(|style| style.bg(cx.theme().primary_active))
             })
-            .when(busy, |this| {
+            .when(stoppable, |this| {
                 this.bg(cx.theme().secondary)
                     .text_color(cx.theme().secondary_foreground)
                     .hover(|style| style.bg(cx.theme().secondary_hover))
             })
-            .child(Icon::new(if busy {
-                IconName::Pause
-            } else {
-                IconName::ArrowUp
-            }))
-            .on_click(cx.listener(move |this, _, window, cx| {
-                if busy {
-                    this.request_stop(cx);
+            .when(resuming, |this| {
+                this.bg(cx.theme().secondary).child(Spinner::new().xsmall())
+            })
+            .when(!resuming, |this| {
+                this.child(Icon::new(if stoppable {
+                    IconName::Pause
                 } else {
+                    IconName::ArrowUp
+                }))
+            })
+            .on_click(cx.listener(move |this, _, window, cx| {
+                if stoppable {
+                    this.request_stop(cx);
+                } else if !resuming {
                     this.submit(window, cx);
                 }
             }));
@@ -1319,6 +1337,7 @@ mod tests {
     fn only_the_ready_phase_accepts_commands() {
         assert!(Phase::Ready.accepts_commands());
         assert!(!Phase::Running.accepts_commands());
+        assert!(!Phase::Resuming.accepts_commands());
         assert!(!Phase::Stopping.accepts_commands());
         assert!(!Phase::Ended.accepts_commands());
     }
