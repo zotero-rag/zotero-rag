@@ -11,7 +11,10 @@
 
 mod bridge;
 
-use bridge::{UiEvent, spawn_engine};
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use bridge::{EngineCommand, UiEvent, spawn_engine};
 use futures::{StreamExt, channel::mpsc::UnboundedReceiver};
 use gpui::prelude::*;
 use gpui::{
@@ -25,11 +28,14 @@ use gpui_component::{
     button::{Button, ButtonVariants as _},
     h_flex,
     input::{InputEvent, Textarea, TextareaState},
+    scroll::ScrollableElement as _,
     spinner::Spinner,
     v_flex,
 };
 use gpui_component_assets::Assets;
+use serde_json::Value;
 use tokio::sync::mpsc::UnboundedSender;
+use zqa::state::SavedChatHistory;
 
 /// Width of the left sidebar.
 const SIDEBAR_WIDTH: Pixels = px(232.);
@@ -43,13 +49,16 @@ const TRAFFIC_LIGHT_INSET: Pixels = if cfg!(target_os = "macos") {
 const CONTENT_WIDTH: Rems = rems(46.);
 
 /// What a sidebar item does when clicked.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 enum SidebarAction {
     /// Send a command string to the engine.
     Run(&'static str),
     /// Prefill the input with a command prefix and focus it (commands that take an
     /// argument, so the user completes them by typing).
     Prefill(&'static str),
+    /// Resume a conversation from a saved chat history. This also saves the current history
+    /// to disk.
+    ResumeConversation(Arc<SavedChatHistory>),
     /// Switch the main pane between the conversation and the settings placeholder.
     ToggleSettings,
 }
@@ -59,12 +68,66 @@ enum SidebarAction {
 enum ChatRow {
     /// A command or question sent by the user.
     User(SharedString),
+    /// Reasoning output from the engine.
+    Reasoning(SharedString),
+    /// A tool call name and request/response pair from the engine.
+    /// TODO: This can look a little ugly since it's typically JSON request/responses. We should
+    /// consider a better formatting solution right here, maybe with a trait.
+    ToolCall((SharedString, Value, Value)),
     /// Answer-style stdout. Grows in place while a command streams.
     Answer(String),
     /// Engine status lines (timings, warnings) written to stderr.
     Status(String),
     /// A command that failed.
     Failed(SharedString),
+}
+struct ChatRows(Vec<ChatRow>);
+
+impl From<&zqa_rag::llm::base::ChatHistoryItem> for ChatRows {
+    fn from(value: &zqa_rag::llm::base::ChatHistoryItem) -> Self {
+        let mut tool_calls: HashMap<SharedString, (SharedString, Value, Value)> = HashMap::new();
+
+        Self(
+            value
+                .content
+                .iter()
+                .flat_map(|content| match content {
+                    zqa_rag::llm::base::ChatHistoryContent::Text(text) => Some(match value.role {
+                        zqa_rag::llm::base::MessageRole::User => ChatRow::User(text.into()),
+                        zqa_rag::llm::base::MessageRole::Assistant => {
+                            ChatRow::Answer(text.to_string())
+                        }
+                        zqa_rag::llm::base::MessageRole::Tool => ChatRow::Status(text.to_string()),
+                    }),
+                    zqa_rag::llm::base::ChatHistoryContent::Reasoning(text) => {
+                        Some(ChatRow::Reasoning(text.into()))
+                    }
+                    zqa_rag::llm::base::ChatHistoryContent::ToolCallRequest(req) => {
+                        let req = req.clone();
+                        tool_calls
+                            .insert(req.id.into(), (req.tool_name.into(), req.args, Value::Null));
+                        None
+                    }
+                    zqa_rag::llm::base::ChatHistoryContent::ToolCallResponse(res) => {
+                        let (tool_name, args, _) = tool_calls.remove(res.id.as_str())?;
+                        Some(ChatRow::ToolCall((tool_name, args, res.result.clone())))
+                    }
+                })
+                .collect(),
+        )
+    }
+}
+
+impl From<&SavedChatHistory> for ChatRows {
+    fn from(value: &SavedChatHistory) -> Self {
+        ChatRows(
+            value
+                .history
+                .iter()
+                .flat_map(|item| ChatRows::from(item).0)
+                .collect(),
+        )
+    }
 }
 
 /// What the engine is doing right now, mirrored into the header.
@@ -93,9 +156,13 @@ enum Pane {
 /// The single-window application view.
 struct ZqaApp {
     /// The query/command input box state.
+    /// TODO: A nicety for users would be to go back to a conversation and have their
+    /// input remembered.
     input_state: Entity<TextareaState>,
     /// Transcript blocks, oldest first.
     rows: Vec<ChatRow>,
+    /// Saved conversations loaded from the zqa state directory.
+    conversation_history: Result<Vec<Arc<SavedChatHistory>>, zqa::state::StateError>,
     /// What the engine thread is doing right now.
     phase: Phase,
     /// Whether a `/new` reset is in flight; the transcript clears only when the
@@ -111,7 +178,7 @@ struct ZqaApp {
     /// Scrolls the transcript; pinned to the bottom while content streams in.
     scroll_handle: ScrollHandle,
     /// Channel carrying commands to the engine thread.
-    cmd_tx: UnboundedSender<String>,
+    cmd_tx: UnboundedSender<EngineCommand>,
     /// Channel signalling the engine to cancel the in-flight command.
     cancel_tx: UnboundedSender<()>,
     /// Kept alive so the input subscription is not dropped.
@@ -120,7 +187,7 @@ struct ZqaApp {
 
 impl ZqaApp {
     fn new(
-        cmd_tx: UnboundedSender<String>,
+        cmd_tx: UnboundedSender<EngineCommand>,
         cancel_tx: UnboundedSender<()>,
         event_rx: UnboundedReceiver<UiEvent>,
         dark_theme: bool,
@@ -159,7 +226,21 @@ impl ZqaApp {
                         UiEvent::Stderr(text) => Self::fold_stderr(&mut app.rows, &text),
                         UiEvent::Done(result) => {
                             app.phase = Phase::Ready;
+                            let refresh_history = app.pending_reset && result.is_ok();
                             Self::finish_command(&mut app.rows, &mut app.pending_reset, result);
+                            if refresh_history {
+                                app.conversation_history = Self::load_conversation_history();
+                            }
+                        }
+                        UiEvent::ConversationResumed(result) => {
+                            app.phase = Phase::Ready;
+                            match result {
+                                Ok(conversation) => {
+                                    app.rows = ChatRows::from(conversation.as_ref()).0;
+                                    app.pane = Pane::Chat;
+                                }
+                                Err(message) => app.rows.push(ChatRow::Failed(message.into())),
+                            }
                         }
                         UiEvent::Cancelled => {
                             app.phase = Phase::Ready;
@@ -191,6 +272,7 @@ impl ZqaApp {
         Self {
             input_state,
             rows: Vec::new(),
+            conversation_history: Self::load_conversation_history(),
             phase: Phase::Ready,
             pending_reset: false,
             pane: Pane::Chat,
@@ -201,6 +283,21 @@ impl ZqaApp {
             cancel_tx,
             _subscriptions: vec![subscription],
         }
+    }
+
+    /// Load saved conversations for the sidebar.
+    ///
+    /// # Returns
+    ///
+    /// Saved conversations in reverse chronological order, or a displayable error.
+    fn load_conversation_history() -> Result<Vec<Arc<SavedChatHistory>>, zqa::state::StateError> {
+        zqa::state::get_conversation_history().map(|history| {
+            history
+                .unwrap_or_default()
+                .into_iter()
+                .map(Arc::new)
+                .collect()
+        })
     }
 
     /// Fold a chunk of command stdout into the transcript.
@@ -288,7 +385,7 @@ impl ZqaApp {
         Self::record_command(&mut self.rows, &mut self.pending_reset, &command);
 
         self.phase = Phase::Running;
-        let _ = self.cmd_tx.send(command);
+        let _ = self.cmd_tx.send(EngineCommand::Dispatch(command));
         self.scroll_handle.scroll_to_bottom();
         cx.notify();
         true
@@ -362,6 +459,7 @@ impl ZqaApp {
 
     /// Render the translucent sidebar: brand row, command items, settings.
     fn render_sidebar(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let conversation_history = self.render_conversation_history(cx);
         let window_controls = Self::render_window_controls(window);
         let brand = self.make_draggable(
             div()
@@ -410,6 +508,17 @@ impl ZqaApp {
                         false,
                         cx,
                     ))
+                    .child(
+                        div()
+                            .px_2()
+                            .pt_2()
+                            .pb_1()
+                            .text_size(px(11.))
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(cx.theme().muted_foreground)
+                            .child("History"),
+                    )
+                    .child(conversation_history)
                     .child(
                         div()
                             .px_2()
@@ -513,7 +622,7 @@ impl ZqaApp {
         // The settings toggle is pure UI and works in any engine state; commands need
         // a live engine.
         let enabled =
-            matches!(action, SidebarAction::ToggleSettings) || self.phase.accepts_commands();
+            matches!(&action, SidebarAction::ToggleSettings) || self.phase.accepts_commands();
 
         div()
             .id(id)
@@ -542,24 +651,121 @@ impl ZqaApp {
                 if !enabled {
                     return;
                 }
-                match action {
-                    SidebarAction::Run(command) => {
-                        this.pane = Pane::Chat;
-                        this.dispatch(command.to_string(), cx);
-                    }
-                    SidebarAction::Prefill(prefix) => {
-                        this.pane = Pane::Chat;
-                        this.input_state
-                            .update(cx, |state, cx| state.set_value(prefix, window, cx));
-                        Self::focus_input(&this.input_state, window, cx);
-                    }
-                    SidebarAction::ToggleSettings => {
-                        this.pane = match this.pane {
-                            Pane::Settings => Pane::Chat,
-                            Pane::Chat => Pane::Settings,
-                        };
-                        cx.notify();
-                    }
+                this.execute_sidebar_action(&action, window, cx);
+            }))
+    }
+
+    /// Apply a sidebar action after its enabled state has been checked.
+    fn execute_sidebar_action(
+        &mut self,
+        action: &SidebarAction,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match action {
+            SidebarAction::Run(command) => {
+                self.pane = Pane::Chat;
+                self.dispatch((*command).to_string(), cx);
+            }
+            SidebarAction::Prefill(prefix) => {
+                self.pane = Pane::Chat;
+                self.input_state
+                    .update(cx, |state, cx| state.set_value(*prefix, window, cx));
+                Self::focus_input(&self.input_state, window, cx);
+            }
+            SidebarAction::ResumeConversation(conversation) => {
+                self.pane = Pane::Chat;
+                self.phase = Phase::Running;
+                let _ = self
+                    .cmd_tx
+                    .send(EngineCommand::ResumeConversation(Arc::clone(conversation)));
+                cx.notify();
+            }
+            SidebarAction::ToggleSettings => {
+                self.pane = match self.pane {
+                    Pane::Settings => Pane::Chat,
+                    Pane::Chat => Pane::Settings,
+                };
+                cx.notify();
+            }
+        }
+    }
+
+    /// Render the saved conversation list or its empty/error state.
+    fn render_conversation_history(&self, cx: &mut Context<Self>) -> AnyElement {
+        match &self.conversation_history {
+            Ok(history) if history.is_empty() => div()
+                .px_2()
+                .py_1()
+                .text_size(px(11.))
+                .text_color(cx.theme().muted_foreground)
+                .child("No saved conversations yet.")
+                .into_any_element(),
+            Ok(history) => v_flex()
+                .max_h(rems(14.))
+                .overflow_y_scrollbar()
+                .gap_1()
+                .children(history.iter().enumerate().map(|(index, conversation)| {
+                    Self::conversation_history_item(index, conversation, cx)
+                }))
+                .into_any_element(),
+            Err(error) => div()
+                .px_2()
+                .py_1()
+                .text_size(px(11.))
+                .text_color(cx.theme().danger)
+                .child(SharedString::from(format!(
+                    "Failed to load history: {error}"
+                )))
+                .into_any_element(),
+        }
+    }
+
+    /// Render one saved conversation's title and latest text preview.
+    fn conversation_history_item(
+        index: usize,
+        conversation: &Arc<SavedChatHistory>,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
+        let title: SharedString = conversation.title.clone().into();
+        let preview: SharedString = conversation
+            .preview()
+            .unwrap_or("No text messages")
+            .to_owned()
+            .into();
+        let action = SidebarAction::ResumeConversation(Arc::clone(conversation));
+
+        div()
+            .id(("history-item", index))
+            .flex()
+            .items_center()
+            .rounded_md()
+            .px_2()
+            .py_1()
+            .text_color(cx.theme().foreground)
+            .hover(|style| style.bg(cx.theme().accent))
+            .child(
+                v_flex()
+                    .w_full()
+                    .min_w_0()
+                    .child(
+                        div()
+                            .text_size(px(13.))
+                            .font_weight(FontWeight::MEDIUM)
+                            .truncate()
+                            .child(title),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(11.))
+                            .text_color(cx.theme().muted_foreground)
+                            .truncate()
+                            .child(preview),
+                    ),
+            )
+            .on_click(cx.listener(move |this, _, window, cx| {
+                if this.phase.accepts_commands() {
+                    this.execute_sidebar_action(&action, window, cx);
                 }
             }))
     }
@@ -774,6 +980,53 @@ impl ZqaApp {
                     .child(body.to_string())
                     .into_any_element()
             }
+            ChatRow::Reasoning(text) => {
+                let body = text.trim();
+                if body.is_empty() {
+                    return None;
+                }
+                div()
+                    .w_full()
+                    .border_l_2()
+                    .border_color(cx.theme().border)
+                    .pl_3()
+                    .text_size(px(12.))
+                    .line_height(rems(1.35))
+                    .text_color(cx.theme().muted_foreground)
+                    .whitespace_normal()
+                    .child(body.to_string())
+                    .into_any_element()
+            }
+            ChatRow::ToolCall((tool_name, request, response)) => {
+                let request =
+                    serde_json::to_string_pretty(request).unwrap_or_else(|_| request.to_string());
+                let response =
+                    serde_json::to_string_pretty(response).unwrap_or_else(|_| response.to_string());
+
+                v_flex()
+                    .w_full()
+                    .rounded_lg()
+                    .border_1()
+                    .border_color(cx.theme().border)
+                    .bg(cx.theme().secondary.opacity(0.35))
+                    .p_3()
+                    .gap_2()
+                    .child(
+                        div()
+                            .text_size(px(12.))
+                            .font_weight(FontWeight::MEDIUM)
+                            .child(format!("Tool: {tool_name}")),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(11.))
+                            .font_family(cx.theme().mono_font_family.clone())
+                            .text_color(cx.theme().muted_foreground)
+                            .whitespace_normal()
+                            .child(format!("Request:\n{request}\n\nResponse:\n{response}")),
+                    )
+                    .into_any_element()
+            }
             ChatRow::Status(lines) => h_flex()
                 .w_full()
                 .justify_center()
@@ -930,7 +1183,7 @@ fn main() {
     // database and every query reports a missing table.
     zqa::set_default_lancedb_uri();
 
-    let (cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    let (cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel::<EngineCommand>();
     let (cancel_tx, cancel_rx) = tokio::sync::mpsc::unbounded_channel::<()>();
     let (event_tx, event_rx) = futures::channel::mpsc::unbounded::<UiEvent>();
     spawn_engine(cmd_rx, cancel_rx, event_tx);
@@ -979,7 +1232,9 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::{ChatRow, Phase, ZqaApp};
+    use zqa_rag::llm::base::{ChatHistoryContent, ChatHistoryItem, MessageRole};
+
+    use super::{ChatRow, ChatRows, Phase, ZqaApp};
 
     /// The text of the trailing answer row, for assertions.
     fn trailing_answer(rows: &[ChatRow]) -> String {
@@ -1005,6 +1260,18 @@ mod tests {
 
         assert_eq!(rows.len(), 1);
         assert_eq!(trailing_answer(&rows), "Hello, world!\n");
+    }
+
+    #[test]
+    fn assistant_history_text_becomes_an_answer_row() {
+        let item = ChatHistoryItem {
+            role: MessageRole::Assistant,
+            content: vec![ChatHistoryContent::Text("Assistant response".into())],
+        };
+
+        let rows = ChatRows::from(&item).0;
+
+        assert_eq!(trailing_answer(&rows), "Assistant response");
     }
 
     #[test]

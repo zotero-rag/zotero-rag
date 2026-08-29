@@ -12,11 +12,22 @@
 //! wrapped in a [`ChannelWriter`] that plays the role of the session's stdout/stderr.
 
 use std::io::{self, Write};
+use std::sync::Arc;
 use std::thread;
 
 use futures::channel::mpsc::UnboundedSender;
 use tokio::sync::mpsc::UnboundedReceiver;
 use zqa::session::Session;
+use zqa::state::SavedChatHistory;
+
+/// A request sent from the UI to the engine thread.
+#[derive(Debug)]
+pub enum EngineCommand {
+    /// Dispatch a CLI-style command or query.
+    Dispatch(String),
+    /// Resume a saved conversation without an interactive prompt.
+    ResumeConversation(Arc<SavedChatHistory>),
+}
 
 /// A single piece of output streamed from the engine thread to the UI.
 #[derive(Debug, Clone)]
@@ -28,6 +39,8 @@ pub enum UiEvent {
     /// A command finished. Carries the dispatch result: `Ok(keep_running)` or an
     /// error message.
     Done(Result<bool, String>),
+    /// A saved conversation resume attempt finished.
+    ConversationResumed(Result<Arc<SavedChatHistory>, String>),
     /// The in-flight command was cancelled by the user before it finished.
     Cancelled,
 }
@@ -96,11 +109,11 @@ fn strip_ansi(input: &str) -> String {
 ///
 /// # Arguments
 ///
-/// * `cmd_rx` - Receiver for command strings sent by the UI.
+/// * `cmd_rx` - Receiver for requests sent by the UI.
 /// * `cancel_rx` - Receiver signalled by the UI to cancel the in-flight command.
 /// * `event_tx` - Sender used to stream [`UiEvent`]s back to the UI.
 pub fn spawn_engine(
-    mut cmd_rx: UnboundedReceiver<String>,
+    mut cmd_rx: UnboundedReceiver<EngineCommand>,
     mut cancel_rx: UnboundedReceiver<()>,
     event_tx: UnboundedSender<UiEvent>,
 ) {
@@ -152,32 +165,46 @@ pub fn spawn_engine(
                     // previous command can't abort this fresh one.
                     while cancel_rx.try_recv().is_ok() {}
 
-                    // `None` means the dispatch was cancelled; dropping the future here
-                    // aborts the request in flight.
-                    //
-                    // TODO(ZOT-219): cancellation only drops this future. Detached tasks the
-                    // handlers spawn (e.g. background title generation in `handle_query_cmd`)
-                    // are not cancelled and run to completion. Fully cancelling them needs the
-                    // core loop's cancellation support tracked in ZOT-219.
-                    let result: Option<Result<bool, String>> = tokio::select! {
-                        result = session.dispatch(&command) => Some(result.map_err(|e| e.to_string())),
-                        _ = cancel_rx.recv() => None,
-                    };
+                    match command {
+                        EngineCommand::Dispatch(command) => {
+                            // `None` means the dispatch was cancelled; dropping the future here
+                            // aborts the request in flight.
+                            //
+                            // TODO(ZOT-219): cancellation only drops this future. Detached tasks
+                            // the handlers spawn (e.g. background title generation in
+                            // `handle_query_cmd`) are not cancelled and run to completion. Fully
+                            // cancelling them needs the core loop's cancellation support tracked
+                            // in ZOT-219.
+                            let result: Option<Result<bool, String>> = tokio::select! {
+                                result = session.dispatch(&command) => {
+                                    Some(result.map_err(|e| e.to_string()))
+                                }
+                                _ = cancel_rx.recv() => None,
+                            };
 
-                    match result {
-                        Some(result) => {
-                            // Only a deliberate exit (`/quit` returns `Ok(false)`) stops the
-                            // engine. A command error keeps the engine alive so the UI stays
-                            // usable; exiting on errors would strand the window with a dead
-                            // channel and a permanently "running" state.
-                            let should_exit = matches!(result, Ok(false));
-                            let _ = event_tx.unbounded_send(UiEvent::Done(result));
-                            if should_exit {
-                                break;
+                            match result {
+                                Some(result) => {
+                                    // Only a deliberate exit (`/quit` returns `Ok(false)`) stops
+                                    // the engine. A command error keeps the engine alive so the UI
+                                    // stays usable; exiting on errors would strand the window with
+                                    // a dead channel and a permanently "running" state.
+                                    let should_exit = matches!(result, Ok(false));
+                                    let _ = event_tx.unbounded_send(UiEvent::Done(result));
+                                    if should_exit {
+                                        break;
+                                    }
+                                }
+                                None => {
+                                    let _ = event_tx.unbounded_send(UiEvent::Cancelled);
+                                }
                             }
                         }
-                        None => {
-                            let _ = event_tx.unbounded_send(UiEvent::Cancelled);
+                        EngineCommand::ResumeConversation(conversation) => {
+                            let result = session
+                                .resume_conversation(&conversation)
+                                .map(|()| conversation)
+                                .map_err(|error| error.to_string());
+                            let _ = event_tx.unbounded_send(UiEvent::ConversationResumed(result));
                         }
                     }
                 }
