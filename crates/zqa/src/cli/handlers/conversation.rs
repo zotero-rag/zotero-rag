@@ -107,7 +107,9 @@ where
         ));
     }
 
-    *ctx.state.title.lock()? = Some(conversation.title.clone());
+    // Replace the state with the conversation's state. We can't just update `*ctx.state.*.lock()?`
+    // since detached tasks in `cli` may still own clones of that `Arc`.
+    ctx.state.title = Arc::new(Mutex::new(Some(conversation.title.clone())));
     ctx.state.chat_history = Arc::new(Mutex::new(conversation.history.clone()));
     ctx.state.dirty.store(false, atomic::Ordering::Relaxed);
     ctx.state.usage = conversation.usage;
