@@ -239,6 +239,7 @@ impl ZqaApp {
                                 Ok(conversation) => {
                                     app.rows = ChatRows::from(conversation.as_ref()).0;
                                     app.pane = Pane::Chat;
+                                    app.conversation_history = Self::load_conversation_history();
                                 }
                                 Err(message) => app.rows.push(ChatRow::Failed(message.into())),
                             }
