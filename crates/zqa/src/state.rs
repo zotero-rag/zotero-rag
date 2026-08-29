@@ -87,19 +87,19 @@ pub(crate) fn get_state_dir() -> Result<PathBuf, StateError> {
 
 /// Metadata in a saved conversation.
 #[derive(Copy, Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-pub(crate) struct UsageMetadata {
+pub struct UsageMetadata {
     /// Input tokens used
-    pub(crate) input_tokens: u32,
+    pub input_tokens: u32,
     /// Input tokens read from
-    pub(crate) input_cache_read: u32,
+    pub input_cache_read: u32,
     /// Input tokens written to cache
-    pub(crate) input_cache_written: u32,
+    pub input_cache_written: u32,
     /// Output tokens used
-    pub(crate) output_tokens: u32,
+    pub output_tokens: u32,
     /// Reasoning tokens used
-    pub(crate) reasoning_tokens: u32,
+    pub reasoning_tokens: u32,
     /// Estimated cost so far, in U.S. cents
-    pub(crate) estimated_cost: u32,
+    pub estimated_cost: u32,
 }
 
 impl Add<UsageMetadata> for UsageMetadata {
@@ -169,7 +169,7 @@ pub struct SavedChatHistory {
     pub title: String,
     /// Tracked usage metadata so far
     #[serde(default)]
-    pub(crate) usage: UsageMetadata,
+    pub usage: UsageMetadata,
 }
 
 impl SavedChatHistory {
