@@ -8,7 +8,8 @@ use std::time::Instant;
 
 use tokio::sync::mpsc;
 use zqa_rag::llm::base::{
-    ChatHistoryContent, ChatHistoryItem, ChatRequest, ContentType, MessageRole,
+    ChatHistoryContent, ChatHistoryItem, ChatRequest, ContentType, MessageRole, ToolCallRequest,
+    ToolCallResponse,
 };
 use zqa_rag::llm::factory::get_client_with_config;
 use zqa_rag::llm::tools::{CallbackFn, Tool};
@@ -307,16 +308,6 @@ where
                 "{DIM_TEXT}Final draft completed in {final_draft_duration:.2?}{RESET}"
             )?;
 
-            let model_response_text = response
-                .content
-                .iter()
-                .filter_map(|c| match c {
-                    ContentType::Text(s) => Some(s.as_str()),
-                    _ => None,
-                })
-                .collect::<Vec<_>>()
-                .join("\n");
-
             // Accumulate token usage counts, then compute pricing using `UsageMetadata::from_rag_usage`
             let total_usage = response.usage + summarization_usage.lock().map(|u| *u)?;
             let usage = UsageMetadata::from_rag_usage(
@@ -371,10 +362,49 @@ where
                 role: MessageRole::User,
                 content: vec![ChatHistoryContent::Text(query.clone())],
             });
-            history.push(ChatHistoryItem {
-                role: MessageRole::Assistant,
-                content: vec![ChatHistoryContent::Text(model_response_text)],
-            });
+
+            // Convert the model's response content into history items
+            let mut assistant_content: Vec<ChatHistoryContent> = Vec::new();
+            for content in response.content {
+                match content {
+                    ContentType::Text(s) => assistant_content.push(ChatHistoryContent::Text(s)),
+                    ContentType::Reasoning(s) => {
+                        assistant_content.push(ChatHistoryContent::Reasoning(s));
+                    }
+                    ContentType::ToolCall(stats) => {
+                        // The request belongs to the assistant message that requested it.
+                        assistant_content.push(ChatHistoryContent::ToolCallRequest(
+                            ToolCallRequest {
+                                id: stats.tool_call_id.clone(),
+                                tool_name: stats.tool_name.clone(),
+                                args: stats.tool_args,
+                            },
+                        ));
+
+                        // Tool results typically show as part of the request to the model, so we
+                        // empty `assistant_content` here with `mem::take`.
+                        history.push(ChatHistoryItem {
+                            role: MessageRole::Assistant,
+                            content: std::mem::take(&mut assistant_content),
+                        });
+
+                        history.push(ChatHistoryItem {
+                            role: MessageRole::User,
+                            content: vec![ChatHistoryContent::ToolCallResponse(ToolCallResponse {
+                                id: stats.tool_call_id,
+                                tool_name: stats.tool_name,
+                                result: stats.tool_result,
+                            })],
+                        });
+                    }
+                }
+            }
+            if !assistant_content.is_empty() {
+                history.push(ChatHistoryItem {
+                    role: MessageRole::Assistant,
+                    content: assistant_content,
+                });
+            }
             ctx.state.dirty.store(true, atomic::Ordering::Relaxed);
         }
         Err(e) => {
