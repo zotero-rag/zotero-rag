@@ -28,7 +28,6 @@ use gpui_component::{
     button::{Button, ButtonVariants as _},
     h_flex,
     input::{InputEvent, Textarea, TextareaState},
-    scroll::ScrollableElement as _,
     spinner::Spinner,
     v_flex,
 };
@@ -53,9 +52,6 @@ const CONTENT_WIDTH: Rems = rems(46.);
 enum SidebarAction {
     /// Send a command string to the engine.
     Run(&'static str),
-    /// Prefill the input with a command prefix and focus it (commands that take an
-    /// argument, so the user completes them by typing).
-    Prefill(&'static str),
     /// Resume a conversation from a saved chat history. This also saves the current history
     /// to disk.
     ResumeConversation(Arc<SavedChatHistory>),
@@ -490,6 +486,8 @@ impl ZqaApp {
             .child(brand)
             .child(
                 v_flex()
+                    .flex_1()
+                    .min_h_0()
                     .p_2()
                     .gap_1()
                     .child(self.sidebar_item(
@@ -518,43 +516,8 @@ impl ZqaApp {
                             .text_color(cx.theme().muted_foreground)
                             .child("History"),
                     )
-                    .child(conversation_history)
-                    .child(
-                        div()
-                            .px_2()
-                            .pt_2()
-                            .pb_1()
-                            .text_size(px(11.))
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(cx.theme().muted_foreground)
-                            .child("Library"),
-                    )
-                    .child(self.sidebar_item(
-                        "sb-search",
-                        IconName::Search,
-                        "Search library",
-                        SidebarAction::Prefill("/search "),
-                        false,
-                        cx,
-                    ))
-                    .child(self.sidebar_item(
-                        "sb-stats",
-                        IconName::ChartPie,
-                        "Library stats",
-                        SidebarAction::Run("/stats"),
-                        false,
-                        cx,
-                    ))
-                    .child(self.sidebar_item(
-                        "sb-health",
-                        IconName::CircleCheck,
-                        "Health check",
-                        SidebarAction::Run("/checkhealth"),
-                        false,
-                        cx,
-                    )),
+                    .child(conversation_history),
             )
-            .child(div().flex_1())
             .child(div().p_2().child(self.sidebar_item(
                 "sb-settings",
                 IconName::Settings,
@@ -647,31 +610,20 @@ impl ZqaApp {
                     .text_color(cx.theme().muted_foreground),
             )
             .child(label)
-            .on_click(cx.listener(move |this, _, window, cx| {
+            .on_click(cx.listener(move |this, _, _, cx| {
                 if !enabled {
                     return;
                 }
-                this.execute_sidebar_action(&action, window, cx);
+                this.execute_sidebar_action(&action, cx);
             }))
     }
 
     /// Apply a sidebar action after its enabled state has been checked.
-    fn execute_sidebar_action(
-        &mut self,
-        action: &SidebarAction,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn execute_sidebar_action(&mut self, action: &SidebarAction, cx: &mut Context<Self>) {
         match action {
             SidebarAction::Run(command) => {
                 self.pane = Pane::Chat;
                 self.dispatch((*command).to_string(), cx);
-            }
-            SidebarAction::Prefill(prefix) => {
-                self.pane = Pane::Chat;
-                self.input_state
-                    .update(cx, |state, cx| state.set_value(*prefix, window, cx));
-                Self::focus_input(&self.input_state, window, cx);
             }
             SidebarAction::ResumeConversation(conversation) => {
                 self.pane = Pane::Chat;
@@ -701,13 +653,16 @@ impl ZqaApp {
                 .text_color(cx.theme().muted_foreground)
                 .child("No saved conversations yet.")
                 .into_any_element(),
-            Ok(history) => v_flex()
-                .max_h(rems(14.))
-                .overflow_y_scrollbar()
-                .gap_1()
-                .children(history.iter().enumerate().map(|(index, conversation)| {
-                    Self::conversation_history_item(index, conversation, cx)
-                }))
+            Ok(history) => div()
+                .id("conversation-history")
+                .flex_1()
+                .min_h_0()
+                .overflow_y_scroll()
+                .child(v_flex().gap_1().children(history.iter().enumerate().map(
+                    |(index, conversation)| {
+                        Self::conversation_history_item(index, conversation, cx)
+                    },
+                )))
                 .into_any_element(),
             Err(error) => div()
                 .px_2()
@@ -763,9 +718,9 @@ impl ZqaApp {
                             .child(preview),
                     ),
             )
-            .on_click(cx.listener(move |this, _, window, cx| {
+            .on_click(cx.listener(move |this, _, _, cx| {
                 if this.phase.accepts_commands() {
-                    this.execute_sidebar_action(&action, window, cx);
+                    this.execute_sidebar_action(&action, cx);
                 }
             }))
     }
