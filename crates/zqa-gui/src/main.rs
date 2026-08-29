@@ -79,50 +79,55 @@ enum ChatRow {
 }
 struct ChatRows(Vec<ChatRow>);
 
-impl From<&zqa_rag::llm::base::ChatHistoryItem> for ChatRows {
-    fn from(value: &zqa_rag::llm::base::ChatHistoryItem) -> Self {
-        let mut tool_calls: HashMap<SharedString, (SharedString, Value, Value)> = HashMap::new();
+impl ChatRows {
+    /// Convert complete chat history into renderable transcript rows.
+    fn from_history(history: &[zqa_rag::llm::base::ChatHistoryItem]) -> Self {
+        let mut rows = Vec::new();
+        let mut tool_calls: HashMap<SharedString, (SharedString, Value)> = HashMap::new();
 
-        Self(
-            value
-                .content
-                .iter()
-                .flat_map(|content| match content {
-                    zqa_rag::llm::base::ChatHistoryContent::Text(text) => Some(match value.role {
-                        zqa_rag::llm::base::MessageRole::User => ChatRow::User(text.into()),
-                        zqa_rag::llm::base::MessageRole::Assistant => {
-                            ChatRow::Answer(text.to_string())
-                        }
-                        zqa_rag::llm::base::MessageRole::Tool => ChatRow::Status(text.to_string()),
-                    }),
+        for item in history {
+            for content in &item.content {
+                match content {
+                    zqa_rag::llm::base::ChatHistoryContent::Text(text) => {
+                        rows.push(match item.role {
+                            zqa_rag::llm::base::MessageRole::User => ChatRow::User(text.into()),
+                            zqa_rag::llm::base::MessageRole::Assistant => {
+                                ChatRow::Answer(text.to_string())
+                            }
+                            zqa_rag::llm::base::MessageRole::Tool => {
+                                ChatRow::Status(text.to_string())
+                            }
+                        });
+                    }
                     zqa_rag::llm::base::ChatHistoryContent::Reasoning(text) => {
-                        Some(ChatRow::Reasoning(text.into()))
+                        rows.push(ChatRow::Reasoning(text.into()));
                     }
-                    zqa_rag::llm::base::ChatHistoryContent::ToolCallRequest(req) => {
-                        let req = req.clone();
-                        tool_calls
-                            .insert(req.id.into(), (req.tool_name.into(), req.args, Value::Null));
-                        None
+                    zqa_rag::llm::base::ChatHistoryContent::ToolCallRequest(request) => {
+                        tool_calls.insert(
+                            request.id.as_str().into(),
+                            (request.tool_name.as_str().into(), request.args.clone()),
+                        );
                     }
-                    zqa_rag::llm::base::ChatHistoryContent::ToolCallResponse(res) => {
-                        let (tool_name, args, _) = tool_calls.remove(res.id.as_str())?;
-                        Some(ChatRow::ToolCall((tool_name, args, res.result.clone())))
+                    zqa_rag::llm::base::ChatHistoryContent::ToolCallResponse(response) => {
+                        if let Some((tool_name, args)) = tool_calls.remove(response.id.as_str()) {
+                            rows.push(ChatRow::ToolCall((
+                                tool_name,
+                                args,
+                                response.result.clone(),
+                            )));
+                        }
                     }
-                })
-                .collect(),
-        )
+                }
+            }
+        }
+
+        Self(rows)
     }
 }
 
 impl From<&SavedChatHistory> for ChatRows {
     fn from(value: &SavedChatHistory) -> Self {
-        ChatRows(
-            value
-                .history
-                .iter()
-                .flat_map(|item| ChatRows::from(item).0)
-                .collect(),
-        )
+        Self::from_history(&value.history)
     }
 }
 
@@ -1187,7 +1192,9 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use zqa_rag::llm::base::{ChatHistoryContent, ChatHistoryItem, MessageRole};
+    use zqa_rag::llm::base::{
+        ChatHistoryContent, ChatHistoryItem, MessageRole, ToolCallRequest, ToolCallResponse,
+    };
 
     use super::{ChatRow, ChatRows, Phase, ZqaApp};
 
@@ -1224,9 +1231,41 @@ mod tests {
             content: vec![ChatHistoryContent::Text("Assistant response".into())],
         };
 
-        let rows = ChatRows::from(&item).0;
+        let rows = ChatRows::from_history(std::slice::from_ref(&item)).0;
 
         assert_eq!(trailing_answer(&rows), "Assistant response");
+    }
+
+    #[test]
+    fn tool_request_and_response_in_separate_items_become_one_row() {
+        let history = [
+            ChatHistoryItem {
+                role: MessageRole::Assistant,
+                content: vec![ChatHistoryContent::ToolCallRequest(ToolCallRequest {
+                    id: "call-1".into(),
+                    tool_name: "search".into(),
+                    args: serde_json::json!({"query": "attention"}),
+                })],
+            },
+            ChatHistoryItem {
+                role: MessageRole::User,
+                content: vec![ChatHistoryContent::ToolCallResponse(ToolCallResponse {
+                    id: "call-1".into(),
+                    tool_name: "search".into(),
+                    result: serde_json::json!({"matches": 3}),
+                })],
+            },
+        ];
+
+        let rows = ChatRows::from_history(&history).0;
+
+        assert_eq!(rows.len(), 1);
+        let ChatRow::ToolCall((tool_name, args, result)) = &rows[0] else {
+            panic!("expected a tool call row, got {:?}", rows[0]);
+        };
+        assert_eq!(tool_name.as_ref(), "search");
+        assert_eq!(args, &serde_json::json!({"query": "attention"}));
+        assert_eq!(result, &serde_json::json!({"matches": 3}));
     }
 
     #[test]
