@@ -173,16 +173,17 @@ pub(crate) fn get_owned_tools<'a>(
 /// has a `'static` lifetime.
 pub type CallbackFn<T> = dyn Fn(&T) + Send + Sync + 'static;
 
-/// Process tool calls in a single model response (provider‑agnostic).
+/// Process tool calls in a single model response (provider-agnostic).
 ///
-/// This function consumes a slice of provider‑agnostic `ChatHistoryContent` that represents the
+/// This function consumes a slice of provider-agnostic `ChatHistoryContent` that represents the
 /// model's latest message (text and/or tool call requests). It executes known tool calls and
-/// turns unknown calls into error results, then returns the corresponding results as user history
-/// items and pushes user-visible entries to `new_contents` (both text and tool call summaries).
+/// turns unknown calls into error results, then returns the corresponding results as one user
+/// history item and pushes user-visible entries to `new_contents` (both text and tool call
+/// summaries).
 ///
 /// # Arguments:
 ///
-/// * `new_contents` - Accumulates user‑facing `ContentType` items produced while processing.
+/// * `new_contents` - Accumulates user-facing `ContentType` items produced while processing.
 /// * `contents` - The model's latest message converted to `ChatHistoryContent` values.
 /// * `tools` - The available tools for invocation.
 /// * `on_tool_call` - Optional callback invoked after each tool call completes, receiving a
@@ -192,14 +193,14 @@ pub type CallbackFn<T> = dyn Fn(&T) + Send + Sync + 'static;
 ///
 /// # Returns
 ///
-/// A vector of user history items containing tool call results.
+/// One user history item containing all tool call results, or [`None`] if no tools were called.
 pub(crate) async fn process_tool_calls(
     new_contents: &mut Vec<ContentType>,
     contents: &[ChatHistoryContent],
     tools: &[SerializedTool<'_>],
     on_tool_call: Option<&Arc<CallbackFn<ToolUseStats>>>,
     on_text: Option<&Arc<CallbackFn<str>>>,
-) -> Vec<ChatHistoryItem> {
+) -> Option<ChatHistoryItem> {
     let futures = contents.iter().map(|content| async move {
         match content {
             ChatHistoryContent::Text(s) => (Some(ContentType::Text(s.clone())), None),
@@ -252,18 +253,15 @@ pub(crate) async fn process_tool_calls(
                     tool_result: tool_result.clone(),
                 };
 
-                let chat_history_item = ChatHistoryItem {
-                    role: MessageRole::User,
-                    content: vec![ChatHistoryContent::ToolCallResponse(ToolCallResponse {
-                        id: tool_call_id,
-                        tool_name: tool_call.tool_name.clone(),
-                        result: tool_result,
-                    })],
-                };
+                let history_content = ChatHistoryContent::ToolCallResponse(ToolCallResponse {
+                    id: tool_call_id,
+                    tool_name: tool_call.tool_name.clone(),
+                    result: tool_result,
+                });
 
                 (
                     Some(ContentType::ToolCall(tool_use_stats)),
-                    Some(chat_history_item),
+                    Some(history_content),
                 )
             }
         }
@@ -271,7 +269,7 @@ pub(crate) async fn process_tool_calls(
 
     let results = join_all(futures).await;
 
-    let mut new_history_items = Vec::new();
+    let mut tool_call_responses = Vec::new();
     for (content_opt, history_opt) in results {
         if let Some(content) = content_opt {
             match &content {
@@ -289,12 +287,15 @@ pub(crate) async fn process_tool_calls(
             }
             new_contents.push(content);
         }
-        if let Some(history) = history_opt {
-            new_history_items.push(history);
+        if let Some(history_content) = history_opt {
+            tool_call_responses.push(history_content);
         }
     }
 
-    new_history_items
+    (!tool_call_responses.is_empty()).then_some(ChatHistoryItem {
+        role: MessageRole::User,
+        content: tool_call_responses,
+    })
 }
 
 #[cfg(test)]
@@ -430,14 +431,14 @@ mod tests {
         let mut new_contents: Vec<ContentType> = vec![];
 
         let start = Instant::now();
-        let chat_history =
+        let tool_call_results =
             process_tool_calls(&mut new_contents, &contents, &serialized_tools, None, None).await;
         let duration = start.elapsed();
 
         // Expect ~500ms for concurrent execution
         assert!(duration.as_millis() < 1000);
         // Ensure that we processed two tool calls
-        test_eq!(chat_history.len(), 2);
+        test_eq!(tool_call_results.unwrap().content.len(), 2);
         test_eq!(new_contents.len(), 2);
     }
 
@@ -455,7 +456,7 @@ mod tests {
         })];
         let mut new_contents = Vec::new();
 
-        let chat_history =
+        let tool_call_results =
             process_tool_calls(&mut new_contents, &contents, &serialized_tools, None, None).await;
         let expected_result = Value::String(
             "Tool 'imaginary_tool' does not exist. Available tools: mock_tool.".into(),
@@ -463,15 +464,15 @@ mod tests {
 
         assert_eq!(*call_count.lock().unwrap(), 0);
         assert_eq!(
-            chat_history,
-            vec![ChatHistoryItem {
+            tool_call_results,
+            Some(ChatHistoryItem {
                 role: MessageRole::User,
                 content: vec![ChatHistoryContent::ToolCallResponse(ToolCallResponse {
                     id: "call-1".into(),
                     tool_name: "imaginary_tool".into(),
                     result: expected_result.clone(),
                 })],
-            }]
+            })
         );
         assert_eq!(
             new_contents,

@@ -2,7 +2,10 @@ use http::HeaderMap;
 
 use crate::clients::test::TestClient;
 use crate::http_client::HttpClient;
-use crate::llm::base::{ChatRequest, CompletionApiResponse, ContentType};
+use crate::llm::base::{
+    ChatHistoryContent, ChatHistoryItem, ChatRequest, CompletionApiResponse, ContentType,
+    MessageRole,
+};
 use crate::llm::errors::LLMError;
 use crate::pricing::ModelUsage;
 
@@ -33,8 +36,14 @@ impl TestClient {
             .await;
 
         let result = result.expect("mock http client should not propagate errors");
+        let text = result.text().await.unwrap();
+
         Ok(CompletionApiResponse {
-            content: vec![ContentType::Text(result.text().await.unwrap())],
+            content: vec![ContentType::Text(text.clone())],
+            history_additions: vec![ChatHistoryItem {
+                role: MessageRole::Assistant,
+                content: vec![ChatHistoryContent::Text(text)],
+            }],
             usage: ModelUsage {
                 input_tokens: 0,
                 input_cache_written: 0,

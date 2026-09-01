@@ -89,34 +89,6 @@ pub struct ChatHistoryItem {
     pub content: Vec<ChatHistoryContent>,
 }
 
-impl From<Vec<ContentType>> for ChatHistoryItem {
-    /// Creates a [`ChatHistoryItem`] from a [`Vec<ContentType>`]. In general, the reason you would
-    /// want to do this is to conveniently add the response from a model (which can include text
-    /// and multiple tool calls) into [`ChatRequest`]. For this reason, this `from` implementation
-    /// sets the `role` to [`ASSISTANT_ROLE`].
-    fn from(value: Vec<ContentType>) -> Self {
-        let content = value
-            .into_iter()
-            .map(|ct| match ct {
-                ContentType::Text(s) => ChatHistoryContent::Text(s),
-                ContentType::Reasoning(s) => ChatHistoryContent::Reasoning(s),
-                ContentType::ToolCall(stats) => {
-                    ChatHistoryContent::ToolCallResponse(ToolCallResponse {
-                        id: stats.tool_call_id,
-                        tool_name: stats.tool_name,
-                        result: stats.tool_result,
-                    })
-                }
-            })
-            .collect();
-
-        Self {
-            role: MessageRole::Assistant,
-            content,
-        }
-    }
-}
-
 /// Provider-agnostic reasoning configuration
 #[derive(Debug, Clone)]
 pub struct ReasoningConfig {
@@ -298,6 +270,9 @@ pub struct CompletionApiResponse {
     /// The content of the response. Note that this is a *single* response from the API, which can
     /// contain multiple types of content.
     pub content: Vec<ContentType>,
+    /// The provider-agnostic history items produced while handling this request. This excludes the
+    /// history and user message supplied in [`ChatRequest`].
+    pub history_additions: Vec<ChatHistoryItem>,
     /// Token usage statistics for the request.
     pub usage: ModelUsage,
 }
@@ -343,7 +318,8 @@ where
     ///
     /// # Returns
     ///
-    /// The final response and accumulated usage across all provider turns.
+    /// The flattened response content, turn-preserving history additions, and accumulated usage
+    /// across all provider turns.
     ///
     /// # Errors
     ///
@@ -355,10 +331,11 @@ where
     where
         Self: Sized,
     {
-        let mut history = self.build_initial_history(request);
+        let mut provider_history = self.build_initial_history(request);
         let tools = get_owned_tools(request.tools, Self::SCHEMA_KEY);
         let mut usage = ModelUsage::default();
         let mut contents = Vec::<ContentType>::new();
+        let mut history_additions = Vec::new();
 
         let mut round_trips = 0;
         let iteration_limit = request
@@ -375,7 +352,7 @@ where
 
             let turn = self
                 .send_once(
-                    &history,
+                    &provider_history,
                     request.system_prompt.as_deref(),
                     tools_passed,
                     request.reasoning.as_ref(),
@@ -383,7 +360,7 @@ where
                 )
                 .await?;
             usage += turn.usage;
-            history.extend(turn.native_items);
+            provider_history.extend(turn.native_items);
 
             let tool_call_results = process_tool_calls(
                 &mut contents,
@@ -398,21 +375,34 @@ where
             )
             .await;
 
-            if tool_call_results.is_empty() {
+            if !turn.contents.is_empty() {
+                history_additions.push(ChatHistoryItem {
+                    role: MessageRole::Assistant,
+                    content: turn.contents,
+                });
+            }
+
+            let Some(tool_call_results) = tool_call_results else {
                 break;
-            } else if iteration_limit > 1 && round_trips == iteration_limit - 2 {
+            };
+
+            if iteration_limit > 1 && round_trips == iteration_limit - 2 {
                 // On the next turn, tool calls will be disallowed, so we should log this.
                 log::warn!(
                     "Reached penultimate iteration ({round_trips}), last trip will not allow tool calling."
                 );
             }
 
-            history.extend(tool_call_results.into_iter().flat_map(Into::into));
+            let provider_tool_call_results: Vec<Self::HistoryItem> =
+                tool_call_results.clone().into();
+            provider_history.extend(provider_tool_call_results);
+            history_additions.push(tool_call_results);
             round_trips += 1;
         }
 
         Ok(CompletionApiResponse {
             content: contents,
+            history_additions,
             usage,
         })
     }
@@ -493,30 +483,94 @@ mod tests {
         }
     }
 
-    fn tool_call_turn(usage: ModelUsage) -> ProviderTurn<TestHistoryItem> {
+    fn tool_call_turn(calls: &[(&str, &str)], usage: ModelUsage) -> ProviderTurn<TestHistoryItem> {
         ProviderTurn {
             native_items: Vec::new(),
-            contents: vec![ChatHistoryContent::ToolCallRequest(ToolCallRequest {
-                id: "call-1".into(),
-                tool_name: "mock_tool".into(),
-                args: serde_json::json!({"name": "Alice"}),
-            })],
+            contents: calls
+                .iter()
+                .map(|(id, name)| {
+                    ChatHistoryContent::ToolCallRequest(ToolCallRequest {
+                        id: (*id).into(),
+                        tool_name: "mock_tool".into(),
+                        args: serde_json::json!({"name": name}),
+                    })
+                })
+                .collect(),
             usage,
         }
     }
 
+    fn expected_history_additions() -> Vec<ChatHistoryItem> {
+        vec![
+            ChatHistoryItem {
+                role: MessageRole::Assistant,
+                content: vec![
+                    ChatHistoryContent::ToolCallRequest(ToolCallRequest {
+                        id: "call-1".into(),
+                        tool_name: "mock_tool".into(),
+                        args: serde_json::json!({"name": "Alice"}),
+                    }),
+                    ChatHistoryContent::ToolCallRequest(ToolCallRequest {
+                        id: "call-2".into(),
+                        tool_name: "mock_tool".into(),
+                        args: serde_json::json!({"name": "Bob"}),
+                    }),
+                ],
+            },
+            ChatHistoryItem {
+                role: MessageRole::User,
+                content: vec![
+                    ChatHistoryContent::ToolCallResponse(ToolCallResponse {
+                        id: "call-1".into(),
+                        tool_name: "mock_tool".into(),
+                        result: serde_json::json!("Hello, Alice!"),
+                    }),
+                    ChatHistoryContent::ToolCallResponse(ToolCallResponse {
+                        id: "call-2".into(),
+                        tool_name: "mock_tool".into(),
+                        result: serde_json::json!("Hello, Bob!"),
+                    }),
+                ],
+            },
+            ChatHistoryItem {
+                role: MessageRole::Assistant,
+                content: vec![ChatHistoryContent::ToolCallRequest(ToolCallRequest {
+                    id: "call-3".into(),
+                    tool_name: "mock_tool".into(),
+                    args: serde_json::json!({"name": "Carol"}),
+                })],
+            },
+            ChatHistoryItem {
+                role: MessageRole::User,
+                content: vec![ChatHistoryContent::ToolCallResponse(ToolCallResponse {
+                    id: "call-3".into(),
+                    tool_name: "mock_tool".into(),
+                    result: serde_json::json!("Hello, Carol!"),
+                })],
+            },
+            ChatHistoryItem {
+                role: MessageRole::Assistant,
+                content: vec![ChatHistoryContent::Text("done".into())],
+            },
+        ]
+    }
+
     #[tokio::test]
-    async fn tool_iteration_limit_disables_tools_on_last_turn_and_accumulates_usage() {
+    async fn send_message_preserves_tool_turns_and_accumulates_usage() {
         let tools_seen = Arc::new(Mutex::new(Vec::new()));
         let client = TestClient {
             turns: Mutex::new(VecDeque::from([
-                tool_call_turn(ModelUsage {
-                    input_tokens: 10,
-                    input_cache_written: 1,
-                    input_cache_read: 2,
-                    output_tokens: 3,
-                    reasoning_tokens: 4,
-                }),
+                tool_call_turn(
+                    &[("call-1", "Alice"), ("call-2", "Bob")],
+                    ModelUsage {
+                        input_tokens: 10,
+                        input_cache_written: 1,
+                        input_cache_read: 2,
+                        output_tokens: 3,
+                        reasoning_tokens: 4,
+                    },
+                ),
+                tool_call_turn(&[("call-3", "Carol")], ModelUsage::default()),
                 ProviderTurn {
                     native_items: Vec::new(),
                     contents: vec![ChatHistoryContent::Text("done".into())],
@@ -539,21 +593,22 @@ mod tests {
         let request = ChatRequest {
             system_prompt: Some("Follow the system instructions.".into()),
             tools: Some(&[Box::new(tool)]),
-            tool_iteration_limit: Some(2),
+            tool_iteration_limit: Some(3),
             ..ChatRequest::default()
         };
 
         let response = client.send_message(&request).await.unwrap();
 
-        assert_eq!(*tools_seen.lock().unwrap(), vec![Some(1), None]);
+        assert_eq!(*tools_seen.lock().unwrap(), vec![Some(1), Some(1), None]);
         assert_eq!(
             *client.system_prompts_seen.lock().unwrap(),
             vec![
                 Some("Follow the system instructions.".into()),
+                Some("Follow the system instructions.".into()),
                 Some("Follow the system instructions.".into())
             ]
         );
-        assert_eq!(*call_count.lock().unwrap(), 1);
+        assert_eq!(*call_count.lock().unwrap(), 3);
         assert_eq!(response.usage.input_tokens, 30);
         assert_eq!(response.usage.input_cache_written, 6);
         assert_eq!(response.usage.input_cache_read, 8);
@@ -561,8 +616,14 @@ mod tests {
         assert_eq!(response.usage.reasoning_tokens, 12);
         assert!(matches!(
             response.content.as_slice(),
-            [ContentType::ToolCall(_), ContentType::Text(text)] if text == "done"
+            [
+                ContentType::ToolCall(_),
+                ContentType::ToolCall(_),
+                ContentType::ToolCall(_),
+                ContentType::Text(text)
+            ] if text == "done"
         ));
+        assert_eq!(response.history_additions, expected_history_additions());
     }
 
     #[tokio::test]
