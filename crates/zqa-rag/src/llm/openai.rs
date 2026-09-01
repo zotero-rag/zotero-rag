@@ -928,16 +928,14 @@ mod tests {
         test_ok!(response);
 
         let response = response.unwrap();
-        let chat_history_contents: ChatHistoryItem = response.content.into();
+        let mut chat_history = vec![ChatHistoryItem {
+            role: MessageRole::User,
+            content: vec![ChatHistoryContent::Text(first_message.message.clone())],
+        }];
+        chat_history.extend(response.history_additions);
 
         let second_message = ChatRequest {
-            chat_history: vec![
-                ChatHistoryItem {
-                    role: MessageRole::User,
-                    content: vec![ChatHistoryContent::Text(first_message.message.clone())],
-                },
-                chat_history_contents,
-            ],
+            chat_history,
             message: "What are the Q, K, and V matrices?".into(),
             ..ChatRequest::default()
         };
