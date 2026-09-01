@@ -267,11 +267,12 @@ impl Default for ContentType {
 /// would be interested in.
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct CompletionApiResponse {
-    /// The content of the response. Note that this is a *single* response from the API, which can
-    /// contain multiple types of content.
+    /// The user-facing content accumulated across all provider turns. Use
+    /// [`Self::history_additions`] when provider turn boundaries matter.
     pub content: Vec<ContentType>,
     /// The provider-agnostic history items produced while handling this request. This excludes the
     /// history and user message supplied in [`ChatRequest`].
+    #[serde(default)]
     pub history_additions: Vec<ChatHistoryItem>,
     /// Token usage statistics for the request.
     pub usage: ModelUsage,
@@ -488,16 +489,18 @@ mod tests {
             native_items: Vec::new(),
             contents: calls
                 .iter()
-                .map(|(id, name)| {
-                    ChatHistoryContent::ToolCallRequest(ToolCallRequest {
-                        id: (*id).into(),
-                        tool_name: "mock_tool".into(),
-                        args: serde_json::json!({"name": name}),
-                    })
-                })
+                .map(|&(id, name)| tool_call_request(id, name))
                 .collect(),
             usage,
         }
+    }
+
+    fn tool_call_request(id: &str, name: &str) -> ChatHistoryContent {
+        ChatHistoryContent::ToolCallRequest(ToolCallRequest {
+            id: id.into(),
+            tool_name: "mock_tool".into(),
+            args: serde_json::json!({"name": name}),
+        })
     }
 
     fn expected_history_additions() -> Vec<ChatHistoryItem> {
@@ -505,6 +508,8 @@ mod tests {
             ChatHistoryItem {
                 role: MessageRole::Assistant,
                 content: vec![
+                    ChatHistoryContent::Reasoning("Need information from both tools.".into()),
+                    ChatHistoryContent::Text("I will check both sources.".into()),
                     ChatHistoryContent::ToolCallRequest(ToolCallRequest {
                         id: "call-1".into(),
                         tool_name: "mock_tool".into(),
@@ -558,18 +563,25 @@ mod tests {
     #[tokio::test]
     async fn send_message_preserves_tool_turns_and_accumulates_usage() {
         let tools_seen = Arc::new(Mutex::new(Vec::new()));
+        let first_turn = ProviderTurn {
+            native_items: Vec::new(),
+            contents: vec![
+                ChatHistoryContent::Reasoning("Need information from both tools.".into()),
+                ChatHistoryContent::Text("I will check both sources.".into()),
+                tool_call_request("call-1", "Alice"),
+                tool_call_request("call-2", "Bob"),
+            ],
+            usage: ModelUsage {
+                input_tokens: 10,
+                input_cache_written: 1,
+                input_cache_read: 2,
+                output_tokens: 3,
+                reasoning_tokens: 4,
+            },
+        };
         let client = TestClient {
             turns: Mutex::new(VecDeque::from([
-                tool_call_turn(
-                    &[("call-1", "Alice"), ("call-2", "Bob")],
-                    ModelUsage {
-                        input_tokens: 10,
-                        input_cache_written: 1,
-                        input_cache_read: 2,
-                        output_tokens: 3,
-                        reasoning_tokens: 4,
-                    },
-                ),
+                first_turn,
                 tool_call_turn(&[("call-3", "Carol")], ModelUsage::default()),
                 ProviderTurn {
                     native_items: Vec::new(),
@@ -617,13 +629,30 @@ mod tests {
         assert!(matches!(
             response.content.as_slice(),
             [
+                ContentType::Reasoning(reasoning),
+                ContentType::Text(progress),
                 ContentType::ToolCall(_),
                 ContentType::ToolCall(_),
                 ContentType::ToolCall(_),
                 ContentType::Text(text)
-            ] if text == "done"
+            ] if reasoning == "Need information from both tools."
+                && progress == "I will check both sources."
+                && text == "done"
         ));
         assert_eq!(response.history_additions, expected_history_additions());
+    }
+
+    #[test]
+    fn completion_response_defaults_missing_history_additions() {
+        let mut serialized = serde_json::to_value(CompletionApiResponse::default()).unwrap();
+        serialized
+            .as_object_mut()
+            .unwrap()
+            .remove("history_additions");
+
+        let response: CompletionApiResponse = serde_json::from_value(serialized).unwrap();
+
+        assert!(response.history_additions.is_empty());
     }
 
     #[tokio::test]
