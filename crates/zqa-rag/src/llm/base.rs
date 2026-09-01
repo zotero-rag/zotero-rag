@@ -66,9 +66,9 @@ pub struct ToolCallResponse {
 pub enum ChatHistoryContent {
     /// A plain-text message
     Text(String),
-    /// A reasoning summary (e.g. a thinking block). Providers that support reasoning surface
-    /// this separately from the answer text; it is dropped when converting to native request
-    /// formats, since native replay preserves the real reasoning items.
+    /// A user-visible reasoning summary (e.g. a thinking block). This remains distinct from answer
+    /// text for presentation. Provider conversions may omit it because a summary does not contain
+    /// the opaque metadata required to replay native reasoning blocks.
     Reasoning(String),
     /// A tool call request
     ToolCallRequest(ToolCallRequest),

@@ -81,8 +81,8 @@ pub(crate) struct OpenAIRequestToolCallInputItem {
     r#type: String,
     /// The name of the function to call.
     name: String,
-    /// The arguments to the tool call.
-    arguments: serde_json::Value,
+    /// The arguments to the tool call, JSON-encoded as required by the Responses API.
+    arguments: String,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -156,7 +156,7 @@ impl From<ChatHistoryItem> for Vec<OpenAIRequestInput> {
                         call_id: request.id,
                         r#type: "function_call".into(),
                         name: request.tool_name,
-                        arguments: request.args,
+                        arguments: stringify_function_arguments(&request.args),
                     }),
                 ),
                 ChatHistoryContent::ToolCallResponse(response) => Some(
@@ -340,6 +340,14 @@ fn parse_function_arguments(arguments: &Value) -> Value {
     }
 }
 
+/// Return function arguments as the JSON string required by the Responses API.
+fn stringify_function_arguments(arguments: &Value) -> String {
+    match arguments {
+        Value::String(arguments) => arguments.clone(),
+        arguments => arguments.to_string(),
+    }
+}
+
 /// Convert an OpenAI message's first text content item to provider-agnostic content.
 fn map_message_to_chat_content(content: &[OpenAIContent]) -> Option<ChatHistoryContent> {
     content
@@ -419,7 +427,7 @@ fn map_response_to_chat_history(response: &OpenAIResponse) -> Vec<OpenAIRequestI
                     call_id: call_id.clone(),
                     r#type: "function_call".into(),
                     name: name.clone(),
-                    arguments: arguments.clone(),
+                    arguments: stringify_function_arguments(arguments),
                 },
             )),
         })
@@ -566,14 +574,14 @@ mod tests {
 
     use super::{
         OpenAIClient, OpenAIContent, OpenAIOutput, OpenAIOutputReasoningSummary, OpenAIRequest,
-        OpenAIResponse, OpenAIUsage,
+        OpenAIRequestInput, OpenAIResponse, OpenAIUsage,
     };
     use crate::config::OpenAIConfig;
     use crate::constants::DEFAULT_OPENAI_EMBEDDING_DIM;
     use crate::http_client::{MockHttpClient, RecordingSequentialMockHttpClient, ReqwestClient};
     use crate::llm::base::{
         AgenticClient, ChatHistoryContent, ChatHistoryItem, ChatRequest, ContentType, MessageRole,
-        ReasoningConfig,
+        ReasoningConfig, ToolCallRequest,
     };
     use crate::llm::openai::{OpenAIInputTokensDetails, OpenAIOutputTokensDetails};
     use crate::llm::tools::test_utils::MockTool;
@@ -793,6 +801,25 @@ mod tests {
             serialized["instructions"],
             "Follow the system instructions."
         );
+    }
+
+    #[test]
+    fn generic_tool_call_arguments_serialize_as_json_string() {
+        let input: Vec<OpenAIRequestInput> = ChatHistoryItem {
+            role: MessageRole::Assistant,
+            content: vec![ChatHistoryContent::ToolCallRequest(ToolCallRequest {
+                id: "call-1".into(),
+                tool_name: "mock_tool".into(),
+                args: serde_json::json!({"name": "Alice"}),
+            })],
+        }
+        .into();
+
+        let serialized = serde_json::to_value(input).unwrap();
+        let arguments = serialized[0]["arguments"].as_str().unwrap();
+        let arguments: serde_json::Value = serde_json::from_str(arguments).unwrap();
+
+        test_eq!(arguments, serde_json::json!({"name": "Alice"}));
     }
 
     fn input_item<'a>(input: &'a [serde_json::Value], item_type: &str) -> &'a serde_json::Value {
