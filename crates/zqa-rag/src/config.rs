@@ -114,8 +114,10 @@ pub struct GeminiConfig {
     pub embedding_model: String,
     /// Embedding dimensions
     pub embedding_dims: usize,
-    /// Token budget for extended thinking. `None` disables thinking.
+    /// Token budget for Gemini 2.5 thinking. `None` disables configured thinking.
     pub reasoning_budget: Option<u32>,
+    /// Reasoning effort for Gemini 3 thinking levels. `None` uses the model default.
+    pub reasoning_effort: Option<String>,
 }
 
 impl Default for GeminiConfig {
@@ -126,6 +128,7 @@ impl Default for GeminiConfig {
             embedding_model: DEFAULT_GEMINI_EMBEDDING_MODEL.into(),
             embedding_dims: DEFAULT_GEMINI_EMBEDDING_DIM as usize,
             reasoning_budget: None,
+            reasoning_effort: None,
         }
     }
 }

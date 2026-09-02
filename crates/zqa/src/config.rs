@@ -68,7 +68,7 @@ use zqa_rag::reranking::common::RerankProviderConfig;
 /// api_key = "AI..."
 /// embedding_model = "gemini-embedding-2-preview"
 /// embedding_dims = 3072
-/// reasoning_budget = 2048
+/// reasoning_effort = "high"
 ///
 /// [voyageai]
 /// reranker = "rerank-2.5"
@@ -354,9 +354,12 @@ impl Config {
                 })
             }),
             ModelProvider::Gemini => self.gemini.as_ref().and_then(|c| {
-                c.reasoning_budget.map(|budget| ReasoningConfig {
-                    max_tokens: Some(budget),
-                    effort: None,
+                if c.reasoning_budget.is_none() && c.reasoning_effort.is_none() {
+                    return None;
+                }
+                Some(ReasoningConfig {
+                    max_tokens: c.reasoning_budget,
+                    effort: c.reasoning_effort.map(|effort| effort.to_string()),
                     summary: None,
                 })
             }),
@@ -657,8 +660,11 @@ pub struct GeminiConfig {
     /// Embedding dimensions
     pub embedding_dims: Option<usize>,
 
-    /// Token budget for extended thinking. Omit to disable thinking.
+    /// Token budget for Gemini 2.5 thinking. Omit to disable configured thinking.
     pub reasoning_budget: Option<u32>,
+
+    /// Reasoning effort for Gemini 3 thinking levels. Omit to use the model default.
+    pub reasoning_effort: Option<ReasoningEffort>,
 }
 
 impl Default for GeminiConfig {
@@ -670,6 +676,7 @@ impl Default for GeminiConfig {
             embedding_dims: Some(DEFAULT_GEMINI_EMBEDDING_DIM as usize),
             api_key: None,
             reasoning_budget: None,
+            reasoning_effort: None,
         }
     }
 }
@@ -938,6 +945,7 @@ impl From<GeminiConfig> for zqa_rag::config::GeminiConfig {
                 .embedding_dims
                 .unwrap_or(DEFAULT_GEMINI_EMBEDDING_DIM as usize),
             reasoning_budget: config.reasoning_budget,
+            reasoning_effort: config.reasoning_effort.map(|effort| effort.to_string()),
         }
     }
 }
@@ -1078,6 +1086,27 @@ mod tests {
         test_eq!(config.model_provider, ModelProvider::OpenAI);
         test_eq!(config.embedding_provider, EmbeddingProvider::VoyageAI); // default
         test_eq!(config.max_concurrent_requests, 1); // default
+    }
+
+    #[test]
+    fn test_gemini_reasoning_effort_is_propagated() {
+        let gemini = GeminiConfig {
+            api_key: Some("test-key".into()),
+            reasoning_effort: Some(ReasoningEffort::High),
+            ..GeminiConfig::default()
+        };
+        let config = Config {
+            model_provider: ModelProvider::Gemini,
+            gemini: Some(gemini.clone()),
+            ..Config::default()
+        };
+
+        let reasoning = config.get_reasoning_config().unwrap();
+        test_eq!(reasoning.max_tokens, None);
+        test_eq!(reasoning.effort.as_deref(), Some("high"));
+
+        let rag_config: zqa_rag::config::GeminiConfig = gemini.into();
+        test_eq!(rag_config.reasoning_effort.as_deref(), Some("high"));
     }
 
     #[test]

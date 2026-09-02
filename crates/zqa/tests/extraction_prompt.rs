@@ -170,6 +170,7 @@ async fn test_extraction_prompt_gemini() {
         embedding_model: None,
         embedding_dims: None,
         reasoning_budget: None,
+        reasoning_effort: None,
     };
 
     let client = get_client_with_config(&LLMClientConfig::Gemini(config.into()))

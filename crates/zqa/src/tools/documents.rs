@@ -999,6 +999,7 @@ mod tests {
                 embedding_model: DEFAULT_GEMINI_EMBEDDING_MODEL.to_string(),
                 embedding_dims: DEFAULT_GEMINI_EMBEDDING_DIM as usize,
                 reasoning_budget: None,
+                reasoning_effort: None,
             }),
             reranker_config: Some(RerankProviderConfig::VoyageAI(VoyageAIConfig {
                 api_key: voyage_api_key,
