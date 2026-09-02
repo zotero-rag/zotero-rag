@@ -12,8 +12,8 @@ use crate::clients::gemini::{GeminiClient, get_gemini_api_key};
 use crate::constants::{DEFAULT_GEMINI_MODEL, DEFAULT_GEMINI_REASONING_BUDGET};
 use crate::http_client::HttpClient;
 use crate::llm::base::{
-    AgenticClient, ChatHistoryContent, ChatHistoryItem, MessageRole, ProviderTurn, ReasoningConfig,
-    ToolCallRequest, send_generation_request,
+    AgenticClient, ChatHistoryContent, ChatHistoryItem, EFFORT_TO_TOKENS, MessageRole,
+    ProviderTurn, ReasoningConfig, ReasoningEffort, ToolCallRequest, send_generation_request,
 };
 use crate::llm::tools::{GEMINI_SCHEMA_KEY, SerializedTool};
 use crate::pricing::ModelUsage;
@@ -194,19 +194,27 @@ fn gemini_thinking_config(
     reasoning: Option<&ReasoningConfig>,
 ) -> Option<GeminiThinkingConfig> {
     let reasoning = reasoning?;
-    let uses_level = uses_thinking_level(model);
-    let level = if uses_level {
-        reasoning
-            .effort
-            .as_deref()
-            .and_then(effort_to_thinking_level)
-    } else {
-        None
+    let (effort, uses_low_fallback) = match reasoning.effort.as_deref() {
+        Some("none") => {
+            log::warn!(
+                "Gemini does not consistently support disabled thinking; using low effort instead."
+            );
+            (Some(ReasoningEffort::Low.to_string()), true)
+        }
+        effort => (effort.map(str::to_owned), false),
     };
+    let uses_level = uses_thinking_level(model);
+    let level = uses_level
+        .then(|| effort.as_deref().and_then(effort_to_thinking_level))
+        .flatten();
     let budget = (!uses_level).then(|| {
-        reasoning
-            .max_tokens
-            .unwrap_or(DEFAULT_GEMINI_REASONING_BUDGET)
+        if uses_low_fallback {
+            *EFFORT_TO_TOKENS.get(&ReasoningEffort::Low).unwrap()
+        } else {
+            reasoning
+                .max_tokens
+                .unwrap_or(DEFAULT_GEMINI_REASONING_BUDGET)
+        }
     });
 
     Some(GeminiThinkingConfig {
@@ -530,6 +538,19 @@ mod tests {
         let config = gemini_thinking_config("gemini-2.5-pro", Some(&reasoning)).unwrap();
         test_eq!(config.thinking_level, None);
         test_eq!(config.thinking_budget, Some(8192));
+
+        // Gemini does not consistently support disabled thinking, so use low effort instead.
+        let reasoning = ReasoningConfig {
+            max_tokens: None,
+            effort: Some("none".into()),
+            summary: None,
+        };
+        let config = gemini_thinking_config("gemini-3-pro-preview", Some(&reasoning)).unwrap();
+        test_eq!(config.thinking_level, Some("low".to_string()));
+        test_eq!(config.thinking_budget, None);
+        let config = gemini_thinking_config("gemini-2.5-flash", Some(&reasoning)).unwrap();
+        test_eq!(config.thinking_level, None);
+        test_eq!(config.thinking_budget, Some(4096));
 
         // No effort and no budget: fall back to the default budget.
         let reasoning = ReasoningConfig {
