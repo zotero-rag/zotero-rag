@@ -8,10 +8,13 @@ use http::HeaderMap;
 use super::base::ChatRequest;
 use super::errors::LLMError;
 use crate::clients::ollama::OllamaClient;
-use crate::constants::{DEFAULT_OLLAMA_BASE_URL, DEFAULT_OLLAMA_MAX_TOKENS, DEFAULT_OLLAMA_MODEL};
+use crate::constants::{
+    DEFAULT_ANTHROPIC_REASONING_BUDGET, DEFAULT_OLLAMA_BASE_URL, DEFAULT_OLLAMA_MAX_TOKENS,
+    DEFAULT_OLLAMA_MODEL,
+};
 use crate::http_client::HttpClient;
 use crate::llm::anthropic::{
-    AnthropicChatHistoryItem, AnthropicRequest, AnthropicResponse, make_thinking_config,
+    AnthropicChatHistoryItem, AnthropicRequest, AnthropicResponse, AnthropicThinkingConfig,
     map_response_to_chat_contents,
 };
 use crate::llm::base::{
@@ -66,21 +69,18 @@ impl<T: HttpClient> AgenticClient for OllamaClient<T> {
             )
         };
 
-        // Ollama proxies the Anthropic Messages API, so the same adaptive-vs-manual thinking
-        // logic applies: newer Claude models are steered via `output_config.effort`, while older
-        // ones use a fixed `budget_tokens`.
-        let (thinking, output_config) = match reasoning {
-            Some(reasoning) => make_thinking_config(&model, Some(reasoning)),
-            None => (None, None),
-        };
-
         let request_body = OllamaRequest {
             model: &model,
             max_tokens: max_tokens.unwrap_or(config_max_tokens),
             messages: history,
             system: system_prompt,
-            thinking,
-            output_config,
+            thinking: reasoning.map(|reasoning| AnthropicThinkingConfig::Enabled {
+                display: "summarized",
+                budget_tokens: reasoning
+                    .max_tokens
+                    .unwrap_or(DEFAULT_ANTHROPIC_REASONING_BUDGET),
+            }),
+            output_config: None,
             tools,
         };
 
@@ -113,6 +113,7 @@ mod tests {
 
     use super::*;
     use crate::clients::ollama::OllamaClient;
+    use crate::config::OllamaConfig;
     use crate::http_client::{RecordingSequentialMockHttpClient, ReqwestClient};
     use crate::llm::anthropic::{
         AnthropicOutputTokensDetails, AnthropicResponseContent, AnthropicTextResponseContent,
@@ -120,6 +121,7 @@ mod tests {
     };
     use crate::llm::base::{
         AgenticClient, ChatHistoryContent, ChatHistoryItem, ChatRequest, MessageRole,
+        ReasoningConfig,
     };
     use crate::llm::tools::test_utils::MockTool;
 
@@ -182,6 +184,60 @@ mod tests {
 
         test_ok!(res);
         assert!(call_count.lock().unwrap().eq(&1_usize));
+    }
+
+    #[tokio::test]
+    async fn test_reasoning_uses_budget_thinking_config() {
+        let response = AnthropicResponse {
+            id: "msg-1".into(),
+            model: DEFAULT_OLLAMA_MODEL.into(),
+            role: MessageRole::Assistant,
+            stop_reason: "end_turn".into(),
+            stop_sequence: None,
+            usage: AnthropicUsageStats {
+                input_tokens: 1,
+                output_tokens: 1,
+                cache_creation_input_tokens: 0,
+                cache_read_input_tokens: 0,
+                output_tokens_details: None,
+            },
+            r#type: "message".into(),
+            content: vec![AnthropicResponseContent::Text(
+                AnthropicTextResponseContent {
+                    r#type: "text".into(),
+                    text: "Done!".into(),
+                },
+            )],
+        };
+        let http_client = RecordingSequentialMockHttpClient::new([response]);
+        let client = OllamaClient {
+            client: http_client.clone(),
+            config: Some(OllamaConfig {
+                model: DEFAULT_OLLAMA_MODEL.into(),
+                ..OllamaConfig::default()
+            }),
+        };
+        let request = ChatRequest {
+            message: "Test".into(),
+            reasoning: Some(ReasoningConfig {
+                max_tokens: Some(2048),
+                effort: Some("high".into()),
+                summary: None,
+            }),
+            ..ChatRequest::default()
+        };
+
+        test_ok!(client.send_message(&request).await);
+
+        let requests = http_client.requests();
+        test_eq!(requests.len(), 1);
+        test_eq!(requests[0]["model"].as_str(), Some(DEFAULT_OLLAMA_MODEL));
+        test_eq!(requests[0]["thinking"]["type"].as_str(), Some("enabled"));
+        test_eq!(
+            requests[0]["thinking"]["budget_tokens"].as_u64(),
+            Some(2048)
+        );
+        assert!(requests[0].get("output_config").is_none());
     }
 
     #[tokio::test]
