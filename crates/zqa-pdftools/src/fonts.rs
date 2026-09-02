@@ -885,8 +885,9 @@ pub(crate) fn get_space_width(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use zqa_macros::test_eq;
+
+    use super::*;
 
     #[test]
     fn test_iter_codepoints_decodes_pdf_literal_escapes() {

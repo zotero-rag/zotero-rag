@@ -2,8 +2,7 @@
 //! the neutral [`HealthCheckResult`] type and the [`HealthCheckable`] trait; each backend is
 //! responsible for implementing the checks that make sense for it.
 
-use std::fmt;
-use std::io;
+use std::{fmt, io};
 
 use async_trait::async_trait;
 

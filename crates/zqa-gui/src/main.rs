@@ -15,21 +15,20 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use bridge::{EngineCommand, UiEvent, spawn_engine};
-use futures::{StreamExt, channel::mpsc::UnboundedReceiver};
+use futures::StreamExt;
+use futures::channel::mpsc::UnboundedReceiver;
 use gpui::prelude::*;
 use gpui::{
     AnyElement, App, Context, Decorations, Div, Entity, Focusable as _, FontWeight, IntoElement,
     MouseButton, Pixels, Rems, Render, ScrollHandle, SharedString, Stateful, Subscription, Window,
     WindowBackgroundAppearance, WindowBounds, div, px, rems, size, transparent_black,
 };
+use gpui_component::button::{Button, ButtonVariants as _};
+use gpui_component::input::{InputEvent, Textarea, TextareaState};
+use gpui_component::spinner::Spinner;
 use gpui_component::{
     ActiveTheme as _, Icon, IconName, InteractiveElementExt as _, Root, Sizable as _,
-    TITLE_BAR_HEIGHT, Theme, ThemeMode, TitleBar,
-    button::{Button, ButtonVariants as _},
-    h_flex,
-    input::{InputEvent, Textarea, TextareaState},
-    spinner::Spinner,
-    v_flex,
+    TITLE_BAR_HEIGHT, Theme, ThemeMode, TitleBar, h_flex, v_flex,
 };
 use gpui_component_assets::Assets;
 use serde_json::Value;
