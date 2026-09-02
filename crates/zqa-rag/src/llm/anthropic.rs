@@ -87,6 +87,8 @@ pub(crate) enum AnthropicThinkingConfig {
         /// "summarized" or "omitted"
         display: &'static str,
     },
+    /// Disabled thinking
+    Disabled,
 }
 
 /// Output-level request configuration, currently only the reasoning effort.
@@ -101,7 +103,7 @@ pub(crate) struct AnthropicOutputConfig {
 ///
 /// The model name is parsed into a model family (Opus, Sonnet, or Haiku) and a version, and
 /// adaptive thinking is enabled for versions above the per-family threshold (Opus and
-/// Sonnet 4.6+, Haiku 4.5+, and all 5.x+ models); the thresholds should not need updating as
+/// Sonnet 4.6+, and all 5.x+ models); the thresholds should not need updating as
 /// new models are released. Unrecognized model names are assumed to support adaptive thinking.
 ///
 /// # Arguments
@@ -116,11 +118,10 @@ fn supports_adaptive_thinking(model: &str) -> bool {
     let tokens: Vec<&str> = lower.split('-').collect();
     let Some(i) = tokens
         .iter()
-        .position(|t| matches!(*t, "opus" | "sonnet" | "haiku"))
+        .position(|t| matches!(*t, "opus" | "sonnet" | "haiku" | "fable"))
     else {
         return true;
     };
-    let family = tokens[i];
 
     // The version can follow the family ("claude-opus-4-5") or precede it
     // ("claude-3-7-sonnet"); a date suffix ("claude-opus-4-5-20251001") is ignored.
@@ -143,10 +144,7 @@ fn supports_adaptive_thinking(model: &str) -> bool {
     if major >= 5 {
         return true;
     }
-    if major == 4 {
-        return minor >= if family == "haiku" { 5 } else { 6 };
-    }
-    false
+    major == 4 && minor >= 6
 }
 
 /// Build the thinking and output configuration for a request. Adaptive-thinking models use
@@ -168,7 +166,7 @@ pub(crate) fn make_thinking_config(
     Option<AnthropicOutputConfig>,
 ) {
     let Some(mut reasoning) = reasoning.cloned() else {
-        return (None, None);
+        return (Some(AnthropicThinkingConfig::Disabled), None);
     };
 
     reasoning.normalize();
@@ -296,8 +294,7 @@ pub(crate) struct AnthropicThinkingResponseContent {
     /// The thinking content from the model.
     pub(crate) thinking: String,
     /// Opaque signature that must be returned unchanged with a tool-use continuation.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) signature: Option<String>,
+    pub(crate) signature: String,
 }
 
 /// A redacted thinking block returned by models with extended thinking enabled.
@@ -571,7 +568,6 @@ mod tests {
             "claude-sonnet-4-6",
             "claude-opus-5",
             "claude-sonnet-5",
-            "claude-haiku-4-5",
             // Future and dated models work without changes to this function.
             "claude-opus-4-9-20260101",
             "claude-5-7-opus",
@@ -588,6 +584,7 @@ mod tests {
             "claude-opus-4-1",
             "claude-opus-4",
             "claude-sonnet-4",
+            "claude-haiku-4-5",
             "claude-3-7-sonnet",
         ] {
             assert!(!supports_adaptive_thinking(model), "{model}");
@@ -662,7 +659,8 @@ mod tests {
         assert!(output_config.is_none());
 
         let (thinking, output_config) = make_thinking_config("claude-sonnet-5", None);
-        assert!(thinking.is_none());
+        let thinking = serde_json::to_value(thinking).unwrap();
+        test_eq!(thinking["type"].as_str(), Some("disabled"));
         assert!(output_config.is_none());
     }
 
@@ -941,7 +939,7 @@ mod tests {
                 AnthropicResponseContent::Thinking(AnthropicThinkingResponseContent {
                     r#type: "thinking".into(),
                     thinking: "I need the tool result.".into(),
-                    signature: Some("thinking-signature".into()),
+                    signature: "thinking-signature".into(),
                 }),
                 AnthropicResponseContent::RedactedThinking(
                     AnthropicRedactedThinkingResponseContent {

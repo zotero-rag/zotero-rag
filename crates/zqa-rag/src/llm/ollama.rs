@@ -8,13 +8,10 @@ use http::HeaderMap;
 use super::base::ChatRequest;
 use super::errors::LLMError;
 use crate::clients::ollama::OllamaClient;
-use crate::constants::{
-    DEFAULT_ANTHROPIC_REASONING_BUDGET, DEFAULT_OLLAMA_BASE_URL, DEFAULT_OLLAMA_MAX_TOKENS,
-    DEFAULT_OLLAMA_MODEL,
-};
+use crate::constants::{DEFAULT_OLLAMA_BASE_URL, DEFAULT_OLLAMA_MAX_TOKENS, DEFAULT_OLLAMA_MODEL};
 use crate::http_client::HttpClient;
 use crate::llm::anthropic::{
-    AnthropicChatHistoryItem, AnthropicRequest, AnthropicResponse, AnthropicThinkingConfig,
+    AnthropicChatHistoryItem, AnthropicRequest, AnthropicResponse, make_thinking_config,
     map_response_to_chat_contents,
 };
 use crate::llm::base::{
@@ -69,16 +66,21 @@ impl<T: HttpClient> AgenticClient for OllamaClient<T> {
             )
         };
 
+        // Ollama proxies the Anthropic Messages API, so the same adaptive-vs-manual thinking
+        // logic applies: newer Claude models are steered via `output_config.effort`, while older
+        // ones use a fixed `budget_tokens`.
+        let (thinking, output_config) = match reasoning {
+            Some(reasoning) => make_thinking_config(&model, Some(reasoning)),
+            None => (None, None),
+        };
+
         let request_body = OllamaRequest {
             model: &model,
             max_tokens: max_tokens.unwrap_or(config_max_tokens),
             messages: history,
             system: system_prompt,
-            thinking: reasoning.map(|r| AnthropicThinkingConfig::Enabled {
-                display: "summarized",
-                budget_tokens: r.max_tokens.unwrap_or(DEFAULT_ANTHROPIC_REASONING_BUDGET),
-            }),
-            output_config: None,
+            thinking,
+            output_config,
             tools,
         };
 
