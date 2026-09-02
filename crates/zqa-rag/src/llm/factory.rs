@@ -88,10 +88,15 @@ impl LLMClient {
                     summary: None,
                 })
             })?,
-            LLMClient::Gemini(client) => client.config.as_ref().map(|c| ReasoningConfig {
-                max_tokens: c.reasoning_budget,
-                effort: None,
-                summary: None,
+            LLMClient::Gemini(client) => client.config.as_ref().and_then(|c| {
+                if c.reasoning_budget.is_none() && c.reasoning_effort.is_none() {
+                    return None;
+                }
+                Some(ReasoningConfig {
+                    max_tokens: c.reasoning_budget,
+                    effort: c.reasoning_effort.clone(),
+                    summary: None,
+                })
             }),
             #[cfg(any(test, feature = "mock"))]
             LLMClient::Mock(_) => None,
@@ -251,8 +256,23 @@ impl BatchAPIProvider for BatchEmbeddingClient {
 #[cfg(test)]
 mod tests {
     use super::LLMClient;
+    use crate::clients::gemini::GeminiClient;
     use crate::clients::test::TestClient;
+    use crate::config::GeminiConfig;
     use crate::llm::base::{ChatRequest, ContentType};
+
+    #[test]
+    fn gemini_reasoning_effort_is_returned() {
+        let client = LLMClient::Gemini(GeminiClient::with_config(GeminiConfig {
+            reasoning_effort: Some("high".into()),
+            ..GeminiConfig::default()
+        }));
+
+        let reasoning = client.get_reasoning_config().unwrap();
+        assert_eq!(reasoning.max_tokens, None);
+        assert_eq!(reasoning.effort.as_deref(), Some("high"));
+        assert_eq!(reasoning.summary, None);
+    }
 
     #[tokio::test]
     async fn mock_client_sends_queued_response() {

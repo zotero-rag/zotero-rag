@@ -259,6 +259,7 @@ mod tests {
             embedding_model: "gemini-embedding-test".into(),
             embedding_dims: 3072,
             reasoning_budget: None,
+            reasoning_effort: None,
         })
     }
 
@@ -301,6 +302,7 @@ mod tests {
             embedding_model: "gemini-embedding-test".into(),
             embedding_dims: 3072,
             reasoning_budget: None,
+            reasoning_effort: None,
         })
     }
 
