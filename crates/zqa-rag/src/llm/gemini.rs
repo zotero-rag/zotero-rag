@@ -155,15 +155,64 @@ struct GeminiThinkingConfig {
     include_thoughts: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     thinking_budget: Option<u32>,
+    /// Thinking level (`"minimal"`, `"low"`, `"medium"`, `"high"`) for Gemini 3+ models,
+    /// which use this instead of a token budget. See
+    /// <https://ai.google.dev/gemini-api/docs/thinking>.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    thinking_level: Option<String>,
 }
 
-impl From<&ReasoningConfig> for GeminiThinkingConfig {
-    fn from(value: &ReasoningConfig) -> Self {
-        Self {
-            include_thoughts: Some(true),
-            thinking_budget: Some(value.max_tokens.unwrap_or(DEFAULT_GEMINI_REASONING_BUDGET)),
-        }
+/// Whether the given Gemini model generation uses the `thinkingLevel` API (Gemini 3 and
+/// later) rather than the older `thinkingBudget` API (Gemini 2.5). A model name of the form
+/// `gemini-{major}...` is parsed for its major version; unrecognized names are assumed to
+/// use `thinkingBudget`.
+fn uses_thinking_level(model: &str) -> bool {
+    model
+        .to_lowercase()
+        .strip_prefix("gemini-")
+        .and_then(|version| version.split(['-', '.']).next())
+        .and_then(|major| major.parse::<u32>().ok())
+        .is_some_and(|major| major >= 3)
+}
+
+/// Map a reasoning effort to a Gemini `thinkingLevel` (`minimal`, `low`, `medium`, or
+/// `high`). `xhigh` and `max` are mapped down to `high`, since Google's highest documented
+/// level is `high`; `none` and unrecognized efforts map to `None`.
+fn effort_to_thinking_level(effort: &str) -> Option<String> {
+    match effort {
+        "minimal" | "low" | "medium" | "high" => Some(effort.to_string()),
+        "xhigh" | "max" => Some("high".to_string()),
+        _ => None,
     }
+}
+
+/// Build the thinking config for a request. Gemini 3+ models use `thinkingLevel`; Gemini 2.5
+/// models use `thinkingBudget`. When no level is specified for Gemini 3+, the provider chooses
+/// its default level.
+fn gemini_thinking_config(
+    model: &str,
+    reasoning: Option<&ReasoningConfig>,
+) -> Option<GeminiThinkingConfig> {
+    let reasoning = reasoning?;
+    let level = if uses_thinking_level(model) {
+        reasoning
+            .effort
+            .as_deref()
+            .and_then(effort_to_thinking_level)
+    } else {
+        None
+    };
+    let budget = (!uses_thinking_level(model)).then(|| {
+        reasoning
+            .max_tokens
+            .unwrap_or(DEFAULT_GEMINI_REASONING_BUDGET)
+    });
+
+    Some(GeminiThinkingConfig {
+        include_thoughts: Some(true),
+        thinking_budget: budget,
+        thinking_level: level,
+    })
 }
 
 /// Optional text generation configuration
@@ -204,6 +253,7 @@ struct GeminiRequestBody<'a> {
 /// Helper to build contents, config, and tools from a ChatRequest.
 /// Returns owned data that can then be borrowed by GeminiRequestBody.
 fn build_gemini_request_data<'a>(
+    model: &str,
     max_tokens: Option<u32>,
     tools: Option<&'a [SerializedTool<'_>]>,
     reasoning: Option<&ReasoningConfig>,
@@ -222,7 +272,7 @@ fn build_gemini_request_data<'a>(
         temperature: Some(1.0),
         top_k: Some(1),
         top_p: Some(1.0),
-        thinking_config: reasoning.map(Into::into),
+        thinking_config: gemini_thinking_config(model, reasoning),
     });
 
     let tools = tools.map(|tools| GeminiToolDeclaration {
@@ -297,9 +347,7 @@ fn map_response_to_chat_contents(contents: &[GeminiPart]) -> Vec<ChatHistoryCont
         match c {
             GeminiPart::Text{text, thought, ..} => {
                 if *thought == Some(true) {
-                    Some(ChatHistoryContent::Text(format!(
-                        "<reasoning>{text}</reasoning>"
-                    )))
+                    Some(ChatHistoryContent::Reasoning(text.clone()))
                 } else {
                     Some(ChatHistoryContent::Text(text.clone()))
                 }
@@ -364,7 +412,8 @@ impl<T: HttpClient> AgenticClient for GeminiClient<T> {
         headers.insert("x-goog-api-key", key.parse()?);
 
         // Build the initial contents, config, and tools (owned)
-        let (generation_config, tools) = build_gemini_request_data(max_tokens, tools, reasoning);
+        let (generation_config, tools) =
+            build_gemini_request_data(&model, max_tokens, tools, reasoning);
 
         // Create the initial request borrowing
         let request = GeminiRequestBody {
@@ -421,6 +470,84 @@ mod tests {
     use crate::http_client::{MockHttpClient, RecordingSequentialMockHttpClient, ReqwestClient};
     use crate::llm::base::{AgenticClient, ChatHistoryItem, ChatRequest, ContentType};
     use crate::llm::tools::test_utils::MockTool;
+
+    #[test]
+    fn test_uses_thinking_level() {
+        test_eq!(uses_thinking_level("gemini-3-pro-preview"), true);
+        test_eq!(uses_thinking_level("gemini-3.7-flash"), true);
+        test_eq!(uses_thinking_level("Gemini-3-flash-preview"), true);
+        test_eq!(uses_thinking_level("gemini-2.5-pro"), false);
+        test_eq!(uses_thinking_level("gemini-2.5-flash-lite"), false);
+        // Unrecognized names conservatively use the budget API.
+        test_eq!(uses_thinking_level("gemma-3-27b"), false);
+        test_eq!(uses_thinking_level("gemini"), false);
+    }
+
+    #[test]
+    fn test_effort_to_thinking_level() {
+        test_eq!(
+            effort_to_thinking_level("minimal"),
+            Some("minimal".to_string())
+        );
+        test_eq!(effort_to_thinking_level("high"), Some("high".to_string()));
+        // `xhigh` and `max` are mapped down, since Google caps at `high`.
+        test_eq!(effort_to_thinking_level("xhigh"), Some("high".to_string()));
+        test_eq!(effort_to_thinking_level("max"), Some("high".to_string()));
+        test_eq!(effort_to_thinking_level("none"), None);
+        test_eq!(effort_to_thinking_level("bogus"), None);
+    }
+
+    #[test]
+    fn test_gemini_thinking_config() {
+        // Gemini 3: an effort maps to a thinking level, with no budget by default.
+        let reasoning = ReasoningConfig {
+            max_tokens: None,
+            effort: Some("high".into()),
+            summary: None,
+        };
+        let config = gemini_thinking_config("gemini-3-pro-preview", Some(&reasoning)).unwrap();
+        test_eq!(config.thinking_level, Some("high".to_string()));
+        test_eq!(config.thinking_budget, None);
+        test_eq!(config.include_thoughts, Some(true));
+
+        // Gemini 3 does not send the legacy budget, even when one was requested.
+        let reasoning = ReasoningConfig {
+            max_tokens: Some(4096),
+            effort: Some("low".into()),
+            summary: None,
+        };
+        let config = gemini_thinking_config("gemini-3.7-flash", Some(&reasoning)).unwrap();
+        test_eq!(config.thinking_level, Some("low".to_string()));
+        test_eq!(config.thinking_budget, None);
+
+        // Gemini 2.5: the budget API is used, regardless of effort.
+        let reasoning = ReasoningConfig {
+            max_tokens: Some(8192),
+            effort: Some("high".into()),
+            summary: None,
+        };
+        let config = gemini_thinking_config("gemini-2.5-pro", Some(&reasoning)).unwrap();
+        test_eq!(config.thinking_level, None);
+        test_eq!(config.thinking_budget, Some(8192));
+
+        // No effort and no budget: fall back to the default budget.
+        let reasoning = ReasoningConfig {
+            max_tokens: None,
+            effort: None,
+            summary: None,
+        };
+        let config = gemini_thinking_config("gemini-2.5-flash", Some(&reasoning)).unwrap();
+        test_eq!(
+            config.thinking_budget,
+            Some(DEFAULT_GEMINI_REASONING_BUDGET)
+        );
+
+        // No reasoning at all: no thinking config is sent.
+        test_eq!(
+            gemini_thinking_config("gemini-3-pro-preview", None).is_none(),
+            true
+        );
+    }
 
     #[tokio::test]
     async fn test_send_message_with_mock() {

@@ -127,12 +127,14 @@ pub(crate) struct OpenAIRequestReasoningItem {
     r#type: String,
     /// The provider-assigned reasoning item ID.
     id: String,
-    /// Optional reasoning summaries returned by the provider.
+    /// Reasoning summaries returned by the provider.
+    summary: Vec<OpenAIContent>,
+    /// Optional reasoning text returned by the provider.
     #[serde(skip_serializing_if = "Option::is_none")]
-    summary: Option<Vec<OpenAIOutputReasoningSummary>>,
-    /// Opaque fields, such as encrypted reasoning content, that must be replayed unchanged.
-    #[serde(flatten)]
-    additional_fields: Map<String, Value>,
+    content: Option<Vec<OpenAIContent>>,
+    /// Encrypted reasoning content that must be replayed unchanged.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    encrypted_content: Option<String>,
 }
 
 impl From<ChatHistoryItem> for Vec<OpenAIRequestInput> {
@@ -272,18 +274,13 @@ impl From<OpenAIUsage> for ModelUsage {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct OpenAIContent {
     /// The content type key.
+    /// `summary_text` for the `summary` field of reasoning blocks
+    /// `reasoning_text` for the `content` field of reasoning blocks
+    /// `output_text` for output messages
     r#type: String,
     #[serde(default)]
     /// Message text, when present.
     text: Option<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-struct OpenAIOutputReasoningSummary {
-    /// Always "summary_text"
-    r#type: String,
-    /// Reasoning summary
-    text: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -293,11 +290,12 @@ enum OpenAIOutput {
     #[serde(rename = "reasoning")]
     Reasoning {
         id: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        summary: Option<Vec<OpenAIOutputReasoningSummary>>,
-        /// Opaque reasoning fields, such as encrypted reasoning content.
-        #[serde(flatten)]
-        additional_fields: Map<String, Value>,
+        summary: Vec<OpenAIContent>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        content: Option<Vec<OpenAIContent>>,
+        /// Encrypted reasoning content that must be replayed unchanged.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        encrypted_content: Option<String>,
     },
     /// A standard assistant message with text content.
     #[serde(rename = "message")]
@@ -363,10 +361,8 @@ fn map_response_to_chat_contents(response: &OpenAIResponse) -> Vec<ChatHistoryCo
         .filter_map(|output| match output {
             OpenAIOutput::Reasoning { summary, .. } => {
                 let summary = summary
-                    .as_deref()
-                    .unwrap_or_default()
                     .iter()
-                    .map(|summary| summary.text.as_str())
+                    .filter_map(|summary| summary.text.as_deref())
                     .collect::<Vec<_>>()
                     .join("\n");
 
@@ -402,12 +398,14 @@ fn map_response_to_chat_history(response: &OpenAIResponse) -> Vec<OpenAIRequestI
             OpenAIOutput::Reasoning {
                 id,
                 summary,
-                additional_fields,
+                content,
+                encrypted_content,
             } => Some(OpenAIRequestInput::Reasoning(OpenAIRequestReasoningItem {
                 r#type: "reasoning".into(),
                 id: id.clone(),
                 summary: summary.clone(),
-                additional_fields: additional_fields.clone(),
+                content: content.clone(),
+                encrypted_content: encrypted_content.clone(),
             })),
             OpenAIOutput::Message { content, role, .. } => {
                 Some(OpenAIRequestInput::Message(OpenAIChatHistoryItem {
@@ -573,8 +571,8 @@ mod tests {
     use zqa_macros::{test_eq, test_ok};
 
     use super::{
-        OpenAIClient, OpenAIContent, OpenAIOutput, OpenAIOutputReasoningSummary, OpenAIRequest,
-        OpenAIRequestInput, OpenAIResponse, OpenAIUsage,
+        OpenAIClient, OpenAIContent, OpenAIOutput, OpenAIRequest, OpenAIRequestInput,
+        OpenAIResponse, OpenAIUsage,
     };
     use crate::config::OpenAIConfig;
     use crate::constants::DEFAULT_OPENAI_EMBEDDING_DIM;
@@ -750,18 +748,15 @@ mod tests {
         }
     }
 
-    fn reasoning_output(
-        id: &str,
-        summary: &str,
-        additional_fields: serde_json::Map<String, serde_json::Value>,
-    ) -> OpenAIOutput {
+    fn reasoning_output(id: &str, summary: &str, encrypted_content: Option<&str>) -> OpenAIOutput {
         OpenAIOutput::Reasoning {
             id: id.into(),
-            summary: Some(vec![OpenAIOutputReasoningSummary {
+            summary: vec![OpenAIContent {
                 r#type: "summary_text".into(),
-                text: summary.into(),
-            }]),
-            additional_fields,
+                text: Some(summary.into()),
+            }],
+            content: None,
+            encrypted_content: encrypted_content.map(str::to_owned),
         }
     }
 
@@ -840,17 +835,16 @@ mod tests {
 
     #[tokio::test]
     async fn test_callbacks_fire_and_reasoning_is_replayed() {
-        let mut reasoning_fields = serde_json::Map::new();
-        reasoning_fields.insert(
-            "encrypted_content".into(),
-            serde_json::Value::String("opaque-reasoning".into()),
-        );
         let tool_call_response = mock_response(
             "resp-1",
             10,
             5,
             vec![
-                reasoning_output("rs-1", "I need the tool result first.", reasoning_fields),
+                reasoning_output(
+                    "rs-1",
+                    "I need the tool result first.",
+                    Some("opaque-reasoning"),
+                ),
                 OpenAIOutput::FunctionCall {
                     call_id: "call-1".into(),
                     name: "mock_tool".into(),
@@ -863,7 +857,7 @@ mod tests {
             20,
             8,
             vec![
-                reasoning_output("rs-2", "I can now answer.", serde_json::Map::new()),
+                reasoning_output("rs-2", "I can now answer.", None),
                 text_output("Done!"),
             ],
         );
