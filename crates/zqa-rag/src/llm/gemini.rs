@@ -194,7 +194,8 @@ fn gemini_thinking_config(
     reasoning: Option<&ReasoningConfig>,
 ) -> Option<GeminiThinkingConfig> {
     let reasoning = reasoning?;
-    let level = if uses_thinking_level(model) {
+    let uses_level = uses_thinking_level(model);
+    let level = if uses_level {
         reasoning
             .effort
             .as_deref()
@@ -202,7 +203,7 @@ fn gemini_thinking_config(
     } else {
         None
     };
-    let budget = (!uses_thinking_level(model)).then(|| {
+    let budget = (!uses_level).then(|| {
         reasoning
             .max_tokens
             .unwrap_or(DEFAULT_GEMINI_REASONING_BUDGET)
