@@ -6,11 +6,14 @@ use std::sync::{Arc, Mutex, RwLock};
 
 use clap::Parser;
 use log::LevelFilter;
+use tokio::sync::mpsc;
+use tokio::sync::mpsc::error::SendError;
 use zqa_pdftools::parse::ExtractedContent;
 use zqa_rag::llm::base::ChatHistoryItem;
 use {fern, humantime};
 
 use crate::config::Config;
+use crate::io::EngineEvent;
 use crate::state::UsageMetadata;
 use crate::store::lance::LanceZoteroStore;
 
@@ -83,6 +86,8 @@ impl Default for PathOptions {
 pub(crate) struct Context<OutStream: Write, ErrStream: Write> {
     /// Application state
     pub(crate) state: State,
+    /// Optional channel for transmitting events. If `None`, no events are published.
+    pub(crate) event_tx: Option<mpsc::Sender<EngineEvent>>,
     /// Config from TOML and env
     pub(crate) config: Config,
     /// The store to use for storage and retrieval
@@ -98,6 +103,16 @@ pub(crate) struct Context<OutStream: Write, ErrStream: Write> {
     pub(crate) out: OutStream,
     /// Abstraction for `stderr()`
     pub(crate) err: ErrStream,
+}
+
+impl<OutStream: Write, ErrStream: Write> Context<OutStream, ErrStream> {
+    /// Emit an event to the channel, if it exists.
+    pub(crate) async fn emit(&self, event: EngineEvent) -> Result<(), SendError<EngineEvent>> {
+        let Some(tx) = &self.event_tx else {
+            return Ok(());
+        };
+        tx.send(event).await
+    }
 }
 
 /// Initialize the `fern` logger.

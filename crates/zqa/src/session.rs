@@ -47,6 +47,7 @@ impl<O: Write, E: Write> Session<O, E> {
         let store = LanceZoteroStore::from_config(&config)?;
         let ctx = Context {
             state: State::default(),
+            event_tx: None, // TODO: thread through to the gui
             config,
             store,
             path_options: PathOptions::default(),
