@@ -8,6 +8,12 @@ pub const DIM_TEXT: &str = "\x1b[2m";
 /// ANSI escape code for resetting text formatting
 pub const RESET: &str = "\x1b[0m";
 
+/// ANSI escape code for light blue text
+pub const BLUE: &str = "\x1b[94m";
+
+/// ANSI escape code for italics
+pub const ITALICS: &str = "\x1b[3m";
+
 /// ANSI escape code for yellow text
 pub const YELLOW: &str = "\x1b[33m";
 
