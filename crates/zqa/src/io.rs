@@ -1,11 +1,15 @@
 //! I/O primitives for working with the agent in `zqa`.
 
 use std::fmt::Display;
+use std::io::{self, Write};
 
 use tokio::sync::oneshot;
 
+use crate::common::Context;
 use crate::state::UsageMetadata;
-use crate::utils::terminal::{BLUE, DIM_TEXT, ITALICS, RED, RESET, YELLOW};
+use crate::utils::terminal::{
+    BLUE, DIM_TEXT, ITALICS, RED, RESET, YELLOW, read_char, read_line, read_number, read_password,
+};
 
 /// An enum of events that can be emitted by handlers called by
 /// [`crate::cli::app::dispatch_command`]. The contract here is that *every* event, including status
@@ -25,6 +29,9 @@ use crate::utils::terminal::{BLUE, DIM_TEXT, ITALICS, RED, RESET, YELLOW};
 /// (if any), but does not handle input. For multiple-choice questions, this presents the user with
 /// numbered options starting from 1. In all cases with options, we follow general CLI standards of
 /// presenting the default within [square brackets] and other options in (parentheses).
+///
+/// The struct has a `handle_event` function that uses the `Display` impl, handles input, and sends
+/// the user response via the channel.
 ///
 /// * [`EngineEvent::Text`] is rendered as-is.
 /// * [`EngineEvent::ToolCall`] is rendered in a dimmed text with the tool name followed by
@@ -117,6 +124,60 @@ pub enum EngineEvent {
     /// An update on token usage. This is not an aggregate and consumers are responsible for
     /// accumulating these. Ignored by the `Display` implementation.
     TokenUsage { usage: UsageMetadata },
+}
+
+impl EngineEvent {
+    /// Handle an event in the CLI. As described in the docs for the struct, this first uses the
+    /// struct's `Display` impl, and then handles input.
+    pub(crate) fn handle_event<O, E>(mut self, ctx: &mut Context<O, E>) -> Result<(), io::Error>
+    where
+        O: Write,
+        E: Write,
+    {
+        // First, use the `Display` impl
+        match self {
+            // Include `RecoverableWarning` so that if the `Display` impl changes, we don't need to
+            // change it here as well
+            EngineEvent::RecoverableWarning { .. }
+            | EngineEvent::Warning { .. }
+            | EngineEvent::Error { .. } => {
+                write!(&mut ctx.err, "{}", self.to_string())?;
+            }
+            _ => write!(&mut ctx.out, "{}", self.to_string())?,
+        }
+
+        // Handle input and send the result using the channel
+        match self {
+            EngineEvent::Confirm { default, reply, .. } => {
+                let option = read_char(
+                    &mut io::stdin().lock(),
+                    if default { 'y' } else { 'n' },
+                    &['y', 'n'],
+                );
+                let _ = reply.send(option == 'y');
+            }
+            EngineEvent::Choose {
+                options,
+                reply,
+                default,
+                ..
+            } => {
+                let opt_idx =
+                    read_number(&mut io::stdin().lock(), default + 1, (1, options.len() + 1)) - 1;
+                let _ = reply.send(opt_idx);
+            }
+            EngineEvent::Line { reply, .. } => {
+                let _ = reply.send(read_line(&mut io::stdin().lock()));
+            }
+            EngineEvent::Secret { reply, .. } => {
+                let _ =
+                    reply.send(read_password(&mut io::stdin().lock(), true).unwrap_or_default());
+            }
+            _ => {}
+        }
+
+        Ok(())
+    }
 }
 
 impl Display for EngineEvent {
