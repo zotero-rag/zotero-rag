@@ -23,7 +23,6 @@ use common::{Args, Context, setup_logger};
 use config::Config;
 use state::{check_or_create_first_run_file, oobe};
 pub use store::lance::LanceZoteroStore;
-use tokio::sync::mpsc;
 pub use utils::arrow::full_library_to_arrow;
 use zqa_rag::config::LLMClientConfig;
 use zqa_rag::embedding::common::EmbeddingProviderConfig;
@@ -241,10 +240,9 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let store = LanceZoteroStore::from_config(&config)?;
-    let (tx, rx) = mpsc::channel(256);
     let context = Context {
         state: State::default(),
-        event_tx: Some(tx),
+        event_tx: None,
         config,
         store,
         path_options: PathOptions::default(),
@@ -253,6 +251,6 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         err: stderr(),
     };
 
-    cli(context, rx).await?;
+    cli(context).await?;
     Ok(())
 }
