@@ -153,17 +153,16 @@ impl EngineEvent {
     /// * Returns `UnexpectedEof` when input ends before a confirmation, choice, or line reply.
     /// * Propagates read, write, flush, and secret-reader errors. The reply sender is dropped.
     ///
-    /// # Examples
+    /// # Example
     ///
     /// ```
     /// use zqa::io::EngineEvent;
     ///
-    /// let (reply, mut answer) = tokio::sync::oneshot::channel();
-    /// EngineEvent::Confirm { message: "Continue?".into(), default: true, reply }
+    /// let (reply_tx, mut answer_rx) = tokio::sync::oneshot::channel();
+    /// EngineEvent::Confirm { message: "Continue?".into(), default: true, reply: reply_tx }
     ///     .handle_event(&mut &b"\n"[..], &mut Vec::new(), &mut Vec::new(),
     ///         rpassword::read_password)?;
-    /// assert!(answer.try_recv().unwrap());
-    /// # Ok::<(), std::io::Error>(())
+    /// assert!(answer_rx.try_recv().unwrap());
     /// ```
     pub fn handle_event<R, O, E>(
         mut self,
@@ -177,18 +176,16 @@ impl EngineEvent {
         O: Write + ?Sized,
         E: Write + ?Sized,
     {
-        if let Self::Choose {
-            options, default, ..
-        } = &mut self
+        if let Self::Choose { options, .. } = &mut self
+            && options.len() == 0
         {
-            *default = choice_default(options.len(), *default).ok_or_else(|| {
-                io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    "A choice requires at least one option",
-                )
-            })?;
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "A choice requires at least one option",
+            ));
         }
 
+        // Use `Display` impl
         match self {
             Self::RecoverableWarning { .. } | Self::TokenUsage { .. } => return Ok(()),
             Self::Warning { .. } | Self::Error { .. } => {
@@ -201,6 +198,7 @@ impl EngineEvent {
             }
         }
 
+        // Handle input variants
         match self {
             Self::Confirm { default, reply, .. } => {
                 let answer = read_answer(input, out, "Enter y or n.\n> ", |line| {
@@ -244,17 +242,6 @@ impl EngineEvent {
             _ => {}
         }
         Ok(())
-    }
-}
-
-/// Resolve the displayed and accepted default, or reject an empty option list.
-fn choice_default(option_count: usize, default: usize) -> Option<usize> {
-    if option_count == 0 {
-        None
-    } else if default < option_count {
-        Some(default)
-    } else {
-        Some(0)
     }
 }
 
@@ -316,9 +303,11 @@ impl Display for EngineEvent {
                 ..
             } => {
                 write!(f, "{message}\n\n")?;
-                let Some(default) = choice_default(options.len(), *default) else {
+                if options.len() == 0 {
                     return writeln!(f, "(no options available)");
                 };
+
+                let default = (options.len() - 1).min(*default);
                 for (i, opt) in options.iter().enumerate() {
                     if i == default {
                         writeln!(f, "[{}] {opt}", i + 1)?;
