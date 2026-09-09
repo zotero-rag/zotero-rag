@@ -3,11 +3,7 @@ name = "zqa-gui"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.95"
-# GPL-3.0-or-later: the gpui stack statically links GPL-3.0-or-later crates
-# (`gpui-pre-zlog`, `gpui-pre-ztracing`, and its macro crate), so this crate and
-# any binary built from it are GPL-covered. The other workspace crates do not
-# link those and remain MIT.
-license = "GPL-3.0-or-later"
+license = "MIT"
 description = "Native GUI front-end for the zqa Zotero RAG QA system."
 
 [[bin]]
@@ -19,8 +15,6 @@ zqa = { path = "../zqa", version = "0.1" }
 zqa-rag = { workspace = true }
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros"] }
 futures = "0.3"
-
-# GPUI Kit pins and re-exports a mutually compatible GPUI, component library, and assets.
 gpui-kit = "0.6"
 serde_json = "1.0.151"
 

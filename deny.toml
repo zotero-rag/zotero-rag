@@ -90,17 +90,6 @@ allow = [
 ]
 confidence-threshold = 0.8
 
-# Per-crate license exceptions. GPUI Kit publishes the GPUI logging and tracing
-# crates under GPL-3.0-or-later. Because Rust statically links them, the distributed
-# zqa-gui binary is GPL-3.0-covered, and zqa-gui itself is licensed accordingly.
-# The other workspace crates do not link these and remain MIT/Apache-2.0.
-exceptions = [
-    { allow = ["GPL-3.0-or-later"], crate = "gpui-pre-zlog" },
-    { allow = ["GPL-3.0-or-later"], crate = "gpui-pre-ztracing" },
-    { allow = ["GPL-3.0-or-later"], crate = "gpui-pre-ztracing-macro" },
-    { allow = ["GPL-3.0-or-later"], crate = "zqa-gui" },        # links the three crates above
-]
-
 [bans]
 # Warn (not deny) on duplicate versions of the same crate. The datafusion /
 # lance / arrow stack legitimately pulls in many duplicates transitively, so
@@ -127,7 +116,6 @@ allow-wildcard-paths = true
 deny = [
     { crate = "anyhow", wrappers = [
         "prost-derive",
-        "gpui-kit",
         "gpui-base",
         "gpui-component",
         "gpui-pre",
@@ -136,10 +124,10 @@ deny = [
         "gpui-pre-linux",
         "gpui-pre-macos",
         "gpui-pre-media",
-        "gpui-pre-platform",
         "gpui-pre-util",
         "gpui-pre-wgpu",
         "gpui-pre-zlog",
+        "gpui-kit-assets"
     ], reason = "prefer thiserror for typed errors; anyhow only tolerated transitively via third-party deps we don't control" },
 ]
 
