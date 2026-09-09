@@ -9,10 +9,9 @@ timestamp: 2026-08-26T00:59:13-04:00
 # Purpose
 
 `zqa-gui` is a native desktop front-end for the RAG pipeline, built on
-[GPUI](https://gpui.rs) and `gpui-component`. It lives in the workspace as a
-separate, unpublished crate rather than a feature of `zqa`, because `gpui` is
-a git-only dependency and crates.io rejects git dependencies. Keeping the GUI
-separate lets [the CLI crate](/cli.md) stay publishable.
+[GPUI Kit](https://gpui-kit.com/). It lives in the workspace as a separate crate
+rather than a feature of `zqa`. GPUI Kit provides a single crates.io dependency
+that pins and re-exports compatible GPUI, component, and asset crates.
 
 Unlike the rest of the workspace, `zqa-gui` is licensed GPL-3.0-or-later.
 

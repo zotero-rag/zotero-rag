@@ -1,11 +1,9 @@
 # zqa-gui
 
-A native GUI front-end for `zqa`, built on [GPUI](https://gpui.rs) and
-[gpui-component](https://github.com/longbridge/gpui-component).
+A native GUI front-end for `zqa`, built on [GPUI Kit](https://gpui-kit.com/).
 
-This is a separate, **unpublished** workspace crate rather than a feature of `zqa`, because
-`gpui` is a git-only dependency and crates.io rejects git dependencies (even optional ones).
-Keeping the GUI here lets `zqa` itself stay publishable.
+This is a separate workspace crate rather than a feature of `zqa`. GPUI Kit provides a
+single crates.io dependency that pins and re-exports compatible GPUI, component, and asset crates.
 
 ## Running
 
@@ -33,8 +31,7 @@ This mirrors what CI installs (see `.github/workflows/rust-checks.yml`).
 
 ## Notes
 
-- The `gpui`, `gpui_platform`, and `gpui-component` dependencies are unpinned git deps; exact
-  commits are recorded in the workspace `Cargo.lock`.
+- The `gpui-kit` dependency pins a mutually compatible GPUI, component, and asset stack.
 - GPUI's dependency graph is large, so the first build is slow. If you use `sccache` as a
   `RUSTC_WRAPPER`, make sure `SCCACHE_DIR`/`TMPDIR` point at stable locations, otherwise
   GPUI's build can fail while creating temp files.

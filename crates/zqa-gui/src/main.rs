@@ -1,4 +1,4 @@
-//! Native GUI front-end for zqa, built on GPUI / gpui-component.
+//! Native GUI front-end for zqa, built on GPUI Kit.
 //!
 //! The window is a chat-style harness over the same engine the CLI drives:
 //! [`bridge`] runs the tokio-based pipeline on a dedicated thread and streams output
@@ -17,20 +17,20 @@ use std::sync::Arc;
 use bridge::{EngineCommand, UiEvent, spawn_engine};
 use futures::StreamExt;
 use futures::channel::mpsc::UnboundedReceiver;
-use gpui::prelude::*;
-use gpui::{
+use gpui_kit::assets::Assets;
+use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::input::{InputEvent, Textarea, TextareaState};
+use gpui_kit::component::spinner::Spinner;
+use gpui_kit::component::{
+    ActiveTheme as _, Icon, IconName, InteractiveElementExt as _, Root, Sizable as _,
+    TITLE_BAR_HEIGHT, Theme, ThemeMode, TitleBar, h_flex, v_flex,
+};
+use gpui_kit::prelude::*;
+use gpui_kit::{
     AnyElement, App, Context, Decorations, Div, Entity, Focusable as _, FontWeight, IntoElement,
     MouseButton, Pixels, Rems, Render, ScrollHandle, SharedString, Stateful, Subscription, Window,
     WindowBackgroundAppearance, WindowBounds, div, px, rems, size, transparent_black,
 };
-use gpui_component::button::{Button, ButtonVariants as _};
-use gpui_component::input::{InputEvent, Textarea, TextareaState};
-use gpui_component::spinner::Spinner;
-use gpui_component::{
-    ActiveTheme as _, Icon, IconName, InteractiveElementExt as _, Root, Sizable as _,
-    TITLE_BAR_HEIGHT, Theme, ThemeMode, TitleBar, h_flex, v_flex,
-};
-use gpui_component_assets::Assets;
 use serde_json::Value;
 use tokio::sync::mpsc::UnboundedSender;
 use zqa::state::SavedChatHistory;
@@ -1166,15 +1166,15 @@ fn main() {
     let (event_tx, event_rx) = futures::channel::mpsc::unbounded::<UiEvent>();
     spawn_engine(cmd_rx, cancel_rx, event_tx);
 
-    let app = gpui_platform::application().with_assets(Assets);
+    let app = gpui_kit::application().with_assets(Assets);
     app.run(move |cx: &mut App| {
-        gpui_component::init(cx);
+        gpui_kit::init(cx);
 
         // `init` always loads the light theme first; honor the OS appearance until the
         // user toggles it in-app. Must run after `init`, which overwrites the global.
         let dark_theme = matches!(
             cx.window_appearance(),
-            gpui::WindowAppearance::Dark | gpui::WindowAppearance::VibrantDark
+            gpui_kit::WindowAppearance::Dark | gpui_kit::WindowAppearance::VibrantDark
         );
         let mode = if dark_theme {
             ThemeMode::Dark
