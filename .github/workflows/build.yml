@@ -12,11 +12,15 @@ on:
     paths-ignore:
       - '**/*.md'
       - 'zqa/**'
+      - 'zqa-gui/**'
+      - 'wiki/**'
   pull_request:
     branches: [ "master" ]
     paths-ignore:
       - '**/*.md'
       - 'zqa/**'
+      - 'zqa-gui/**'
+      - 'wiki/**'
 
 env:
   CARGO_TERM_COLOR: always
