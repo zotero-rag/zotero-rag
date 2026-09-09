@@ -787,7 +787,7 @@ mod tests {
         "responseId": "_c6haqHRAvSc6dkPiuLhuQ4"
     }"#;
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn test_malformed_generation_retry_exhaustion() {
         dotenv().ok();
 
