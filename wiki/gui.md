@@ -13,8 +13,6 @@ timestamp: 2026-08-26T00:59:13-04:00
 rather than a feature of `zqa`. GPUI Kit provides a single crates.io dependency
 that pins and re-exports compatible GPUI, component, and asset crates.
 
-Unlike the rest of the workspace, `zqa-gui` is licensed GPL-3.0-or-later.
-
 # Architecture
 
 The window is a chat-style harness over the same engine the CLI drives. There
