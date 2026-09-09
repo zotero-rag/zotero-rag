@@ -236,7 +236,7 @@ To report a bug, please re-run using `--log-level debug` and add the logs to you
 
 **Does this support vim motions?** Yes, obviously. Set up your `.inputrc` accordingly (on macOS, the program will also respect `.editrc`, and this takes precedence over `.inputrc`, which acts as a fallback).
 
-**Will you make a GUI?** A GUI is currently a work-in-progress: see `crates/zqa-gui`. This is built on GPUI, so is GPL 3.0-licensed.
+**Will you make a GUI?** A GUI is currently a work-in-progress: see `crates/zqa-gui`.
 
 **I'm getting a 400 Forbidden!** Check that you set an API key in your `config.toml`, `.env`, or in your environment variables. Then, check that the API key has access to the API and is valid. Finally, check that your account has credits loaded.
 
@@ -246,4 +246,4 @@ To report a bug, please re-run using `--log-level debug` and add the logs to you
 
 # License
 
-MIT License - See [LICENSE](LICENSE) for details. Exception: the `zqa-gui` crate is GPL-3.0-or-later because it statically links GPL-licensed crates from the Zed ecosystem (see `crates/zqa-gui/LICENSE` and `deny.toml`).
+MIT License - See [LICENSE](LICENSE) for details.
