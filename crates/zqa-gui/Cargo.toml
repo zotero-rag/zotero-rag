@@ -4,36 +4,24 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.95"
 # GPL-3.0-or-later: the gpui stack statically links GPL-3.0-or-later crates
-# (zlog, ztracing, ztracing_macro from zed-industries/zed), so this crate and
+# (`gpui-pre-zlog`, `gpui-pre-ztracing`, and its macro crate), so this crate and
 # any binary built from it are GPL-covered. The other workspace crates do not
 # link those and remain MIT.
 license = "GPL-3.0-or-later"
 description = "Native GUI front-end for the zqa Zotero RAG QA system."
-# Not publishable: gpui is a git-only dependency, which crates.io rejects. Keeping this
-# crate unpublished is what lets `zqa` itself stay publishable.
-publish = false
 
 [[bin]]
 name = "zqa-gui"
 path = "src/main.rs"
 
 [dependencies]
-zqa = { path = "../zqa" }
+zqa = { path = "../zqa", version = "0.1" }
 zqa-rag = { workspace = true }
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros"] }
 futures = "0.3"
 
-# gpui/gpui_platform track Zed's `main`; gpui-component tracks its own `main` against
-# that. They are intentionally left unpinned here so the first resolve records exact,
-# mutually compatible commits in Cargo.lock. Pin explicit `rev`s once the build is green.
-gpui = { git = "https://github.com/zed-industries/zed" }
-# `x11`/`wayland` select the Linux display backends and are required to build there; they are
-# target-gated inside gpui_platform, so enabling them unconditionally is safe on macOS (this
-# mirrors gpui-component's own workspace). Linux builds also need system libraries; see the
-# CI "Dependencies" steps and zqa-gui/README.md.
-gpui_platform = { git = "https://github.com/zed-industries/zed", features = ["font-kit", "x11", "wayland", "runtime_shaders"] }
-gpui-component = { git = "https://github.com/longbridge/gpui-component" }
-gpui-component-assets = { git = "https://github.com/longbridge/gpui-component" }
+# GPUI Kit pins and re-exports a mutually compatible GPUI, component library, and assets.
+gpui-kit = "0.6"
 serde_json = "1.0.151"
 
 [dev-dependencies]
