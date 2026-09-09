@@ -22,6 +22,14 @@ pub enum LLMError {
     /// A broad "other" error. This is also used for cases when we don't know what went wrong.
     #[error("Unknown error occurred: {0}")]
     GenericLLMError(String),
+    /// The provider accepted the request but could not generate a usable response.
+    #[error("{provider} generation failed: {finish_reason}")]
+    GenerationError {
+        /// The provider that reported the generation failure.
+        provider: &'static str,
+        /// The provider's reason for ending generation.
+        finish_reason: String,
+    },
     /// An unsuccessful HTTP response that is not a credential error or a timeout.
     #[error("Other HTTP status code error: {0}")]
     HttpStatusError(String),
