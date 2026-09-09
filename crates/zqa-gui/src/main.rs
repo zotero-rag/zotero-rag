@@ -28,8 +28,9 @@ use gpui_kit::component::{
 use gpui_kit::prelude::*;
 use gpui_kit::{
     AnyElement, App, Context, Decorations, Div, Entity, Focusable as _, FontWeight, IntoElement,
-    MouseButton, Pixels, Rems, Render, ScrollHandle, SharedString, Stateful, Subscription, Window,
-    WindowBackgroundAppearance, WindowBounds, div, px, rems, size, transparent_black,
+    KeyBinding, MouseButton, Pixels, Rems, Render, ScrollHandle, SharedString, Stateful,
+    Subscription, Window, WindowBackgroundAppearance, WindowBounds, actions, div, px, rems, size,
+    transparent_black,
 };
 use serde_json::Value;
 use tokio::sync::mpsc::UnboundedSender;
@@ -45,6 +46,9 @@ const TRAFFIC_LIGHT_INSET: Pixels = if cfg!(target_os = "macos") {
 };
 /// Width of the centered conversation column.
 const CONTENT_WIDTH: Rems = rems(46.);
+
+// Window actions
+actions!(window, [CloseWindow, QuitApp]);
 
 /// What a sidebar item does when clicked.
 #[derive(Clone)]
@@ -498,7 +502,7 @@ impl ZqaApp {
                     .gap_1()
                     .child(self.sidebar_item(
                         "sb-new",
-                        IconName::Plus,
+                        Some(IconName::Plus),
                         "New chat",
                         SidebarAction::Run("/new"),
                         false,
@@ -506,7 +510,7 @@ impl ZqaApp {
                     ))
                     .child(self.sidebar_item(
                         "sb-help",
-                        IconName::Info,
+                        Some(IconName::Info),
                         "Help",
                         SidebarAction::Run("/help"),
                         false,
@@ -526,7 +530,7 @@ impl ZqaApp {
             )
             .child(div().p_2().child(self.sidebar_item(
                 "sb-settings",
-                IconName::Settings,
+                Some(IconName::Settings),
                 "Settings",
                 SidebarAction::ToggleSettings,
                 self.pane == Pane::Settings,
@@ -582,7 +586,7 @@ impl ZqaApp {
     fn sidebar_item(
         &mut self,
         id: &'static str,
-        icon: IconName,
+        icon: Option<IconName>,
         label: &'static str,
         action: SidebarAction,
         selected: bool,
@@ -593,7 +597,7 @@ impl ZqaApp {
         let enabled =
             matches!(&action, SidebarAction::ToggleSettings) || self.phase.accepts_commands();
 
-        div()
+        let mut el = div()
             .id(id)
             .flex()
             .items_center()
@@ -609,19 +613,25 @@ impl ZqaApp {
             })
             .when(!enabled, |this| {
                 this.text_color(cx.theme().muted_foreground).opacity(0.6)
-            })
-            .child(
-                Icon::new(icon)
-                    .small()
-                    .text_color(cx.theme().muted_foreground),
-            )
-            .child(label)
-            .on_click(cx.listener(move |this, _, _, cx| {
-                if !enabled {
-                    return;
-                }
-                this.execute_sidebar_action(&action, cx);
-            }))
+            });
+
+        if let Some(icon) = icon {
+            el = el
+                .child(
+                    Icon::new(icon)
+                        .small()
+                        .text_color(cx.theme().muted_foreground),
+                )
+                .child(label)
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if !enabled {
+                        return;
+                    }
+                    this.execute_sidebar_action(&action, cx);
+                }))
+        }
+
+        el
     }
 
     /// Apply a sidebar action after its enabled state has been checked.
@@ -1148,6 +1158,12 @@ impl ZqaApp {
 impl Render for ZqaApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         h_flex()
+            .on_action(|_: &CloseWindow, window, _| {
+                window.remove_window();
+            })
+            .on_action(|_: &QuitApp, _window, cx: &mut App| {
+                cx.quit();
+            })
             .size_full()
             .text_color(cx.theme().foreground)
             .child(self.render_sidebar(window, cx))
@@ -1169,6 +1185,17 @@ fn main() {
     let app = gpui_kit::application().with_assets(Assets);
     app.run(move |cx: &mut App| {
         gpui_kit::init(cx);
+
+        cx.bind_keys([
+            KeyBinding::new("cmd-w", CloseWindow, None),
+            KeyBinding::new("cmd-q", QuitApp, None),
+        ]);
+        cx.on_window_closed(|cx, _window_id| {
+            if cx.windows().is_empty() {
+                cx.quit();
+            }
+        })
+        .detach();
 
         // `init` always loads the light theme first; honor the OS appearance until the
         // user toggles it in-app. Must run after `init`, which overwrites the global.
@@ -1199,6 +1226,7 @@ fn main() {
             cx.open_window(window_options, |window, cx| {
                 let view =
                     cx.new(|cx| ZqaApp::new(cmd_tx, cancel_tx, event_rx, dark_theme, window, cx));
+
                 // The root stays transparent so the sidebar can show the blur.
                 cx.new(|cx| Root::new(view, window, cx).bg(transparent_black()))
             })
