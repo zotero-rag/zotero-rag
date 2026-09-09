@@ -3,7 +3,9 @@ use std::io::Write;
 use std::path::Path;
 use std::sync::Arc;
 
+use rpassword::read_password;
 use rustyline::error::ReadlineError;
+use tokio::sync::mpsc;
 
 use crate::cli::commands::{Command, parse_command};
 use crate::cli::errors::CLIError;
@@ -21,6 +23,7 @@ use crate::cli::handlers::query::{handle_query_cmd, handle_search_cmd};
 use crate::cli::placeholder::PlaceholderText;
 use crate::cli::readline::get_readline_config;
 use crate::common::Context;
+use crate::io::EngineEvent;
 use crate::state::get_state_dir;
 
 /// A file that contains parsed PDF texts from the user's Zotero library. In case the
@@ -79,6 +82,7 @@ pub(crate) async fn dispatch_command<O: Write, E: Write>(
 ///
 /// * `ctx` - A `Context` object that contains CLI args and objects that implement
 ///   [`std::io::Write`] for `stdout` and `stderr`.
+/// * `rx` - A channel that receives `EngineEvent`s.
 ///
 /// # Errors
 ///
@@ -87,7 +91,10 @@ pub(crate) async fn dispatch_command<O: Write, E: Write>(
 /// * `CLIError::IOError` - If `writeln!` fails.
 /// * `CLIError::StateDirError` - If the state dir could not be obtained.
 #[allow(clippy::needless_continue)]
-pub(crate) async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<(), CLIError> {
+pub(crate) async fn cli<O: Write, E: Write>(
+    mut ctx: Context<O, E>,
+    mut rx: mpsc::Receiver<EngineEvent>,
+) -> Result<(), CLIError> {
     // At startup, we should check if there are pending embedding batches and notify the user if so.
     // [`crate::cli::handlers::batch`] has more details about the semantics of interacting with
     // batch APIs. We don't do the check itself since we have two bad options:
@@ -152,15 +159,30 @@ pub(crate) async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<()
                     log::debug!("Failed to write history entry: {e}");
                 }
 
-                match dispatch_command(&command, &mut ctx).await {
-                    Ok(true) => {}
-                    Ok(false) => break,
-                    Err(CLIError::CommandError(ref e)) => {
-                        if let Err(write_err) = writeln!(&mut ctx.err, "Error: {e}") {
-                            log::error!("Failed to write to stderr: {write_err}");
+                let continue_loop = {
+                    let dispatch = dispatch_command(&command, &mut ctx);
+                    tokio::pin!(dispatch);
+
+                    loop {
+                        tokio::select! {
+                            result = &mut dispatch => break result,
+                            Some(event) = rx.recv() => {
+                                event.handle_event(&mut ctx.input, &mut ctx.out, &mut ctx.err, read_password)?
+                            }
                         }
                     }
-                    Err(e) => return Err(e),
+                };
+
+                while let Ok(event) = rx.try_recv() {
+                    event.handle_event(&mut ctx.input, &mut ctx.out, &mut ctx.err, read_password)?
+                }
+
+                match continue_loop {
+                    Err(ref e) => {
+                        write!(&mut ctx.err, "{e}")?;
+                    }
+                    Ok(false) => break,
+                    _ => {}
                 }
             }
             Err(ReadlineError::Signal(rustyline::error::Signal::Resize)) => {
