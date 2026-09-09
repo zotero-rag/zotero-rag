@@ -13,7 +13,7 @@ The Cargo workspace contains six crates, all under `crates/`:
 | Crate | Role |
 | --- | --- |
 | `zqa` | Command-line application. |
-| `zqa-gui` | Native GPUI desktop front-end (unpublished, GPL-3.0-or-later). |
+| `zqa-gui` | Native GPUI desktop front-end (unpublished). |
 | `zqa-rag` | RAG, provider, and vector-storage library. |
 | `zqa-pdftools` | PDF parsing and text-extraction library. |
 | `zqa-macros` | Declarative macro crate. |
