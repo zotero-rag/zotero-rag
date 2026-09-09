@@ -1,7 +1,7 @@
 //! Functions, structs, and trait implementations for interacting with the Gemini API. This module
 //! includes support for both text generation and embedding, and tool calling is supported.
 
-use std::env;
+use std::{env, time::Duration};
 
 use reqwest::header::HeaderMap;
 use serde::{Deserialize, Serialize};
@@ -9,7 +9,9 @@ use serde::{Deserialize, Serialize};
 use super::base::ChatRequest;
 use super::errors::LLMError;
 use crate::clients::gemini::{GeminiClient, get_gemini_api_key};
-use crate::constants::{DEFAULT_GEMINI_MODEL, DEFAULT_GEMINI_REASONING_BUDGET};
+use crate::constants::{
+    DEFAULT_GEMINI_MODEL, DEFAULT_GEMINI_REASONING_BUDGET, DEFAULT_MAX_RETRIES,
+};
 use crate::http_client::HttpClient;
 use crate::llm::base::{
     AgenticClient, ChatHistoryContent, ChatHistoryItem, EFFORT_TO_TOKENS, MessageRole,
@@ -310,6 +312,7 @@ struct GeminiUsageMetadata {
     tool_use_prompt_token_count: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     thoughts_token_count: Option<u32>,
+    #[serde(default)]
     candidates_token_count: u32,
     total_token_count: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -331,11 +334,19 @@ impl From<GeminiUsageMetadata> for ModelUsage {
     }
 }
 
+/// Response content can be empty or absent when generation fails.
+#[derive(Default, Serialize, Deserialize, Clone)]
+struct GeminiResponseContent {
+    #[serde(default)]
+    parts: Vec<GeminiPart>,
+}
+
 /// One of several response candidates.
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct GeminiResponseCandidate {
-    content: GeminiContent,
+    #[serde(default)]
+    content: GeminiResponseContent,
     finish_reason: String,
 }
 
@@ -438,29 +449,48 @@ impl<T: HttpClient> AgenticClient for GeminiClient<T> {
             tools: tools.as_ref(),
         };
 
-        let response: GeminiResponseBody = send_generation_request(
-            &self.client,
-            request,
-            &headers,
-            &format!(
-                "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
-            ),
-        )
-        .await?;
+        let url = format!(
+            "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+        );
+        let mut usage = ModelUsage::default();
+        let mut attempt = 0;
+        loop {
+            let response: GeminiResponseBody =
+                send_generation_request(&self.client, &request, &headers, &url).await?;
+            usage += response.usage_metadata.into();
 
-        let first_candidate = response
-            .candidates
-            .first()
-            .ok_or_else(|| LLMError::GenericLLMError("No candidates in Gemini response".into()))?;
+            let first_candidate = response.candidates.into_iter().next().ok_or_else(|| {
+                LLMError::GenericLLMError("No candidates in Gemini response".into())
+            })?;
+            let finish_reason = first_candidate.finish_reason;
+            if matches!(
+                finish_reason.as_str(),
+                "MALFORMED_RESPONSE" | "MALFORMED_FUNCTION_CALL"
+            ) && attempt < DEFAULT_MAX_RETRIES
+            {
+                log::warn!("Gemini returned {finish_reason}; retrying generation");
+                // Retry this turn before executing tools or modifying the conversation history.
+                tokio::time::sleep(Duration::from_secs(1 << attempt)).await;
+                attempt += 1;
+                continue;
+            }
+            let parts = first_candidate.content.parts;
+            if !matches!(finish_reason.as_str(), "STOP" | "MAX_TOKENS") || parts.is_empty() {
+                return Err(LLMError::GenerationError {
+                    provider: "Gemini",
+                    finish_reason,
+                });
+            }
 
-        Ok(ProviderTurn {
-            contents: map_response_to_chat_contents(&first_candidate.content.parts),
-            native_items: vec![GeminiContent {
-                role: GeminiMessageRole::Model,
-                parts: first_candidate.content.parts.clone(),
-            }],
-            usage: response.usage_metadata.into(),
-        })
+            return Ok(ProviderTurn {
+                contents: map_response_to_chat_contents(&parts),
+                native_items: vec![GeminiContent {
+                    role: GeminiMessageRole::Model,
+                    parts,
+                }],
+                usage,
+            });
+        }
     }
 }
 
@@ -577,15 +607,14 @@ mod tests {
 
         let mock_response = GeminiResponseBody {
             candidates: vec![GeminiResponseCandidate {
-                content: GeminiContent {
-                    role: GeminiMessageRole::Model,
+                content: GeminiResponseContent {
                     parts: vec![GeminiPart::Text {
                         text: "Hello from Gemini!".into(),
                         thought: None,
                         thought_signature: None,
                     }],
                 },
-                finish_reason: "stop".into(),
+                finish_reason: "STOP".into(),
             }],
             usage_metadata: GeminiUsageMetadata {
                 prompt_token_count: 7,
@@ -738,59 +767,110 @@ mod tests {
         let res = client.send_message(&request).await;
 
         test_ok!(res);
+        assert!(*call_count.lock().unwrap() > 0, "expected mock_tool to run");
+    }
+
+    const MALFORMED_RESPONSE: &str = r#"{
+        "candidates": [{
+            "content": {},
+            "finishReason": "MALFORMED_RESPONSE",
+            "index": 0
+        }],
+        "usageMetadata": {
+            "promptTokenCount": 121,
+            "totalTokenCount": 224,
+            "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 121}],
+            "thoughtsTokenCount": 103,
+            "serviceTier": "standard"
+        },
+        "modelVersion": "gemini-3.1-pro-preview",
+        "responseId": "_c6haqHRAvSc6dkPiuLhuQ4"
+    }"#;
+
+    #[tokio::test]
+    async fn test_malformed_generation_retry_exhaustion() {
+        dotenv().ok();
+
+        for finish_reason in ["MALFORMED_RESPONSE", "MALFORMED_FUNCTION_CALL"] {
+            let mut response: serde_json::Value = serde_json::from_str(MALFORMED_RESPONSE).unwrap();
+            response["candidates"][0]["finishReason"] = finish_reason.into();
+            let http_client = RecordingSequentialMockHttpClient::new(std::iter::repeat_n(
+                response,
+                DEFAULT_MAX_RETRIES + 1,
+            ));
+            let client = GeminiClient {
+                client: http_client.clone(),
+                config: None,
+            };
+
+            let result = client.send_message(&ChatRequest::default()).await;
+
+            assert!(matches!(
+                result,
+                Err(LLMError::GenerationError { provider: "Gemini", finish_reason: reason })
+                    if reason == finish_reason
+            ));
+            let requests = http_client.requests();
+            test_eq!(requests.len(), DEFAULT_MAX_RETRIES + 1);
+            assert!(requests.iter().all(|request| request == &requests[0]));
+        }
     }
 
     #[tokio::test]
-    async fn test_callbacks_fire() {
+    async fn test_empty_generation_is_not_success_or_retried() {
         dotenv().ok();
 
-        let tool_call_response = GeminiResponseBody {
-            candidates: vec![GeminiResponseCandidate {
-                content: GeminiContent {
-                    role: GeminiMessageRole::Model,
-                    parts: vec![GeminiPart::FunctionCall {
-                        function_call: GeminiFunctionCall {
-                            id: Some("call-1".into()),
-                            name: "mock_tool".into(),
-                            args: serde_json::json!({"name": "Alice"}),
-                        },
-                        thought_signature: None,
-                    }],
-                },
-                finish_reason: "STOP".into(),
+        for finish_reason in ["SAFETY", "STOP", "MAX_TOKENS"] {
+            let mut response: serde_json::Value = serde_json::from_str(MALFORMED_RESPONSE).unwrap();
+            response["candidates"][0]["finishReason"] = finish_reason.into();
+            response["candidates"][0]
+                .as_object_mut()
+                .unwrap()
+                .remove("content");
+            let http_client = RecordingSequentialMockHttpClient::new([response]);
+            let client = GeminiClient {
+                client: http_client.clone(),
+                config: None,
+            };
+
+            let result = client.send_message(&ChatRequest::default()).await;
+
+            assert!(matches!(
+                result,
+                Err(LLMError::GenerationError { provider: "Gemini", finish_reason: reason })
+                    if reason == finish_reason
+            ));
+            test_eq!(http_client.requests().len(), 1);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_callbacks_fire_once_across_generation_retries() {
+        dotenv().ok();
+
+        let tool_call_response = serde_json::json!({
+            "candidates": [{
+                "content": {"role": "model", "parts": [{
+                    "functionCall": {
+                        "id": "call-1", "name": "mock_tool", "args": {"name": "Alice"}
+                    },
+                    "thoughtSignature": "test-signature"
+                }]},
+                "finishReason": "STOP"
             }],
-            usage_metadata: GeminiUsageMetadata {
-                prompt_token_count: 10,
-                candidates_token_count: 5,
-                total_token_count: 15,
-                thoughts_token_count: None,
-                prompt_tokens_details: None,
-                cached_content_token_count: Some(0),
-                tool_use_prompt_token_count: Some(0),
-            },
-        };
-        let text_response = GeminiResponseBody {
-            candidates: vec![GeminiResponseCandidate {
-                content: GeminiContent {
-                    role: GeminiMessageRole::Model,
-                    parts: vec![GeminiPart::Text {
-                        text: "Done!".into(),
-                        thought: None,
-                        thought_signature: None,
-                    }],
-                },
-                finish_reason: "STOP".into(),
+            "usageMetadata": {
+                "promptTokenCount": 10, "candidatesTokenCount": 5, "totalTokenCount": 15
+            }
+        });
+        let text_response = serde_json::json!({
+            "candidates": [{
+                "content": {"role": "model", "parts": [{"text": "Done!"}]},
+                "finishReason": "STOP"
             }],
-            usage_metadata: GeminiUsageMetadata {
-                prompt_token_count: 20,
-                candidates_token_count: 8,
-                total_token_count: 28,
-                thoughts_token_count: None,
-                prompt_tokens_details: None,
-                cached_content_token_count: Some(0),
-                tool_use_prompt_token_count: None,
-            },
-        };
+            "usageMetadata": {
+                "promptTokenCount": 20, "candidatesTokenCount": 8, "totalTokenCount": 28
+            }
+        });
 
         let call_count = Arc::new(Mutex::new(0_usize));
         let tool = MockTool {
@@ -818,14 +898,34 @@ mod tests {
             tool_iteration_limit: None,
         };
 
-        let http_client =
-            RecordingSequentialMockHttpClient::new([tool_call_response, text_response]);
+        let malformed_response: serde_json::Value =
+            serde_json::from_str(MALFORMED_RESPONSE).unwrap();
+        let http_client = RecordingSequentialMockHttpClient::new([
+            malformed_response.clone(),
+            tool_call_response,
+            malformed_response,
+            text_response,
+        ]);
         let mock_client = GeminiClient {
             client: http_client.clone(),
             config: None,
         };
         let res = mock_client.send_message(&request).await;
         test_ok!(res);
+
+        let usage = res.unwrap().usage;
+        test_eq!(usage.input_tokens, 10 + 20 + 2 * 121);
+        test_eq!(usage.output_tokens, 5 + 8);
+        test_eq!(usage.reasoning_tokens, 2 * 103);
+        test_eq!(*call_count.lock().unwrap(), 1_usize);
+        let requests = http_client.requests();
+        test_eq!(requests.len(), 4);
+        test_eq!(&requests[0], &requests[1]);
+        test_eq!(&requests[2], &requests[3]);
+        test_eq!(
+            &requests[2]["contents"][1]["parts"][0]["thoughtSignature"],
+            "test-signature"
+        );
 
         test_eq!(*tool_call_count.lock().unwrap(), 1_usize);
         let texts = text_segments.lock().unwrap();
