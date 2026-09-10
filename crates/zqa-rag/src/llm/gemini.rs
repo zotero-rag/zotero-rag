@@ -1,7 +1,8 @@
 //! Functions, structs, and trait implementations for interacting with the Gemini API. This module
 //! includes support for both text generation and embedding, and tool calling is supported.
 
-use std::{env, time::Duration};
+use std::env;
+use std::time::Duration;
 
 use reqwest::header::HeaderMap;
 use serde::{Deserialize, Serialize};
