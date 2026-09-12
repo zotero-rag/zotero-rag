@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Instant;
 
 use schemars::{JsonSchema, schema_for};
 use serde::Deserialize;
@@ -115,8 +116,16 @@ where
             embedding_tokens.fetch_add(stats.embedding_tokens as u64, Ordering::Relaxed);
             rerank_tokens.fetch_add(stats.rerank_tokens as u64, Ordering::Relaxed);
 
-            get_authors(&mut results, library_path.as_deref())
-                .map_err(|e| format!("Failed to get authors: {e}"))?;
+            let author_lookup_start = Instant::now();
+            let author_result = get_authors(&mut results, library_path.as_deref());
+            log::debug!(
+                "Zotero author lookup took {:.1?}",
+                author_lookup_start.elapsed()
+            );
+            author_result.map_err(|e| {
+                log::warn!("Failed to get authors: {e}");
+                format!("Failed to get authors: {e}")
+            })?;
 
             let tool_results = results
                 .iter()
