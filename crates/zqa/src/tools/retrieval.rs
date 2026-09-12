@@ -119,7 +119,7 @@ where
             let author_lookup_start = Instant::now();
             let author_result = get_authors(&mut results, library_path.as_deref());
             log::debug!(
-                "Zotero author lookup took {:.1?}",
+                "Zotero author lookup took {:.2?}",
                 author_lookup_start.elapsed()
             );
             author_result.map_err(|e| {
