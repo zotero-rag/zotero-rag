@@ -144,6 +144,7 @@ mod tests {
             tools: None,
             on_tool_call: None,
             on_text: None,
+            on_reasoning: None,
             tool_iteration_limit: None,
         };
 
@@ -177,6 +178,7 @@ mod tests {
             tools: Some(&[Box::new(tool)]),
             on_tool_call: None,
             on_text: None,
+            on_reasoning: None,
             tool_iteration_limit: None,
         };
 
@@ -315,6 +317,7 @@ mod tests {
             on_text: Some(Arc::new(move |s| {
                 text_segments_cb.lock().unwrap().push(s.to_string());
             })),
+            on_reasoning: None,
             tool_iteration_limit: None,
         };
 

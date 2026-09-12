@@ -224,6 +224,9 @@ pub struct ChatRequest<'a> {
     pub on_tool_call: Option<Arc<CallbackFn<ToolUseStats>>>,
     /// Optional callback invoked each time a text chunk is produced.
     pub on_text: Option<Arc<CallbackFn<str>>>,
+    /// Optional callback invoked for each reasoning summary or thinking block, in response order
+    /// relative to text and tool callbacks. Reasoning is not passed to `on_text`.
+    pub on_reasoning: Option<Arc<CallbackFn<str>>>,
     /// Optional limit on the number of tool call iterations per user message.
     pub tool_iteration_limit: Option<usize>,
 }
@@ -373,6 +376,7 @@ where
                 },
                 request.on_tool_call.as_ref(),
                 request.on_text.as_ref(),
+                request.on_reasoning.as_ref(),
             )
             .await;
 
@@ -640,6 +644,97 @@ mod tests {
                 && text == "done"
         ));
         assert_eq!(response.history_additions, expected_history_additions());
+    }
+
+    /// Reasoning, text, and tool callbacks follow provider content order across turns.
+    #[tokio::test]
+    async fn send_message_delivers_reasoning_in_callback_order() {
+        let client = TestClient {
+            turns: Mutex::new(VecDeque::from([
+                ProviderTurn {
+                    native_items: Vec::new(),
+                    contents: vec![
+                        ChatHistoryContent::Reasoning("Check the source.".into()),
+                        ChatHistoryContent::Text("Looking it up.".into()),
+                        tool_call_request("call-1", "Alice"),
+                    ],
+                    usage: ModelUsage::default(),
+                },
+                ProviderTurn {
+                    native_items: Vec::new(),
+                    contents: vec![
+                        ChatHistoryContent::Reasoning("The source agrees.".into()),
+                        ChatHistoryContent::Text("Done.".into()),
+                    ],
+                    usage: ModelUsage::default(),
+                },
+            ])),
+            system_prompts_seen: Arc::default(),
+            tools_seen: Arc::default(),
+        };
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let texts = Arc::clone(&events);
+        let reasoning = Arc::clone(&events);
+        let tool_calls = Arc::clone(&events);
+        let request = ChatRequest {
+            tools: Some(&[Box::new(MockTool {
+                call_count: Arc::default(),
+            })]),
+            on_text: Some(Arc::new(move |text| {
+                texts.lock().unwrap().push(format!("text: {text}"));
+            })),
+            on_reasoning: Some(Arc::new(move |text| {
+                reasoning.lock().unwrap().push(format!("reasoning: {text}"));
+            })),
+            on_tool_call: Some(Arc::new(move |stats| {
+                tool_calls
+                    .lock()
+                    .unwrap()
+                    .push(format!("tool: {}", stats.tool_name));
+            })),
+            ..ChatRequest::default()
+        };
+
+        client.send_message(&request).await.unwrap();
+
+        assert_eq!(
+            *events.lock().unwrap(),
+            [
+                "reasoning: Check the source.",
+                "text: Looking it up.",
+                "tool: mock_tool",
+                "reasoning: The source agrees.",
+                "text: Done.",
+            ]
+        );
+    }
+
+    /// Text-only responses must not invoke the reasoning callback.
+    #[tokio::test]
+    async fn send_message_without_reasoning_only_calls_on_text() {
+        let client = TestClient {
+            turns: Mutex::new(VecDeque::from([ProviderTurn {
+                native_items: Vec::new(),
+                contents: vec![ChatHistoryContent::Text("done".into())],
+                usage: ModelUsage::default(),
+            }])),
+            system_prompts_seen: Arc::default(),
+            tools_seen: Arc::default(),
+        };
+        let text_segments = Arc::new(Mutex::new(Vec::new()));
+        let request = ChatRequest {
+            on_text: Some(Arc::new({
+                let text_segments = Arc::clone(&text_segments);
+                move |text| text_segments.lock().unwrap().push(text.to_string())
+            })),
+            on_reasoning: Some(Arc::new(|_| panic!("unexpected reasoning callback"))),
+            ..ChatRequest::default()
+        };
+
+        let response = client.send_message(&request).await.unwrap();
+
+        assert_eq!(*text_segments.lock().unwrap(), ["done"]);
+        assert_eq!(response.content, [ContentType::Text("done".into())]);
     }
 
     #[test]

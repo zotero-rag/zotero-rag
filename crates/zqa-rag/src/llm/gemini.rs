@@ -368,7 +368,7 @@ fn map_response_to_chat_contents(contents: &[GeminiPart]) -> Vec<ChatHistoryCont
         match c {
             GeminiPart::Text{text, thought, ..} => {
                 if *thought == Some(true) {
-                    Some(ChatHistoryContent::Reasoning(text.clone()))
+                    (!text.is_empty()).then(|| ChatHistoryContent::Reasoning(text.clone()))
                 } else {
                     Some(ChatHistoryContent::Text(text.clone()))
                 }
@@ -511,6 +511,30 @@ mod tests {
     use crate::llm::base::{AgenticClient, ChatHistoryItem, ChatRequest, ContentType};
     use crate::llm::tools::test_utils::MockTool;
 
+    /// Empty thoughts produce no display block, while other text retains its content and order.
+    #[test]
+    fn empty_thoughts_are_omitted_from_display() {
+        let parts: Vec<GeminiPart> = serde_json::from_value(serde_json::json!([
+            {"text": "", "thought": true, "thoughtSignature": "opaque"},
+            {"text": "Check the sources.\nThey agree.", "thought": true},
+            {"text": "The answer.", "thought": false},
+            {"text": "More detail."},
+            {"text": ""}
+        ]))
+        .unwrap();
+
+        assert!(map_response_to_chat_contents(&parts[..1]).is_empty());
+        assert_eq!(
+            map_response_to_chat_contents(&parts),
+            [
+                ChatHistoryContent::Reasoning("Check the sources.\nThey agree.".into()),
+                ChatHistoryContent::Text("The answer.".into()),
+                ChatHistoryContent::Text("More detail.".into()),
+                ChatHistoryContent::Text(String::new()),
+            ]
+        );
+    }
+
     #[test]
     fn test_uses_thinking_level() {
         test_eq!(uses_thinking_level("gemini-3-pro-preview"), true);
@@ -646,6 +670,7 @@ mod tests {
             tools: None,
             on_tool_call: None,
             on_text: None,
+            on_reasoning: None,
             tool_iteration_limit: None,
         };
         let res = client.send_message(&request).await;
@@ -737,6 +762,7 @@ mod tests {
             tools: None,
             on_tool_call: None,
             on_text: None,
+            on_reasoning: None,
             tool_iteration_limit: None,
         };
         let res = client.send_message(&request).await;
@@ -761,6 +787,7 @@ mod tests {
             tools: Some(&[Box::new(tool)]),
             on_tool_call: None,
             on_text: None,
+            on_reasoning: None,
             tool_iteration_limit: None,
         };
 
@@ -894,6 +921,7 @@ mod tests {
             on_text: Some(Arc::new(move |s| {
                 text_segments_cb.lock().unwrap().push(s.to_string());
             })),
+            on_reasoning: None,
             tool_iteration_limit: None,
         };
 

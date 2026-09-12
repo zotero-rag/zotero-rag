@@ -38,6 +38,7 @@ async fn run_extraction_test(client: zqa_rag::llm::factory::LLMClient, provider_
         tools: None,
         on_tool_call: None,
         on_text: None,
+        on_reasoning: None,
         tool_iteration_limit: None,
     };
 

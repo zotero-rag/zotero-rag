@@ -29,6 +29,38 @@ use crate::tools::summarization::SummarizationTool;
 use crate::utils::rag::ModelResponse;
 use crate::utils::terminal::{DIM_TEXT, RESET};
 
+/// Reasoning and answer segments share one queue to preserve the provider's content order.
+enum ResponseSegment {
+    Text(String),
+    Reasoning(String),
+}
+
+impl ResponseSegment {
+    /// Write answer text to stdout and dimmed reasoning to stderr.
+    ///
+    /// The GUI maps stdout to answer rows and stderr to muted status rows. Routing reasoning to
+    /// stderr reuses that styling and keeps reasoning out of stdout captures. The tradeoff is that
+    /// reasoning shares diagnostic output and is hidden when stderr is discarded.
+    ///
+    /// TODO: Move to typed output events so the GUI can render reasoning rows directly and the CLI
+    /// can print reasoning dimmed to stdout, with diagnostics on stderr.
+    ///
+    /// # Arguments
+    ///
+    /// * `out` - The answer output stream.
+    /// * `err` - The diagnostic output stream, rendered as muted text by the GUI.
+    ///
+    /// # Errors
+    ///
+    /// * Returns an I/O error if writing the segment fails.
+    fn write_to(&self, out: &mut impl Write, err: &mut impl Write) -> std::io::Result<()> {
+        match self {
+            Self::Text(text) => writeln!(out, "{text}"),
+            Self::Reasoning(reasoning) => writeln!(err, "{DIM_TEXT}{reasoning}{RESET}"),
+        }
+    }
+}
+
 /// Given a positive number, returns a thousands separator-formatted string representation
 ///
 /// # Arguments:
@@ -182,6 +214,7 @@ where
                 tools: None,
                 on_tool_call: None,
                 on_text: None,
+                on_reasoning: None,
                 tool_iteration_limit: None,
             };
             if let Ok(response) = small_client.send_message(&request).await {
@@ -220,10 +253,14 @@ where
     let retrieval_embedding_tokens = Arc::clone(&retrieval_tool.embedding_tokens);
     let retrieval_rerank_tokens = Arc::clone(&retrieval_tool.rerank_tokens);
 
-    let (text_tx, mut text_rx) = mpsc::unbounded_channel::<String>();
+    let (response_tx, mut response_rx) = mpsc::unbounded_channel::<ResponseSegment>();
     let (status_tx, mut status_rx) = mpsc::unbounded_channel::<String>();
+    let text_tx = response_tx.clone();
     let on_text: Arc<CallbackFn<str>> = Arc::new(move |text: &str| {
-        let _ = text_tx.send(text.to_string());
+        let _ = text_tx.send(ResponseSegment::Text(text.to_string()));
+    });
+    let on_reasoning: Arc<CallbackFn<str>> = Arc::new(move |reasoning: &str| {
+        let _ = response_tx.send(ResponseSegment::Reasoning(reasoning.to_string()));
     });
 
     // Since `Box::new` moves the tool but we still need the modified usage after the tool runs, we
@@ -265,6 +302,7 @@ where
             tools: Some(&tools),
             on_tool_call: None,
             on_text: Some(on_text),
+            on_reasoning: Some(on_reasoning),
             tool_iteration_limit: Some(ctx.config.tool_iteration_limit),
         }
     };
@@ -273,15 +311,15 @@ where
     let mut send_message = pin!(llm_client.send_message(&request));
     let result = loop {
         tokio::select! {
-            Some(segment) = text_rx.recv() => writeln!(ctx.out, "{segment}")?,
+            Some(segment) = response_rx.recv() => segment.write_to(&mut ctx.out, &mut ctx.err)?,
             Some(line) = status_rx.recv() => writeln!(ctx.err, "{line}")?,
             Some(title_cost) = cost_rx.recv() => ctx.state.usage += title_cost,
             result = &mut send_message => break result,
         }
     };
     // Both producers can race the response's completion; drain the leftovers.
-    while let Ok(segment) = text_rx.try_recv() {
-        writeln!(ctx.out, "{segment}")?;
+    while let Ok(segment) = response_rx.try_recv() {
+        segment.write_to(&mut ctx.out, &mut ctx.err)?;
     }
     while let Ok(line) = status_rx.try_recv() {
         writeln!(ctx.err, "{line}")?;
@@ -401,9 +439,40 @@ mod tests {
     use zqa_macros::test_ok;
     use zqa_macros_proc::retry;
 
-    use super::{handle_query_cmd, handle_search_cmd};
+    use super::{ResponseSegment, handle_query_cmd, handle_search_cmd};
     use crate::cli::handlers::library::handle_process_cmd;
     use crate::common::test_support::TestPaths;
+
+    /// Reasoning is dimmed on stderr, and answer text remains unformatted on stdout.
+    #[test]
+    fn response_segments_keep_reasoning_separate_from_answers() {
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+
+        ResponseSegment::Reasoning("Compare the sources.\nThey agree.".into())
+            .write_to(&mut out, &mut err)
+            .unwrap();
+        ResponseSegment::Text("The answer.".into())
+            .write_to(&mut out, &mut err)
+            .unwrap();
+
+        assert_eq!(out, b"The answer.\n");
+        assert_eq!(err, b"\x1b[2mCompare the sources.\nThey agree.\x1b[0m\n");
+    }
+
+    /// A text-only response does not produce diagnostic output.
+    #[test]
+    fn text_response_leaves_reasoning_output_empty() {
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+
+        ResponseSegment::Text("The answer.".into())
+            .write_to(&mut out, &mut err)
+            .unwrap();
+
+        assert_eq!(out, b"The answer.\n");
+        assert!(err.is_empty());
+    }
 
     #[retry(3)]
     #[tokio::test(flavor = "multi_thread")]
