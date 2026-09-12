@@ -354,6 +354,13 @@ where
                 tools.as_deref()
             };
 
+            let turn_start = std::time::Instant::now();
+            log::debug!(
+                "Generation turn {} of {iteration_limit}: history_items={}, tools_allowed={}",
+                round_trips + 1,
+                provider_history.len(),
+                tools_passed.is_some()
+            );
             let turn = self
                 .send_once(
                     &provider_history,
@@ -362,7 +369,22 @@ where
                     request.reasoning.as_ref(),
                     request.max_tokens,
                 )
-                .await?;
+                .await
+                .inspect_err(|error| {
+                    log::debug!(
+                        "Generation turn {} failed after {:.2?}: {}",
+                        round_trips + 1,
+                        turn_start.elapsed(),
+                        crate::logging::preview(error)
+                    );
+                })?;
+            log::debug!(
+                "Generation turn {} completed in {:.2?}: content_items={}, usage={:?}",
+                round_trips + 1,
+                turn_start.elapsed(),
+                turn.contents.len(),
+                turn.usage
+            );
             usage += turn.usage;
             provider_history.extend(turn.native_items);
 
@@ -388,6 +410,10 @@ where
             }
 
             let Some(tool_call_results) = tool_call_results else {
+                log::debug!(
+                    "Generation stopped: no tool calls on turn {}",
+                    round_trips + 1
+                );
                 break;
             };
 
@@ -404,6 +430,14 @@ where
             history_additions.push(tool_call_results);
             round_trips += 1;
         }
+
+        if round_trips == iteration_limit {
+            log::debug!("Generation stopped: iteration limit {iteration_limit} reached");
+        }
+        log::debug!(
+            "Generation finished: history_additions={}, usage={usage:?}",
+            history_additions.len()
+        );
 
         Ok(CompletionApiResponse {
             content: contents,
@@ -427,11 +461,19 @@ where
 
     let body = res.text().await?;
     let json: serde_json::Value = serde_json::from_str(&body).map_err(|err| {
-        log::error!("Failed to parse response body as JSON: {err}. Body: {body}");
+        log::error!(
+            "Failed to parse response body as JSON: {}. Body: {}",
+            crate::logging::preview(&err),
+            crate::logging::preview(&body)
+        );
         LLMError::DeserializationError(body.clone())
     })?;
     let response: S = serde_json::from_value(json).map_err(|err| {
-        log::error!("Failed to deserialize response into target type: {err}. Body: {body}");
+        log::error!(
+            "Failed to deserialize response into target type: {}. Body: {}",
+            crate::logging::preview(&err),
+            crate::logging::preview(&body)
+        );
         LLMError::DeserializationError(body)
     })?;
 

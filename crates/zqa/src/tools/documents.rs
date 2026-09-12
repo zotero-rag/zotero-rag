@@ -23,6 +23,7 @@ use zqa_rag::llm::base::ChatRequest;
 use zqa_rag::llm::errors::LLMError;
 use zqa_rag::llm::factory::LLMClient;
 use zqa_rag::llm::tools::Tool;
+use zqa_rag::logging::preview;
 use zqa_rag::reranking::common::{RerankProviderConfig, get_reranking_provider_with_config};
 
 use crate::common::UserDocument;
@@ -375,6 +376,12 @@ async fn embedding_retrieval(
 ) -> Result<Vec<String>, DocumentError> {
     let chunker = Chunker::new(contents.clone(), ChunkingStrategy::SectionBased(2048));
     let chunks = chunker.chunk();
+    log::debug!(
+        "Document retrieval: chunks={}, embedding_provider={}, embedding_model={}",
+        chunks.len(),
+        embedding_config.provider_name(),
+        embedding_config.model_name()
+    );
 
     let chunk_texts: Vec<String> = chunks.into_iter().map(|c| c.content.clone()).collect();
     let chunk_text_refs: Vec<&str> = chunk_texts
@@ -407,7 +414,12 @@ async fn embedding_retrieval(
         .map(|(i, _)| chunk_texts[i].as_str())
         .collect();
 
-    log::debug!("[embedding_retrieval] Kept chunks: {kept_chunks:#?}");
+    log::debug!(
+        "Document retrieval: candidates={}, threshold={SCORE_THRESHOLD}, kept={}, preview={}",
+        scores.len(),
+        kept_chunks.len(),
+        preview(format_args!("{kept_chunks:?}"))
+    );
 
     if kept_chunks.is_empty() {
         let mut scored_indices = scores.iter().copied().enumerate().collect::<Vec<_>>();
@@ -423,7 +435,7 @@ async fn embedding_retrieval(
             "No chunks passed score threshold {}; falling back to top {} chunk(s) for query '{}'",
             SCORE_THRESHOLD,
             kept_chunks.len(),
-            query
+            preview(query)
         );
     }
 
@@ -432,6 +444,10 @@ async fn embedding_retrieval(
     }
 
     let Some(reranker_config) = reranker_config else {
+        log::debug!(
+            "Document retrieval: reranking disabled, returning {} chunks",
+            kept_chunks.len()
+        );
         return Ok(kept_chunks
             .iter()
             .map(std::string::ToString::to_string)
@@ -445,6 +461,11 @@ async fn embedding_retrieval(
         .into_iter()
         .map(|i| kept_chunks[i].to_string())
         .collect();
+    log::debug!(
+        "Document reranking: input_chunks={}, output_chunks={}",
+        kept_chunks.len(),
+        reranked_chunks.len()
+    );
 
     Ok(reranked_chunks)
 }
@@ -491,15 +512,24 @@ async fn process_document(
     reranker_config: Option<&RerankProviderConfig>,
     client: Option<&LLMClient>,
 ) -> Result<Vec<String>, DocumentError> {
+    log::debug!(
+        "Processing document {}: method={query_method:?}",
+        document.filename
+    );
     let reranked_chunks =
         embedding_retrieval(query, &document.contents, embedding_config, reranker_config).await?;
 
-    log::debug!("Reranked chunks: {reranked_chunks:#?}");
+    log::debug!(
+        "Retrieved {} chunks for {}: {}",
+        reranked_chunks.len(),
+        document.filename,
+        preview(format_args!("{reranked_chunks:?}"))
+    );
 
     if reranked_chunks.is_empty() {
         log::debug!(
             "No document chunks passed retrieval for query '{}' in file '{}'",
-            query,
+            preview(query),
             document.filename
         );
         return Ok(Vec::new());
@@ -559,12 +589,18 @@ async fn process_document(
         if returned_chunks.is_empty() {
             log::debug!(
                 "No expanded section chunks found for query '{}' in file '{}'; falling back to reranked chunks",
-                query,
+                preview(query),
                 document.filename
             );
             return Ok(reranked_chunks);
         }
 
+        log::debug!(
+            "Hybrid retrieval for {}: retrieved_chunks={}, expanded_sections={}",
+            document.filename,
+            reranked_chunks.len(),
+            returned_chunks.len()
+        );
         let result = call_subagent(
             query,
             &returned_chunks
@@ -584,6 +620,11 @@ async fn process_document(
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
             .collect::<Vec<_>>();
+        log::debug!(
+            "Hybrid retrieval for {}: final_chunks={}",
+            document.filename,
+            agent_chunks.len()
+        );
 
         Ok(agent_chunks)
     } else {
@@ -694,7 +735,7 @@ impl Tool for QueryDocumentsTool {
         type FileFuture<'a> =
             Pin<Box<dyn Future<Output = Result<QueryDocumentsResult, DocumentError>> + Send + 'a>>;
 
-        log::debug!("QueryDocumentsTool called with args: {args}");
+        log::debug!("QueryDocumentsTool called with args: {}", preview(&args));
 
         Box::pin(async move {
             let input: QueryDocumentsToolInput =
@@ -754,6 +795,10 @@ impl Tool for QueryDocumentsTool {
 
             let query = input.query;
             let query_method = input.query_method;
+            log::debug!(
+                "Document query: selected_documents={}, method={query_method:?}",
+                selected_documents.len()
+            );
 
             let mut futures: FuturesUnordered<FileFuture> = FuturesUnordered::new();
             for (filename, doc) in selected_documents {
@@ -773,7 +818,7 @@ impl Tool for QueryDocumentsTool {
                     )
                     .await
                     .map_err(|e| {
-                        log::debug!("Embedding-based retrieval failed: {e}");
+                        log::debug!("Document retrieval failed for {filename}: {}", preview(&e));
                         DocumentError::DocumentProcessingFailed(format!(
                             "Embedding-based retrieval failed: {e}"
                         ))
@@ -794,11 +839,10 @@ impl Tool for QueryDocumentsTool {
             }
 
             log::debug!(
-                "QueryDocumentsTool returned: {:?}",
-                json!({
-                    "results": all_results,
-                    "errors": errors
-                })
+                "QueryDocumentsTool completed: successful_documents={}, failed_documents={}, errors={}",
+                all_results.len(),
+                errors.len(),
+                preview(format_args!("{errors:?}"))
             );
 
             Ok(json!({

@@ -192,7 +192,13 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    log::debug!("Loaded configuration: {config:#?}");
+    log::debug!(
+        "Loaded configuration: generation_provider={:?}, embedding_provider={:?}, reranker_provider={:?}, tool_iteration_limit={}",
+        config.model_provider,
+        config.embedding_provider,
+        config.reranker_provider,
+        config.tool_iteration_limit
+    );
 
     let is_first_run = check_or_create_first_run_file()
         .or_else(|e| {

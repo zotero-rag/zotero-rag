@@ -499,14 +499,19 @@ impl VectorBackend for LanceBackend {
             .iter()
             .any(|i| i.columns.as_slice() == [embedding_col]);
         let has_fts_index = indices.iter().any(|i| i.columns.as_slice() == [text_col]);
+        log::debug!(
+            "Index maintenance: vector_index_exists={has_vector_index}, text_index_exists={has_fts_index}"
+        );
 
         if !has_vector_index {
+            log::debug!("Creating vector index on {embedding_col}");
             tbl.create_index(&[embedding_col], lancedb::index::Index::Auto)
                 .execute()
                 .await?;
         }
 
         if !has_fts_index {
+            log::debug!("Creating full-text index on {text_col}");
             // Note that currently, multi-column indexes are not supported by LanceDB.
             tbl.create_index(
                 &[text_col],
@@ -528,6 +533,12 @@ impl VectorBackend for LanceBackend {
     /// the same one here. Since that isn't stored (at least, not that I know of), this onus is on the
     /// user.
     async fn connect(&self) -> Result<Self::Connection, Self::Error> {
+        log::debug!(
+            "Connecting to LanceDB: path={}, embedding_provider={}, embedding_model={}",
+            self.get_db_path(),
+            self.config.provider_id(),
+            self.config.model_name()
+        );
         let db = connect(&self.get_db_path()).execute().await?;
         provider_registry().register_embedding_with_lancedb(&db, &self.config)?;
 
@@ -715,6 +726,7 @@ impl VectorBackend for LanceBackend {
         limit: usize,
     ) -> Result<Vec<Self::Record>, Self::Error> {
         let start_time = Instant::now();
+        log::debug!("Vector search: limit={limit}, query_bytes={}", query.len());
         let db = self.connect().await?;
 
         let tbl = db
@@ -759,7 +771,12 @@ impl VectorBackend for LanceBackend {
             .execute()
             .await?;
         let batches: Vec<RecordBatch> = stream.try_collect().await?;
-        log::debug!("Vector search took {:.1?}", start_time.elapsed());
+        log::debug!(
+            "Vector search took {:.1?}: batches={}, rows={}",
+            start_time.elapsed(),
+            batches.len(),
+            batches.iter().map(RecordBatch::num_rows).sum::<usize>()
+        );
 
         Ok(batches)
     }
@@ -896,7 +913,14 @@ impl VectorBackend for LanceBackend {
         items: Vec<Self::Record>,
         merge_on: Option<&[&str]>,
     ) -> Result<(), Self::Error> {
+        let start = Instant::now();
+        log::debug!(
+            "LanceDB write: table={LANCE_DATA_TABLE_NAME}, batches={}, input_rows={}, merge_on={merge_on:?}",
+            items.len(),
+            items.iter().map(RecordBatch::num_rows).sum::<usize>()
+        );
         if items.is_empty() {
+            log::debug!("LanceDB write skipped: no input batches");
             return Ok(());
         }
 
@@ -907,6 +931,7 @@ impl VectorBackend for LanceBackend {
             && let Some(first_batch) = items.first()
         {
             // Add rows if they don't already exist
+            log::debug!("LanceDB write: merging into existing table");
             let tbl = db
                 .open_table(LANCE_DATA_TABLE_NAME)
                 .execute()
@@ -942,6 +967,7 @@ impl VectorBackend for LanceBackend {
             // If the metadata is stored and creating the data table fails,
             // [`CreateTableMode::Overwrite`] overwrites it on the next attempt anyway.
             ensure_metadata_table(&db, &self.config).await?;
+            log::debug!("LanceDB write: creating or overwriting data table");
 
             // Create a new table and add rows
             db.create_table(LANCE_DATA_TABLE_NAME, items)
@@ -953,7 +979,7 @@ impl VectorBackend for LanceBackend {
 
             self.sync_table_version(&db).await?;
         }
-
+        log::debug!("LanceDB write completed in {:.2?}", start.elapsed());
         Ok(())
     }
 }

@@ -237,7 +237,14 @@ fn write_batch_metadata(
 
     let filename = format!("batch_{seq}.log");
     let contents = serde_json::to_string_pretty(&metadata)?;
-    fs::write(batch_dir.join(filename), contents)?;
+    fs::write(batch_dir.join(&filename), contents)?;
+    log::debug!(
+        "Saved batch metadata: file={filename}, batch_id={}, provider={}, model={}, items={}",
+        metadata.batch_id,
+        metadata.provider,
+        metadata.model,
+        metadata.items.len()
+    );
 
     Ok(())
 }
@@ -327,6 +334,7 @@ where
         .map(|i| (i.library_key.as_str(), i)) // we use `library_key` as the id in the batch
         .collect::<HashMap<&str, &BatchItem>>();
 
+    let success_count = successes.len();
     let items_to_embeddings: Vec<(&BatchItem, Vec<f32>)> = successes.into_iter().filter_map(|res| {
         if let Some(item) = ids_to_items.get(res.id.as_str()) {
             Some((*item, res.embedding))
@@ -340,6 +348,7 @@ where
         }
     })
     .collect();
+    let matched_count = items_to_embeddings.len();
 
     let batch_dir = get_state_dir()?.join("batches");
 
@@ -373,12 +382,15 @@ where
         .collect::<Vec<_>>();
 
     let updated_cache = update_hash_cache(cache, batch, to_insert.iter().map(|(i, _)| i.hash));
+    log::debug!(
+        "Batch {} result filtering: returned_successes={success_count}, matched_items={matched_count}, duplicates={}, items_to_insert={}",
+        batch.batch_id,
+        matched_count - to_insert.len(),
+        to_insert.len()
+    );
 
     if to_insert.is_empty() {
-        cache_file.seek(io::SeekFrom::Start(0))?;
-        cache_file.set_len(0)?;
-        cache_file.write_all(serde_json::to_string_pretty(&updated_cache)?.as_bytes())?;
-        cache_file.unlock()?;
+        persist_hash_cache(&mut cache_file, &updated_cache)?;
 
         // The user likely doesn't really care about the WAL semantics.
         writeln!(
@@ -431,12 +443,28 @@ where
         .await?;
     ctx.store.create_or_update_indices().await?;
 
-    cache_file.seek(io::SeekFrom::Start(0))?;
-    cache_file.set_len(0)?;
+    persist_hash_cache(&mut cache_file, &updated_cache)
+}
 
-    cache_file.write_all(serde_json::to_string_pretty(&updated_cache)?.as_bytes())?;
-    cache_file.unlock()?;
-
+/// Replace the contents of a locked hash-cache file and release the lock after writing.
+///
+/// # Arguments
+///
+/// * `file` - A hash-cache file whose exclusive lock is held by the caller.
+/// * `cache` - The cache to persist after processing batch results.
+///
+/// # Returns
+///
+/// `Ok(())` once the cache is written and the file is unlocked.
+///
+/// # Errors
+///
+/// * Returns a [`CLIError`] if serialization, file writes, or unlocking fails.
+fn persist_hash_cache(file: &mut fs::File, cache: &HashCache) -> Result<(), CLIError> {
+    file.seek(io::SeekFrom::Start(0))?;
+    file.set_len(0)?;
+    file.write_all(serde_json::to_string_pretty(cache)?.as_bytes())?;
+    file.unlock()?;
     Ok(())
 }
 
@@ -493,7 +521,18 @@ where
             .collect(),
     };
 
+    log::debug!(
+        "Submitting embedding batch: provider={}, model={}, dimensions={}, inputs={}",
+        cfg.provider_id(),
+        cfg.model_name(),
+        cfg.dims(),
+        items.len()
+    );
     let submission = embedder.submit_batch(request).await?;
+    log::debug!(
+        "Embedding batch submitted: batch_id={}",
+        submission.batch_id
+    );
     let batch_id = submission.batch_id.clone();
     write_batch_metadata(
         cfg.provider_id(),
@@ -542,6 +581,12 @@ where
 
     let batch_id = batch.batch_id.as_str();
     let results = client.get_batch_results(batch_id).await?;
+    log::debug!(
+        "Fetched batch {batch_id}: expected_items={}, succeeded={}, failed={}",
+        batch.items.len(),
+        results.succeeded.len(),
+        results.failed.len()
+    );
 
     if results.succeeded.len() + results.failed.len() != batch.items.len() {
         return Err(CLIError::CommandError("Length mismatch between batch results and saved batch. The file may have been corrupted.".into()));
@@ -682,8 +727,25 @@ fn get_pending_batches() -> Result<Vec<BatchEmbeddingMetadata>, CLIError> {
 
     Ok(files
         .into_iter()
-        .filter_map(|id| fs::read_to_string(batch_dir.join(format!("batch_{id}.log"))).ok())
-        .filter_map(|c| serde_json::from_str::<BatchEmbeddingMetadata>(&c).ok())
+        .filter_map(|id| {
+            let path = batch_dir.join(format!("batch_{id}.log"));
+            let contents = fs::read_to_string(&path)
+                .inspect_err(|error| {
+                    log::debug!(
+                        "Skipping unreadable batch metadata {}: {error}",
+                        path.display()
+                    );
+                })
+                .ok()?;
+            serde_json::from_str::<BatchEmbeddingMetadata>(&contents)
+                .inspect_err(|error| {
+                    log::debug!(
+                        "Skipping invalid batch metadata {}: {error}",
+                        path.display()
+                    );
+                })
+                .ok()
+        })
         .collect())
 }
 
@@ -753,6 +815,10 @@ where
     };
 
     let status = embedder.get_batch_status(&selected_batch.batch_id).await?;
+    log::debug!(
+        "Embedding batch {}: status={status:?}",
+        selected_batch.batch_id
+    );
     writeln!(&mut ctx.out, "Current status: {}", status.as_str())?;
 
     if status == BatchJobState::Completed {
@@ -846,6 +912,11 @@ where
             pending_items.contains(&(item.hash, embedding_provider, embedding_model))
         });
 
+    log::debug!(
+        "Batch submission filtering: pending_overlap={}, new_items={}",
+        overlap.len(),
+        new_items.len()
+    );
     match (overlap.is_empty(), new_items.is_empty()) {
         (true, true) => unreachable!("lib_items is nonempty, so both subsets cannot be empty"),
         (true, false) => {

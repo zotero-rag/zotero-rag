@@ -152,13 +152,21 @@ impl ZoteroStore for LanceZoteroStore {
     ) -> Result<(Vec<ZoteroItem>, VectorSearchStats), CLIError> {
         let embedding_tokens = query.len();
         let items = <Self as ZoteroStore>::vector_search_raw(self, &query, limit).await?;
+        let raw_count = items.len();
 
         let filtered_items: Vec<ZoteroItem> = items
             .into_iter()
             .filter(|item| !item.text.trim().is_empty())
             .collect();
 
+        log::debug!(
+            "Library retrieval: limit={limit}, raw_results={raw_count}, nonempty_results={}, reranker_configured={}",
+            filtered_items.len(),
+            reranker_config.is_some()
+        );
+
         if filtered_items.is_empty() {
+            log::debug!("Library retrieval stopped: no nonempty results");
             return Ok((
                 Vec::new(),
                 VectorSearchStats {
@@ -169,6 +177,7 @@ impl ZoteroStore for LanceZoteroStore {
         }
 
         let Some(reranker) = reranker_config else {
+            log::debug!("Library retrieval: reranking disabled");
             return Ok((
                 filtered_items,
                 VectorSearchStats {
@@ -179,6 +188,12 @@ impl ZoteroStore for LanceZoteroStore {
         };
 
         let rerank_provider = get_reranking_provider_with_config(reranker)?;
+        log::debug!(
+            "Reranking library results: provider={}, model={}, inputs={}",
+            reranker.provider_name(),
+            reranker.model_name(),
+            filtered_items.len()
+        );
         let item_strings = filtered_items
             .iter()
             .map(|f| f.text.as_str())
@@ -187,10 +202,14 @@ impl ZoteroStore for LanceZoteroStore {
         let rerank_tokens = item_strings.iter().map(|s| s.len()).sum::<usize>() + query.len();
         let indices = rerank_provider.rerank(&item_strings, &query).await?;
 
-        let reranked_items = indices
+        let reranked_items: Vec<ZoteroItem> = indices
             .into_iter()
             .filter_map(|idx| filtered_items.get(idx).cloned())
             .collect();
+        log::debug!(
+            "Library retrieval completed: reranked_results={}",
+            reranked_items.len()
+        );
 
         Ok((
             reranked_items,

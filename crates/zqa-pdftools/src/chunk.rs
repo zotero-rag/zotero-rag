@@ -110,9 +110,16 @@ impl Chunker {
     /// metadata for that chunk.
     #[must_use]
     pub fn chunk(&self) -> Vec<DocumentChunk> {
+        log::debug!(
+            "Chunking document: strategy={:?}, bytes={}, sections={}",
+            self.strategy,
+            self.content.text_content.len(),
+            self.content.sections.len()
+        );
         match &self.strategy {
             ChunkingStrategy::WholeDocument => {
                 let text_len = self.content.text_content.len();
+                log::debug!("Whole-document chunking produced 1 chunk ({text_len} bytes)");
                 vec![DocumentChunk {
                     chunk_id: 1,
                     chunk_count: 1,
@@ -130,13 +137,18 @@ impl Chunker {
 
                 if sections.is_empty() {
                     // Treat entire doc as one section and chunk by `max_tok`.
-                    return Chunker::chunk_text(
+                    let chunks = Chunker::chunk_text(
                         &self.content.text_content,
                         *max_tok,
                         1,
                         0,
                         (1, self.content.page_count),
                     );
+                    log::debug!(
+                        "No section boundaries; fallback chunking produced {} chunks",
+                        chunks.len()
+                    );
+                    return chunks;
                 }
 
                 let mut running_count = 0;
@@ -172,6 +184,7 @@ impl Chunker {
                 // chunk_text only knows the count within its own section; patch every chunk
                 // with the true document-wide total now that we have it.
                 let total = chunks.len();
+                log::debug!("Section-based chunking produced {total} chunks");
                 for chunk in &mut chunks {
                     chunk.chunk_count = total;
                 }

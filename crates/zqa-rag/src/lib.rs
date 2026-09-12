@@ -40,6 +40,7 @@ pub mod constants;
 pub mod embedding;
 pub(crate) mod http_client;
 pub mod llm;
+pub mod logging;
 pub mod pricing;
 pub mod providers;
 pub(crate) mod requests;

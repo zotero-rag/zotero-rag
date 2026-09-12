@@ -8,6 +8,7 @@ use serde::Serialize;
 
 use crate::http_client::HttpClient;
 use crate::llm::errors::LLMError;
+use crate::logging::preview;
 
 /// Calculate the backoff delay given an attempt number and a response. It assumes the response is
 /// a 429 Too Many Requests response with a "Retry-After" header. If the header is not present or
@@ -54,28 +55,41 @@ pub(crate) async fn request_with_backoff<T: HttpClient>(
 ) -> Result<Response, LLMError> {
     let mut attempt = 0;
 
-    let serialized_request =
-        serde_json::to_string_pretty(request).unwrap_or("Serialization failed".into());
-    log::debug!("Request to URL: {url}\nHeaders: {headers:#?}\nrequest: {serialized_request}");
-
     loop {
+        log::debug!(
+            "Provider request: attempt {} of {}",
+            attempt + 1,
+            max_retries + 1
+        );
         let response = client.post_json(url, headers.clone(), &request).await?;
+        let status = response.status();
+        log::debug!(
+            "Provider request: attempt {} returned {status}",
+            attempt + 1
+        );
 
         if response.status().is_success() {
             return Ok(response);
         }
 
         if response.status() == StatusCode::TOO_MANY_REQUESTS && attempt < max_retries {
-            log::debug!("Got HTTP 429 response, retrying with backoff (attempt {attempt})");
-
             let delay = calculate_backoff_delay(attempt, &response);
+            log::debug!(
+                "Rate limited on attempt {}; retrying after {delay:.2?}",
+                attempt + 1
+            );
             let _ = tokio::time::sleep(delay).await;
             attempt += 1;
             continue;
         }
 
         let body = response.text().await?;
-        log::debug!("Request failed: {body}");
+        log::debug!(
+            "Provider request failed: status={status}, attempts={}, retries_exhausted={}, body={}",
+            attempt + 1,
+            status == StatusCode::TOO_MANY_REQUESTS && attempt == max_retries,
+            preview(&body)
+        );
 
         return Err(LLMError::HttpStatusError(body));
     }

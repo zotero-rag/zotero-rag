@@ -100,6 +100,11 @@ where
                 .get_items_by_keys(&input.ids)
                 .await
                 .map_err(|e| format!("Search failed: {e}"))?;
+            log::debug!(
+                "Summarization retrieval: requested_ids={}, found_papers={}",
+                input.ids.len(),
+                results.len()
+            );
 
             let mut set = JoinSet::new();
             for item in results {
@@ -143,12 +148,17 @@ where
                         }
                     }
                     Err(e) => {
-                        log::warn!("Summarization failed: {e}");
+                        log::warn!("Summarization failed: {}", zqa_rag::logging::preview(&e));
                         errors.push(e.to_string());
                     }
                 }
             }
 
+            log::debug!(
+                "Summarization completed: successes={}, failures={}",
+                summaries.len(),
+                errors.len()
+            );
             Ok(json!({
                 "summaries": summaries,
                 "errors": errors

@@ -1117,6 +1117,8 @@ fn compute_parent_indices(sections: &mut [SectionBoundary]) {
 /// # Errors
 /// Returns an error if the file cannot be loaded or if text extraction fails.
 pub fn extract_text(file_path: &str) -> Result<ExtractedContent, Box<dyn Error>> {
+    let start = std::time::Instant::now();
+    log::debug!("Loading PDF: {file_path}");
     let doc = Document::load(file_path)?;
 
     let mut full_text = String::new();
@@ -1127,7 +1129,10 @@ pub fn extract_text(file_path: &str) -> Result<ExtractedContent, Box<dyn Error>>
     let page_count = doc.get_pages().len();
 
     for (page_num, page_id) in doc.page_iter().enumerate() {
-        log::debug!("\tParsing page {} of {page_count}", page_num + 1);
+        log::debug!(
+            "Parsing PDF {file_path}: page {} of {page_count}",
+            page_num + 1
+        );
 
         let byte_offset = full_text.len();
         let mut parser = PdfParser::default();
@@ -1201,6 +1206,13 @@ pub fn extract_text(file_path: &str) -> Result<ExtractedContent, Box<dyn Error>>
     sections.retain(|f| f.level < 4);
 
     compute_parent_indices(&mut sections);
+
+    log::debug!(
+        "Extracted PDF {file_path}: pages={page_count}, bytes={}, sections={}, skipped_characters={skipped_chars_total}, elapsed={:.2?}",
+        full_text.len(),
+        sections.len(),
+        start.elapsed()
+    );
 
     Ok(ExtractedContent {
         text_content: full_text,

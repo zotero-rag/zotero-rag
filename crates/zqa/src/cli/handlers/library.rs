@@ -114,6 +114,11 @@ where
 
     writer.write(&record_batch)?;
     writer.finish()?;
+    log::debug!(
+        "Saved Arrow recovery file: path={}, rows={}",
+        batch_iter_path.display(),
+        record_batch.num_rows()
+    );
 
     let result = ctx.store.upsert_batches(batches).await;
 
@@ -121,8 +126,17 @@ where
         Ok(()) => {
             writeln!(&mut ctx.out, "Successfully parsed library!")?;
             std::fs::remove_file(batch_iter_path)?;
+            log::debug!(
+                "Removed Arrow recovery file after successful write: {}",
+                batch_iter_path.display()
+            );
         }
         Err(e) => {
+            log::debug!(
+                "Database write failed; retaining Arrow recovery file {}: {}",
+                batch_iter_path.display(),
+                zqa_rag::logging::preview(&e)
+            );
             writeln!(&mut ctx.err, "Parsing library failed: {e}")?;
             writeln!(
                 &mut ctx.err,
@@ -168,6 +182,7 @@ where
 
     let batch_iter_path = &ctx.path_options.batch_iter_path;
     let batch_iter_display = batch_iter_path.display();
+    log::debug!("Replaying Arrow recovery file: {batch_iter_display}");
 
     let file = File::open(batch_iter_path)?;
     let reader = FileReader::try_new(file, None)?;
@@ -186,6 +201,10 @@ where
     }
 
     let n_batches = batches.len();
+    log::debug!(
+        "Loaded Arrow recovery data: batches={n_batches}, rows={}",
+        batches.iter().map(RecordBatch::num_rows).sum::<usize>()
+    );
 
     write!(ctx.out, "Successfully loaded {n_batches} batch")?;
 
@@ -199,7 +218,12 @@ where
     if db.is_ok() {
         writeln!(ctx.out, "Successfully parsed library!")?;
         std::fs::remove_file(batch_iter_path)?;
+        log::debug!("Removed Arrow recovery file after successful replay: {batch_iter_display}");
     } else if let Err(e) = db {
+        log::debug!(
+            "Replay failed; retaining Arrow recovery file {batch_iter_display}: {}",
+            zqa_rag::logging::preview(&e)
+        );
         writeln!(ctx.err, "Parsing library failed: {e}")?;
         writeln!(
             ctx.err,
