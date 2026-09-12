@@ -26,7 +26,6 @@ use crate::store::common::ZoteroStore;
 use crate::tools::mixins::ToolExt;
 use crate::tools::retrieval::RetrievalTool;
 use crate::tools::summarization::SummarizationTool;
-use crate::utils::library::get_authors;
 use crate::utils::rag::ModelResponse;
 use crate::utils::terminal::{DIM_TEXT, RESET};
 
@@ -50,7 +49,7 @@ fn format_number(num: u32) -> String {
         .join(",")
 }
 
-/// Perform a vector search for a user-provided search term.
+/// Perform a vector search and print matching titles.
 ///
 /// # Arguments
 ///
@@ -80,7 +79,7 @@ where
     }
 
     let vector_search_start = Instant::now();
-    let (mut search_results, _) = ctx
+    let (search_results, _) = ctx
         .store
         .vector_search(
             search_term.clone(),
@@ -88,11 +87,6 @@ where
             ctx.config.get_reranker_config().as_ref(),
         )
         .await?;
-    let _ = get_authors(
-        &mut search_results,
-        ctx.path_options.library_path.as_deref(),
-    );
-
     let vector_search_duration = vector_search_start.elapsed();
     writeln!(
         &mut ctx.err,
