@@ -190,6 +190,8 @@ pub type CallbackFn<T> = dyn Fn(&T) + Send + Sync + 'static;
 ///   reference to the [`ToolUseStats`] for that call.
 /// * `on_text` - Optional callback invoked for each text segment in the model's response,
 ///   receiving the text as a string slice.
+/// * `on_reasoning` - Optional callback invoked for each reasoning block, receiving the reasoning
+///   as a string slice. Callbacks follow the order of content in the model's response.
 ///
 /// # Returns
 ///
@@ -200,6 +202,7 @@ pub(crate) async fn process_tool_calls(
     tools: &[SerializedTool<'_>],
     on_tool_call: Option<&Arc<CallbackFn<ToolUseStats>>>,
     on_text: Option<&Arc<CallbackFn<str>>>,
+    on_reasoning: Option<&Arc<CallbackFn<str>>>,
 ) -> Option<ChatHistoryItem> {
     let futures = contents.iter().map(|content| async move {
         match content {
@@ -283,7 +286,11 @@ pub(crate) async fn process_tool_calls(
                         cb(s);
                     }
                 }
-                ContentType::Reasoning(_) => {}
+                ContentType::Reasoning(s) => {
+                    if let Some(cb) = on_reasoning {
+                        cb(s);
+                    }
+                }
             }
             new_contents.push(content);
         }
@@ -431,8 +438,15 @@ mod tests {
         let mut new_contents: Vec<ContentType> = vec![];
 
         let start = Instant::now();
-        let tool_call_results =
-            process_tool_calls(&mut new_contents, &contents, &serialized_tools, None, None).await;
+        let tool_call_results = process_tool_calls(
+            &mut new_contents,
+            &contents,
+            &serialized_tools,
+            None,
+            None,
+            None,
+        )
+        .await;
         let duration = start.elapsed();
 
         // Expect ~500ms for concurrent execution
@@ -456,8 +470,15 @@ mod tests {
         })];
         let mut new_contents = Vec::new();
 
-        let tool_call_results =
-            process_tool_calls(&mut new_contents, &contents, &serialized_tools, None, None).await;
+        let tool_call_results = process_tool_calls(
+            &mut new_contents,
+            &contents,
+            &serialized_tools,
+            None,
+            None,
+            None,
+        )
+        .await;
         let expected_result = Value::String(
             "Tool 'imaginary_tool' does not exist. Available tools: mock_tool.".into(),
         );

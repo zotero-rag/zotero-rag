@@ -297,6 +297,10 @@ struct OpenRouterResponse {
 }
 
 /// Convert OpenRouter response message into provider-agnostic `ChatHistoryContent` items.
+///
+/// Prefer the top-level reasoning text to avoid displaying it twice. When it is absent or empty,
+/// display readable reasoning details in array order, leaving the original details intact for
+/// continuation requests.
 fn map_response_to_chat_contents(message: &OpenRouterResponseMessage) -> Vec<ChatHistoryContent> {
     let mut contents = Vec::new();
 
@@ -304,6 +308,19 @@ fn map_response_to_chat_contents(message: &OpenRouterResponseMessage) -> Vec<Cha
         && !reasoning.is_empty()
     {
         contents.push(ChatHistoryContent::Reasoning(reasoning.clone()));
+    } else if let Some(details) = message
+        .reasoning_details
+        .as_ref()
+        .and_then(serde_json::Value::as_array)
+    {
+        contents.extend(details.iter().filter_map(|detail| {
+            let text = match detail.get("type")?.as_str()? {
+                "reasoning.text" => detail.get("text")?.as_str()?,
+                "reasoning.summary" => detail.get("summary")?.as_str()?,
+                _ => return None,
+            };
+            (!text.is_empty()).then(|| ChatHistoryContent::Reasoning(text.to_owned()))
+        }));
     }
 
     if let Some(text) = &message.content
@@ -484,6 +501,7 @@ mod tests {
             tools: None,
             on_tool_call: None,
             on_text: None,
+            on_reasoning: None,
             tool_iteration_limit: None,
         };
 
@@ -542,6 +560,7 @@ mod tests {
             tools: None,
             on_tool_call: None,
             on_text: None,
+            on_reasoning: None,
             tool_iteration_limit: None,
         };
 
@@ -608,6 +627,7 @@ mod tests {
             tools: Some(&[Box::new(tool)]),
             on_tool_call: None,
             on_text: None,
+            on_reasoning: None,
             tool_iteration_limit: None,
         };
 
@@ -696,11 +716,8 @@ mod tests {
         let text_segments_cb = Arc::clone(&text_segments);
 
         let request = ChatRequest {
-            chat_history: Vec::new(),
             max_tokens: Some(1024),
             message: "Test".into(),
-            system_prompt: None,
-            reasoning: None,
             tools: Some(&[Box::new(tool)]),
             on_tool_call: Some(Arc::new(move |_| {
                 *tool_call_count_cb.lock().unwrap() += 1;
@@ -708,7 +725,7 @@ mod tests {
             on_text: Some(Arc::new(move |s| {
                 text_segments_cb.lock().unwrap().push(s.to_string());
             })),
-            tool_iteration_limit: None,
+            ..ChatRequest::default()
         };
 
         let mock_client = OpenRouterClient {
@@ -727,10 +744,89 @@ mod tests {
         test_eq!(texts[0].as_str(), "Done!");
     }
 
+    /// Readable details provide reasoning when the top-level field is missing or empty.
+    #[test]
+    fn reasoning_details_fallback_preserves_block_order() {
+        for reasoning in [None, Some("")] {
+            let message: OpenRouterResponseMessage = serde_json::from_value(serde_json::json!({
+                "role": "assistant",
+                "content": "Done!",
+                "reasoning": reasoning,
+                "reasoning_details": [
+                    {"type": "reasoning.summary", "summary": "Check the sources."},
+                    {"type": "reasoning.encrypted", "data": "opaque", "text": "not display text"},
+                    {"type": "reasoning.text", "text": "They agree.\nI can answer.", "signature": "opaque"}
+                ]
+            }))
+            .unwrap();
+
+            assert_eq!(
+                map_response_to_chat_contents(&message),
+                [
+                    ChatHistoryContent::Reasoning("Check the sources.".into()),
+                    ChatHistoryContent::Reasoning("They agree.\nI can answer.".into()),
+                    ChatHistoryContent::Text("Done!".into()),
+                ]
+            );
+        }
+    }
+
+    /// Top-level reasoning takes precedence over details to avoid duplicate output.
+    #[test]
+    fn reasoning_details_do_not_duplicate_top_level_reasoning() {
+        let message: OpenRouterResponseMessage = serde_json::from_value(serde_json::json!({
+            "role": "assistant",
+            "reasoning": "Thinking hard.",
+            "reasoning_details": [{"type": "reasoning.text", "text": "Thinking hard."}]
+        }))
+        .unwrap();
+
+        assert_eq!(
+            map_response_to_chat_contents(&message),
+            [ChatHistoryContent::Reasoning("Thinking hard.".into())]
+        );
+    }
+
+    /// Unreadable details must not create display blocks or prevent answer text from being shown.
+    #[test]
+    fn reasoning_details_skip_empty_unknown_and_malformed_entries() {
+        for details in [
+            serde_json::Value::Null,
+            serde_json::json!({"type": "reasoning.text", "text": "not an array"}),
+            serde_json::json!([
+                null,
+                "not an object",
+                {"text": "missing type"},
+                {"type": "unknown", "text": "future format"},
+                {"type": "reasoning.encrypted", "data": "opaque"},
+                {"type": "reasoning.text", "text": ""},
+                {"type": "reasoning.summary", "summary": ""},
+                {"type": "reasoning.text", "text": null},
+                {"type": "reasoning.summary", "summary": 42},
+                {"type": "reasoning.text"}
+            ]),
+        ] {
+            let message: OpenRouterResponseMessage = serde_json::from_value(serde_json::json!({
+                "role": "assistant",
+                "content": "Done!",
+                "reasoning_details": details
+            }))
+            .unwrap();
+
+            assert_eq!(
+                map_response_to_chat_contents(&message),
+                [ChatHistoryContent::Text("Done!".into())]
+            );
+        }
+    }
+
+    /// Details-only reasoning reaches the callback and is replayed unchanged after tool calls.
     #[tokio::test]
-    async fn test_reasoning_is_surfaced_and_replayed() {
-        let reasoning_details =
-            serde_json::json!([{"type": "reasoning.text", "text": "Thinking hard."}]);
+    async fn reasoning_details_are_surfaced_and_replayed() {
+        let reasoning_details = serde_json::json!([
+            {"type": "reasoning.text", "text": "Thinking hard.", "signature": "opaque signature"},
+            {"type": "reasoning.encrypted", "data": "opaque data", "provider_extra": 42}
+        ]);
         let usage = || OpenRouterUsageStats {
             prompt_tokens: 10,
             completion_tokens: 5,
@@ -759,7 +855,7 @@ mod tests {
                         },
                     }]),
                     refusal: None,
-                    reasoning: Some("Thinking hard.".into()),
+                    reasoning: None,
                     reasoning_details: Some(reasoning_details.clone()),
                 },
                 finish_reason: "tool_calls".into(),
@@ -789,27 +885,27 @@ mod tests {
         let tool = MockTool {
             call_count: Arc::new(Mutex::new(0)),
         };
+        let reasoning_segments = Arc::new(Mutex::new(Vec::new()));
+        let segments = Arc::clone(&reasoning_segments);
         let request = ChatRequest {
-            chat_history: Vec::new(),
-            max_tokens: Some(1024),
             message: "Test".into(),
-            system_prompt: None,
-            reasoning: None,
             tools: Some(&[Box::new(tool)]),
-            on_tool_call: None,
-            on_text: None,
-            tool_iteration_limit: None,
+            on_reasoning: Some(Arc::new(move |text| {
+                segments.lock().unwrap().push(text.to_string());
+            })),
+            ..ChatRequest::default()
         };
 
         let http_client =
             RecordingSequentialMockHttpClient::new([tool_call_response, text_response]);
         let mock_client = OpenRouterClient {
             client: http_client.clone(),
-            config: None,
+            config: Some(crate::config::OpenRouterConfig {
+                api_key: "fixture".into(),
+                ..Default::default()
+            }),
         };
-        let res = mock_client.send_message(&request).await;
-        test_ok!(res);
-        let res = res.unwrap();
+        let res = mock_client.send_message(&request).await.unwrap();
 
         let reasoning: Vec<_> = res
             .content
@@ -820,6 +916,7 @@ mod tests {
             })
             .collect();
         assert_eq!(reasoning, ["Thinking hard."]);
+        assert_eq!(*reasoning_segments.lock().unwrap(), ["Thinking hard."]);
 
         let requests = http_client.requests();
         test_eq!(requests.len(), 2);
