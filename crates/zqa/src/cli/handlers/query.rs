@@ -127,6 +127,11 @@ where
     E: Write,
 {
     writeln!(&mut ctx.out)?;
+    log::debug!(
+        "Starting query: input_bytes={}, tool_iteration_limit={}",
+        query.len(),
+        ctx.config.tool_iteration_limit
+    );
 
     for mention in get_document_mentions(&query) {
         let path = match import_document(ctx, Path::new(&mention)) {
@@ -184,7 +189,16 @@ where
                 on_text: None,
                 tool_iteration_limit: None,
             };
-            if let Ok(response) = small_client.send_message(&request).await {
+            if let Ok(response) = small_client
+                .send_message(&request)
+                .await
+                .inspect_err(|error| {
+                    log::debug!(
+                        "Background title generation failed: {}",
+                        zqa_rag::logging::preview(error)
+                    );
+                })
+            {
                 let title = ModelResponse::from(&response.content).to_string();
                 let title = title.trim().to_string();
                 if !title.is_empty()
@@ -268,6 +282,11 @@ where
             tool_iteration_limit: Some(ctx.config.tool_iteration_limit),
         }
     };
+    log::debug!(
+        "Query ready: history_items={}, tools={}",
+        request.chat_history.len(),
+        tools.len()
+    );
 
     let final_draft_start = Instant::now();
     let mut send_message = pin!(llm_client.send_message(&request));
@@ -294,6 +313,10 @@ where
 
     match result {
         Ok(response) => {
+            log::debug!(
+                "Query completed in {final_draft_duration:.2?}: usage={:?}",
+                response.usage
+            );
             writeln!(
                 &mut ctx.err,
                 "{DIM_TEXT}Final draft completed in {final_draft_duration:.2?}{RESET}"
@@ -358,6 +381,10 @@ where
             ctx.state.dirty.store(true, atomic::Ordering::Relaxed);
         }
         Err(e) => {
+            log::debug!(
+                "Query failed in {final_draft_duration:.2?}: {}",
+                zqa_rag::logging::preview(&e)
+            );
             writeln!(
                 &mut ctx.err,
                 "{DIM_TEXT}Final draft failed in {final_draft_duration:.2?}{RESET}"

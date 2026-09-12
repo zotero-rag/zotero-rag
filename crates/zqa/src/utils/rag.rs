@@ -42,10 +42,10 @@ impl fmt::Display for ModelResponse<'_> {
 
                     // Log details in DEBUG mode
                     log::debug!(
-                        "Tool call:\n\tname: {}\n\targuments: {}\n\tresponse{}",
+                        "Tool call: name={}, arguments={}, response={}",
                         stats.tool_name,
-                        serde_json::to_string_pretty(&stats.tool_args).or(Err(fmt::Error {}))?,
-                        serde_json::to_string_pretty(&stats.tool_result).or(Err(fmt::Error {}))?
+                        zqa_rag::logging::preview(&stats.tool_args),
+                        zqa_rag::logging::preview(&stats.tool_result)
                     );
                 }
             }

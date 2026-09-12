@@ -5,6 +5,7 @@
 
 use std::future::Future;
 use std::pin::Pin;
+use std::time::Instant;
 #[cfg(any(test, feature = "mock"))]
 use std::{
     collections::VecDeque,
@@ -93,6 +94,38 @@ impl Default for ReqwestClient {
     }
 }
 
+impl ReqwestClient {
+    /// Send an HTTP request and log transport metadata without headers, query parameters,
+    /// credentials, or request bodies. Timing ends when response headers arrive.
+    async fn send(
+        &self,
+        builder: reqwest::RequestBuilder,
+    ) -> Result<reqwest::Response, reqwest::Error> {
+        let request = builder.build()?;
+        let method = request.method().clone();
+        let endpoint = request.url().clone();
+        let host = endpoint.host_str().unwrap_or_default();
+        let path = endpoint.path();
+        let start = Instant::now();
+        log::debug!("HTTP {method} {host}{path}: sending request");
+        let result = self.client.execute(request).await;
+        match &result {
+            Ok(response) => log::debug!(
+                "HTTP {method} {host}{path}: status={}, headers received in {:.2?}",
+                response.status(),
+                start.elapsed()
+            ),
+            Err(error) => log::debug!(
+                "HTTP {method} {host}{path}: transport failure after {:.2?}, timeout={}, connect={}",
+                start.elapsed(),
+                error.is_timeout(),
+                error.is_connect()
+            ),
+        }
+        result
+    }
+}
+
 impl HttpClient for ReqwestClient {
     fn post_json<'a, T: serde::Serialize + Send + Sync>(
         &'a self,
@@ -100,15 +133,8 @@ impl HttpClient for ReqwestClient {
         headers: HeaderMap,
         body: &'a T,
     ) -> Pin<Box<dyn Future<Output = Result<reqwest::Response, reqwest::Error>> + Send + 'a>> {
-        let serialized_body = serde_json::to_string_pretty(&body);
-        log::debug!("Sending request to {url} with body: {serialized_body:#?}");
-
         Box::pin(async move {
-            self.client
-                .post(url)
-                .json(&body)
-                .headers(headers)
-                .send()
+            self.send(self.client.post(url).json(&body).headers(headers))
                 .await
         })
     }
@@ -120,11 +146,7 @@ impl HttpClient for ReqwestClient {
         form_data: Form,
     ) -> Pin<Box<dyn Future<Output = Result<reqwest::Response, reqwest::Error>> + Send + '_>> {
         Box::pin(async move {
-            self.client
-                .post(url)
-                .headers(headers)
-                .multipart(form_data)
-                .send()
+            self.send(self.client.post(url).headers(headers).multipart(form_data))
                 .await
         })
     }
@@ -134,7 +156,7 @@ impl HttpClient for ReqwestClient {
         url: &'a str,
         headers: HeaderMap,
     ) -> Pin<Box<dyn Future<Output = Result<reqwest::Response, reqwest::Error>> + Send + 'a>> {
-        Box::pin(async move { self.client.get(url).headers(headers).send().await })
+        Box::pin(async move { self.send(self.client.get(url).headers(headers)).await })
     }
 
     fn post_empty<'a>(
@@ -142,7 +164,7 @@ impl HttpClient for ReqwestClient {
         url: &'a str,
         headers: HeaderMap,
     ) -> Pin<Box<dyn Future<Output = Result<reqwest::Response, reqwest::Error>> + Send + 'a>> {
-        Box::pin(async move { self.client.post(url).headers(headers).send().await })
+        Box::pin(async move { self.send(self.client.post(url).headers(headers)).await })
     }
 }
 

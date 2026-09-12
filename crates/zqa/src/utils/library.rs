@@ -203,13 +203,20 @@ pub async fn get_new_library_items<T: ZoteroStore>(
         .map_err(|e| LibraryParsingError::LanceDBError(e.to_string()))?;
 
     let library_items = parse_library_metadata(library_path, None, None)?;
+    let library_count = library_items.len();
 
     let db_items_set: HashSet<_> = metadata_vecs.iter().collect();
 
-    Ok(library_items
+    let new_items = library_items
         .into_iter()
         .filter(|item| !db_items_set.contains(item))
-        .collect::<Vec<_>>())
+        .collect::<Vec<_>>();
+    log::debug!(
+        "Library filtering: metadata_items={library_count}, existing_items={}, new_items={}",
+        metadata_vecs.len(),
+        new_items.len()
+    );
+    Ok(new_items)
 }
 
 /// Parses the Zotero library metadata. If successful, returns a list of metadata for each item.
@@ -232,6 +239,10 @@ pub fn parse_library_metadata(
     limit: Option<usize>,
 ) -> Result<Vec<ZoteroItemMetadata>, LibraryParsingError> {
     if let Some(path) = resolve_lib_path(library_path) {
+        log::debug!(
+            "Reading Zotero metadata: path={}, offset={start_from:?}, limit={limit:?}",
+            path.display()
+        );
         let conn = Connection::open(path.join("zotero.sqlite"))?;
 
         let mut query = "SELECT DISTINCT
@@ -275,9 +286,14 @@ pub fn parse_library_metadata(
                     authors: None,
                 })
             })?
-            .filter_map(std::result::Result::ok)
+            .filter_map(|row| {
+                row.inspect_err(|error| {
+                    log::debug!("Skipping invalid Zotero metadata row: {error}");
+                })
+                .ok()
+            })
             .collect();
-
+        log::debug!("Read {} Zotero metadata items", item_iter.len());
         Ok(item_iter)
     } else {
         Err(LibraryParsingError::SqlError(
@@ -433,7 +449,9 @@ pub async fn parse_library<T: ZoteroStore>(
 ) -> Result<Vec<ZoteroItem>, LibraryParsingError> {
     let start_time = Instant::now();
 
-    let metadata = if store.exists().await {
+    let store_exists = store.exists().await;
+    log::debug!("Library parsing: existing_store={store_exists}");
+    let metadata = if store_exists {
         get_new_library_items(store, library_path).await?
     } else {
         parse_library_metadata(library_path, start_from, limit)?

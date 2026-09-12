@@ -259,6 +259,9 @@ where
 
     let batches: Vec<Vec<Option<String>>> = texts.chunks(batch_size).map(<[_]>::to_vec).collect();
     let num_batches = batches.len();
+    log::debug!(
+        "Embedding run: provider={embedding_provider}, dimensions={embedding_dim}, batches={num_batches}, batch_size={batch_size}, concurrency={max_concurrent}, wait_seconds={wait_after_request_s}"
+    );
 
     let futures = batches.into_iter().enumerate().map(|(i, batch)| {
         let api_url = api_url.clone();
@@ -278,11 +281,14 @@ where
                 .iter()
                 .filter_map(|opt| opt.clone().filter(|s| !s.trim().is_empty()))
                 .collect();
+            log::debug!("{embedding_provider} embedding batch {}/{num_batches}: inputs={}, nonempty={}",
+                i + 1, batch.len(), cur_texts.len());
 
             // (embeddings_for_batch, fail_count, failed_texts, masked_count)
             type BatchResult = (Vec<Vec<f32>>, usize, Vec<String>, usize);
 
             if cur_texts.is_empty() {
+                log::debug!("{embedding_provider} embedding batch {}: skipping API call, {} empty inputs replaced with zero vectors", i + 1, batch.len());
                 let embeddings =
                     std::iter::repeat_n(vec![0.0f32; embedding_dim], batch.len()).collect();
                 if wait_after_request_s > 0 && i < num_batches - 1 {
@@ -299,11 +305,11 @@ where
             let start_time = Instant::now();
             let request = make_request(cur_texts);
             let response = api_client.post_json(&api_url, headers, &request).await?;
-
+            let status = response.status();
             let body = response.text().await?;
             log::debug!(
-                "{embedding_provider} embedding request took {:.1?}",
-                start_time.elapsed()
+                "{embedding_provider} embedding batch {}: status={status}, elapsed={:.1?}",
+                i + 1, start_time.elapsed()
             );
 
             let api_response: U = serde_json::from_str(&body)?;
@@ -315,9 +321,12 @@ where
             };
 
             let result: BatchResult = if let Some(emb) = embeddings_opt {
+                let expected = mask.iter().filter(|&&is_real| is_real).count();
+                log::debug!("{embedding_provider} embedding batch {}: expected_vectors={expected}, returned_vectors={}, empty_inputs={}, missing_vectors_replaced_with_zeros={}",
+                    i + 1, emb.len(), batch.len() - expected, expected.saturating_sub(emb.len()));
                 let mut it = emb.into_iter();
                 let mut batch_embs = Vec::with_capacity(batch.len());
-                let masked_count = mask.iter().filter(|&&m| !m).count();
+                let masked_count = batch.len() - expected;
                 for &is_real in &mask {
                     if is_real && let Some(embedding) = it.next() {
                         batch_embs.push(embedding);
@@ -328,8 +337,8 @@ where
                 (batch_embs, 0, vec![], masked_count)
             } else {
                 let error_msg = error_message.unwrap_or_else(|| String::from("No error found."));
-                log::error!("Got a 4xx response from the {embedding_provider} API: {error_msg}\n");
-                log::error!("We tried sending the request: {request:#?}\n");
+                log::error!("{embedding_provider} embedding batch {} failed (HTTP {status}): {}", i + 1, crate::logging::preview(&error_msg));
+                log::debug!("{embedding_provider} embedding batch {}: replacing {} failed inputs with zero vectors", i + 1, batch.len());
                 let fail_texts: Vec<String> =
                     batch.iter().filter_map(|t| t.as_ref()).cloned().collect();
                 let zeros = std::iter::repeat_n(vec![0.0f32; embedding_dim], batch.len()).collect();
@@ -367,12 +376,10 @@ where
     }
 
     if fail_count > 0 {
-        let failed = FailedTexts {
-            embedding_provider,
-            texts: failed_texts,
-        };
-
-        log::error!("Some texts failed to embed:\n{failed}");
+        log::error!(
+            "{embedding_provider}: {fail_count} texts failed to embed: {}",
+            crate::logging::preview(format_args!("{failed_texts:?}"))
+        );
     }
 
     log::info!(

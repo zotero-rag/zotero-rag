@@ -120,6 +120,12 @@ impl LLMClient {
         &self,
         request: &ChatRequest<'_>,
     ) -> Result<CompletionApiResponse, LLMError> {
+        log::debug!(
+            "Sending generation request: model={:?}, message_bytes={}, history_items={}",
+            self.get_model_name(),
+            request.message.len(),
+            request.chat_history.len()
+        );
         match self {
             LLMClient::Anthropic(client) => AgenticClient::send_message(client, request).await,
             LLMClient::Ollama(client) => AgenticClient::send_message(client, request).await,

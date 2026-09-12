@@ -13,7 +13,8 @@ use serde::ser::SerializeMap;
 use serde_json::{Map, Value};
 
 use crate::llm::base::{
-    ChatHistoryContent, ChatHistoryItem, ContentType, MessageRole, ToolCallResponse, ToolUseStats,
+    ChatHistoryContent, ChatHistoryItem, ContentType, MessageRole, ToolCallRequest,
+    ToolCallResponse, ToolUseStats,
 };
 
 /// The key for the input schema for tools passed to Anthropic.
@@ -173,6 +174,64 @@ pub(crate) fn get_owned_tools<'a>(
 /// has a `'static` lifetime.
 pub type CallbackFn<T> = dyn Fn(&T) + Send + Sync + 'static;
 
+/// Execute a requested tool, logging its outcome and converting failures into model-visible text.
+///
+/// # Arguments
+///
+/// * `tool_call` - The provider's tool name, call ID, and arguments.
+/// * `tools` - The tools available on this generation turn.
+///
+/// # Returns
+///
+/// The tool's unmodified result, or an error string for failed or unknown calls.
+async fn execute_tool_call(tool_call: &ToolCallRequest, tools: &[SerializedTool<'_>]) -> Value {
+    let tool_call_id = &tool_call.id;
+    let tool_name = &tool_call.tool_name;
+    let start = std::time::Instant::now();
+    log::debug!(
+        "Calling tool {tool_name} (id={tool_call_id}): args={}",
+        crate::logging::preview(&tool_call.args)
+    );
+    if let Some(tool) = tools
+        .iter()
+        .find(|tool| tool.tool.name() == tool_call.tool_name)
+    {
+        let result = tool.tool.call(tool_call.args.clone()).await;
+        log::debug!(
+            "Tool {tool_name} (id={tool_call_id}): success={}, elapsed={:.2?}",
+            result.is_ok(),
+            start.elapsed()
+        );
+        result.unwrap_or_else(|e| {
+            log::debug!(
+                "Tool {tool_name} (id={tool_call_id}) error: {}",
+                crate::logging::preview(&e)
+            );
+            Value::String(format!("Error calling tool: {e}"))
+        })
+    } else {
+        let available_tool_names = tools
+            .iter()
+            .map(|tool| tool.tool.name())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let available_tools = if available_tool_names.is_empty() {
+            "none"
+        } else {
+            &available_tool_names
+        };
+
+        log::warn!(
+            "Model called unknown tool '{}'. Available tools: {available_tools}.",
+            tool_call.tool_name
+        );
+        Value::String(format!(
+            "Tool '{}' does not exist. Available tools: {available_tools}.",
+            tool_call.tool_name
+        ))
+    }
+}
+
 /// Process tool calls in a single model response (provider-agnostic).
 ///
 /// This function consumes a slice of provider-agnostic `ChatHistoryContent` that represents the
@@ -210,41 +269,14 @@ pub(crate) async fn process_tool_calls(
                 // we will.
                 log::warn!(
                     "Got a tool result from the API response. This is not expected, and will be \
-                    ignored. Tool result: {tool_result:#?}"
+                    ignored. Tool result: {}",
+                    crate::logging::preview(format_args!("{tool_result:?}"))
                 );
                 (None, None)
             }
             ChatHistoryContent::ToolCallRequest(tool_call) => {
                 let tool_call_id = tool_call.id.clone();
-                let tool_result = if let Some(tool) = tools
-                    .iter()
-                    .find(|tool| tool.tool.name() == tool_call.tool_name)
-                {
-                    tool.tool
-                        .call(tool_call.args.clone())
-                        .await
-                        .unwrap_or_else(|e| Value::String(format!("Error calling tool: {e}")))
-                } else {
-                    let available_tool_names = tools
-                        .iter()
-                        .map(|tool| tool.tool.name())
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    let available_tools = if available_tool_names.is_empty() {
-                        "none"
-                    } else {
-                        &available_tool_names
-                    };
-
-                    log::warn!(
-                        "Model called unknown tool '{}'. Available tools: {available_tools}.",
-                        tool_call.tool_name
-                    );
-                    Value::String(format!(
-                        "Tool '{}' does not exist. Available tools: {available_tools}.",
-                        tool_call.tool_name
-                    ))
-                };
+                let tool_result = execute_tool_call(tool_call, tools).await;
 
                 let tool_use_stats = ToolUseStats {
                     tool_call_id: tool_call_id.clone(),
