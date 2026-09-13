@@ -4,6 +4,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use rustyline::error::ReadlineError;
+use tokio::sync::mpsc;
 
 use crate::cli::commands::{Command, parse_command};
 use crate::cli::errors::CLIError;
@@ -21,6 +22,7 @@ use crate::cli::handlers::query::{handle_query_cmd, handle_search_cmd};
 use crate::cli::placeholder::PlaceholderText;
 use crate::cli::readline::get_readline_config;
 use crate::common::Context;
+use crate::io::EngineEvent;
 use crate::state::get_state_dir;
 
 /// A file that contains parsed PDF texts from the user's Zotero library. In case the
@@ -87,7 +89,10 @@ pub(crate) async fn dispatch_command<O: Write, E: Write>(
 /// * `CLIError::IOError` - If `writeln!` fails.
 /// * `CLIError::StateDirError` - If the state dir could not be obtained.
 #[allow(clippy::needless_continue)]
-pub(crate) async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<(), CLIError> {
+pub(crate) async fn cli<O: Write, E: Write>(
+    mut ctx: Context<O, E>,
+    rx: mpsc::Receiver<EngineEvent>,
+) -> Result<(), CLIError> {
     // At startup, we should check if there are pending embedding batches and notify the user if so.
     // [`crate::cli::handlers::batch`] has more details about the semantics of interacting with
     // batch APIs. We don't do the check itself since we have two bad options:
