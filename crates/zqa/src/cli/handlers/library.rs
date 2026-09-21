@@ -271,11 +271,12 @@ pub(crate) async fn handle_doctor_cmd(ctx: &mut Context) -> Result<(), CLIError>
 
 #[cfg(test)]
 mod tests {
-    use zqa_macros::{test_contains, test_ok};
+    use zqa_macros::test_ok;
     use zqa_macros_proc::retry;
 
     use super::{handle_checkhealth_cmd, handle_process_cmd, handle_stats_cmd};
-    use crate::common::test_support::TestPaths;
+    use crate::common::test_support::{TestPaths, capture_events};
+    use crate::io::EngineEvent;
 
     #[retry(3)]
     #[tokio::test(flavor = "multi_thread")]
@@ -285,18 +286,22 @@ mod tests {
         let paths = TestPaths::new();
         let mut ctx = paths.context(vec![]);
 
-        let result = handle_process_cmd(&mut ctx).await;
+        let (result, events) = capture_events(&mut ctx, handle_process_cmd).await;
         test_ok!(result);
         assert!(result.is_ok());
 
-        let output = String::from_utf8(ctx.out.clone().into_inner()).unwrap();
-        assert!(output.contains("Successfully parsed library!"));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            EngineEvent::StatusUpdate { message } if message.contains("Successfully parsed library!")
+        )));
 
-        let stats = handle_stats_cmd(&mut ctx).await;
-        let output = String::from_utf8(ctx.out.into_inner()).unwrap();
+        let (stats, events) = capture_events(&mut ctx, handle_stats_cmd).await;
         test_ok!(stats);
-        test_contains!(output, "LanceDB metadata:");
-        test_contains!(output, "Number of rows: 8");
+        assert!(events.iter().any(|event| matches!(
+            event,
+            EngineEvent::Text { message }
+                if message.contains("LanceDB metadata:") && message.contains("Number of rows: 8")
+        )));
     }
 
     #[tokio::test]
@@ -305,10 +310,13 @@ mod tests {
 
         let paths = TestPaths::new();
         let mut ctx = paths.context(vec![]);
-        handle_checkhealth_cmd(&mut ctx).await.unwrap();
-        let output = String::from_utf8(ctx.out.into_inner()).unwrap();
+        let (result, events) = capture_events(&mut ctx, handle_checkhealth_cmd).await;
+        result.unwrap();
 
-        assert!(output.contains("storage does not exist"));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            EngineEvent::Text { message } if message.contains("storage does not exist")
+        )));
     }
 
     #[retry(3)]
@@ -322,12 +330,24 @@ mod tests {
         test_ok!(result);
 
         let mut ctx = paths.context(vec![]);
-        handle_checkhealth_cmd(&mut ctx).await.unwrap();
-        let output = String::from_utf8(ctx.out.into_inner()).unwrap();
+        let (result, events) = capture_events(&mut ctx, handle_checkhealth_cmd).await;
+        result.unwrap();
 
-        test_contains!(output, "Vector Store Health Check Results");
-        test_contains!(output, "storage exists");
-        test_contains!(output, "Table is accessible");
-        test_contains!(output, "Table has");
+        assert!(events.iter().any(|event| matches!(
+            event,
+            EngineEvent::Text { message } if message.contains("Vector Store Health Check Results")
+        )));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            EngineEvent::Text { message } if message.contains("storage exists")
+        )));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            EngineEvent::Text { message } if message.contains("Table is accessible")
+        )));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            EngineEvent::Text { message } if message.contains("Table has")
+        )));
     }
 }
