@@ -81,9 +81,8 @@ impl Default for PathOptions {
     }
 }
 
-/// A structure that holds the application context, including CLI arguments and writers
-/// for `stdout` and `stderr`.
-pub(crate) struct Context<OutStream: Write, ErrStream: Write> {
+/// Application state, configuration, storage, and an optional event sender.
+pub(crate) struct Context {
     /// Application state
     pub(crate) state: State,
     /// Optional channel for transmitting events. If `None`, no events are published.
@@ -94,18 +93,9 @@ pub(crate) struct Context<OutStream: Write, ErrStream: Write> {
     pub(crate) store: LanceZoteroStore,
     /// Runtime filesystem path overrides (library location, batch-iter file)
     pub(crate) path_options: PathOptions,
-    /// Abstraction for `stdin()`. Boxed rather than generic because, unlike `out`/`err` (which
-    /// tests substitute with an inspectable `Cursor` to assert on), input is only ever *supplied*:
-    /// no caller needs the concrete reader type. Boxing also keeps the input concern off every
-    /// handler signature.
-    pub(crate) input: Box<dyn BufRead>,
-    /// Abstraction for `stdout()`
-    pub(crate) out: OutStream,
-    /// Abstraction for `stderr()`
-    pub(crate) err: ErrStream,
 }
 
-impl<OutStream: Write, ErrStream: Write> Context<OutStream, ErrStream> {
+impl Context {
     /// Emit an event to the channel, if it exists.
     ///
     /// # Arguments
@@ -119,10 +109,6 @@ impl<OutStream: Write, ErrStream: Write> Context<OutStream, ErrStream> {
     /// # Errors
     ///
     /// * `SendError<EngineEvent>` - If the receiver is closed; the error retains the event.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "Event producers are not connected yet.")
-    )]
     pub(crate) async fn emit(&self, event: EngineEvent) -> Result<(), SendError<EngineEvent>> {
         let Some(tx) = &self.event_tx else {
             return Ok(());

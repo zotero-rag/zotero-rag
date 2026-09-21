@@ -1,4 +1,5 @@
 use std::fs;
+use std::io::BufRead;
 use std::io::Write;
 use std::path::Path;
 use std::sync::Arc;
@@ -37,39 +38,35 @@ pub(crate) const BATCH_ITER_FILE: &str = "batch_iter.bin";
 /// # Arguments
 ///
 /// * `command` - The command string entered by the user.
-/// * `ctx` - A `Context` object that contains CLI args and objects that implement
-///   [`std::io::Write`] for `stdout` and `stderr`.
+/// * `ctx` - A `Context` object that contains CLI args
 ///
 /// # Returns
 ///
 /// `Ok(true)` if the CLI should continue running, `Ok(false)` if it should exit.
-pub(crate) async fn dispatch_command<O: Write, E: Write>(
-    command: &str,
-    ctx: &mut Context<O, E>,
-) -> Result<bool, CLIError> {
+pub(crate) async fn dispatch_command(command: &str, ctx: &mut Context) -> Result<bool, CLIError> {
     let command =
         parse_command(command.trim()).map_err(|e| CLIError::CommandError(e.to_string()))?;
 
     match command {
         Command::Batch(subcmd) => handle_batch_cmd(subcmd, ctx).await,
         Command::CheckHealth => handle_checkhealth_cmd(ctx).await,
-        Command::Config => handle_config_cmd(ctx),
+        Command::Config => handle_config_cmd(ctx).await,
         Command::Dedup => handle_dedup_cmd(ctx).await,
-        Command::Docs(subcmd) => handle_docs_cmd(subcmd, ctx),
+        Command::Docs(subcmd) => handle_docs_cmd(subcmd, ctx).await,
         Command::Doctor => handle_doctor_cmd(ctx).await,
         Command::DoNothing => {
             return Ok(true);
         }
         Command::Embed { fix } => handle_embed_cmd(fix, ctx).await,
-        Command::Help => handle_help_cmd(ctx),
+        Command::Help => handle_help_cmd(ctx).await,
         Command::Index => handle_index_cmd(ctx).await,
-        Command::NewConversation => handle_new_conversation_cmd(ctx),
+        Command::NewConversation => handle_new_conversation_cmd(ctx).await,
         Command::Process => handle_process_cmd(ctx).await,
         Command::Quit => {
-            return handle_quit_cmd(ctx).and(Ok(false));
+            return handle_quit_cmd(ctx).await.and(Ok(false));
         }
         Command::Query { text } => handle_query_cmd(text, ctx).await,
-        Command::Resume => handle_resume_cmd(ctx),
+        Command::Resume => handle_resume_cmd(ctx).await,
         Command::Search { query } => handle_search_cmd(query, ctx).await,
         Command::Stats => handle_stats_cmd(ctx).await,
     }
@@ -80,20 +77,25 @@ pub(crate) async fn dispatch_command<O: Write, E: Write>(
 ///
 /// # Arguments
 ///
-/// * `ctx` - A `Context` object that contains CLI args and objects that implement
-///   [`std::io::Write`] for `stdout` and `stderr`.
+/// * `ctx` - Application state, configuration, storage, and the event sender.
 /// * `rx` - A channel that receives `EngineEvent`s.
+/// * `input` - Input for event-prompt replies.
+/// * `output` - Output for model text, status updates, and prompts.
+/// * `err` - Output for warnings and errors.
 ///
 /// # Errors
 ///
 /// * `CLIError::ReadlineError` - If we could not get the history file path, a `readline` editor could not be created,
 ///   or the history could not be saved.
-/// * `CLIError::IOError` - If `writeln!` fails.
+/// * `CLIError::IOError` - If rendering an event, flushing output, or reading a prompt reply fails.
 /// * `CLIError::StateDirError` - If the state dir could not be obtained.
 #[allow(clippy::needless_continue)]
-pub(crate) async fn cli<O: Write, E: Write>(
-    mut ctx: Context<O, E>,
+pub(crate) async fn cli<R: BufRead, O: Write, E: Write>(
+    mut ctx: Context,
     mut rx: mpsc::Receiver<EngineEvent>,
+    mut input: R,
+    mut output: O,
+    mut err: E,
 ) -> Result<(), CLIError> {
     // At startup, we should check if there are pending embedding batches and notify the user if so.
     // [`crate::cli::handlers::batch`] has more details about the semantics of interacting with
@@ -117,7 +119,7 @@ pub(crate) async fn cli<O: Write, E: Write>(
 
         if !batch_files.is_empty() {
             writeln!(
-                &mut ctx.out,
+                &mut output,
                 "You have {} embedding batch{} pending. Use /batch check to check their status.\n",
                 batch_files.len(),
                 if batch_files.len() > 1 { "es" } else { "" }
@@ -167,19 +169,19 @@ pub(crate) async fn cli<O: Write, E: Write>(
                         tokio::select! {
                             result = &mut dispatch => break result,
                             Some(event) = rx.recv() => {
-                                event.handle_event(&mut ctx.input, &mut ctx.out, &mut ctx.err, read_password)?
+                                event.handle_event(&mut input, &mut output, &mut err, read_password)?
                             }
                         }
                     }
                 };
 
                 while let Ok(event) = rx.try_recv() {
-                    event.handle_event(&mut ctx.input, &mut ctx.out, &mut ctx.err, read_password)?
+                    event.handle_event(&mut input, &mut output, &mut err, read_password)?
                 }
 
                 match continue_loop {
                     Err(ref e) => {
-                        write!(&mut ctx.err, "{e}")?;
+                        write!(&mut err, "{e}")?;
                     }
                     Ok(false) => break,
                     _ => {}
@@ -191,7 +193,12 @@ pub(crate) async fn cli<O: Write, E: Write>(
             }
             Err(ReadlineError::Interrupted) => {
                 // Handle SIGINT by saving the conversation if needed
-                save_current_conversation(&mut ctx)?;
+                save_current_conversation(&mut ctx).await?;
+
+                while let Ok(event) = rx.try_recv() {
+                    event.handle_event(&mut input, &mut output, &mut err, read_password)?;
+                }
+
                 break;
             }
             _ => break,

@@ -1,7 +1,6 @@
 //! Command handlers for library-related tasks
 
 use std::fs::File;
-use std::io::Write;
 
 use arrow_array::RecordBatch;
 use arrow_ipc::reader::FileReader;
@@ -11,6 +10,7 @@ use zqa_rag::vector::doctor::doctor as rag_doctor;
 use crate::cli::errors::CLIError;
 use crate::common::Context;
 use crate::full_library_to_arrow;
+use crate::io::EngineEvent;
 use crate::store::common::ZoteroStore;
 use crate::utils::arrow::library_to_arrow;
 use crate::utils::library::{
@@ -18,28 +18,33 @@ use crate::utils::library::{
 };
 use crate::utils::terminal::{DIM_TEXT, RESET, read_line};
 
-/// Print table statistics for the current LanceDB database.
+/// Emit table statistics for the current LanceDB database.
 ///
 /// # Arguments
 ///
-/// * `ctx` - A `Context` object that contains CLI state and objects that implement
-///   [`std::io::Write`] for `stdout` and `stderr`.
+/// * `ctx` - The application context, including the store and event sender.
 ///
 /// # Returns
 ///
-/// `Ok(())` if the command output was written successfully.
+/// `Ok(())` if event publication completed without error.
 ///
 /// # Errors
 ///
-/// Returns a [`CLIError`] if writing to an output stream fails.
-pub(crate) async fn handle_stats_cmd<O, E>(ctx: &mut Context<O, E>) -> Result<(), CLIError>
-where
-    O: Write,
-    E: Write,
-{
+/// * `CLIError::ChannelError` - If the event receiver is closed.
+pub(crate) async fn handle_stats_cmd(ctx: &mut Context) -> Result<(), CLIError> {
     match ctx.store.get_metadata().await {
-        Ok(stats) => writeln!(&mut ctx.out, "{stats}")?,
-        Err(e) => writeln!(&mut ctx.err, "Could not get database statistics: {e}")?,
+        Ok(stats) => {
+            ctx.emit(EngineEvent::Text {
+                message: format!("{stats}\n"),
+            })
+            .await?;
+        }
+        Err(e) => {
+            ctx.emit(EngineEvent::Error {
+                message: format!("Could not get database statistics: {e}\n"),
+            })
+            .await?;
+        }
     }
 
     Ok(())
@@ -53,8 +58,7 @@ where
 ///
 /// # Arguments
 ///
-/// * `ctx` - A `Context` object that contains CLI state and objects that implement
-///   [`std::io::Write`] for `stdout` and `stderr`.
+/// * `ctx` - The application context, including the store, configuration, and event sender.
 ///
 /// # Returns
 ///
@@ -62,13 +66,9 @@ where
 ///
 /// # Errors
 ///
-/// Returns a [`CLIError`] if input/output fails, configuration is invalid,
-/// or parsing / insertion setup fails.
-pub(crate) async fn handle_process_cmd<O, E>(ctx: &mut Context<O, E>) -> Result<(), CLIError>
-where
-    O: Write,
-    E: Write,
-{
+/// Returns a [`CLIError`] if file operations fail, configuration is invalid,
+/// parsing / insertion setup fails, or the event receiver is closed.
+pub(crate) async fn handle_process_cmd(ctx: &mut Context) -> Result<(), CLIError> {
     const WARNING_THRESHOLD: usize = 100;
 
     let library_path = ctx.path_options.library_path.as_deref();
@@ -79,22 +79,26 @@ where
     };
 
     if let Err(parse_err) = item_metadata {
-        writeln!(
-            &mut ctx.err,
-            "Could not parse library metadata: {parse_err}"
-        )?;
+        ctx.emit(EngineEvent::Error {
+            message: format!("Could not parse library metadata: {parse_err}\n"),
+        })
+        .await?;
         return Ok(());
     }
 
     let item_metadata = item_metadata.unwrap();
     let metadata_length = item_metadata.len();
     if metadata_length >= WARNING_THRESHOLD {
-        writeln!(
-            &mut ctx.out,
-            "Your library has {metadata_length} new items. Parsing may take a while. Continue?"
-        )?;
-        write!(&mut ctx.out, "(/process) >>> ")?;
-        ctx.out.flush()?;
+        ctx.emit(EngineEvent::Text {
+            message: format!(
+                "Your library has {metadata_length} new items. Parsing may take a while. Continue?\n"
+            ),
+        })
+        .await?;
+        ctx.emit(EngineEvent::Text {
+            message: "(/process) >>> ".into(),
+        })
+        .await?;
 
         let option = read_line(&mut ctx.input);
         let option = option.trim().to_lowercase();
@@ -124,7 +128,10 @@ where
 
     match result {
         Ok(()) => {
-            writeln!(&mut ctx.out, "Successfully parsed library!")?;
+            ctx.emit(EngineEvent::StatusUpdate {
+                message: "Successfully parsed library!\n".into(),
+            })
+            .await?;
             std::fs::remove_file(batch_iter_path)?;
             log::debug!(
                 "Removed Arrow recovery file after successful write: {}",
@@ -137,12 +144,17 @@ where
                 batch_iter_path.display(),
                 zqa_rag::logging::preview(&e)
             );
-            writeln!(&mut ctx.err, "Parsing library failed: {e}")?;
-            writeln!(
-                &mut ctx.err,
-                "The parsed PDFs have been saved in '{}'. Run '/embed' to retry embedding.",
-                batch_iter_path.display()
-            )?;
+            ctx.emit(EngineEvent::Error {
+                message: format!("Parsing library failed: {e}\n"),
+            })
+            .await?;
+            ctx.emit(EngineEvent::Warning {
+                message: format!(
+                    "The parsed PDFs have been saved in '{}'. Run '/embed' to retry embedding.\n",
+                    batch_iter_path.display()
+                ),
+            })
+            .await?;
         }
     }
 
@@ -157,8 +169,7 @@ where
 /// # Arguments
 ///
 /// * `fix` - Whether to repair zero-vector rows instead of replaying saved batch data.
-/// * `ctx` - A `Context` object that contains CLI state and objects that implement
-///   [`std::io::Write`] for `stdout` and `stderr`.
+/// * `ctx` - The application context, including the store, configuration, and event sender.
 ///
 /// # Returns
 ///
@@ -167,15 +178,8 @@ where
 /// # Errors
 ///
 /// Returns a [`CLIError`] if reading batch data, accessing configuration,
-/// database operations, or writing output fails.
-pub(crate) async fn handle_embed_cmd<O, E>(
-    fix: bool,
-    ctx: &mut Context<O, E>,
-) -> Result<(), CLIError>
-where
-    O: Write,
-    E: Write,
-{
+/// or database operations fail, or the event receiver is closed.
+pub(crate) async fn handle_embed_cmd(fix: bool, ctx: &mut Context) -> Result<(), CLIError> {
     if fix {
         return fix_zero_embeddings(ctx).await;
     }
@@ -193,10 +197,12 @@ where
     }
 
     if batches.is_empty() {
-        writeln!(
-            &mut ctx.err,
-            "(/embed) It seems {batch_iter_display} contains no batches. Exiting early."
-        )?;
+        ctx.emit(EngineEvent::Warning {
+            message: format!(
+                "(/embed) It seems {batch_iter_display} contains no batches. Exiting early.\n"
+            ),
+        })
+        .await?;
         return Ok(());
     }
 
@@ -206,17 +212,19 @@ where
         batches.iter().map(RecordBatch::num_rows).sum::<usize>()
     );
 
-    write!(ctx.out, "Successfully loaded {n_batches} batch")?;
-
-    if n_batches > 1 {
-        write!(&mut ctx.out, "es")?;
-    }
-    writeln!(ctx.out, ".")?;
+    let suffix = if n_batches > 1 { "es" } else { "" };
+    ctx.emit(EngineEvent::StatusUpdate {
+        message: format!("Successfully loaded {n_batches} batch{suffix}.\n"),
+    })
+    .await?;
 
     let db = ctx.store.upsert_batches(batches).await;
 
     if db.is_ok() {
-        writeln!(ctx.out, "Successfully parsed library!")?;
+        ctx.emit(EngineEvent::StatusUpdate {
+            message: "Successfully parsed library!\n".into(),
+        })
+        .await?;
         std::fs::remove_file(batch_iter_path)?;
         log::debug!("Removed Arrow recovery file after successful replay: {batch_iter_display}");
     } else if let Err(e) = db {
@@ -224,11 +232,14 @@ where
             "Replay failed; retaining Arrow recovery file {batch_iter_display}: {}",
             zqa_rag::logging::preview(&e)
         );
-        writeln!(ctx.err, "Parsing library failed: {e}")?;
-        writeln!(
-            ctx.err,
-            "Your {batch_iter_display} file has been left untouched."
-        )?;
+        ctx.emit(EngineEvent::Error {
+            message: format!("Parsing library failed: {e}\n"),
+        })
+        .await?;
+        ctx.emit(EngineEvent::Warning {
+            message: format!("Your {batch_iter_display} file has been left untouched.\n"),
+        })
+        .await?;
     }
 
     Ok(())
@@ -238,31 +249,31 @@ where
 ///
 /// # Arguments
 ///
-/// * `ctx` - A `Context` object that contains CLI state and objects that implement
-///   [`std::io::Write`] for `stdout` and `stderr`.
+/// * `ctx` - The application context, including the store and event sender.
 ///
 /// # Returns
 ///
-/// `Ok(())` if deduplication completed and the result was written successfully.
+/// `Ok(())` if the deduplication result or error was passed to the event sender.
 ///
 /// # Errors
 ///
-/// Returns a [`CLIError`] if configuration is invalid, deduplication fails,
-/// or writing output fails.
-pub(crate) async fn handle_dedup_cmd<O, E>(ctx: &mut Context<O, E>) -> Result<(), CLIError>
-where
-    O: Write,
-    E: Write,
-{
+/// * `CLIError::ChannelError` - If the event receiver is closed.
+pub(crate) async fn handle_dedup_cmd(ctx: &mut Context) -> Result<(), CLIError> {
     let result = ctx.store.dedup_by_title().await;
 
     match result {
         Ok(count) => {
-            writeln!(ctx.out, "Deduped {count} rows")?;
+            ctx.emit(EngineEvent::Text {
+                message: format!("Deduped {count} rows\n"),
+            })
+            .await?;
         }
         Err(e) => {
             // Avoid terminating CLI
-            writeln!(&mut ctx.err, "Deduplication failed: {e}")?;
+            ctx.emit(EngineEvent::Error {
+                message: format!("Deduplication failed: {e}\n"),
+            })
+            .await?;
         }
     }
 
@@ -273,58 +284,56 @@ where
 ///
 /// # Arguments
 ///
-/// * `ctx` - A `Context` object that contains CLI state and objects that implement
-///   [`std::io::Write`] for `stdout` and `stderr`.
+/// * `ctx` - The application context, including the store and event sender.
 ///
 /// # Returns
 ///
-/// `Ok(())` if index creation completed successfully.
+/// `Ok(())` if the index update and event publication completed without a channel error.
+/// Index-creation failures are reported as error events.
 ///
 /// # Errors
 ///
-/// Returns a [`CLIError`] if index creation fails or writing output fails.
-pub(crate) async fn handle_index_cmd<O, E>(ctx: &mut Context<O, E>) -> Result<(), CLIError>
-where
-    O: Write,
-    E: Write,
-{
-    writeln!(
-        &mut ctx.out,
-        "Updating indices. This may take a while depending on how many items need to be added."
-    )?;
+/// * `CLIError::ChannelError` - If the event receiver is closed.
+pub(crate) async fn handle_index_cmd(ctx: &mut Context) -> Result<(), CLIError> {
+    ctx.emit(EngineEvent::StatusUpdate {
+        message: "Updating indices. This may take a while depending on how many items need to be added.\n"
+            .into(),
+    })
+    .await?;
 
     if let Err(e) = ctx.store.create_or_update_indices().await {
-        writeln!(&mut ctx.err, "Failed to update indexes: {e}")?;
+        ctx.emit(EngineEvent::Error {
+            message: format!("Failed to update indexes: {e}\n"),
+        })
+        .await?;
     }
 
-    writeln!(
-        &mut ctx.out,
-        "Done! You should verify the indices exist with /checkhealth."
-    )?;
+    ctx.emit(EngineEvent::StatusUpdate {
+        message: "Done! You should verify the indices exist with /checkhealth.\n".into(),
+    })
+    .await?;
 
     Ok(())
 }
 
-/// Run health checks against the LanceDB database and print the results.
+/// Run health checks against the LanceDB database and emit the results.
 ///
 /// # Arguments
 ///
-/// * `ctx` - A `Context` object that contains CLI state and objects that implement
-///   [`std::io::Write`] for `stdout` and `stderr`.
+/// * `ctx` - The application context, including the store and event sender.
 ///
 /// # Returns
 ///
-/// `Ok(())` if the health-check output was written successfully.
+/// `Ok(())` if health-check event publication completed without error.
 ///
 /// # Errors
 ///
-/// Returns a [`CLIError`] if writing output fails.
-pub(crate) async fn handle_checkhealth_cmd<O: Write, E: Write>(
-    ctx: &mut Context<O, E>,
-) -> Result<(), CLIError> {
-    if let Err(e) = writeln!(ctx.out, "{}", ctx.store.health_check().await) {
-        let _ = writeln!(ctx.err, "{e}");
-    }
+/// * `CLIError::ChannelError` - If the event receiver is closed.
+pub(crate) async fn handle_checkhealth_cmd(ctx: &mut Context) -> Result<(), CLIError> {
+    ctx.emit(EngineEvent::Text {
+        message: format!("{}\n", ctx.store.health_check().await),
+    })
+    .await?;
 
     Ok(())
 }
@@ -336,8 +345,7 @@ pub(crate) async fn handle_checkhealth_cmd<O: Write, E: Write>(
 ///
 /// # Arguments
 ///
-/// * `ctx` - A `Context` object that contains CLI state and objects that implement
-///   [`std::io::Write`] for `stdout` and `stderr`.
+/// * `ctx` - The application context, including the store, configuration, and event sender.
 ///
 /// # Returns
 ///
@@ -345,14 +353,24 @@ pub(crate) async fn handle_checkhealth_cmd<O: Write, E: Write>(
 ///
 /// # Errors
 ///
-/// Returns a [`CLIError`] if diagnostics, repair, or writing output fails.
-pub(crate) async fn handle_doctor_cmd<O, E>(ctx: &mut Context<O, E>) -> Result<(), CLIError>
-where
-    O: Write,
-    E: Write,
-{
-    if let Err(e) = rag_doctor(ctx.store.backend(), &mut ctx.out).await {
-        writeln!(ctx.err, "{e}")?;
+/// Returns a [`CLIError`] if repair fails or the event receiver is closed.
+/// Diagnostic failures are reported as error events.
+pub(crate) async fn handle_doctor_cmd(ctx: &mut Context) -> Result<(), CLIError> {
+    let mut output = Vec::new();
+    let result = rag_doctor(ctx.store.backend(), &mut output).await;
+
+    if !output.is_empty() {
+        ctx.emit(EngineEvent::Text {
+            message: String::from_utf8_lossy(&output).into_owned(),
+        })
+        .await?;
+    }
+
+    if let Err(e) = result {
+        ctx.emit(EngineEvent::Error {
+            message: format!("{e}\n"),
+        })
+        .await?;
     }
 
     // Currently, we can really only fix the zero-embeddings issue
@@ -366,8 +384,7 @@ where
 ///
 /// # Arguments
 ///
-/// * `ctx` - A `Context` object that contains CLI state and objects that implement
-///   [`std::io::Write`] for `stdout` and `stderr`.
+/// * `ctx` - The application context, including the store, configuration, and event sender.
 ///
 /// # Returns
 ///
@@ -376,8 +393,8 @@ where
 /// # Errors
 ///
 /// Returns a [`CLIError`] if configuration is invalid, database operations fail,
-/// embedding regeneration fails, or writing output fails.
-async fn fix_zero_embeddings<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Result<(), CLIError> {
+/// embedding regeneration fails, or the event receiver is closed.
+async fn fix_zero_embeddings(ctx: &mut Context) -> Result<(), CLIError> {
     let healthcheck = ctx.store.health_check().await;
 
     let zero_batches = match healthcheck.zero_embedding_items {
@@ -388,10 +405,10 @@ async fn fix_zero_embeddings<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Res
                 .sum();
 
             if num_zeros > 0 {
-                writeln!(
-                    ctx.out,
-                    "{DIM_TEXT}Fixing {num_zeros} zero-embedding items.{RESET}"
-                )?;
+                ctx.emit(EngineEvent::StatusUpdate {
+                    message: format!("{DIM_TEXT}Fixing {num_zeros} zero-embedding items.{RESET}\n"),
+                })
+                .await?;
             }
 
             zero_items
@@ -408,7 +425,10 @@ async fn fix_zero_embeddings<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Res
         ))?;
 
     if zero_batches.is_empty() {
-        writeln!(ctx.out, "{DIM_TEXT}Done!{RESET}")?;
+        ctx.emit(EngineEvent::StatusUpdate {
+            message: format!("{DIM_TEXT}Done!{RESET}\n"),
+        })
+        .await?;
         return Ok(());
     }
 
@@ -428,10 +448,10 @@ async fn fix_zero_embeddings<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Res
 
     ctx.store.delete_by_library_keys(&zero_subset_keys).await?;
 
-    writeln!(
-        ctx.out,
-        "{num_empty_texts} items had empty texts, and will be deleted.\n"
-    )?;
+    ctx.emit(EngineEvent::StatusUpdate {
+        message: format!("{num_empty_texts} items had empty texts, and will be deleted.\n\n"),
+    })
+    .await?;
 
     if nonempty_zero_subset.is_empty() {
         return Ok(());
@@ -445,7 +465,10 @@ async fn fix_zero_embeddings<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Res
 
     ctx.store.upsert_batches(batches).await?;
 
-    writeln!(ctx.out, "Successfully fixed zero embeddings!\n")?;
+    ctx.emit(EngineEvent::StatusUpdate {
+        message: "Successfully fixed zero embeddings!\n\n".into(),
+    })
+    .await?;
 
     Ok(())
 }

@@ -1,6 +1,5 @@
 //! Command handlers for query operations.
 
-use std::io::Write;
 use std::path::Path;
 use std::pin::pin;
 use std::sync::{Arc, Mutex, atomic};
@@ -21,6 +20,7 @@ use crate::cli::prompts::{
     get_summarize_prompt, get_summarize_system_prompt, get_title_prompt, get_title_system_prompt,
 };
 use crate::common::Context;
+use crate::io::EngineEvent;
 use crate::state::UsageMetadata;
 use crate::store::common::ZoteroStore;
 use crate::tools::mixins::ToolExt;
@@ -35,28 +35,15 @@ enum ResponseSegment {
     Reasoning(String),
 }
 
-impl ResponseSegment {
-    /// Write answer text to stdout and dimmed reasoning to stderr.
-    ///
-    /// The GUI maps stdout to answer rows and stderr to muted status rows. Routing reasoning to
-    /// stderr reuses that styling and keeps reasoning out of stdout captures. The tradeoff is that
-    /// reasoning shares diagnostic output and is hidden when stderr is discarded.
-    ///
-    /// TODO: Move to typed output events so the GUI can render reasoning rows directly and the CLI
-    /// can print reasoning dimmed to stdout, with diagnostics on stderr.
-    ///
-    /// # Arguments
-    ///
-    /// * `out` - The answer output stream.
-    /// * `err` - The diagnostic output stream, rendered as muted text by the GUI.
-    ///
-    /// # Errors
-    ///
-    /// * Returns an I/O error if writing the segment fails.
-    fn write_to(&self, out: &mut impl Write, err: &mut impl Write) -> std::io::Result<()> {
-        match self {
-            Self::Text(text) => writeln!(out, "{text}"),
-            Self::Reasoning(reasoning) => writeln!(err, "{DIM_TEXT}{reasoning}{RESET}"),
+impl From<ResponseSegment> for EngineEvent {
+    fn from(segment: ResponseSegment) -> Self {
+        match segment {
+            ResponseSegment::Text(text) => Self::Text {
+                message: format!("{text}\n"),
+            },
+            ResponseSegment::Reasoning(reasoning) => Self::Reasoning {
+                message: format!("{reasoning}\n"),
+            },
         }
     }
 }
@@ -81,32 +68,30 @@ fn format_number(num: u32) -> String {
         .join(",")
 }
 
-/// Perform a vector search and print matching titles.
+/// Perform a vector search and emit matching titles as text events.
 ///
 /// # Arguments
 ///
 /// * `search_term` - The search string to run against the vector database.
-/// * `ctx` - A `Context` object that contains CLI state and objects that implement
-///   [`std::io::Write`] for `stdout` and `stderr`.
+/// * `ctx` - The application context, including the store, configuration, and event sender.
 ///
 /// # Returns
 ///
-/// `Ok(())` if the search completed and results were written successfully.
+/// `Ok(())` if the search and event publication completed without error.
 ///
 /// # Errors
 ///
 /// Returns a [`CLIError`] if provider configuration is invalid, vector search fails,
-/// or writing to an output stream fails.
-pub(crate) async fn handle_search_cmd<O, E>(
+/// or the event receiver is closed.
+pub(crate) async fn handle_search_cmd(
     search_term: String,
-    ctx: &mut Context<O, E>,
-) -> Result<(), CLIError>
-where
-    O: Write,
-    E: Write,
-{
+    ctx: &mut Context,
+) -> Result<(), CLIError> {
     if search_term.is_empty() {
-        writeln!(&mut ctx.err, "Please provide a search term after /search.")?;
+        ctx.emit(EngineEvent::Warning {
+            message: "Please provide a search term after /search.\n".into(),
+        })
+        .await?;
         return Ok(());
     }
 
@@ -120,15 +105,24 @@ where
         )
         .await?;
     let vector_search_duration = vector_search_start.elapsed();
-    writeln!(
-        &mut ctx.err,
-        "{DIM_TEXT}Vector search completed in {vector_search_duration:.2?}{RESET}"
-    )?;
+    ctx.emit(EngineEvent::StatusUpdate {
+        message: format!(
+            "{DIM_TEXT}Vector search completed in {vector_search_duration:.2?}{RESET}\n"
+        ),
+    })
+    .await?;
 
     for item in &search_results {
-        writeln!(&mut ctx.out, "{}", item.metadata.title)?;
+        ctx.emit(EngineEvent::Text {
+            message: format!("{}\n", item.metadata.title),
+        })
+        .await?;
     }
-    writeln!(&mut ctx.out)?;
+
+    ctx.emit(EngineEvent::Text {
+        message: "\n".into(),
+    })
+    .await?;
 
     Ok(())
 }
@@ -138,27 +132,22 @@ where
 /// # Arguments
 ///
 /// * `query` - The user query.
-/// * `ctx` - A `Context` object that contains CLI state and objects that implement
-///   [`std::io::Write`] for `stdout` and `stderr`.
+/// * `ctx` - The application context, including conversation state, providers, and the event sender.
 ///
 /// # Returns
 ///
-/// `Ok(())` if the query was processed and response metadata was written successfully.
+/// `Ok(())` if the query and response-metadata event publication completed without error.
 ///
 /// # Errors
 ///
 /// Returns a [`CLIError`] if configuration is invalid, document import fails,
-/// provider calls fail before final response handling, or writing to output streams fails.
+/// provider calls fail before final response handling, or the event receiver is closed.
 #[allow(clippy::too_many_lines)]
-pub(crate) async fn handle_query_cmd<O, E>(
-    query: String,
-    ctx: &mut Context<O, E>,
-) -> Result<(), CLIError>
-where
-    O: Write,
-    E: Write,
-{
-    writeln!(&mut ctx.out)?;
+pub(crate) async fn handle_query_cmd(query: String, ctx: &mut Context) -> Result<(), CLIError> {
+    ctx.emit(EngineEvent::Text {
+        message: "\n".into(),
+    })
+    .await?;
     log::debug!(
         "Starting query: input_bytes={}, tool_iteration_limit={}",
         query.len(),
@@ -169,14 +158,17 @@ where
         let path = match import_document(ctx, Path::new(&mention)) {
             Ok(p) => p,
             Err(e) => {
-                writeln!(
-                    &mut ctx.err,
-                    "{DIM_TEXT}Failed to import {mention}: {e}{RESET}"
-                )?;
+                ctx.emit(EngineEvent::Error {
+                    message: format!("{DIM_TEXT}Failed to import {mention}: {e}{RESET}\n"),
+                })
+                .await?;
                 continue;
             }
         };
-        writeln!(&mut ctx.err, "{DIM_TEXT}Imported document: {path}{RESET}")?;
+        ctx.emit(EngineEvent::StatusUpdate {
+            message: format!("{DIM_TEXT}Imported document: {path}{RESET}\n"),
+        })
+        .await?;
     }
     let llm_client = ctx
         .config
@@ -330,18 +322,24 @@ where
     let mut send_message = pin!(llm_client.send_message(&request));
     let result = loop {
         tokio::select! {
-            Some(segment) = response_rx.recv() => segment.write_to(&mut ctx.out, &mut ctx.err)?,
-            Some(line) = status_rx.recv() => writeln!(ctx.err, "{line}")?,
+            Some(segment) = response_rx.recv() => ctx.emit(segment.into()).await?,
+            Some(line) = status_rx.recv() => ctx.emit(EngineEvent::StatusUpdate {
+                message: format!("{line}\n"),
+            }).await?,
             Some(title_cost) = cost_rx.recv() => ctx.state.usage += title_cost,
             result = &mut send_message => break result,
         }
     };
     // Both producers can race the response's completion; drain the leftovers.
     while let Ok(segment) = response_rx.try_recv() {
-        segment.write_to(&mut ctx.out, &mut ctx.err)?;
+        ctx.emit(segment.into()).await?;
     }
+
     while let Ok(line) = status_rx.try_recv() {
-        writeln!(ctx.err, "{line}")?;
+        ctx.emit(EngineEvent::StatusUpdate {
+            message: format!("{line}\n"),
+        })
+        .await?;
     }
     while let Some(usage) = cost_rx.recv().await {
         ctx.state.usage += usage;
@@ -355,10 +353,12 @@ where
                 "Query completed in {final_draft_duration:.2?}: usage={:?}",
                 response.usage
             );
-            writeln!(
-                &mut ctx.err,
-                "{DIM_TEXT}Final draft completed in {final_draft_duration:.2?}{RESET}"
-            )?;
+            ctx.emit(EngineEvent::StatusUpdate {
+                message: format!(
+                    "{DIM_TEXT}Final draft completed in {final_draft_duration:.2?}{RESET}\n"
+                ),
+            })
+            .await?;
 
             // Accumulate token usage counts, then compute pricing using `UsageMetadata::from_rag_usage`
             let total_usage = response.usage + summarization_usage.lock().map(|u| *u)?;
@@ -423,82 +423,103 @@ where
                 "Query failed in {final_draft_duration:.2?}: {}",
                 zqa_rag::logging::preview(&e)
             );
-            writeln!(
-                &mut ctx.err,
-                "{DIM_TEXT}Final draft failed in {final_draft_duration:.2?}{RESET}"
-            )?;
+            ctx.emit(EngineEvent::StatusUpdate {
+                message: format!(
+                    "{DIM_TEXT}Final draft failed in {final_draft_duration:.2?}{RESET}\n"
+                ),
+            })
+            .await?;
 
-            writeln!(
-                &mut ctx.err,
-                "Failed to call the LLM endpoint for the final response: {e}"
-            )?;
+            ctx.emit(EngineEvent::Error {
+                message: format!("Failed to call the LLM endpoint for the final response: {e}\n"),
+            })
+            .await?;
         }
     }
 
-    writeln!(&mut ctx.out, "\n-----")?;
-    writeln!(&mut ctx.out, "{DIM_TEXT}Total token usage:{RESET}")?;
-    writeln!(
-        &mut ctx.out,
-        "\t{DIM_TEXT}Input tokens: {}{RESET}",
-        format_number(ctx.state.usage.input_tokens)
-    )?;
-    writeln!(
-        &mut ctx.out,
-        "\t{DIM_TEXT}Output tokens: {}{RESET}\n",
-        format_number(ctx.state.usage.output_tokens)
-    )?;
+    ctx.emit(EngineEvent::Text {
+        message: "\n-----\n".into(),
+    })
+    .await?;
+    ctx.emit(EngineEvent::Text {
+        message: format!("{DIM_TEXT}Total token usage:{RESET}\n"),
+    })
+    .await?;
+    ctx.emit(EngineEvent::Text {
+        message: format!(
+            "\t{DIM_TEXT}Input tokens: {}{RESET}\n",
+            format_number(ctx.state.usage.input_tokens)
+        ),
+    })
+    .await?;
+    ctx.emit(EngineEvent::Text {
+        message: format!(
+            "\t{DIM_TEXT}Output tokens: {}{RESET}\n\n",
+            format_number(ctx.state.usage.output_tokens)
+        ),
+    })
+    .await?;
 
     let cost = f64::from(ctx.state.usage.estimated_cost) / 100.0;
     if cost > 0.0 {
-        writeln!(
-            &mut ctx.out,
-            "\t{DIM_TEXT}Session cost: ${cost:.4} ({}){RESET}",
-            ctx.config.get_generation_model_name().unwrap_or_default()
-        )?;
+        ctx.emit(EngineEvent::Text {
+            message: format!(
+                "\t{DIM_TEXT}Session cost: ${cost:.4} ({}){RESET}\n",
+                ctx.config.get_generation_model_name().unwrap_or_default()
+            ),
+        })
+        .await?;
     }
-    writeln!(&mut ctx.out)?;
+
+    ctx.emit(EngineEvent::Text {
+        message: "\n".into(),
+    })
+    .await?;
 
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use zqa_macros::test_ok;
+    use zqa_macros::{test_eq, test_ok};
     use zqa_macros_proc::retry;
 
     use super::{ResponseSegment, handle_query_cmd, handle_search_cmd};
     use crate::cli::handlers::library::handle_process_cmd;
     use crate::common::test_support::TestPaths;
+    use crate::io::EngineEvent;
 
-    /// Reasoning is dimmed on stderr, and answer text remains unformatted on stdout.
+    /// Reasoning and answers retain distinct event types and trailing newlines.
     #[test]
     fn response_segments_keep_reasoning_separate_from_answers() {
-        let mut out = Vec::new();
-        let mut err = Vec::new();
+        let reasoning = EngineEvent::from(ResponseSegment::Reasoning(
+            "Compare the sources.\nThey agree.".into(),
+        ));
+        let answer = EngineEvent::from(ResponseSegment::Text("The answer.".into()));
 
-        ResponseSegment::Reasoning("Compare the sources.\nThey agree.".into())
-            .write_to(&mut out, &mut err)
-            .unwrap();
-        ResponseSegment::Text("The answer.".into())
-            .write_to(&mut out, &mut err)
-            .unwrap();
+        let EngineEvent::Reasoning { message } = reasoning else {
+            panic!("Expected a reasoning event");
+        };
 
-        assert_eq!(out, b"The answer.\n");
-        assert_eq!(err, b"\x1b[2mCompare the sources.\nThey agree.\x1b[0m\n");
+        test_eq!(message, "Compare the sources.\nThey agree.\n");
+
+        let EngineEvent::Text { message } = answer else {
+            panic!("Expected a text event");
+        };
+
+        test_eq!(message, "The answer.\n");
     }
 
-    /// A text-only response does not produce diagnostic output.
+    /// A text-only response produces an answer event, not a reasoning event.
     #[test]
     fn text_response_leaves_reasoning_output_empty() {
-        let mut out = Vec::new();
-        let mut err = Vec::new();
+        let event = EngineEvent::from(ResponseSegment::Text("The answer.".into()));
 
-        ResponseSegment::Text("The answer.".into())
-            .write_to(&mut out, &mut err)
-            .unwrap();
+        let EngineEvent::Text { message } = event else {
+            panic!("Expected a text event");
+        };
 
-        assert_eq!(out, b"The answer.\n");
-        assert_eq!(err, b"");
+        test_eq!(message, "The answer.\n");
     }
 
     #[retry(3)]

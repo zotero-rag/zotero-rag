@@ -82,6 +82,7 @@ use zqa_rag::providers::registry::provider_registry;
 use crate::cli::commands::BatchCommand;
 use crate::cli::errors::CLIError;
 use crate::common::Context;
+use crate::io::EngineEvent;
 use crate::state::get_state_dir;
 use crate::utils::arrow::library_to_arrow_with_embeddings;
 use crate::utils::library::{ZoteroItem, parse_library};
@@ -319,15 +320,12 @@ fn update_hash_cache(
 ///     * writing to the state directory failed. This is typically caused by permission issues.
 ///     * writing out the serialized data failed
 /// * `CLIError::SerializationError` if JSON serialization failed.
-async fn handle_successful_batch_results<O, E>(
-    ctx: &mut Context<O, E>,
+/// * `CLIError::ChannelError` if the event receiver is closed.
+async fn handle_successful_batch_results(
+    ctx: &mut Context,
     batch: &BatchEmbeddingMetadata,
     successes: Vec<BatchEmbeddingResult>,
-) -> Result<(), CLIError>
-where
-    O: Write,
-    E: Write,
-{
+) -> Result<(), CLIError> {
     let ids_to_items = batch
         .items
         .iter()
@@ -335,19 +333,21 @@ where
         .collect::<HashMap<&str, &BatchItem>>();
 
     let success_count = successes.len();
-    let items_to_embeddings: Vec<(&BatchItem, Vec<f32>)> = successes.into_iter().filter_map(|res| {
-        if let Some(item) = ids_to_items.get(res.id.as_str()) {
-            Some((*item, res.embedding))
-        } else {
-            writeln!(&mut ctx.err,
-                "Item {} from batch response not in library. If you removed items from your library, this is fine.",
-                res.id
-            ).ok()?;
+    let mut items_to_embeddings: Vec<(&BatchItem, Vec<f32>)> = Vec::new();
 
-            None
+    for res in successes {
+        if let Some(item) = ids_to_items.get(res.id.as_str()) {
+            items_to_embeddings.push((*item, res.embedding));
+        } else {
+            _ = ctx.emit(EngineEvent::Warning {
+                message: format!(
+                    "Item {} from batch response not in library. If you removed items from your library, this is fine.\n",
+                    res.id
+                ),
+            }).await;
         }
-    })
-    .collect();
+    }
+
     let matched_count = items_to_embeddings.len();
 
     let batch_dir = get_state_dir()?.join("batches");
@@ -393,20 +393,22 @@ where
         persist_hash_cache(&mut cache_file, &updated_cache)?;
 
         // The user likely doesn't really care about the WAL semantics.
-        writeln!(
-            &mut ctx.out,
-            "All items in the batch were duplicates; no action taken.",
-        )?;
+        ctx.emit(EngineEvent::Text {
+            message: "All items in the batch were duplicates; no action taken.\n".into(),
+        })
+        .await?;
 
         return Ok(());
     }
 
-    writeln!(
-        &mut ctx.out,
-        "{} items to insert, {} items dropped as duplicates.",
-        to_insert.len(),
-        batch.items.len() - to_insert.len()
-    )?;
+    ctx.emit(EngineEvent::StatusUpdate {
+        message: format!(
+            "{} items to insert, {} items dropped as duplicates.\n",
+            to_insert.len(),
+            batch.items.len() - to_insert.len()
+        ),
+    })
+    .await?;
 
     // Build batch to insert into the LanceDB store
     let library_keys: Vec<&str> = to_insert
@@ -483,11 +485,8 @@ fn persist_hash_cache(file: &mut fs::File, cache: &HashCache) -> Result<(), CLIE
 /// * `CLIError::IOError` in the following cases:
 ///     * writing to the state directory failed. This is typically caused by permission issues.
 ///     * writing out the serialized data failed
-async fn retry_items<O, E>(ctx: &mut Context<O, E>, items: Vec<BatchItem>) -> Result<(), CLIError>
-where
-    O: Write,
-    E: Write,
-{
+/// * `CLIError::ChannelError` if the event receiver is closed.
+async fn retry_items(ctx: &mut Context, items: Vec<BatchItem>) -> Result<(), CLIError> {
     let cfg = ctx.config.get_embedding_config();
     let Some(cfg) = cfg else {
         // `CommandError` variants don't exit the CLI
@@ -541,7 +540,10 @@ where
         submission,
     )?;
 
-    writeln!(ctx.out, "Batch {batch_id} successfully created.")?;
+    ctx.emit(EngineEvent::StatusUpdate {
+        message: format!("Batch {batch_id} successfully created.\n"),
+    })
+    .await?;
     Ok(())
 }
 
@@ -562,9 +564,10 @@ where
 ///     * writing to the state directory failed. This is typically caused by permission issues.
 ///     * writing out the serialized data failed
 /// * `CLIError::SerializationError` if JSON serialization failed.
+/// * `CLIError::ChannelError` if the event receiver is closed.
 #[allow(clippy::too_many_lines)]
 async fn prompt_and_fetch_batch_results<O, E>(
-    ctx: &mut Context<O, E>,
+    ctx: &mut Context,
     client: impl BatchAPIProvider,
     batch: &BatchEmbeddingMetadata,
 ) -> Result<(), CLIError>
@@ -572,7 +575,10 @@ where
     O: Write,
     E: Write,
 {
-    writeln!(&mut ctx.out, "Fetch results now? ([y]/n)")?;
+    ctx.emit(EngineEvent::Text {
+        message: "Fetch results now? ([y]/n)\n".into(),
+    })
+    .await?;
     if read_char(&mut ctx.input, 'y', &['y', 'n']) != 'y' {
         return Ok(());
     }
@@ -606,17 +612,22 @@ where
         }
         (true, false) => {
             // complete failure
-            writeln!(
-                &mut ctx.err,
-                "All {} batch items failed.",
-                results.failed.len()
-            )?;
+            ctx.emit(EngineEvent::Error {
+                message: format!("All {} batch items failed.\n", results.failed.len()),
+            })
+            .await?;
 
             for err in results.failed.iter().take(3) {
-                writeln!(&mut ctx.err, "  {} - {}", err.id, err.error)?;
+                ctx.emit(EngineEvent::Error {
+                    message: format!("  {} - {}\n", err.id, err.error),
+                })
+                .await?;
             }
 
-            writeln!(&mut ctx.out, "Retry the entire batch? ([y]/n)")?;
+            ctx.emit(EngineEvent::Text {
+                message: "Retry the entire batch? ([y]/n)\n".into(),
+            })
+            .await?;
             if read_char(&mut ctx.input, 'y', &['y', 'n']) == 'y' {
                 retry_items(ctx, batch.items.clone()).await?;
                 fs::remove_file(batch_dir.join(format!("batch_{}.log", batch.seq_id)))?;
@@ -630,36 +641,47 @@ where
         }
         (false, false) => {
             // partial success
-            writeln!(
-                &mut ctx.out,
-                "{} of {} items succeeded.",
-                results.succeeded.len(),
-                results.succeeded.len() + results.failed.len()
-            )?;
+            ctx.emit(EngineEvent::StatusUpdate {
+                message: format!(
+                    "{} of {} items succeeded.\n",
+                    results.succeeded.len(),
+                    results.succeeded.len() + results.failed.len()
+                ),
+            })
+            .await?;
 
             // Show a few of the failures so the user can make an informed choice below.
-            writeln!(
-                &mut ctx.err,
-                "Below are a few of the errors sent by the API:"
-            )?;
+            ctx.emit(EngineEvent::Error {
+                message: "Below are a few of the errors sent by the API:\n".into(),
+            })
+            .await?;
             for err in results.failed.iter().take(3) {
-                writeln!(&mut ctx.err, "  {} - {}", err.id, err.error)?;
+                ctx.emit(EngineEvent::Error {
+                    message: format!("  {} - {}\n", err.id, err.error),
+                })
+                .await?;
             }
 
-            writeln!(&mut ctx.out, "What do you want to do?")?;
-            writeln!(
-                &mut ctx.out,
-                "  [a] Import the successful items and retry the remaining (default)"
-            )?;
-            writeln!(
-                &mut ctx.out,
-                "  (b) Import the successful items and drop the remaining ones without retrying"
-            )?;
-            writeln!(
-                &mut ctx.out,
-                "  (c) Drop all results and retry the entire batch"
-            )?;
-            writeln!(&mut ctx.out, "  (d) Decide later, do nothing right now")?;
+            ctx.emit(EngineEvent::Text {
+                message: "What do you want to do?\n".into(),
+            })
+            .await?;
+            ctx.emit(EngineEvent::Text {
+                message: "  [a] Import the successful items and retry the remaining (default)\n"
+                    .into(),
+            })
+            .await?;
+            ctx.emit(EngineEvent::Text {
+                message: "  (b) Import the successful items and drop the remaining ones without retrying\n".into(),
+            }).await?;
+            ctx.emit(EngineEvent::Text {
+                message: "  (c) Drop all results and retry the entire batch\n".into(),
+            })
+            .await?;
+            ctx.emit(EngineEvent::Text {
+                message: "  (d) Decide later, do nothing right now\n".into(),
+            })
+            .await?;
 
             let log_file = batch_dir.join(format!("batch_{}.log", batch.seq_id));
 
@@ -749,11 +771,7 @@ fn get_pending_batches() -> Result<Vec<BatchEmbeddingMetadata>, CLIError> {
         .collect())
 }
 
-async fn handle_batch_check_status_cmd<O, E>(ctx: &mut Context<O, E>) -> Result<(), CLIError>
-where
-    O: Write,
-    E: Write,
-{
+async fn handle_batch_check_status_cmd(ctx: &mut Context) -> Result<(), CLIError> {
     let config = &ctx
         .config
         .get_embedding_config()
@@ -769,10 +787,10 @@ where
     // Get a list of batches
     let batch_dir = get_state_dir()?.join("batches");
     if !batch_dir.exists() {
-        writeln!(
-            &mut ctx.err,
-            "No batches have been submitted. Try `/batch create` to submit one."
-        )?;
+        ctx.emit(EngineEvent::Warning {
+            message: "No batches have been submitted. Try `/batch create` to submit one.\n".into(),
+        })
+        .await?;
         return Ok(());
     }
 
@@ -780,24 +798,33 @@ where
 
     let selected_batch = match pending_batches.len() {
         0 => {
-            writeln!(
-                &mut ctx.err,
-                "No valid batches were found. Your state directory may have been corrupted."
-            )?;
+            ctx.emit(EngineEvent::Warning {
+                message:
+                    "No valid batches were found. Your state directory may have been corrupted.\n"
+                        .into(),
+            })
+            .await?;
             return Ok(());
         }
         1 => pending_batches.first().unwrap(),
         _ => {
-            writeln!(
-                &mut ctx.out,
-                "You have multiple submitted batches. Please choose one from the below options:"
-            )?;
+            ctx.emit(EngineEvent::Text {
+                message: "You have multiple submitted batches. Please choose one from the below options:\n".into(),
+            }).await?;
 
             for (i, batch) in pending_batches.iter().enumerate() {
                 if i == 0 {
-                    _ = writeln!(&mut ctx.out, "[{}]. [seq {}] {batch}", i + 1, batch.seq_id);
+                    _ = ctx
+                        .emit(EngineEvent::Text {
+                            message: format!("[{}]. [seq {}] {batch}\n", i + 1, batch.seq_id),
+                        })
+                        .await;
                 } else {
-                    _ = writeln!(&mut ctx.out, "({}). [seq {}] {batch}", i + 1, batch.seq_id);
+                    _ = ctx
+                        .emit(EngineEvent::Text {
+                            message: format!("({}). [seq {}] {batch}\n", i + 1, batch.seq_id),
+                        })
+                        .await;
                 }
             }
 
@@ -819,7 +846,10 @@ where
         "Embedding batch {}: status={status:?}",
         selected_batch.batch_id
     );
-    writeln!(&mut ctx.out, "Current status: {}", status.as_str())?;
+    ctx.emit(EngineEvent::StatusUpdate {
+        message: format!("Current status: {}\n", status.as_str()),
+    })
+    .await?;
 
     if status == BatchJobState::Completed {
         prompt_and_fetch_batch_results(ctx, embedder, selected_batch).await?;
@@ -829,11 +859,7 @@ where
 }
 
 #[allow(clippy::too_many_lines)]
-async fn handle_batch_create_cmd<O, E>(ctx: &mut Context<O, E>) -> Result<(), CLIError>
-where
-    O: Write,
-    E: Write,
-{
+async fn handle_batch_create_cmd(ctx: &mut Context) -> Result<(), CLIError> {
     let embedding_config = ctx
         .config
         .get_embedding_config()
@@ -868,15 +894,16 @@ where
     if let Some(first_batch) = pending_batches.first() {
         let old_batch_provider = first_batch.provider;
         if old_batch_provider != embedding_provider {
-            writeln!(
-                &mut ctx.err,
-                concat!(
-                    "A previous batch used {} for embedding, but the current configuration uses {}, which is incompatible.",
-                    " Consider using `/batch cancel` to cancel an older batch if it had the wrong provider, ",
-                    "or update your config and restart the program."
+            ctx.emit(EngineEvent::Error {
+                message: format!(
+                    concat!(
+                        "A previous batch used {} for embedding, but the current configuration uses {}, which is incompatible.",
+                        " Consider using `/batch cancel` to cancel an older batch if it had the wrong provider, ",
+                        "or update your config and restart the program.\n"
+                    ),
+                    old_batch_provider, embedding_provider
                 ),
-                old_batch_provider, embedding_provider
-            )?;
+            }).await?;
 
             // We don't need the caller to show an error
             return Ok(());
@@ -900,10 +927,10 @@ where
     };
     let lib_items: Vec<BatchItem> = lib_items.into_iter().map(Into::into).collect();
     if lib_items.is_empty() {
-        writeln!(
-            &mut ctx.out,
-            "No new items in Zotero library. Nothing to do."
-        )?;
+        ctx.emit(EngineEvent::Text {
+            message: "No new items in Zotero library. Nothing to do.\n".into(),
+        })
+        .await?;
         return Ok(());
     }
 
@@ -925,22 +952,26 @@ where
         }
         (false, true) => {
             // This batch is a proper subset of the union of pending batches
-            writeln!(
-                &mut ctx.out,
-                "All items are already pending in other batches; nothing new to submit."
-            )?;
+            ctx.emit(EngineEvent::Text {
+                message: "All items are already pending in other batches; nothing new to submit.\n"
+                    .into(),
+            })
+            .await?;
             Ok(())
         }
         (false, false) => {
-            writeln!(
-                &mut ctx.out,
-                "Some new items from Zotero are currently pending in other batches. What do you want to do?"
-            )?;
-            writeln!(
-                &mut ctx.out,
-                "  [a] Create a new batch with only the non-overlapping items (default)"
-            )?;
-            writeln!(&mut ctx.out, "  (b) Process all items anyway")?;
+            ctx.emit(EngineEvent::Text {
+                message: "Some new items from Zotero are currently pending in other batches. What do you want to do?\n".into(),
+            }).await?;
+            ctx.emit(EngineEvent::Text {
+                message: "  [a] Create a new batch with only the non-overlapping items (default)\n"
+                    .into(),
+            })
+            .await?;
+            ctx.emit(EngineEvent::Text {
+                message: "  (b) Process all items anyway\n".into(),
+            })
+            .await?;
 
             match read_char(&mut ctx.input, 'a', &['a', 'b']) {
                 'a' => retry_items(ctx, new_items).await,
@@ -972,16 +1003,23 @@ where
                     retry_items(ctx, overlap).await?;
 
                     if !subsumed.is_empty() {
-                        writeln!(
-                            &mut ctx.out,
-                            "{} pending batch{} {} proper subset{} of this batch, and can be deleted. What do you want to do?",
-                            subsumed.len(),
-                            if subsumed.len() > 1 { "es" } else { "" },
-                            if subsumed.len() > 1 { "are" } else { "is a" },
-                            if subsumed.len() > 1 { "s" } else { "" }
-                        )?;
-                        writeln!(&mut ctx.out, "[a] Cancel batches that are subsets")?;
-                        writeln!(&mut ctx.out, "(b) Do not cancel subset batches.")?;
+                        ctx.emit(EngineEvent::Text {
+                            message: format!(
+                                "{} pending batch{} {} proper subset{} of this batch, and can be deleted. What do you want to do?\n",
+                                subsumed.len(),
+                                if subsumed.len() > 1 { "es" } else { "" },
+                                if subsumed.len() > 1 { "are" } else { "is a" },
+                                if subsumed.len() > 1 { "s" } else { "" }
+                            ),
+                        }).await?;
+                        ctx.emit(EngineEvent::Text {
+                            message: "[a] Cancel batches that are subsets\n".into(),
+                        })
+                        .await?;
+                        ctx.emit(EngineEvent::Text {
+                            message: "(b) Do not cancel subset batches.\n".into(),
+                        })
+                        .await?;
 
                         if read_char(&mut ctx.input, 'a', &['a', 'b']) == 'a' {
                             for batch in subsumed {
@@ -998,29 +1036,24 @@ where
     }
 }
 
-async fn handle_batch_cancel_cmd<O, E>(
-    batch_id: usize,
-    ctx: &mut Context<O, E>,
-) -> Result<(), CLIError>
-where
-    O: Write,
-    E: Write,
-{
+async fn handle_batch_cancel_cmd(batch_id: usize, ctx: &mut Context) -> Result<(), CLIError> {
     let batch_dir = get_state_dir()?.join("batches");
     if !batch_dir.exists() {
-        writeln!(
-            &mut ctx.err,
-            "Cannot cancel batch because the batches directory does not exist."
-        )?;
+        ctx.emit(EngineEvent::Error {
+            message: "Cannot cancel batch because the batches directory does not exist.\n".into(),
+        })
+        .await?;
         return Ok(());
     }
 
     let batch_file = batch_dir.join(format!("batch_{batch_id}.log"));
     if !batch_file.exists() {
-        writeln!(
-            &mut ctx.err,
-            "Cannot cancel batch {batch_id} because its batch file does not exist."
-        )?;
+        ctx.emit(EngineEvent::Error {
+            message: format!(
+                "Cannot cancel batch {batch_id} because its batch file does not exist.\n"
+            ),
+        })
+        .await?;
         return Ok(());
     }
 
@@ -1050,14 +1083,10 @@ where
 }
 
 /// Handle the `/batch` commands.
-pub(crate) async fn handle_batch_cmd<O, E>(
+pub(crate) async fn handle_batch_cmd(
     subcmd: BatchCommand,
-    ctx: &mut Context<O, E>,
-) -> Result<(), CLIError>
-where
-    O: Write,
-    E: Write,
-{
+    ctx: &mut Context,
+) -> Result<(), CLIError> {
     match subcmd {
         BatchCommand::Cancel(id) => handle_batch_cancel_cmd(id, ctx).await,
         BatchCommand::CheckStatus => handle_batch_check_status_cmd(ctx).await,
