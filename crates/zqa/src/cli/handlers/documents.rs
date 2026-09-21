@@ -1,6 +1,5 @@
 //! Command handlers for document-related operations.
 
-use std::io::Write;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -55,8 +54,8 @@ pub(crate) fn get_document_session_key(path: &Path) -> Result<String, CLIError> 
 /// # Errors
 ///
 /// * `LLMError::InvalidProviderError` if the provider is not supported
-pub(super) fn get_user_document_tools<O: Write, E: Write>(
-    ctx: &mut Context<O, E>,
+pub(super) fn get_user_document_tools(
+    ctx: &mut Context,
     status_tx: UnboundedSender<String>,
 ) -> Result<Vec<Box<dyn Tool>>, CLIError> {
     let imports = ctx.state.imports.clone();
