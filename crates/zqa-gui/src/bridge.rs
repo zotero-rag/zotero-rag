@@ -202,6 +202,7 @@ pub fn spawn_engine(
                         EngineCommand::ResumeConversation(conversation) => {
                             let result = session
                                 .resume_conversation(&conversation)
+                                .await
                                 .map(|()| conversation)
                                 .map_err(|error| error.to_string());
                             let _ = event_tx.unbounded_send(UiEvent::ConversationResumed(result));

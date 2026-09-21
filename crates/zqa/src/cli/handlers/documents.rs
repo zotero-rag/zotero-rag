@@ -11,6 +11,7 @@ use zqa_rag::providers::registry::provider_registry;
 use crate::cli::commands::DocsCommand;
 use crate::cli::errors::CLIError;
 use crate::common::Context;
+use crate::io::EngineEvent;
 use crate::tools::documents::{DocumentsToolFactory, parse_user_document};
 
 /// Given a path to a file, attempt to return a relative path, or return the full canonical path
@@ -45,8 +46,7 @@ pub(crate) fn get_document_session_key(path: &Path) -> Result<String, CLIError> 
 ///
 /// # Arguments
 ///
-/// * `ctx` - A `Context` object that contains CLI args and objects that implement
-///   [`std::io::Write`] for `stdout` and `stderr`.
+/// * `ctx` - The application context, including imported documents and provider configuration.
 ///
 /// # Returns
 ///
@@ -138,8 +138,7 @@ pub(crate) fn get_document_mentions(query: &str) -> Vec<String> {
 ///
 /// # Arguments
 ///
-/// * `ctx` - A `Context` object that contains CLI args and objects that implement
-///   [`std::io::Write`] for `stdout` and `stderr`.
+/// * `ctx` - The application context whose imported documents will be updated.
 /// * `path` - A [`Path`] reference to the file.
 ///
 /// # Returns
@@ -150,10 +149,7 @@ pub(crate) fn get_document_mentions(query: &str) -> Vec<String> {
 ///
 /// * `CLIError::IOError` if the path could not be canonicalized.
 /// * `CLIError::ConfigError` if importing failed; this is usually due to some config error.
-pub(super) fn import_document<O: Write, E: Write>(
-    ctx: &mut Context<O, E>,
-    path: &Path,
-) -> Result<String, CLIError> {
+pub(super) fn import_document(ctx: &mut Context, path: &Path) -> Result<String, CLIError> {
     let key = get_document_session_key(path)?;
     let imports = Arc::clone(&ctx.state.imports);
 
@@ -177,8 +173,7 @@ pub(super) fn import_document<O: Write, E: Write>(
 /// # Arguments
 ///
 /// * `subcmd` - The parsed document subcommand to execute.
-/// * `ctx` - A `Context` object that contains CLI state and objects that implement
-///   [`std::io::Write`] for `stdout` and `stderr`.
+/// * `ctx` - The application context, including imported documents and the event sender.
 ///
 /// # Returns
 ///
@@ -186,15 +181,11 @@ pub(super) fn import_document<O: Write, E: Write>(
 ///
 /// # Errors
 ///
-/// Returns a [`CLIError`] if document state could not be accessed or output could not be written.
-pub(crate) fn handle_docs_cmd<O, E>(
+/// Returns a [`CLIError`] if document state could not be accessed or the event receiver is closed.
+pub(crate) async fn handle_docs_cmd(
     subcmd: DocsCommand,
-    ctx: &mut Context<O, E>,
-) -> Result<(), CLIError>
-where
-    O: Write,
-    E: Write,
-{
+    ctx: &mut Context,
+) -> Result<(), CLIError> {
     match subcmd {
         DocsCommand::Clear => {
             let mut imports = ctx.state.imports.write()?;
@@ -205,21 +196,21 @@ where
             imports.remove(&key);
         }
         DocsCommand::List => {
-            let imports = ctx.state.imports.read()?;
-            let keys: Vec<String> = imports.keys().cloned().collect();
+            let keys: Vec<String> = ctx.state.imports.read()?.keys().cloned().collect();
 
             if keys.is_empty() {
-                writeln!(
-                    &mut ctx.out,
-                    "No documents currently in state. Use @ in a message to add some."
-                )?;
+                ctx.emit(EngineEvent::Text {
+                    message: "No documents currently in state. Use @ in a message to add some.\n"
+                        .into(),
+                })
+                .await?;
                 return Ok(());
             }
 
-            writeln!(&mut ctx.out, "Available documents:")?;
-            for key in &keys {
-                writeln!(&mut ctx.out, "{key}")?;
-            }
+            ctx.emit(EngineEvent::Text {
+                message: format!("Available documents:\n{}\n", keys.join("\n")),
+            })
+            .await?;
         }
     }
 
