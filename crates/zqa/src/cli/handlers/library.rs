@@ -1,38 +1,42 @@
 //! Command handlers for library-related tasks
 
-use std::io::Write;
-
 use zqa_rag::vector::doctor::doctor as rag_doctor;
 
 use crate::cli::errors::CLIError;
 use crate::common::Context;
+use crate::io::EngineEvent;
 use crate::store::common::ZoteroStore;
 use crate::utils::arrow::{ArrowError, library_to_arrow};
 use crate::utils::library::{get_new_library_items, parse_library, parse_library_metadata};
 use crate::utils::terminal::read_line;
 
-/// Print table statistics for the current LanceDB database.
+/// Emit table statistics for the current LanceDB database.
 ///
 /// # Arguments
 ///
-/// * `ctx` - A `Context` object that contains CLI state and objects that implement
-///   [`std::io::Write`] for `stdout` and `stderr`.
+/// * `ctx` - The application context, including the store and event sender.
 ///
 /// # Returns
 ///
-/// `Ok(())` if the command output was written successfully.
+/// `Ok(())` if event publication completed without error.
 ///
 /// # Errors
 ///
-/// Returns a [`CLIError`] if writing to an output stream fails.
-pub(crate) async fn handle_stats_cmd<O, E>(ctx: &mut Context<O, E>) -> Result<(), CLIError>
-where
-    O: Write,
-    E: Write,
-{
+/// * `CLIError::ChannelError` - If the event receiver is closed.
+pub(crate) async fn handle_stats_cmd(ctx: &mut Context) -> Result<(), CLIError> {
     match ctx.store.get_metadata().await {
-        Ok(stats) => writeln!(&mut ctx.out, "{stats}")?,
-        Err(e) => writeln!(&mut ctx.err, "Could not get database statistics: {e}")?,
+        Ok(stats) => {
+            ctx.emit(EngineEvent::Text {
+                message: format!("{stats}\n"),
+            })
+            .await?;
+        }
+        Err(e) => {
+            ctx.emit(EngineEvent::Error {
+                message: format!("Could not get database statistics: {e}\n"),
+            })
+            .await?;
+        }
     }
 
     Ok(())
@@ -46,8 +50,7 @@ where
 ///
 /// # Arguments
 ///
-/// * `ctx` - A `Context` object that contains CLI state and objects that implement
-///   [`std::io::Write`] for `stdout` and `stderr`.
+/// * `ctx` - The application context, including the store, configuration, and event sender.
 ///
 /// # Returns
 ///
@@ -55,13 +58,9 @@ where
 ///
 /// # Errors
 ///
-/// Returns a [`CLIError`] if input/output fails, configuration is invalid,
-/// or parsing / insertion setup fails.
-pub(crate) async fn handle_process_cmd<O, E>(ctx: &mut Context<O, E>) -> Result<(), CLIError>
-where
-    O: Write,
-    E: Write,
-{
+/// Returns a [`CLIError`] if configuration is invalid, parsing / insertion setup fails,
+/// or the event receiver is closed.
+pub(crate) async fn handle_process_cmd(ctx: &mut Context) -> Result<(), CLIError> {
     const WARNING_THRESHOLD: usize = 100;
 
     let library_path = ctx.path_options.library_path.as_deref();
@@ -72,22 +71,26 @@ where
     };
 
     if let Err(parse_err) = item_metadata {
-        writeln!(
-            &mut ctx.err,
-            "Could not parse library metadata: {parse_err}"
-        )?;
+        ctx.emit(EngineEvent::Error {
+            message: format!("Could not parse library metadata: {parse_err}\n"),
+        })
+        .await?;
         return Ok(());
     }
 
     let item_metadata = item_metadata.unwrap();
     let metadata_length = item_metadata.len();
     if metadata_length >= WARNING_THRESHOLD {
-        writeln!(
-            &mut ctx.out,
-            "Your library has {metadata_length} new items. Parsing may take a while. Continue?"
-        )?;
-        write!(&mut ctx.out, "(/process) >>> ")?;
-        ctx.out.flush()?;
+        ctx.emit(EngineEvent::Text {
+            message: format!(
+                "Your library has {metadata_length} new items. Parsing may take a while. Continue?\n"
+            ),
+        })
+        .await?;
+        ctx.emit(EngineEvent::Text {
+            message: "(/process) >>> ".into(),
+        })
+        .await?;
 
         let option = read_line(&mut ctx.input);
         let option = option.trim().to_lowercase();
@@ -113,12 +116,26 @@ where
     };
 
     match result {
-        Ok(0) => writeln!(&mut ctx.out, "Successfully parsed library!")?,
-        Ok(num_failed) => writeln!(
-            &mut ctx.err,
-            "{num_failed} items could not be embedded and were not saved. Run '/process' again to retry them."
-        )?,
-        Err(e) => writeln!(&mut ctx.err, "Parsing library failed: {e}")?,
+        Ok(0) => {
+            ctx.emit(EngineEvent::StatusUpdate {
+                message: "Successfully parsed library!\n".into(),
+            })
+            .await?;
+        }
+        Ok(num_failed) => {
+            ctx.emit(EngineEvent::Warning {
+                message: format!(
+                    "{num_failed} items could not be embedded and were not saved. Run '/process' again to retry them.\n"
+                ),
+            })
+            .await?;
+        }
+        Err(e) => {
+            ctx.emit(EngineEvent::Error {
+                message: format!("Parsing library failed: {e}\n"),
+            })
+            .await?;
+        }
     }
 
     Ok(())
@@ -128,31 +145,31 @@ where
 ///
 /// # Arguments
 ///
-/// * `ctx` - A `Context` object that contains CLI state and objects that implement
-///   [`std::io::Write`] for `stdout` and `stderr`.
+/// * `ctx` - The application context, including the store and event sender.
 ///
 /// # Returns
 ///
-/// `Ok(())` if deduplication completed and the result was written successfully.
+/// `Ok(())` if the deduplication result or error was passed to the event sender.
 ///
 /// # Errors
 ///
-/// Returns a [`CLIError`] if configuration is invalid, deduplication fails,
-/// or writing output fails.
-pub(crate) async fn handle_dedup_cmd<O, E>(ctx: &mut Context<O, E>) -> Result<(), CLIError>
-where
-    O: Write,
-    E: Write,
-{
+/// * `CLIError::ChannelError` - If the event receiver is closed.
+pub(crate) async fn handle_dedup_cmd(ctx: &mut Context) -> Result<(), CLIError> {
     let result = ctx.store.dedup_by_title().await;
 
     match result {
         Ok(count) => {
-            writeln!(ctx.out, "Deduped {count} rows")?;
+            ctx.emit(EngineEvent::Text {
+                message: format!("Deduped {count} rows\n"),
+            })
+            .await?;
         }
         Err(e) => {
             // Avoid terminating CLI
-            writeln!(&mut ctx.err, "Deduplication failed: {e}")?;
+            ctx.emit(EngineEvent::Error {
+                message: format!("Deduplication failed: {e}\n"),
+            })
+            .await?;
         }
     }
 
@@ -163,58 +180,56 @@ where
 ///
 /// # Arguments
 ///
-/// * `ctx` - A `Context` object that contains CLI state and objects that implement
-///   [`std::io::Write`] for `stdout` and `stderr`.
+/// * `ctx` - The application context, including the store and event sender.
 ///
 /// # Returns
 ///
-/// `Ok(())` if index creation completed successfully.
+/// `Ok(())` if the index update and event publication completed without a channel error.
+/// Index-creation failures are reported as error events.
 ///
 /// # Errors
 ///
-/// Returns a [`CLIError`] if index creation fails or writing output fails.
-pub(crate) async fn handle_index_cmd<O, E>(ctx: &mut Context<O, E>) -> Result<(), CLIError>
-where
-    O: Write,
-    E: Write,
-{
-    writeln!(
-        &mut ctx.out,
-        "Updating indices. This may take a while depending on how many items need to be added."
-    )?;
+/// * `CLIError::ChannelError` - If the event receiver is closed.
+pub(crate) async fn handle_index_cmd(ctx: &mut Context) -> Result<(), CLIError> {
+    ctx.emit(EngineEvent::StatusUpdate {
+        message: "Updating indices. This may take a while depending on how many items need to be added.\n"
+            .into(),
+    })
+    .await?;
 
     if let Err(e) = ctx.store.create_or_update_indices().await {
-        writeln!(&mut ctx.err, "Failed to update indexes: {e}")?;
+        ctx.emit(EngineEvent::Error {
+            message: format!("Failed to update indexes: {e}\n"),
+        })
+        .await?;
     }
 
-    writeln!(
-        &mut ctx.out,
-        "Done! You should verify the indices exist with /checkhealth."
-    )?;
+    ctx.emit(EngineEvent::StatusUpdate {
+        message: "Done! You should verify the indices exist with /checkhealth.\n".into(),
+    })
+    .await?;
 
     Ok(())
 }
 
-/// Run health checks against the LanceDB database and print the results.
+/// Run health checks against the LanceDB database and emit the results.
 ///
 /// # Arguments
 ///
-/// * `ctx` - A `Context` object that contains CLI state and objects that implement
-///   [`std::io::Write`] for `stdout` and `stderr`.
+/// * `ctx` - The application context, including the store and event sender.
 ///
 /// # Returns
 ///
-/// `Ok(())` if the health-check output was written successfully.
+/// `Ok(())` if health-check event publication completed without error.
 ///
 /// # Errors
 ///
-/// Returns a [`CLIError`] if writing output fails.
-pub(crate) async fn handle_checkhealth_cmd<O: Write, E: Write>(
-    ctx: &mut Context<O, E>,
-) -> Result<(), CLIError> {
-    if let Err(e) = writeln!(ctx.out, "{}", ctx.store.health_check().await) {
-        let _ = writeln!(ctx.err, "{e}");
-    }
+/// * `CLIError::ChannelError` - If the event receiver is closed.
+pub(crate) async fn handle_checkhealth_cmd(ctx: &mut Context) -> Result<(), CLIError> {
+    ctx.emit(EngineEvent::Text {
+        message: format!("{}\n", ctx.store.health_check().await),
+    })
+    .await?;
 
     Ok(())
 }
@@ -223,8 +238,7 @@ pub(crate) async fn handle_checkhealth_cmd<O: Write, E: Write>(
 ///
 /// # Arguments
 ///
-/// * `ctx` - A `Context` object that contains CLI state and objects that implement
-///   [`std::io::Write`] for `stdout` and `stderr`.
+/// * `ctx` - The application context, including the store, configuration, and event sender.
 ///
 /// # Returns
 ///
@@ -232,14 +246,24 @@ pub(crate) async fn handle_checkhealth_cmd<O: Write, E: Write>(
 ///
 /// # Errors
 ///
-/// * [`CLIError`] if writing output fails.
-pub(crate) async fn handle_doctor_cmd<O, E>(ctx: &mut Context<O, E>) -> Result<(), CLIError>
-where
-    O: Write,
-    E: Write,
-{
-    if let Err(e) = rag_doctor(ctx.store.backend(), &mut ctx.out).await {
-        writeln!(ctx.err, "{e}")?;
+/// Returns a [`CLIError`] if the event receiver is closed.
+/// Diagnostic failures are reported as error events.
+pub(crate) async fn handle_doctor_cmd(ctx: &mut Context) -> Result<(), CLIError> {
+    let mut output = Vec::new();
+    let result = rag_doctor(ctx.store.backend(), &mut output).await;
+
+    if !output.is_empty() {
+        ctx.emit(EngineEvent::Text {
+            message: String::from_utf8_lossy(&output).into_owned(),
+        })
+        .await?;
+    }
+
+    if let Err(e) = result {
+        ctx.emit(EngineEvent::Error {
+            message: format!("{e}\n"),
+        })
+        .await?;
     }
 
     Ok(())
