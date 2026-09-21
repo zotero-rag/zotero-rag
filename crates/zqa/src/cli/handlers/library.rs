@@ -483,12 +483,13 @@ mod tests {
     };
     use arrow_ipc::writer::FileWriter;
     use lancedb::connect;
-    use zqa_macros::{test_contains, test_ok};
+    use zqa_macros::test_ok;
     use zqa_macros_proc::retry;
     use zqa_rag::constants::DEFAULT_VOYAGE_EMBEDDING_DIM;
 
     use super::{handle_checkhealth_cmd, handle_embed_cmd, handle_process_cmd, handle_stats_cmd};
-    use crate::common::test_support::TestPaths;
+    use crate::common::test_support::{TestPaths, capture_events};
+    use crate::io::EngineEvent;
 
     #[retry(3)]
     #[tokio::test(flavor = "multi_thread")]
@@ -512,15 +513,21 @@ mod tests {
         writer.write(&record_batch).unwrap();
         writer.finish().unwrap();
 
-        let result = handle_embed_cmd(false, &mut ctx).await;
+        let (result, events) =
+            capture_events(&mut ctx, async |ctx| handle_embed_cmd(false, ctx).await).await;
         test_ok!(result);
         assert!(result.is_ok());
 
-        let output = String::from_utf8(ctx.out.into_inner()).unwrap();
-        assert!(output.contains("Successfully parsed library!"));
-
-        let err = String::from_utf8(ctx.err.into_inner()).unwrap();
-        assert_eq!(err, "");
+        assert!(events.iter().any(|event| matches!(
+            event,
+            EngineEvent::StatusUpdate { message } if message.contains("Successfully parsed library!")
+        )));
+        assert!(!events.iter().any(|event| matches!(
+            event,
+            EngineEvent::Warning { .. }
+                | EngineEvent::Error { .. }
+                | EngineEvent::RecoverableWarning { .. }
+        )));
     }
 
     #[retry(3)]
@@ -531,18 +538,22 @@ mod tests {
         let paths = TestPaths::new();
         let mut ctx = paths.context(vec![]);
 
-        let result = handle_process_cmd(&mut ctx).await;
+        let (result, events) = capture_events(&mut ctx, handle_process_cmd).await;
         test_ok!(result);
         assert!(result.is_ok());
 
-        let output = String::from_utf8(ctx.out.clone().into_inner()).unwrap();
-        assert!(output.contains("Successfully parsed library!"));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            EngineEvent::StatusUpdate { message } if message.contains("Successfully parsed library!")
+        )));
 
-        let stats = handle_stats_cmd(&mut ctx).await;
-        let output = String::from_utf8(ctx.out.into_inner()).unwrap();
+        let (stats, events) = capture_events(&mut ctx, handle_stats_cmd).await;
         test_ok!(stats);
-        test_contains!(output, "LanceDB metadata:");
-        test_contains!(output, "Number of rows: 8");
+        assert!(events.iter().any(|event| matches!(
+            event,
+            EngineEvent::Text { message }
+                if message.contains("LanceDB metadata:") && message.contains("Number of rows: 8")
+        )));
     }
 
     #[tokio::test]
@@ -551,10 +562,13 @@ mod tests {
 
         let paths = TestPaths::new();
         let mut ctx = paths.context(vec![]);
-        handle_checkhealth_cmd(&mut ctx).await.unwrap();
-        let output = String::from_utf8(ctx.out.into_inner()).unwrap();
+        let (result, events) = capture_events(&mut ctx, handle_checkhealth_cmd).await;
+        result.unwrap();
 
-        assert!(output.contains("storage does not exist"));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            EngineEvent::Text { message } if message.contains("storage does not exist")
+        )));
     }
 
     #[retry(3)]
@@ -568,13 +582,25 @@ mod tests {
         test_ok!(result);
 
         let mut ctx = paths.context(vec![]);
-        handle_checkhealth_cmd(&mut ctx).await.unwrap();
-        let output = String::from_utf8(ctx.out.into_inner()).unwrap();
+        let (result, events) = capture_events(&mut ctx, handle_checkhealth_cmd).await;
+        result.unwrap();
 
-        test_contains!(output, "Vector Store Health Check Results");
-        test_contains!(output, "storage exists");
-        test_contains!(output, "Table is accessible");
-        test_contains!(output, "Table has");
+        assert!(events.iter().any(|event| matches!(
+            event,
+            EngineEvent::Text { message } if message.contains("Vector Store Health Check Results")
+        )));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            EngineEvent::Text { message } if message.contains("storage exists")
+        )));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            EngineEvent::Text { message } if message.contains("Table is accessible")
+        )));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            EngineEvent::Text { message } if message.contains("Table has")
+        )));
     }
 
     async fn insert_zero_embedding_row(db_uri: &str) {
@@ -651,12 +677,15 @@ mod tests {
         assert!(first_result.is_ok());
 
         let mut ctx = paths.context(vec![]);
-        let result = handle_embed_cmd(true, &mut ctx).await;
+        let (result, events) =
+            capture_events(&mut ctx, async |ctx| handle_embed_cmd(true, ctx).await).await;
         test_ok!(result);
         assert!(result.is_ok());
 
-        let output = String::from_utf8(ctx.out.into_inner()).unwrap();
-        test_contains!(output, "Done!");
+        assert!(events.iter().any(|event| matches!(
+            event,
+            EngineEvent::StatusUpdate { message } if message.contains("Done!")
+        )));
     }
 
     #[retry(3)]
@@ -672,11 +701,15 @@ mod tests {
         insert_zero_embedding_row(&paths.db_uri).await;
 
         let mut ctx = paths.context(vec![]);
-        let result = handle_embed_cmd(true, &mut ctx).await;
+        let (result, events) =
+            capture_events(&mut ctx, async |ctx| handle_embed_cmd(true, ctx).await).await;
         test_ok!(result);
         assert!(result.is_ok());
 
-        let output = String::from_utf8(ctx.out.into_inner()).unwrap();
-        test_contains!(output, "items had empty texts, and will be deleted.");
+        assert!(events.iter().any(|event| matches!(
+            event,
+            EngineEvent::StatusUpdate { message }
+                if message.contains("items had empty texts, and will be deleted.")
+        )));
     }
 }

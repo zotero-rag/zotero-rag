@@ -219,7 +219,7 @@ mod tests {
     use serde_json::json;
     use serial_test::serial;
     use temp_env;
-    use zqa_macros::{test_contains, test_eq, test_ok};
+    use zqa_macros::{test_eq, test_ok};
     use zqa_macros_proc::retry;
     use zqa_rag::constants::{
         DEFAULT_VOYAGE_EMBEDDING_DIM, DEFAULT_VOYAGE_EMBEDDING_MODEL, DEFAULT_VOYAGE_RERANK_MODEL,
@@ -230,7 +230,8 @@ mod tests {
     use zqa_rag::reranking::common::RerankProviderConfig;
 
     use super::dispatch_command;
-    use crate::common::test_support::{TestPaths, create_test_context};
+    use crate::common::test_support::{TestPaths, capture_events, create_test_context};
+    use crate::io::EngineEvent;
     use crate::store::lance::LanceZoteroStore;
     use crate::tools::retrieval::RetrievalTool;
 
@@ -299,12 +300,14 @@ mod tests {
         temp_env::async_with_vars([("ZQA_STATE_DIR", Some(state_dir.as_str()))], async {
             let mut ctx = create_test_context(vec![]);
 
-            let result = dispatch_command("/resume", &mut ctx).await;
+            let (result, events) =
+                capture_events(&mut ctx, async |ctx| dispatch_command("/resume", ctx).await).await;
             test_ok!(result);
             assert!(result.unwrap());
-
-            let output = String::from_utf8(ctx.out.into_inner()).unwrap();
-            test_contains!(output, "No saved conversations found.");
+            assert!(events.iter().any(|event| matches!(
+                event,
+                EngineEvent::Text { message } if message.contains("No saved conversations found.")
+            )));
         })
         .await;
     }
@@ -321,12 +324,14 @@ mod tests {
         test_ok!(process_result);
         assert!(process_result.unwrap());
 
-        let dedup_result = dispatch_command("/dedup", &mut ctx).await;
+        let (dedup_result, events) =
+            capture_events(&mut ctx, async |ctx| dispatch_command("/dedup", ctx).await).await;
         test_ok!(dedup_result);
         assert!(dedup_result.unwrap());
-
-        let output = String::from_utf8(ctx.out.into_inner()).unwrap();
-        test_contains!(output, "Deduped ");
+        assert!(events.iter().any(|event| matches!(
+            event,
+            EngineEvent::Text { message } if message.contains("Deduped ")
+        )));
     }
 
     #[retry(3)]

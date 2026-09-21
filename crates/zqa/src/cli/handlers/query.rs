@@ -486,7 +486,7 @@ mod tests {
 
     use super::{ResponseSegment, handle_query_cmd, handle_search_cmd};
     use crate::cli::handlers::library::handle_process_cmd;
-    use crate::common::test_support::TestPaths;
+    use crate::common::test_support::{TestPaths, capture_events};
     use crate::io::EngineEvent;
 
     /// Reasoning and answers retain distinct event types and trailing newlines.
@@ -533,16 +533,25 @@ mod tests {
         test_ok!(result);
 
         let mut ctx = paths.context(vec![]); // search doesn't use LLMs
-        let result = handle_search_cmd(
-            "How should I oversample in defect prediction?".to_string(),
-            &mut ctx,
-        )
+        let (result, events) = capture_events(&mut ctx, async |ctx| {
+            handle_search_cmd(
+                "How should I oversample in defect prediction?".to_string(),
+                ctx,
+            )
+            .await
+        })
         .await;
         test_ok!(result);
         assert!(result.is_ok());
 
-        let output = String::from_utf8(ctx.out.into_inner()).unwrap();
-        assert!(output.len() > 20);
+        let output_len: usize = events
+            .iter()
+            .map(|event| match event {
+                EngineEvent::Text { message } => message.len(),
+                _ => 0,
+            })
+            .sum();
+        assert!(output_len > 20);
     }
 
     #[retry(3)]
@@ -557,16 +566,20 @@ mod tests {
         // TODO: At some point, we'll want to add support for tool calls on these. Right now, the
         // underlying `TestClient` doesn't call `process_tool_calls
         let mut ctx = paths.context(vec!["You have papers X, Y, and Z.".into()]);
-        let result = handle_query_cmd(
-            "What papers do I have about learning rate scheduling?".to_string(),
-            &mut ctx,
-        )
+        let (result, events) = capture_events(&mut ctx, async |ctx| {
+            handle_query_cmd(
+                "What papers do I have about learning rate scheduling?".to_string(),
+                ctx,
+            )
+            .await
+        })
         .await;
 
         test_ok!(result);
         assert!(result.is_ok());
-
-        let output = String::from_utf8(ctx.out.into_inner()).unwrap();
-        assert!(output.contains("Total token usage:"));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            EngineEvent::Text { message } if message.contains("Total token usage:")
+        )));
     }
 }

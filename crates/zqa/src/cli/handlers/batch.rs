@@ -566,15 +566,11 @@ async fn retry_items(ctx: &mut Context, items: Vec<BatchItem>) -> Result<(), CLI
 /// * `CLIError::SerializationError` if JSON serialization failed.
 /// * `CLIError::ChannelError` if the event receiver is closed.
 #[allow(clippy::too_many_lines)]
-async fn prompt_and_fetch_batch_results<O, E>(
+async fn prompt_and_fetch_batch_results(
     ctx: &mut Context,
     client: impl BatchAPIProvider,
     batch: &BatchEmbeddingMetadata,
-) -> Result<(), CLIError>
-where
-    O: Write,
-    E: Write,
-{
+) -> Result<(), CLIError> {
     ctx.emit(EngineEvent::Text {
         message: "Fetch results now? ([y]/n)\n".into(),
     })
@@ -1117,7 +1113,8 @@ mod tests {
         handle_batch_cancel_cmd, handle_batch_check_status_cmd, handle_batch_create_cmd,
         prompt_and_fetch_batch_results, update_hash_cache, write_batch_metadata,
     };
-    use crate::common::test_support::create_test_context;
+    use crate::common::test_support::{capture_events, create_test_context};
+    use crate::io::EngineEvent;
     use crate::utils::library::{ZoteroItem, ZoteroItemMetadata};
 
     /// A [`CacheEntry`] for a VoyageAI batch with the given model and sequence number.
@@ -1457,11 +1454,12 @@ mod tests {
             async {
                 let mut ctx = create_test_context(vec![]);
 
-                let result = handle_batch_check_status_cmd(&mut ctx).await;
+                let (result, events) = capture_events(&mut ctx, handle_batch_check_status_cmd).await;
                 assert!(result.is_ok());
-
-                let err = String::from_utf8(ctx.err.into_inner()).unwrap();
-                test_contains!(err, "No batches have been submitted");
+                assert!(events.iter().any(|event| matches!(
+                    event,
+                    EngineEvent::Warning { message } if message.contains("No batches have been submitted")
+                )));
             },
         )
         .await;
@@ -1628,11 +1626,15 @@ mod tests {
             [("ZQA_STATE_DIR", Some(tmp.path().to_str().unwrap()))],
             async {
                 let mut ctx = create_test_context(vec![]);
-                let result = handle_batch_cancel_cmd(1, &mut ctx).await;
+                let (result, events) = capture_events(&mut ctx, async |ctx| {
+                    handle_batch_cancel_cmd(1, ctx).await
+                })
+                .await;
                 assert!(result.is_ok());
-
-                let err = String::from_utf8(ctx.err.into_inner()).unwrap();
-                test_contains!(err, "batches directory does not exist");
+                assert!(events.iter().any(|event| matches!(
+                    event,
+                    EngineEvent::Error { message } if message.contains("batches directory does not exist")
+                )));
             },
         )
         .await;
@@ -1647,11 +1649,14 @@ mod tests {
             [("ZQA_STATE_DIR", Some(tmp.path().to_str().unwrap()))],
             async {
                 let mut ctx = create_test_context(vec![]);
-                let result = handle_batch_cancel_cmd(7, &mut ctx).await;
+                let (result, events) =
+                    capture_events(&mut ctx, async |ctx| handle_batch_cancel_cmd(7, ctx).await)
+                        .await;
                 assert!(result.is_ok());
-
-                let err = String::from_utf8(ctx.err.into_inner()).unwrap();
-                test_contains!(err, "batch file does not exist");
+                assert!(events.iter().any(|event| matches!(
+                    event,
+                    EngineEvent::Error { message } if message.contains("batch file does not exist")
+                )));
             },
         )
         .await;
@@ -1700,11 +1705,12 @@ mod tests {
             [("ZQA_STATE_DIR", Some(tmp.path().to_str().unwrap()))],
             async {
                 let mut ctx = create_test_context(vec![]);
-                let result = handle_batch_create_cmd(&mut ctx).await;
+                let (result, events) = capture_events(&mut ctx, handle_batch_create_cmd).await;
                 assert!(result.is_ok());
-
-                let err = String::from_utf8(ctx.err.into_inner()).unwrap();
-                test_contains!(err, "incompatible");
+                assert!(events.iter().any(|event| matches!(
+                    event,
+                    EngineEvent::Error { message } if message.contains("incompatible")
+                )));
                 // The mismatching batch must be left untouched.
                 assert!(batch_dir.join("batch_1.log").exists());
             },
@@ -1877,11 +1883,12 @@ mod tests {
             async {
                 let mut ctx = create_test_context(vec![]);
 
-                let result = handle_batch_check_status_cmd(&mut ctx).await;
+                let (result, events) = capture_events(&mut ctx, handle_batch_check_status_cmd).await;
                 assert!(result.is_ok());
-
-                let err = String::from_utf8(ctx.err.into_inner()).unwrap();
-                test_contains!(err, "No valid batches were found");
+                assert!(events.iter().any(|event| matches!(
+                    event,
+                    EngineEvent::Warning { message } if message.contains("No valid batches were found")
+                )));
             },
         )
         .await;
