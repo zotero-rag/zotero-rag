@@ -1,11 +1,13 @@
 use std::io;
 use std::sync::PoisonError;
+use tokio::sync::mpsc::error::SendError;
 
 use thiserror::Error;
 use zqa_rag::llm::errors::LLMError;
 use zqa_rag::vector::backends::lance::LanceError;
 
 use crate::config::ConfigError;
+use crate::io::EngineEvent;
 use crate::state::StateError;
 use crate::utils;
 
@@ -13,6 +15,8 @@ use crate::utils;
 pub enum CLIError {
     #[error("Error parsing library: {0}")]
     ArrowError(String),
+    #[error("Channel error: {0}")]
+    ChannelError(#[from] SendError<EngineEvent>),
     #[error("Command error: {0}")]
     CommandError(String),
     #[error("Configuration error: {0}")]

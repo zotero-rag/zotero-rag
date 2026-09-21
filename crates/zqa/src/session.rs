@@ -95,7 +95,10 @@ impl<O: Write, E: Write> Session<O, E> {
     ///
     /// Returns a [`CLIError`] if the current conversation cannot be saved or conversation state
     /// cannot be locked.
-    pub fn resume_conversation(&mut self, conversation: &SavedChatHistory) -> Result<(), CLIError> {
-        resume_conversation(&mut self.ctx, conversation)
+    pub async fn resume_conversation(
+        &mut self,
+        conversation: &SavedChatHistory,
+    ) -> Result<(), CLIError> {
+        resume_conversation(&mut self.ctx, conversation).await
     }
 }
