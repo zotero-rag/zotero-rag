@@ -177,7 +177,7 @@ impl EngineEvent {
         E: Write + ?Sized,
     {
         if let Self::Choose { options, .. } = &mut self
-            && options.len() == 0
+            && options.is_empty()
         {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -303,9 +303,9 @@ impl Display for EngineEvent {
                 ..
             } => {
                 write!(f, "{message}\n\n")?;
-                if options.len() == 0 {
+                if options.is_empty() {
                     return writeln!(f, "(no options available)");
-                };
+                }
 
                 let default = (options.len() - 1).min(*default);
                 for (i, opt) in options.iter().enumerate() {
