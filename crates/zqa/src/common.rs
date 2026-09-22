@@ -149,7 +149,7 @@ mod tests {
     use tokio::sync::mpsc;
     use zqa_macros::test_eq;
 
-    use super::test_support::{capture_events, create_test_context};
+    use super::test_support::{capture_events, create_test_context, respond_to_events};
     use crate::io::EngineEvent;
 
     #[tokio::test]
@@ -191,6 +191,44 @@ mod tests {
         assert!(
             matches!(rx.try_recv().unwrap(), EngineEvent::Text { message } if message == "restored")
         );
+    }
+
+    #[tokio::test]
+    async fn test_respond_to_events_answers_requests() {
+        let mut ctx = create_test_context(vec![]);
+        let result = respond_to_events(
+            &mut ctx,
+            async |ctx| {
+                let (reply, answer) = tokio::sync::oneshot::channel();
+                ctx.emit(EngineEvent::Confirm {
+                    message: "Continue?".into(),
+                    default: true,
+                    reply,
+                })
+                .await
+                .unwrap();
+                let confirmed = answer.await.unwrap();
+                let (reply, answer) = tokio::sync::oneshot::channel();
+                ctx.emit(EngineEvent::Choose {
+                    message: "Select an option".into(),
+                    options: vec!["First".into(), "Second".into()],
+                    default: 0,
+                    reply,
+                })
+                .await
+                .unwrap();
+                (confirmed, answer.await.unwrap())
+            },
+            |event| match event {
+                EngineEvent::Confirm { reply, .. } => reply.send(false).unwrap(),
+                EngineEvent::Choose { reply, .. } => reply.send(1).unwrap(),
+                _ => panic!("expected an input request"),
+            },
+        )
+        .await;
+
+        test_eq!(result, (false, 1));
+        assert!(ctx.event_tx.is_none());
     }
 
     #[tokio::test]
@@ -279,9 +317,34 @@ pub(crate) mod test_support {
         ctx: &mut Context,
         action: impl AsyncFnOnce(&mut Context) -> T,
     ) -> (T, Vec<EngineEvent>) {
+        let mut events = Vec::new();
+        let result = respond_to_events(ctx, action, |event| events.push(event)).await;
+        (result, events)
+    }
+
+    /// Run a handler while a test consumer handles its output and input requests.
+    ///
+    /// The consumer runs concurrently with the handler and receives queued events before this
+    /// function returns. Input events must be answered or their reply senders dropped by the
+    /// consumer. The previous context sender is restored when the handler finishes.
+    /// Detached background tasks are not awaited.
+    ///
+    /// # Arguments
+    ///
+    /// * `ctx` - The context whose event sender will be temporarily replaced.
+    /// * `action` - The handler or async closure to run.
+    /// * `on_event` - The consumer that receives each event in order.
+    ///
+    /// # Returns
+    ///
+    /// The handler's result, after all queued events have been consumed.
+    pub(crate) async fn respond_to_events<T>(
+        ctx: &mut Context,
+        action: impl AsyncFnOnce(&mut Context) -> T,
+        mut on_event: impl FnMut(EngineEvent),
+    ) -> T {
         let (tx, mut rx) = mpsc::channel(1);
         let previous_sender = ctx.event_tx.replace(tx);
-        let mut events = Vec::new();
         let result = {
             let action = action(ctx);
             tokio::pin!(action);
@@ -289,17 +352,17 @@ pub(crate) mod test_support {
             loop {
                 tokio::select! {
                     result = &mut action => break result,
-                    Some(event) = rx.recv() => events.push(event),
+                    Some(event) = rx.recv() => on_event(event),
                 }
             }
         };
 
         while let Ok(event) = rx.try_recv() {
-            events.push(event);
+            on_event(event);
         }
 
         ctx.event_tx = previous_sender;
-        (result, events)
+        result
     }
 
     /// Create a config with the mock LLM provider.

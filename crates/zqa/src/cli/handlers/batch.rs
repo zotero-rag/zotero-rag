@@ -71,6 +71,7 @@ use std::path::{Path, PathBuf};
 use chrono::{DateTime, Utc};
 use humantime::format_duration;
 use serde::{Deserialize, Serialize};
+use tokio::sync::oneshot;
 use xxhash_rust::xxh3;
 use zqa_rag::capabilities::{BatchAPIProvider, BatchJobState};
 use zqa_rag::embedding::common::{
@@ -86,7 +87,6 @@ use crate::io::EngineEvent;
 use crate::state::get_state_dir;
 use crate::utils::arrow::library_to_arrow_with_embeddings;
 use crate::utils::library::{ZoteroItem, parse_library};
-use crate::utils::terminal::{read_char, read_number};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct BatchItem {
@@ -571,11 +571,15 @@ async fn prompt_and_fetch_batch_results(
     client: impl BatchAPIProvider,
     batch: &BatchEmbeddingMetadata,
 ) -> Result<(), CLIError> {
-    ctx.emit(EngineEvent::Text {
-        message: "Fetch results now? ([y]/n)\n".into(),
+    let (tx, rx) = oneshot::channel();
+    ctx.emit(EngineEvent::Confirm {
+        message: "Fetch results now? ".into(),
+        default: true,
+        reply: tx,
     })
     .await?;
-    if read_char(&mut ctx.input, 'y', &['y', 'n']) != 'y' {
+
+    if !rx.await? {
         return Ok(());
     }
 
@@ -620,11 +624,15 @@ async fn prompt_and_fetch_batch_results(
                 .await?;
             }
 
-            ctx.emit(EngineEvent::Text {
-                message: "Retry the entire batch? ([y]/n)\n".into(),
+            let (tx, rx) = oneshot::channel();
+            ctx.emit(EngineEvent::Confirm {
+                message: "Retry the entire batch? ".into(),
+                default: true,
+                reply: tx,
             })
             .await?;
-            if read_char(&mut ctx.input, 'y', &['y', 'n']) == 'y' {
+
+            if rx.await? {
                 retry_items(ctx, batch.items.clone()).await?;
                 fs::remove_file(batch_dir.join(format!("batch_{}.log", batch.seq_id)))?;
             }
@@ -658,31 +666,25 @@ async fn prompt_and_fetch_batch_results(
                 .await?;
             }
 
-            ctx.emit(EngineEvent::Text {
-                message: "What do you want to do?\n".into(),
-            })
-            .await?;
-            ctx.emit(EngineEvent::Text {
-                message: "  [a] Import the successful items and retry the remaining (default)\n"
-                    .into(),
-            })
-            .await?;
-            ctx.emit(EngineEvent::Text {
-                message: "  (b) Import the successful items and drop the remaining ones without retrying\n".into(),
-            }).await?;
-            ctx.emit(EngineEvent::Text {
-                message: "  (c) Drop all results and retry the entire batch\n".into(),
-            })
-            .await?;
-            ctx.emit(EngineEvent::Text {
-                message: "  (d) Decide later, do nothing right now\n".into(),
-            })
-            .await?;
-
             let log_file = batch_dir.join(format!("batch_{}.log", batch.seq_id));
 
-            match read_char(&mut ctx.input, 'a', &['a', 'b', 'c', 'd']) {
-                'a' => {
+            let (tx, rx) = oneshot::channel();
+            ctx.emit(EngineEvent::Choose {
+                message: "What do you want to do?".into(),
+                options: vec![
+                    "Import the successful items and retry the remaining (default)".into(),
+                    "Import the successful items and drop the remaining ones without retrying"
+                        .into(),
+                    "Drop all results and retry the entire batch".into(),
+                    "Decide later, do nothing right now".into(),
+                ],
+                reply: tx,
+                default: 0,
+            })
+            .await?;
+
+            match rx.await? {
+                0 => {
                     handle_successful_batch_results(ctx, batch, results.succeeded).await?;
 
                     let failed_ids: HashSet<&str> =
@@ -699,15 +701,15 @@ async fn prompt_and_fetch_batch_results(
 
                     fs::remove_file(log_file)?;
                 }
-                'b' => {
+                1 => {
                     handle_successful_batch_results(ctx, batch, results.succeeded).await?;
                     fs::remove_file(log_file)?;
                 }
-                'c' => {
+                2 => {
                     retry_items(ctx, batch.items.clone()).await?;
                     fs::remove_file(log_file)?;
                 }
-                'd' => {}
+                3 => {}
                 _ => unreachable!("read_char restricts to the valid set"),
             }
         }
@@ -808,24 +810,24 @@ async fn handle_batch_check_status_cmd(ctx: &mut Context) -> Result<(), CLIError
                 message: "You have multiple submitted batches. Please choose one from the below options:\n".into(),
             }).await?;
 
-            for (i, batch) in pending_batches.iter().enumerate() {
-                if i == 0 {
-                    _ = ctx
-                        .emit(EngineEvent::Text {
-                            message: format!("[{}]. [seq {}] {batch}\n", i + 1, batch.seq_id),
-                        })
-                        .await;
-                } else {
-                    _ = ctx
-                        .emit(EngineEvent::Text {
-                            message: format!("({}). [seq {}] {batch}\n", i + 1, batch.seq_id),
-                        })
-                        .await;
-                }
-            }
+            let choices = pending_batches
+                .iter()
+                .map(|batch| format!("[seq {}] {batch}\n", batch.seq_id))
+                .collect::<Vec<_>>();
+            let (tx, rx) = oneshot::channel();
 
-            let choice = read_number(&mut ctx.input, 1, (1, pending_batches.len() + 1));
-            pending_batches.get(choice.saturating_sub(1)).unwrap()
+            ctx.emit(EngineEvent::Choose {
+                message:
+                    "You have multiple submitted batches. Please choose one from the below options:"
+                        .into(),
+                options: choices,
+                reply: tx,
+                default: 0,
+            })
+            .await?;
+
+            let choice = rx.await?;
+            pending_batches.get(choice).unwrap()
         }
     };
 
@@ -956,22 +958,20 @@ async fn handle_batch_create_cmd(ctx: &mut Context) -> Result<(), CLIError> {
             Ok(())
         }
         (false, false) => {
-            ctx.emit(EngineEvent::Text {
-                message: "Some new items from Zotero are currently pending in other batches. What do you want to do?\n".into(),
+            let (tx, rx) = oneshot::channel();
+            ctx.emit(EngineEvent::Choose {
+                message: "Some new items from Zotero are currently pending in other batches. What do you want to do?".into(),
+                options: vec![
+                    "Create a new batch with only the non-overlapping items (default)".into(),
+                    "Process all items anyway".into()
+                ],
+                reply: tx,
+                default: 0
             }).await?;
-            ctx.emit(EngineEvent::Text {
-                message: "  [a] Create a new batch with only the non-overlapping items (default)\n"
-                    .into(),
-            })
-            .await?;
-            ctx.emit(EngineEvent::Text {
-                message: "  (b) Process all items anyway\n".into(),
-            })
-            .await?;
 
-            match read_char(&mut ctx.input, 'a', &['a', 'b']) {
-                'a' => retry_items(ctx, new_items).await,
-                'b' => {
+            match rx.await? {
+                0 => retry_items(ctx, new_items).await,
+                1 => {
                     // It is possible to end up in this branch when there are pending batches, some
                     // of which are proper subsets of the batch we are submitting. In this case, we
                     // should let the user know and ask before deleting those.
@@ -999,25 +999,25 @@ async fn handle_batch_create_cmd(ctx: &mut Context) -> Result<(), CLIError> {
                     retry_items(ctx, overlap).await?;
 
                     if !subsumed.is_empty() {
-                        ctx.emit(EngineEvent::Text {
+                        let (tx, rx) = oneshot::channel();
+                        ctx.emit(EngineEvent::Choose {
                             message: format!(
-                                "{} pending batch{} {} proper subset{} of this batch, and can be deleted. What do you want to do?\n",
+                                "{} pending batch{} {} proper subset{} of this batch, and can be deleted. What do you want to do?",
                                 subsumed.len(),
                                 if subsumed.len() > 1 { "es" } else { "" },
                                 if subsumed.len() > 1 { "are" } else { "is a" },
                                 if subsumed.len() > 1 { "s" } else { "" }
                             ),
-                        }).await?;
-                        ctx.emit(EngineEvent::Text {
-                            message: "[a] Cancel batches that are subsets\n".into(),
-                        })
-                        .await?;
-                        ctx.emit(EngineEvent::Text {
-                            message: "(b) Do not cancel subset batches.\n".into(),
+                            options: vec![
+                                "Cancel batches that are subsets".into(),
+                                "Do not cancel subset batches.".into(),
+                            ],
+                            reply: tx,
+                            default: 0
                         })
                         .await?;
 
-                        if read_char(&mut ctx.input, 'a', &['a', 'b']) == 'a' {
+                        if rx.await? == 0 {
                             for batch in subsumed {
                                 handle_batch_cancel_cmd(batch.seq_id, ctx).await?;
                             }
@@ -1094,7 +1094,6 @@ pub(crate) async fn handle_batch_cmd(
 mod tests {
     use std::fs;
     use std::future::{Future, ready};
-    use std::io::Cursor;
 
     use chrono::{Duration, Utc};
     use serial_test::serial;
@@ -1113,7 +1112,7 @@ mod tests {
         handle_batch_cancel_cmd, handle_batch_check_status_cmd, handle_batch_create_cmd,
         prompt_and_fetch_batch_results, update_hash_cache, write_batch_metadata,
     };
-    use crate::common::test_support::{capture_events, create_test_context};
+    use crate::common::test_support::{capture_events, create_test_context, respond_to_events};
     use crate::io::EngineEvent;
     use crate::utils::library::{ZoteroItem, ZoteroItemMetadata};
 
@@ -1726,8 +1725,6 @@ mod tests {
             [("ZQA_STATE_DIR", Some(tmp.path().to_str().unwrap()))],
             async {
                 let mut ctx = create_test_context(vec![]);
-                // Decline the very first "Fetch results now?" prompt.
-                ctx.input = Box::new(Cursor::new(b"n\n".to_vec()));
 
                 let batch = make_metadata_at(Utc::now() - Duration::seconds(5), 2);
                 // The provider would return a mismatched (empty) payload, but declining must
@@ -1736,11 +1733,28 @@ mod tests {
                     results: make_results(&[], &[]),
                 };
 
-                let result = prompt_and_fetch_batch_results(&mut ctx, mock, &batch).await;
+                let mut answers = [false].into_iter();
+                let result = respond_to_events(
+                    &mut ctx,
+                    async |ctx| prompt_and_fetch_batch_results(ctx, mock, &batch).await,
+                    |event| match event {
+                        EngineEvent::Confirm {
+                            message,
+                            default,
+                            reply,
+                        } => {
+                            test_eq!(message, "Fetch results now? ");
+                            assert!(default);
+                            reply
+                                .send(answers.next().expect("unexpected confirmation"))
+                                .unwrap();
+                        }
+                        event => panic!("unexpected event: {event:?}"),
+                    },
+                )
+                .await;
                 assert!(result.is_ok());
-
-                let out = String::from_utf8(ctx.out.into_inner()).unwrap();
-                test_contains!(out, "Fetch results now?");
+                test_eq!(answers.next(), None);
             },
         )
         .await;
@@ -1754,7 +1768,6 @@ mod tests {
             [("ZQA_STATE_DIR", Some(tmp.path().to_str().unwrap()))],
             async {
                 let mut ctx = create_test_context(vec![]);
-                ctx.input = Box::new(Cursor::new(b"y\n".to_vec()));
 
                 // The batch has 3 items, but the provider returns results for only 2. The
                 // length-mismatch guard must reject before any DB write or retry.
@@ -1763,7 +1776,27 @@ mod tests {
                     results: make_results(&["K0"], &["K1"]),
                 };
 
-                let result = prompt_and_fetch_batch_results(&mut ctx, mock, &batch).await;
+                let mut answers = [true].into_iter();
+                let result = respond_to_events(
+                    &mut ctx,
+                    async |ctx| prompt_and_fetch_batch_results(ctx, mock, &batch).await,
+                    |event| match event {
+                        EngineEvent::Confirm {
+                            message,
+                            default,
+                            reply,
+                        } => {
+                            test_eq!(message, "Fetch results now? ");
+                            assert!(default);
+                            reply
+                                .send(answers.next().expect("unexpected confirmation"))
+                                .unwrap();
+                        }
+                        event => panic!("unexpected event: {event:?}"),
+                    },
+                )
+                .await;
+                test_eq!(answers.next(), None);
                 assert!(matches!(
                     result,
                     Err(crate::cli::errors::CLIError::CommandError(_))
@@ -1781,7 +1814,6 @@ mod tests {
             [("ZQA_STATE_DIR", Some(tmp.path().to_str().unwrap()))],
             async {
                 let mut ctx = create_test_context(vec![]);
-                ctx.input = Box::new(Cursor::new(b"y\n".to_vec()));
 
                 // 0 items + 0 results passes the length check (0 == 0) but trips the empty-batch
                 // guard right after it.
@@ -1790,7 +1822,27 @@ mod tests {
                     results: make_results(&[], &[]),
                 };
 
-                let result = prompt_and_fetch_batch_results(&mut ctx, mock, &batch).await;
+                let mut answers = [true].into_iter();
+                let result = respond_to_events(
+                    &mut ctx,
+                    async |ctx| prompt_and_fetch_batch_results(ctx, mock, &batch).await,
+                    |event| match event {
+                        EngineEvent::Confirm {
+                            message,
+                            default,
+                            reply,
+                        } => {
+                            test_eq!(message, "Fetch results now? ");
+                            assert!(default);
+                            reply
+                                .send(answers.next().expect("unexpected confirmation"))
+                                .unwrap();
+                        }
+                        event => panic!("unexpected event: {event:?}"),
+                    },
+                )
+                .await;
+                test_eq!(answers.next(), None);
                 assert!(matches!(
                     result,
                     Err(crate::cli::errors::CLIError::CommandError(_))
@@ -1813,20 +1865,51 @@ mod tests {
             [("ZQA_STATE_DIR", Some(tmp.path().to_str().unwrap()))],
             async {
                 let mut ctx = create_test_context(vec![]);
-                // 'y' to fetch, then 'n' to decline retrying the whole batch.
-                ctx.input = Box::new(Cursor::new(b"y\nn\n".to_vec()));
 
                 let batch = make_metadata_at(Utc::now() - Duration::seconds(5), 2);
                 let mock = MockBatchProvider {
                     results: make_results(&[], &["K0", "K1"]),
                 };
 
-                let result = prompt_and_fetch_batch_results(&mut ctx, mock, &batch).await;
+                let mut answers = [true, false].into_iter();
+                let mut events = Vec::new();
+                let result = respond_to_events(
+                    &mut ctx,
+                    async |ctx| prompt_and_fetch_batch_results(ctx, mock, &batch).await,
+                    |event| match event {
+                        EngineEvent::Confirm {
+                            message,
+                            default,
+                            reply,
+                        } => {
+                            let answer = answers.next().expect("unexpected confirmation");
+                            test_eq!(
+                                message,
+                                if answer {
+                                    "Fetch results now? "
+                                } else {
+                                    "Retry the entire batch? "
+                                }
+                            );
+                            assert!(default);
+                            reply.send(answer).unwrap();
+                        }
+                        EngineEvent::Choose { .. }
+                        | EngineEvent::Line { .. }
+                        | EngineEvent::Secret { .. } => {
+                            panic!("unexpected input request: {event:?}");
+                        }
+                        event => events.push(event),
+                    },
+                )
+                .await;
                 assert!(result.is_ok());
-
-                let err = String::from_utf8(ctx.err.into_inner()).unwrap();
-                test_contains!(err, "All 2 batch items failed");
-                // Declining the retry must leave the WAL entry untouched — nothing was applied,
+                test_eq!(answers.next(), None);
+                assert!(events.iter().any(|event| matches!(
+                    event,
+                    EngineEvent::Error { message } if message.contains("All 2 batch items failed")
+                )));
+                // Declining the retry must leave the WAL entry untouched: nothing was applied,
                 // so there is nothing to clean up.
                 assert!(batch_dir.join("batch_1.log").exists());
             },
@@ -1846,8 +1929,6 @@ mod tests {
             [("ZQA_STATE_DIR", Some(tmp.path().to_str().unwrap()))],
             async {
                 let mut ctx = create_test_context(vec![]);
-                // 'y' to fetch, then 'd' to decide later (no import, no retry, no network/DB).
-                ctx.input = Box::new(Cursor::new(b"y\nd\n".to_vec()));
 
                 // K0 succeeded, K1 failed => partial success.
                 let batch = make_metadata_at(Utc::now() - Duration::seconds(5), 2);
@@ -1855,14 +1936,42 @@ mod tests {
                     results: make_results(&["K0"], &["K1"]),
                 };
 
-                let result = prompt_and_fetch_batch_results(&mut ctx, mock, &batch).await;
+                let mut answers = [true].into_iter();
+                let mut choices = [3].into_iter();
+                let mut events = Vec::new();
+                let result = respond_to_events(
+                    &mut ctx,
+                    async |ctx| prompt_and_fetch_batch_results(ctx, mock, &batch).await,
+                    |event| match event {
+                        EngineEvent::Confirm { message, default, reply } => {
+                            test_eq!(message, "Fetch results now? ");
+                            assert!(default);
+                            reply.send(answers.next().expect("unexpected confirmation")).unwrap();
+                        }
+                        EngineEvent::Choose { message, options, default, reply } => {
+                            test_eq!(message, "What do you want to do?");
+                            test_eq!(default, 0);
+                            test_eq!(options.len(), 4);
+                            test_eq!(options[3], "Decide later, do nothing right now");
+                            reply.send(choices.next().expect("unexpected choice")).unwrap();
+                        }
+                        EngineEvent::Line { .. } | EngineEvent::Secret { .. } => {
+                            panic!("unexpected input request: {event:?}");
+                        }
+                        event => events.push(event),
+                    },
+                )
+                .await;
                 assert!(result.is_ok());
+                test_eq!(answers.next(), None);
+                test_eq!(choices.next(), None);
+                assert!(events.iter().any(|event| matches!(
+                    event,
+                    EngineEvent::StatusUpdate { message } if message.contains("1 of 2 items succeeded")
+                )));
 
                 // "Decide later" must touch nothing: the WAL entry stays put.
                 assert!(batch_dir.join("batch_1.log").exists());
-
-                let out = String::from_utf8(ctx.out.into_inner()).unwrap();
-                test_contains!(out, "What do you want to do?");
             },
         )
         .await;

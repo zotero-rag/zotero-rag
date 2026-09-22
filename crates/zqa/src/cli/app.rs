@@ -169,14 +169,14 @@ pub(crate) async fn cli<R: BufRead, O: Write, E: Write>(
                         tokio::select! {
                             result = &mut dispatch => break result,
                             Some(event) = rx.recv() => {
-                                event.handle_event(&mut input, &mut output, &mut err, read_password)?
+                                event.handle_event(&mut input, &mut output, &mut err, read_password)?;
                             }
                         }
                     }
                 };
 
                 while let Ok(event) = rx.try_recv() {
-                    event.handle_event(&mut input, &mut output, &mut err, read_password)?
+                    event.handle_event(&mut input, &mut output, &mut err, read_password)?;
                 }
 
                 match continue_loop {

@@ -248,11 +248,15 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         config,
         store,
         path_options: PathOptions::default(),
-        input: Box::new(std::io::stdin().lock()),
-        out: stdout(),
-        err: stderr(),
     };
 
-    cli(context, event_rx).await?;
+    cli(
+        context,
+        event_rx,
+        std::io::stdin().lock(),
+        stdout(),
+        stderr(),
+    )
+    .await?;
     Ok(())
 }

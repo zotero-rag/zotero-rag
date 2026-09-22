@@ -5,6 +5,7 @@ use std::fs::File;
 use arrow_array::RecordBatch;
 use arrow_ipc::reader::FileReader;
 use arrow_ipc::writer::FileWriter;
+use tokio::sync::oneshot;
 use zqa_rag::vector::doctor::doctor as rag_doctor;
 
 use crate::cli::errors::CLIError;
@@ -16,7 +17,7 @@ use crate::utils::arrow::library_to_arrow;
 use crate::utils::library::{
     ZoteroItem, ZoteroItemSet, get_new_library_items, parse_library_metadata,
 };
-use crate::utils::terminal::{DIM_TEXT, RESET, read_line};
+use crate::utils::terminal::{DIM_TEXT, RESET};
 
 /// Emit table statistics for the current LanceDB database.
 ///
@@ -89,20 +90,17 @@ pub(crate) async fn handle_process_cmd(ctx: &mut Context) -> Result<(), CLIError
     let item_metadata = item_metadata.unwrap();
     let metadata_length = item_metadata.len();
     if metadata_length >= WARNING_THRESHOLD {
-        ctx.emit(EngineEvent::Text {
+        let (tx, rx) = oneshot::channel();
+        ctx.emit(EngineEvent::Confirm {
             message: format!(
-                "Your library has {metadata_length} new items. Parsing may take a while. Continue?\n"
+                "Your library has {metadata_length} new items. Parsing may take a while. Continue?"
             ),
-        })
-        .await?;
-        ctx.emit(EngineEvent::Text {
-            message: "(/process) >>> ".into(),
+            reply: tx,
+            default: true,
         })
         .await?;
 
-        let option = read_line(&mut ctx.input);
-        let option = option.trim().to_lowercase();
-        if ["n", "no", "false", "0"].contains(&option.as_str()) {
+        if !rx.await? {
             return Ok(());
         }
     }
