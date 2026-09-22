@@ -16,7 +16,7 @@ use std::sync::Arc;
 use std::thread;
 
 use futures::channel::mpsc::UnboundedSender;
-use tokio::sync::mpsc::UnboundedReceiver;
+use tokio::sync::mpsc::{self, UnboundedReceiver};
 use zqa::session::Session;
 use zqa::state::SavedChatHistory;
 
@@ -141,16 +141,8 @@ pub fn spawn_engine(
                 }
             };
 
-            let out = ChannelWriter {
-                tx: event_tx.clone(),
-                is_err: false,
-            };
-            let err = ChannelWriter {
-                tx: event_tx.clone(),
-                is_err: true,
-            };
-
-            let mut session = match Session::new(config, out, err) {
+            let (engine_tx, engine_rx) = mpsc::channel(256);
+            let mut session = match Session::new(config, Some(engine_tx), engine_rx) {
                 Ok(session) => session,
                 Err(e) => {
                     let _ =
@@ -178,6 +170,10 @@ pub fn spawn_engine(
                             let result: Option<Result<bool, String>> = tokio::select! {
                                 result = session.dispatch(&command) => {
                                     Some(result.map_err(|e| e.to_string()))
+                                }
+                                evt = engine_rx.recv() => {
+                                    Some(event_tx.unbounded_send(evt)
+                                        .map_or_else(|e| Err(e.to_string()), |_| Ok(true)))
                                 }
                                 _ = cancel_rx.recv() => None,
                             };
