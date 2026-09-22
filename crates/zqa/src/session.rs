@@ -6,13 +6,14 @@
 //! the full retrieval/generation pipeline without depending on the crate internals
 //! ([`Context`], [`State`], the handler functions) being `pub`.
 
-use std::io::{Cursor, Write};
+use tokio::sync::mpsc;
 
 use crate::cli::app::dispatch_command;
 use crate::cli::errors::CLIError;
 use crate::cli::handlers::conversation::resume_conversation;
 use crate::common::{Context, PathOptions, State};
 use crate::config::Config;
+use crate::io::EngineEvent;
 use crate::state::SavedChatHistory;
 use crate::store::lance::LanceZoteroStore;
 
@@ -26,39 +27,38 @@ use crate::store::lance::LanceZoteroStore;
 /// The type is deliberately not `Send`: the underlying [`Context`] holds non-`Send` state,
 /// so a `Session` is meant to live on a single owning thread that drives it (for example, a
 /// dedicated engine thread with its own async runtime).
-pub struct Session<O: Write, E: Write> {
-    ctx: Context<O, E>,
+pub struct Session {
+    ctx: Context,
+    event_rx: mpsc::Receiver<EngineEvent>,
 }
 
-impl<O: Write, E: Write> Session<O, E> {
+impl Session {
     /// Build a session from a config and a pair of output streams.
     ///
     /// # Arguments
     ///
     /// * `config` - The loaded application configuration (see [`crate::load_config`]).
-    /// * `out` - The stream that command stdout is written to.
-    /// * `err` - The stream that command stderr (status lines, warnings) is written to.
+    /// * `event_rx` - A receiver for [`EngineEvent`]s from the engine's event loop.
     ///
     /// # Errors
     ///
     /// Returns a [`CLIError`] if a vector store cannot be constructed from `config`
     /// (for example, if no embedding provider is configured).
-    pub fn new(config: Config, out: O, err: E) -> Result<Self, CLIError> {
+    pub fn new(
+        config: Config,
+        event_tx: Option<mpsc::Sender<EngineEvent>>,
+        event_rx: mpsc::Receiver<EngineEvent>,
+    ) -> Result<Self, CLIError> {
         let store = LanceZoteroStore::from_config(&config)?;
         let ctx = Context {
             state: State::default(),
-            event_tx: None, // TODO: thread through to the gui
+            event_tx,
             config,
             store,
             path_options: PathOptions::default(),
-            // The GUI never drives interactive prompts; feed EOF so any handler that
-            // reads input terminates instead of blocking.
-            input: Box::new(Cursor::new(Vec::new())),
-            out,
-            err,
         };
 
-        Ok(Self { ctx })
+        Ok(Self { ctx, event_rx })
     }
 
     /// Dispatch a single command string (e.g. `"/help"` or a bare query) through the

@@ -1,9 +1,9 @@
 //! Command handlers for conversation-related operations.
 
-use std::io::BufRead;
 use std::sync::{Arc, Mutex, atomic};
 
 use chrono::Local;
+use tokio::sync::oneshot;
 
 use crate::cli::errors::CLIError;
 use crate::common::Context;
@@ -50,49 +50,42 @@ pub(crate) async fn handle_resume_cmd(ctx: &mut Context) -> Result<(), CLIError>
             .await?;
         }
         Ok(Some(histories)) => {
-            ctx.emit(EngineEvent::Text {
-                message: "\nSaved conversations:\n".into(),
-            })
-            .await?;
-
-            for (i, h) in histories.iter().enumerate() {
-                let msg_count = h.history.len();
-                ctx.emit(EngineEvent::Text {
-                    message: format!(
-                        "  [{}] {} ({} message{})\n",
-                        i + 1,
+            let (tx, rx) = oneshot::channel();
+            let choices = histories
+                .iter()
+                .map(|h| {
+                    let msg_count = h.history.len();
+                    format!(
+                        "{} ({} message{})\n",
                         h.title,
                         msg_count,
                         if msg_count == 1 { "" } else { "s" }
-                    ),
+                    )
                 })
-                .await?;
-            }
+                .collect::<Vec<_>>();
 
-            ctx.emit(EngineEvent::Text {
-                message: format!("\nEnter a number (1-{}): ", histories.len()),
+            ctx.emit(EngineEvent::Choose {
+                message: "Saved conversations:".into(),
+                options: choices,
+                reply: tx,
+                default: 0,
             })
             .await?;
 
-            let mut input = String::new();
-            ctx.input.read_line(&mut input)?;
-            let input = input.trim();
-
-            match input.parse::<usize>() {
-                Ok(n) if n >= 1 && n <= histories.len() => {
-                    let selected = &histories[n - 1];
-                    resume_conversation(ctx, selected).await?;
-                    ctx.emit(EngineEvent::StatusUpdate {
-                        message: format!("Resumed: {}\n", selected.title),
-                    })
-                    .await?;
-                }
-                _ => {
-                    ctx.emit(EngineEvent::Error {
-                        message: "Invalid selection.\n".into(),
-                    })
-                    .await?;
-                }
+            if let Ok(n) = rx.await
+                && n < histories.len()
+            {
+                let selected = &histories[n - 1];
+                resume_conversation(ctx, selected).await?;
+                ctx.emit(EngineEvent::StatusUpdate {
+                    message: format!("Resumed: {}\n", selected.title),
+                })
+                .await?;
+            } else {
+                ctx.emit(EngineEvent::Error {
+                    message: "Invalid selection.\n".into(),
+                })
+                .await?;
             }
         }
     }
@@ -180,7 +173,6 @@ pub(crate) async fn save_current_conversation(ctx: &mut Context) -> Result<bool,
 
 #[cfg(test)]
 mod tests {
-    use std::io::Cursor;
     use std::sync::atomic::Ordering;
 
     use chrono::Local;
@@ -191,7 +183,8 @@ mod tests {
     use zqa_rag::llm::base::{ChatHistoryContent, ChatHistoryItem, MessageRole};
 
     use super::{handle_resume_cmd, resume_conversation};
-    use crate::common::test_support::create_test_context;
+    use crate::common::test_support::{create_test_context, respond_to_events};
+    use crate::io::EngineEvent;
     use crate::state::{SavedChatHistory, UsageMetadata, save_conversation};
 
     #[tokio::test]
@@ -294,15 +287,30 @@ mod tests {
             .unwrap();
 
             let mut ctx = create_test_context(vec![]);
-            let (tx, mut rx) = mpsc::channel(16);
-            ctx.event_tx = Some(tx);
-            ctx.input = Box::new(Cursor::new("1\n"));
-            handle_resume_cmd(&mut ctx).await.unwrap();
-
-            let out: String = std::iter::from_fn(|| rx.try_recv().ok())
-                .map(|event| event.to_string())
-                .collect();
-            test_contains!(out, "Resumed:");
+            let mut events = Vec::new();
+            let mut choices = 0;
+            respond_to_events(&mut ctx, handle_resume_cmd, |event| match event {
+                EngineEvent::Choose {
+                    options,
+                    default,
+                    reply,
+                    ..
+                } => {
+                    choices += 1;
+                    test_eq!(options.len(), 2);
+                    test_eq!(default, 0);
+                    test_contains!(options[0], "Conversation B");
+                    reply.send(0).unwrap();
+                }
+                event => events.push(event),
+            })
+            .await
+            .unwrap();
+            test_eq!(choices, 1);
+            assert!(events.iter().any(|event| matches!(
+                event,
+                EngineEvent::StatusUpdate { message } if message.contains("Resumed:")
+            )));
 
             let loaded_history = ctx.state.chat_history.lock().unwrap();
             let loaded_usage = ctx.state.usage;
@@ -334,15 +342,23 @@ mod tests {
             .unwrap();
 
             let mut ctx = create_test_context(vec![]);
-            let (tx, mut rx) = mpsc::channel(16);
-            ctx.event_tx = Some(tx);
-            ctx.input = Box::new(Cursor::new("99\n"));
-            handle_resume_cmd(&mut ctx).await.unwrap();
-
-            let err: String = std::iter::from_fn(|| rx.try_recv().ok())
-                .map(|event| event.to_string())
-                .collect();
-            test_contains!(err, "Invalid selection.");
+            let mut events = Vec::new();
+            let mut choices = 0;
+            respond_to_events(&mut ctx, handle_resume_cmd, |event| match event {
+                EngineEvent::Choose { options, reply, .. } => {
+                    choices += 1;
+                    test_eq!(options.len(), 1);
+                    reply.send(99).unwrap();
+                }
+                event => events.push(event),
+            })
+            .await
+            .unwrap();
+            test_eq!(choices, 1);
+            assert!(events.iter().any(|event| matches!(
+                event,
+                EngineEvent::Error { message } if message.contains("Invalid selection.")
+            )));
         })
         .await;
     }
