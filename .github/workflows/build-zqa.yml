@@ -63,9 +63,9 @@ jobs:
         OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         COHERE_API_KEY: ${{ secrets.COHERE_API_KEY }}
-        OPENROUTER_MODEL: google/gemini-2.5-flash
+        OPENROUTER_MODEL: openai/gpt-6-luna
         ANTHROPIC_MODEL: claude-haiku-4-5-20251001
-        OPENAI_MODEL: gpt-5.4-mini
+        OPENAI_MODEL: gpt-6-luna
         VOYAGE_AI_MODEL: voyage-4-lite
         OPENAI_EMBEDDING_MODEL: text-embedding-3-small
         MAX_CONCURRENT_REQUESTS: 5

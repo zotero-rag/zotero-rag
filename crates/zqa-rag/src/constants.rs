@@ -28,19 +28,19 @@ pub const DEFAULT_OLLAMA_EMBEDDING_DIM: usize = 4096;
 pub const DEFAULT_OLLAMA_BASE_URL: &str = "http://localhost:11434";
 
 /// Default OpenAI model for chat completions
-pub const DEFAULT_OPENAI_MODEL: &str = "gpt-5.6-terra";
+pub const DEFAULT_OPENAI_MODEL: &str = "gpt-6-sol";
 
 /// Default OpenAI model for conversation title generation
-pub const DEFAULT_OPENAI_MODEL_SMALL: &str = "gpt-5.6-luna";
+pub const DEFAULT_OPENAI_MODEL_SMALL: &str = "gpt-6-luna";
 
 /// Default OpenAI generation max tokens
-pub const DEFAULT_OPENAI_MAX_TOKENS: u32 = 8192;
+pub const DEFAULT_OPENAI_MAX_TOKENS: u32 = 64000;
 
-/// OpenAI text-embedding-3-small dimension
-pub const DEFAULT_OPENAI_EMBEDDING_DIM: u32 = 1536;
+/// OpenAI text-embedding-3-large dimension
+pub const DEFAULT_OPENAI_EMBEDDING_DIM: u32 = 3072;
 
 /// Default OpenAI embedding model
-pub const DEFAULT_OPENAI_EMBEDDING_MODEL: &str = "text-embedding-3-small";
+pub const DEFAULT_OPENAI_EMBEDDING_MODEL: &str = "text-embedding-3-large";
 
 /// Default Anthropic model for chat completions
 pub const DEFAULT_ANTHROPIC_MODEL: &str = "claude-sonnet-5";
@@ -55,22 +55,22 @@ pub const DEFAULT_ANTHROPIC_MAX_TOKENS: u32 = 64000;
 pub const DEFAULT_GEMINI_MODEL: &str = "gemini-3.1-pro-preview";
 
 /// Default Gemini model for conversation title generation
-pub const DEFAULT_GEMINI_MODEL_SMALL: &str = "gemini-3.1-flash-lite-preview";
+pub const DEFAULT_GEMINI_MODEL_SMALL: &str = "gemini-3.5-flash-lite";
 
-/// Gemini gemini-embedding-2-preview dimension
+/// Gemini gemini-embedding-2 dimension
 pub const DEFAULT_GEMINI_EMBEDDING_DIM: u32 = 3072;
 
 /// Default Gemini embedding model
-pub const DEFAULT_GEMINI_EMBEDDING_MODEL: &str = "gemini-embedding-2-preview";
+pub const DEFAULT_GEMINI_EMBEDDING_MODEL: &str = "gemini-embedding-2";
 
 /// Default OpenRouter model
-pub const DEFAULT_OPENROUTER_MODEL: &str = "moonshotai/kimi-k3";
+pub const DEFAULT_OPENROUTER_MODEL: &str = "openai/gpt-6-sol";
 
 /// Default OpenRouter model for conversation title generation
-pub const DEFAULT_OPENROUTER_MODEL_SMALL: &str = "openai/gpt-5.6-luna";
+pub const DEFAULT_OPENROUTER_MODEL_SMALL: &str = "openai/gpt-6-luna";
 
 /// Default maximum tokens for OpenRouter requests
-pub const DEFAULT_OPENROUTER_MAX_TOKENS: u32 = 32_000;
+pub const DEFAULT_OPENROUTER_MAX_TOKENS: u32 = 64000;
 
 /// Default Cohere dimensions
 pub const DEFAULT_COHERE_EMBEDDING_DIM: u32 = 1536;
@@ -82,7 +82,7 @@ pub const DEFAULT_COHERE_EMBEDDING_MODEL: &str = "embed-v4.0";
 pub const DEFAULT_COHERE_RERANK_MODEL: &str = "rerank-v4.0-pro";
 
 /// Default Voyage AI rerank model
-pub const DEFAULT_VOYAGE_RERANK_MODEL: &str = "rerank-2.5";
+pub const DEFAULT_VOYAGE_RERANK_MODEL: &str = "rerank-3";
 
 /// Default Voyage AI embedding model
 pub const DEFAULT_VOYAGE_EMBEDDING_MODEL: &str = "voyage-4-large";
