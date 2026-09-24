@@ -164,7 +164,7 @@ impl EngineEvent {
     ///         rpassword::read_password)?;
     /// assert!(answer_rx.try_recv().unwrap());
     /// ```
-    pub fn handle_event<R, O, E>(
+    pub(crate) fn handle_event<R, O, E>(
         mut self,
         input: &mut R,
         out: &mut O,

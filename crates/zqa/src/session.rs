@@ -21,15 +21,9 @@ use crate::store::lance::LanceZoteroStore;
 ///
 /// A `Session` holds the same [`Context`] the CLI builds, so it carries conversation
 /// state, config, and the vector store across successive [`dispatch`](Session::dispatch)
-/// calls. Command output is written to the `out`/`err` streams supplied at construction;
-/// front-ends typically pass channel-backed writers to stream results into a UI.
-///
-/// The type is deliberately not `Send`: the underlying [`Context`] holds non-`Send` state,
-/// so a `Session` is meant to live on a single owning thread that drives it (for example, a
-/// dedicated engine thread with its own async runtime).
+/// calls. Commands emit events via the [`mpsc::Sender<EngineEvent>`] supplied during construction.
 pub struct Session {
     ctx: Context,
-    event_rx: mpsc::Receiver<EngineEvent>,
 }
 
 impl Session {
@@ -38,7 +32,6 @@ impl Session {
     /// # Arguments
     ///
     /// * `config` - The loaded application configuration (see [`crate::load_config`]).
-    /// * `event_rx` - A receiver for [`EngineEvent`]s from the engine's event loop.
     ///
     /// # Errors
     ///
@@ -47,7 +40,6 @@ impl Session {
     pub fn new(
         config: Config,
         event_tx: Option<mpsc::Sender<EngineEvent>>,
-        event_rx: mpsc::Receiver<EngineEvent>,
     ) -> Result<Self, CLIError> {
         let store = LanceZoteroStore::from_config(&config)?;
         let ctx = Context {
@@ -58,7 +50,7 @@ impl Session {
             path_options: PathOptions::default(),
         };
 
-        Ok(Self { ctx, event_rx })
+        Ok(Self { ctx })
     }
 
     /// Dispatch a single command string (e.g. `"/help"` or a bare query) through the
@@ -78,8 +70,11 @@ impl Session {
     ///
     /// Returns a [`CLIError`] if the command cannot be parsed or a handler fails
     /// unrecoverably.
-    pub async fn dispatch(&mut self, command: &str) -> Result<bool, CLIError> {
-        dispatch_command(command, &mut self.ctx).await
+    pub fn dispatch(
+        &mut self,
+        command: &str,
+    ) -> impl Future<Output = Result<bool, CLIError>> + Send {
+        dispatch_command(command, &mut self.ctx)
     }
 
     /// Resume a saved conversation without interactive input.
@@ -95,10 +90,10 @@ impl Session {
     ///
     /// Returns a [`CLIError`] if the current conversation cannot be saved or conversation state
     /// cannot be locked.
-    pub async fn resume_conversation(
+    pub fn resume_conversation(
         &mut self,
         conversation: &SavedChatHistory,
-    ) -> Result<(), CLIError> {
-        resume_conversation(&mut self.ctx, conversation).await
+    ) -> impl Future<Output = Result<(), CLIError>> + Send {
+        resume_conversation(&mut self.ctx, conversation)
     }
 }

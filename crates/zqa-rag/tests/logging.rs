@@ -1,11 +1,10 @@
 //! Exercise enabled debug logs through the public LLM API and a local HTTP endpoint.
 
-use std::fmt;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
 use std::sync::Mutex;
-use std::thread;
 use std::time::Duration;
+use std::{fmt, thread};
 
 use log::{LevelFilter, Log, Metadata, Record};
 use zqa_rag::config::{LLMClientConfig, OllamaConfig};

@@ -108,11 +108,11 @@ impl Context {
     /// # Errors
     ///
     /// * `SendError<EngineEvent>` - If the receiver is closed; the error retains the event.
-    pub(crate) async fn emit(&self, event: EngineEvent) -> Result<(), SendError<EngineEvent>> {
+    pub(crate) async fn emit(&self, event: EngineEvent) -> Result<(), Box<SendError<EngineEvent>>> {
         let Some(tx) = &self.event_tx else {
             return Ok(());
         };
-        tx.send(event).await
+        tx.send(event).await.map_err(Box::new)
     }
 }
 
