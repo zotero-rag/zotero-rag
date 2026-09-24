@@ -11,12 +11,12 @@
 //! the GPUI side as [`UiEvent`]s through a `futures::mpsc` channel, whose sender is
 //! wrapped in a [`ChannelWriter`] that plays the role of the session's stdout/stderr.
 
-use std::io::{self, Write};
 use std::sync::Arc;
 use std::thread;
 
 use futures::channel::mpsc::UnboundedSender;
 use tokio::sync::mpsc::{self, UnboundedReceiver};
+use zqa::io::EngineEvent;
 use zqa::session::Session;
 use zqa::state::SavedChatHistory;
 
@@ -30,12 +30,10 @@ pub enum EngineCommand {
 }
 
 /// A single piece of output streamed from the engine thread to the UI.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub enum UiEvent {
-    /// A chunk of command stdout (typically answer text).
-    Stdout(String),
-    /// A chunk of command stderr (status lines, warnings, timings).
-    Stderr(String),
+    /// An event from the agent engine.
+    Engine(EngineEvent),
     /// A command finished. Carries the dispatch result: `Ok(keep_running)` or an
     /// error message.
     Done(Result<bool, String>),
@@ -45,59 +43,10 @@ pub enum UiEvent {
     Cancelled,
 }
 
-/// A [`Write`] implementation that forwards written bytes to the UI as [`UiEvent`]s,
-/// stripping ANSI SGR escape sequences (the handlers colorize output for a terminal).
-struct ChannelWriter {
-    tx: UnboundedSender<UiEvent>,
-    is_err: bool,
-}
-
-impl Write for ChannelWriter {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        // The handlers write each colored fragment as its own `&str`, so a given `write`
-        // call holds either a complete escape sequence or plain text, never a split one.
-        // UTF-8 boundaries can in principle be split across writes; lossy decoding is
-        // acceptable here since this is display-only output.
-        let text = strip_ansi(&String::from_utf8_lossy(buf));
-        if !text.is_empty() {
-            let event = if self.is_err {
-                UiEvent::Stderr(text)
-            } else {
-                UiEvent::Stdout(text)
-            };
-            // A closed receiver means the UI is gone; drop the output rather than error.
-            let _ = self.tx.unbounded_send(event);
-        }
-        Ok(buf.len())
+impl From<EngineEvent> for UiEvent {
+    fn from(event: EngineEvent) -> Self {
+        UiEvent::Engine(event)
     }
-
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
-}
-
-/// Remove ANSI SGR escape sequences (`ESC [ ... m` and friends) from `input`.
-///
-/// This is a deliberately small stripper: it drops `ESC [` up to and including the first
-/// alphabetic terminator, which covers every sequence the handlers emit (see
-/// `zqa::utils::terminal`). It is not a general-purpose ANSI parser.
-fn strip_ansi(input: &str) -> String {
-    let mut out = String::with_capacity(input.len());
-    let mut chars = input.chars();
-
-    while let Some(c) = chars.next() {
-        if c == '\x1b' {
-            if chars.next() == Some('[') {
-                while let Some(next) = chars.next()
-                    && !next.is_ascii_alphabetic()
-                {}
-            }
-            continue;
-        }
-        out.push(c);
-    }
-
-    out
 }
 
 /// Spawn the engine thread.
@@ -141,8 +90,8 @@ pub fn spawn_engine(
                 }
             };
 
-            let (engine_tx, engine_rx) = mpsc::channel(256);
-            let mut session = match Session::new(config, Some(engine_tx), engine_rx) {
+            let (engine_tx, mut engine_rx) = mpsc::channel(256);
+            let mut session = match Session::new(config, Some(engine_tx)) {
                 Ok(session) => session,
                 Err(e) => {
                     let _ =
@@ -167,16 +116,44 @@ pub fn spawn_engine(
                             // `handle_query_cmd`) are not cancelled and run to completion. Fully
                             // cancelling them needs the core loop's cancellation support tracked
                             // in ZOT-219.
-                            let result: Option<Result<bool, String>> = tokio::select! {
-                                result = session.dispatch(&command) => {
-                                    Some(result.map_err(|e| e.to_string()))
+                            let result: Option<Result<bool, String>> = {
+                                let dispatch = session.dispatch(&command);
+                                tokio::pin!(dispatch);
+
+                                loop {
+                                    tokio::select! {
+                                        // Dismissing a prompt also drops its reply sender. Prefer the
+                                        // cancel signal to the resulting receive error from dispatch.
+                                        biased;
+                                        Some(()) = cancel_rx.recv() => {
+                                            break None;
+                                        }
+                                        result = &mut dispatch => {
+                                            break Some(result.map_err(|e| e.to_string()));
+                                        }
+                                        event = engine_rx.recv() => {
+                                            match event {
+                                                Some(event) => {
+                                                    if event_tx.unbounded_send(UiEvent::Engine(event)).is_err() {
+                                                        // The UI has gone away; stop the driver
+                                                        return;
+                                                    }
+                                                }
+                                                None => {
+                                                    break Some(Err("The engine event channel closed".into()));
+                                                }
+                                            }
+                                        },
+                                    }
                                 }
-                                evt = engine_rx.recv() => {
-                                    Some(event_tx.unbounded_send(evt)
-                                        .map_or_else(|e| Err(e.to_string()), |_| Ok(true)))
-                                }
-                                _ = cancel_rx.recv() => None,
                             };
+
+                            // Forward queued output before announcing completion or cancellation.
+                            while let Ok(event) = engine_rx.try_recv() {
+                                if event_tx.unbounded_send(UiEvent::Engine(event)).is_err() {
+                                    return;
+                                }
+                            }
 
                             match result {
                                 Some(result) => {
@@ -208,31 +185,4 @@ pub fn spawn_engine(
             });
         })
         .expect("failed to spawn zqa engine thread");
-}
-
-#[cfg(test)]
-mod tests {
-    use super::strip_ansi;
-
-    #[test]
-    fn leaves_plain_text_untouched() {
-        assert_eq!(strip_ansi("hello world"), "hello world");
-    }
-
-    #[test]
-    fn strips_sgr_sequences() {
-        // Dim + reset (the handlers' most common colorization).
-        assert_eq!(strip_ansi("\x1b[2mdim\x1b[0m"), "dim");
-        // Multi-parameter sequence with surrounding text preserved.
-        assert_eq!(
-            strip_ansi("\x1b[31;1mred bold\x1b[0m done"),
-            "red bold done"
-        );
-    }
-
-    #[test]
-    fn handles_trailing_escape() {
-        // A lone trailing ESC with no sequence body is dropped without panicking.
-        assert_eq!(strip_ansi("text\x1b"), "text");
-    }
 }
