@@ -100,10 +100,6 @@ impl Context {
     /// # Errors
     ///
     /// * `SendError<EngineEvent>` - If the receiver is closed; the error retains the event.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "Event producers are not connected yet.")
-    )]
     pub(crate) async fn emit(&self, event: EngineEvent) -> Result<(), Box<SendError<EngineEvent>>> {
         let Some(tx) = &self.event_tx else {
             return Ok(());
