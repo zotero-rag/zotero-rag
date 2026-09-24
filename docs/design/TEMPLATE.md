@@ -1,7 +1,10 @@
 # Design: [Feature]
 
-**Author(s):** [Your Name / Team]  
+Optional: **Linear issues:** [Issue IDs, no links]  
+Optional: **GitHub issues:** [Linked issue IDs].  
+**Author(s):** [Your Name / Team. If using an agent, record harness, model, and reasoning.]  
 **Date:** [Date]  
+**`master` as of writing:** [Latest `master` commit hash]  
 **Status:** [Draft / In Review / Approved / Obsolete]
 
 ## Glossary
@@ -23,7 +26,7 @@ Provide goals and non-goals, with brief explanations for why, particularly if so
 * **Non-Goals:** 
   * [Bullet point of a reasonable feature or goal that is explicitly chosen *not* to be a goal (e.g., "ACID compliance is a non-goal")]
 
-## The Actual Design
+## Design
 
 Start with a high-level overview, then dive into the details. Focus heavily on the trade-offs made given the context, goals, and non-goals.
 
