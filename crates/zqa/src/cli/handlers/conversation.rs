@@ -75,7 +75,7 @@ pub(crate) async fn handle_resume_cmd(ctx: &mut Context) -> Result<(), CLIError>
             if let Ok(n) = rx.await
                 && n < histories.len()
             {
-                let selected = &histories[n - 1];
+                let selected = &histories[n];
                 resume_conversation(ctx, selected).await?;
                 ctx.emit(EngineEvent::StatusUpdate {
                     message: format!("Resumed: {}\n", selected.title),

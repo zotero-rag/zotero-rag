@@ -1,8 +1,8 @@
 use std::io;
 use std::sync::PoisonError;
-use tokio::sync::mpsc::error::SendError;
 
 use thiserror::Error;
+use tokio::sync::mpsc::error::SendError;
 use tokio::sync::oneshot;
 use zqa_rag::llm::errors::LLMError;
 use zqa_rag::vector::backends::lance::LanceError;
@@ -17,7 +17,7 @@ pub enum CLIError {
     #[error("Error parsing library: {0}")]
     ArrowError(String),
     #[error("Channel send error: {0}")]
-    ChannelSendError(#[from] SendError<EngineEvent>),
+    ChannelSendError(#[from] Box<SendError<EngineEvent>>),
     #[error("Channel receive error: {0}")]
     ChannelRecvError(String),
     #[error("Command error: {0}")]
@@ -43,6 +43,12 @@ pub enum CLIError {
 impl From<oneshot::error::RecvError> for CLIError {
     fn from(value: oneshot::error::RecvError) -> Self {
         Self::ChannelRecvError(value.to_string())
+    }
+}
+
+impl From<SendError<EngineEvent>> for CLIError {
+    fn from(error: SendError<EngineEvent>) -> Self {
+        Self::ChannelSendError(Box::new(error))
     }
 }
 
