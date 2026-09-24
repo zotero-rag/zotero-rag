@@ -10,8 +10,12 @@
 //! strip of each pane drags the window instead.
 
 mod bridge;
+#[cfg(target_os = "macos")]
+mod macos;
+mod prompt_card;
+mod prompts;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 
 use bridge::{EngineCommand, UiEvent, spawn_engine};
@@ -32,9 +36,12 @@ use gpui_kit::{
     Subscription, Window, WindowBackgroundAppearance, WindowBounds, actions, div, px, rems, size,
     transparent_black,
 };
+use prompt_card::{PromptCard, PromptEvent};
+use prompts::PromptRequest;
 use serde_json::Value;
 use tokio::sync::mpsc::UnboundedSender;
-use zqa::state::SavedChatHistory;
+use zqa::io::EngineEvent;
+use zqa::state::{SavedChatHistory, UsageMetadata};
 
 /// Width of the left sidebar.
 const SIDEBAR_WIDTH: Pixels = px(232.);
@@ -135,7 +142,7 @@ impl From<&SavedChatHistory> for ChatRows {
 }
 
 /// What the engine is doing right now, mirrored into the header.
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 enum Phase {
     Ready,
     Running,
@@ -164,21 +171,24 @@ struct ZqaApp {
     /// TODO: A nicety for users would be to go back to a conversation and have their
     /// input remembered.
     input_state: Entity<TextareaState>,
+    /// Requests waiting behind the visible question card.
+    pending_prompts: VecDeque<PromptRequest>,
+    active_prompt: Option<Entity<PromptCard>>,
+    prompt_subscription: Option<Subscription>,
     /// Transcript blocks, oldest first.
     rows: Vec<ChatRow>,
     /// Saved conversations loaded from the zqa state directory.
     conversation_history: Result<Vec<Arc<SavedChatHistory>>, zqa::state::StateError>,
     /// What the engine thread is doing right now.
     phase: Phase,
-    /// Whether a `/new` reset is in flight; the transcript clears only when the
-    /// engine confirms it, so a failed save cannot lose the visible copy.
+    /// Whether a `/new` reset is in flight; the transcript clears only when the engine confirms it, so a failed
+    /// save cannot lose the visible copy.
     pending_reset: bool,
     /// Which pane the main area shows.
     pane: Pane,
     /// Whether the dark theme is active; toggled from the header.
     dark_theme: bool,
-    /// Whether a left press on a drag surface is pending; consumed by the next
-    /// mouse move to start a window drag.
+    /// Whether a left press on a drag surface is pending; consumed by the next mouse move to start a window drag.
     drag_armed: bool,
     /// Scrolls the transcript; pinned to the bottom while content streams in.
     scroll_handle: ScrollHandle,
@@ -196,6 +206,7 @@ impl ZqaApp {
         cancel_tx: UnboundedSender<()>,
         event_rx: UnboundedReceiver<UiEvent>,
         dark_theme: bool,
+        conversation_history: Result<Vec<Arc<SavedChatHistory>>, zqa::state::StateError>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -222,15 +233,18 @@ impl ZqaApp {
         );
 
         // Drain engine output on GPUI's executor and fold it into the transcript.
-        cx.spawn(async move |this, cx| {
+        cx.spawn_in(window, async move |this, cx| {
             let mut event_rx = event_rx;
+
             while let Some(event) = event_rx.next().await {
-                let update = this.update(cx, |app, cx| {
+                let update = this.update_in(cx, |app, window, cx| {
                     match event {
-                        UiEvent::Stdout(text) => Self::fold_stdout(&mut app.rows, &text),
-                        UiEvent::Stderr(text) => Self::fold_stderr(&mut app.rows, &text),
+                        UiEvent::Engine(event) => app.handle_engine_event(event, window, cx),
                         UiEvent::Done(result) => {
+                            app.clear_prompts();
+                            Self::focus_input(&app.input_state, window, cx);
                             app.phase = Phase::Ready;
+
                             let refresh_history = app.pending_reset && result.is_ok();
                             Self::finish_command(&mut app.rows, &mut app.pending_reset, result);
                             if refresh_history {
@@ -238,7 +252,10 @@ impl ZqaApp {
                             }
                         }
                         UiEvent::ConversationResumed(result) => {
+                            app.clear_prompts();
+                            Self::focus_input(&app.input_state, window, cx);
                             app.phase = Phase::Ready;
+
                             match result {
                                 Ok(conversation) => {
                                     app.rows = ChatRows::from(conversation.as_ref()).0;
@@ -249,10 +266,12 @@ impl ZqaApp {
                             }
                         }
                         UiEvent::Cancelled => {
+                            app.clear_prompts();
+                            Self::focus_input(&app.input_state, window, cx);
                             app.phase = Phase::Ready;
-                            // A cancelled reset may or may not have taken effect
-                            // engine-side; keeping the transcript is the conservative
-                            // reading.
+
+                            // A cancelled reset may or may not have taken effect engine-side; keeping the transcript
+                            // is the conservative reading.
                             app.pending_reset = false;
                             Self::fold_stderr(&mut app.rows, "(cancelled)");
                         }
@@ -269,6 +288,7 @@ impl ZqaApp {
             // exited. Reflect that in the UI so input is disabled rather than silently
             // accepted into a dead channel.
             let _ = this.update(cx, |app, cx| {
+                app.clear_prompts();
                 app.phase = Phase::Ended;
                 cx.notify();
             });
@@ -277,8 +297,11 @@ impl ZqaApp {
 
         Self {
             input_state,
+            pending_prompts: VecDeque::new(),
+            active_prompt: None,
+            prompt_subscription: None,
             rows: Vec::new(),
-            conversation_history: Self::load_conversation_history(),
+            conversation_history,
             phase: Phase::Ready,
             pending_reset: false,
             pane: Pane::Chat,
@@ -288,6 +311,134 @@ impl ZqaApp {
             cmd_tx,
             cancel_tx,
             _subscriptions: vec![subscription],
+        }
+    }
+
+    fn start_tool_call(&self, _id: String, _name: String, _args: serde_json::Value) {
+        todo!();
+    }
+
+    fn finish_tool_call(
+        &self,
+        _id: String,
+        _name: String,
+        _response: Result<serde_json::Value, String>,
+    ) {
+        todo!();
+    }
+
+    fn accumulate_usage(&self, _usage: UsageMetadata) {
+        todo!();
+    }
+
+    /// Keep input requests in arrival order without blocking the GUI event consumer.
+    fn queue_prompt(&mut self, event: EngineEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if self.phase != Phase::Running {
+            return;
+        }
+
+        match PromptRequest::from_event(event) {
+            Ok(request) => self.pending_prompts.push_back(request),
+            Err(message) => {
+                self.rows.push(ChatRow::Failed(message.into()));
+                self.request_stop(cx);
+                return;
+            }
+        }
+
+        self.pane = Pane::Chat;
+        self.show_next_prompt(window, cx);
+    }
+
+    /// Focus the next live request. Each card owns a fresh editor so secret input and undo
+    /// history cannot leak into a subsequent prompt or the chat composer.
+    fn show_next_prompt(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.active_prompt.is_some() {
+            return;
+        }
+
+        while let Some(request) = self.pending_prompts.pop_front() {
+            if request.is_closed() {
+                continue;
+            }
+
+            let card = cx.new(|cx| PromptCard::new(request, window, cx));
+            self.prompt_subscription = Some(cx.subscribe_in(
+                &card,
+                window,
+                |this, card, event: &PromptEvent, window, cx| {
+                    if this.active_prompt.as_ref() != Some(card) {
+                        return;
+                    }
+
+                    match event {
+                        PromptEvent::Submitted => {
+                            this.active_prompt = None;
+                            this.prompt_subscription = None;
+                            this.show_next_prompt(window, cx);
+
+                            if this.active_prompt.is_none() {
+                                Self::focus_input(&this.input_state, window, cx);
+                            }
+                        }
+                        PromptEvent::Cancelled => this.request_stop(cx),
+                    }
+
+                    cx.notify();
+                },
+            ));
+            window.focus(&card.read(cx).focus_handle(cx), cx);
+            self.active_prompt = Some(card);
+            break;
+        }
+    }
+
+    /// Discard unanswered requests and their editors when the command ends or is cancelled.
+    fn clear_prompts(&mut self) {
+        self.prompt_subscription = None;
+        self.active_prompt = None;
+        self.pending_prompts.clear();
+    }
+
+    fn handle_engine_event(
+        &mut self,
+        event: EngineEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match event {
+            EngineEvent::Text { message } => {
+                Self::fold_stdout(&mut self.rows, &message);
+            }
+            EngineEvent::Reasoning { message } => {
+                self.rows.push(ChatRow::Reasoning(message.into()));
+            }
+            EngineEvent::StatusUpdate { message }
+            | EngineEvent::Warning { message }
+            | EngineEvent::RecoverableWarning { message } => {
+                self.rows.push(ChatRow::Status(message));
+            }
+            EngineEvent::Error { message } => {
+                self.rows.push(ChatRow::Failed(message.into()));
+            }
+            EngineEvent::ToolCall { id, name, args } => {
+                self.start_tool_call(id, name, args);
+            }
+            EngineEvent::ToolResponse { id, name, response } => {
+                self.finish_tool_call(id, name, response);
+            }
+            EngineEvent::TokenUsage { usage } => {
+                self.accumulate_usage(usage);
+            }
+            request @ (EngineEvent::Confirm { .. }
+            | EngineEvent::Choose { .. }
+            | EngineEvent::Line { .. }
+            | EngineEvent::Secret { .. }) => {
+                self.queue_prompt(request, window, cx);
+            }
+            _ => {
+                // EngineEvent is non_exhaustive across crate boundaries.
+            }
         }
     }
 
@@ -426,6 +577,7 @@ impl ZqaApp {
         }
         let _ = self.cancel_tx.send(());
         self.phase = Phase::Stopping;
+        self.clear_prompts();
         cx.notify();
     }
 
@@ -748,6 +900,17 @@ impl ZqaApp {
                 .flex_1()
                 .min_h_0()
                 .child(self.render_transcript(cx))
+                .when_some(self.active_prompt.clone(), |body, prompt| {
+                    body.child(
+                        div()
+                            .flex_shrink_0()
+                            .px_4()
+                            .pb_2()
+                            .flex()
+                            .justify_center()
+                            .child(div().w_full().max_w(CONTENT_WIDTH).child(prompt)),
+                    )
+                })
                 .child(self.render_dock(cx))
                 .into_any_element(),
             Pane::Settings => self.render_settings(cx),
@@ -755,6 +918,7 @@ impl ZqaApp {
 
         v_flex()
             .flex_1()
+            .min_w_0()
             .h_full()
             // Opaque over the window vibrancy; only the sidebar is translucent.
             .bg(cx.theme().background)
@@ -827,6 +991,7 @@ impl ZqaApp {
         };
 
         let toggle = Button::new("toggle-theme")
+            .accessibility_label("Toggle color theme")
             .ghost()
             .small()
             .compact()
@@ -1147,7 +1312,11 @@ impl ZqaApp {
                         .border_color(cx.theme().border)
                         .bg(cx.theme().popover)
                         .p_2()
-                        .child(Textarea::new(&self.input_state).appearance(false))
+                        .child(
+                            Textarea::new(&self.input_state)
+                                .appearance(false)
+                                .disabled(busy),
+                        )
                         .child(h_flex().justify_end().child(action)),
                 ),
             )
@@ -1224,8 +1393,15 @@ fn main() {
 
         cx.spawn(async move |cx| {
             cx.open_window(window_options, |window, cx| {
-                let view =
-                    cx.new(|cx| ZqaApp::new(cmd_tx, cancel_tx, event_rx, dark_theme, window, cx));
+                #[cfg(target_os = "macos")]
+                if !macos::use_sidebar_material(window) {
+                    eprintln!("Could not configure the native sidebar blur material.");
+                }
+
+                let history = ZqaApp::load_conversation_history();
+                let view = cx.new(|cx| {
+                    ZqaApp::new(cmd_tx, cancel_tx, event_rx, dark_theme, history, window, cx)
+                });
 
                 // The root stays transparent so the sidebar can show the blur.
                 cx.new(|cx| Root::new(view, window, cx).bg(transparent_black()))
@@ -1238,11 +1414,235 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
+    use gpui_kit::test::TestWindowExt;
+    use gpui_kit::{Entity, TestAppContext, VisualTestContext, px, size};
+    use tokio::sync::{mpsc, oneshot};
+    use zqa::io::EngineEvent;
+    use zqa_macros::test_eq;
     use zqa_rag::llm::base::{
         ChatHistoryContent, ChatHistoryItem, MessageRole, ToolCallRequest, ToolCallResponse,
     };
 
-    use super::{ChatRow, ChatRows, Phase, ZqaApp};
+    use super::{ChatRow, ChatRows, EngineCommand, Phase, UiEvent, ZqaApp};
+
+    /// A whole-app fixture with no engine thread, provider calls, or initial filesystem reads.
+    /// Tests can seed private view state through `app.update`, inject engine events through
+    /// `events`, and inspect outgoing commands and cancellation signals.
+    struct GuiHarness {
+        app: Entity<ZqaApp>,
+        events: futures::channel::mpsc::UnboundedSender<UiEvent>,
+        commands: mpsc::UnboundedReceiver<EngineCommand>,
+        cancellations: mpsc::UnboundedReceiver<()>,
+    }
+
+    impl GuiHarness {
+        fn new(cx: &mut TestAppContext) -> (Self, &mut VisualTestContext) {
+            cx.update(gpui_kit::init);
+            let (cmd_tx, commands) = mpsc::unbounded_channel();
+            let (cancel_tx, cancellations) = mpsc::unbounded_channel();
+            let (events, event_rx) = futures::channel::mpsc::unbounded();
+            let (app, cx) = cx.add_window_view(|window, cx| {
+                ZqaApp::new(
+                    cmd_tx,
+                    cancel_tx,
+                    event_rx,
+                    false,
+                    Ok(Vec::new()),
+                    window,
+                    cx,
+                )
+            });
+
+            (
+                Self {
+                    app,
+                    events,
+                    commands,
+                    cancellations,
+                },
+                cx,
+            )
+        }
+    }
+
+    #[gpui_kit::test]
+    fn gui_composer_dispatches_and_consumes_engine_output(cx: &mut TestAppContext) {
+        let (mut harness, cx) = GuiHarness::new(cx);
+        cx.update(|window, cx| {
+            window.input("/help", cx);
+            window.press("enter", cx);
+        });
+        cx.run_until_parked();
+
+        let EngineCommand::Dispatch(command) = harness.commands.try_recv().unwrap() else {
+            panic!("expected a dispatch command");
+        };
+        test_eq!(command, "/help");
+        harness.app.read_with(cx, |app, _| {
+            test_eq!(app.phase, Phase::Running);
+        });
+
+        harness
+            .events
+            .unbounded_send(UiEvent::Engine(EngineEvent::Text {
+                message: "Synthetic help output".into(),
+            }))
+            .unwrap();
+        harness
+            .events
+            .unbounded_send(UiEvent::Done(Ok(true)))
+            .unwrap();
+        cx.run_until_parked();
+        harness.app.read_with(cx, |app, _| {
+            test_eq!(app.phase, Phase::Ready);
+            test_eq!(trailing_answer(&app.rows), "Synthetic help output");
+        });
+    }
+
+    #[gpui_kit::test]
+    fn gui_answers_queued_prompts_without_finishing_command(cx: &mut TestAppContext) {
+        let (harness, cx) = GuiHarness::new(cx);
+        harness.app.update(cx, |app, cx| {
+            app.phase = Phase::Running;
+            app.rows.push(ChatRow::Answer("Seeded conversation".into()));
+            cx.notify();
+        });
+        let (reply, mut confirmation) = oneshot::channel();
+        harness
+            .events
+            .unbounded_send(UiEvent::Engine(EngineEvent::Confirm {
+                message: "Continue?".into(),
+                default: true,
+                reply,
+            }))
+            .unwrap();
+        let (reply, mut line) = oneshot::channel();
+        harness
+            .events
+            .unbounded_send(UiEvent::Engine(EngineEvent::Line {
+                message: Some("What next?".into()),
+                reply,
+            }))
+            .unwrap();
+        cx.run_until_parked();
+
+        cx.update(|window, cx| {
+            window.click(("prompt-option", 1_usize), cx);
+            window.click("send-prompt", cx);
+        });
+        cx.run_until_parked();
+        test_eq!(confirmation.try_recv().unwrap(), false);
+
+        cx.update(|window, cx| {
+            window.input("A second response", cx);
+            window.press("enter", cx);
+        });
+        cx.run_until_parked();
+        test_eq!(line.try_recv().unwrap(), "A second response");
+        harness.app.read_with(cx, |app, _| {
+            test_eq!(app.phase, Phase::Running);
+            assert!(app.active_prompt.is_none());
+            assert!(app.pending_prompts.is_empty());
+            test_eq!(trailing_answer(&app.rows), "Seeded conversation");
+        });
+    }
+
+    #[gpui_kit::test]
+    fn gui_long_options_wrap_and_controls_stay_inside_resized_window(cx: &mut TestAppContext) {
+        let (harness, cx) = GuiHarness::new(cx);
+        harness.app.update(cx, |app, cx| {
+            app.phase = Phase::Running;
+            cx.notify();
+        });
+        let (reply, _answer) = oneshot::channel();
+        harness.events.unbounded_send(UiEvent::Engine(EngineEvent::Choose {
+            message: "Select an approach".into(),
+            options: vec![
+                "Compare the evidence across these papers, explain where their conclusions disagree, and give me a detailed summary of the assumptions, limitations, and practical implications for a follow-up study. Include enough context that I can understand the trade-offs without opening every paper, and clearly distinguish established results from suggestions that still need experimental validation.\n".into(),
+                "A short alternative".into(),
+            ],
+            default: 0,
+            reply,
+        })).unwrap();
+        cx.run_until_parked();
+        let mut heights = Vec::new();
+
+        for (width, height) in [(1080., 760.), (760., 760.), (760., 520.), (1080., 760.)] {
+            cx.simulate_resize(size(px(width), px(height)));
+            cx.run_until_parked();
+            cx.update(|window, cx| {
+                window.render_frame(cx);
+                let option = window.find(("prompt-option", 0_usize)).bounds();
+                heights.push(option.size.height);
+
+                for bounds in [
+                    option,
+                    window.find("send-prompt").bounds(),
+                    window.find("skip-prompt").bounds(),
+                ] {
+                    assert!(bounds.left() >= super::SIDEBAR_WIDTH);
+                    assert!(bounds.right() <= px(width));
+                    assert!(bounds.top() >= px(0.));
+                    assert!(bounds.bottom() <= px(height));
+                }
+            });
+        }
+
+        assert!(
+            heights[0] > px(40.),
+            "the long label must span multiple lines"
+        );
+        assert!(
+            heights[1] > heights[0],
+            "narrowing the window must reflow the label"
+        );
+        test_eq!(heights[2], heights[1]);
+        test_eq!(heights[3], heights[0]);
+    }
+
+    #[gpui_kit::test]
+    fn gui_skip_cancels_and_clears_queued_prompts(cx: &mut TestAppContext) {
+        let (mut harness, cx) = GuiHarness::new(cx);
+        harness.app.update(cx, |app, cx| {
+            app.phase = Phase::Running;
+            cx.notify();
+        });
+        let (reply, mut first) = oneshot::channel();
+        harness
+            .events
+            .unbounded_send(UiEvent::Engine(EngineEvent::Confirm {
+                message: "Continue?".into(),
+                default: true,
+                reply,
+            }))
+            .unwrap();
+        let (reply, mut second) = oneshot::channel();
+        harness
+            .events
+            .unbounded_send(UiEvent::Engine(EngineEvent::Secret {
+                message: "Secret".into(),
+                reply,
+            }))
+            .unwrap();
+        cx.run_until_parked();
+
+        cx.update(|window, cx| window.click("skip-prompt", cx));
+        cx.run_until_parked();
+        harness.cancellations.try_recv().unwrap();
+        harness.app.read_with(cx, |app, _| {
+            test_eq!(app.phase, Phase::Stopping);
+            assert!(app.active_prompt.is_none());
+            assert!(app.pending_prompts.is_empty());
+        });
+        test_eq!(first.try_recv(), Err(oneshot::error::TryRecvError::Closed));
+        test_eq!(second.try_recv(), Err(oneshot::error::TryRecvError::Closed));
+
+        harness.events.unbounded_send(UiEvent::Cancelled).unwrap();
+        cx.run_until_parked();
+        harness.app.read_with(cx, |app, _| {
+            test_eq!(app.phase, Phase::Ready);
+        });
+    }
 
     /// The text of the trailing answer row, for assertions.
     fn trailing_answer(rows: &[ChatRow]) -> String {
