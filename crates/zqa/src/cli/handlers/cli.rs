@@ -22,7 +22,13 @@ use crate::utils::terminal::{BOLD, RESET};
 ///
 /// Returns a [`CLIError`] if conversation state could not be persisted.
 pub(crate) async fn handle_quit_cmd(ctx: &mut Context) -> Result<(), CLIError> {
-    save_current_conversation(ctx).await.map(|_| ())
+    if !save_current_conversation(ctx).await? {
+        return Err(CLIError::CommandError(
+            "could not save the current conversation; keeping it active".into(),
+        ));
+    }
+
+    Ok(())
 }
 
 /// Emit the active CLI configuration as a text event.
@@ -191,8 +197,17 @@ mod tests {
             let result = super::handle_new_conversation_cmd(&mut ctx).await;
 
             assert!(result.is_err());
-            let history = ctx.state.chat_history.lock().unwrap();
-            test_eq!(history.len(), 1);
+            assert!(super::handle_quit_cmd(&mut ctx).await.is_err());
+            {
+                let history = ctx.state.chat_history.lock().unwrap();
+                test_eq!(history.len(), 1);
+            }
+
+            fs::remove_file(&blocker).unwrap();
+            super::handle_quit_cmd(&mut ctx).await.unwrap();
+            let saved = crate::state::get_conversation_history().unwrap().unwrap();
+            test_eq!(saved.len(), 1);
+            test_eq!(saved[0].history.len(), 1);
         })
         .await;
     }
