@@ -32,6 +32,16 @@ pub enum LocalApiError {
     UnverifiedLibrary(PathBuf),
 }
 
+impl LocalApiError {
+    /// Identify group-specific HTTP failures while preserving API-wide failures.
+    fn is_unavailable_group(&self, library: &str) -> bool {
+        library.starts_with("groups/")
+            && matches!(self, Self::Request(error) if error.status().is_some_and(|status| {
+                status == StatusCode::NOT_FOUND || status.is_server_error()
+            }))
+    }
+}
+
 impl From<reqwest::Error> for LocalApiError {
     fn from(error: reqwest::Error) -> Self {
         Self::Request(Arc::new(error))
@@ -81,6 +91,8 @@ struct ItemData {
     link_mode: Option<String>,
     /// Attachment filename. Stored files are located under `storage/<attachment-key>/`.
     filename: Option<String>,
+    /// Raw linked-file path, including the `attachments:` prefix for base-relative files.
+    path: Option<String>,
     /// Creators in Zotero's stored order, including all returned creator roles.
     /// Defaults to an empty list when the item has no `creators` field.
     #[serde(default)]
@@ -213,11 +225,13 @@ impl ZoteroApi {
         Ok(response)
     }
 
-    /// Collect pages in a stable order, rejecting changes to a library between pages.
+    /// Collect pages in a stable order until the endpoint is exhausted or `stop_when` matches.
+    /// Reject library version changes between pages.
     async fn list<T: DeserializeOwned>(
         &mut self,
         path: &str,
         mut query: Vec<(String, String)>,
+        stop_when: impl Fn(&[T]) -> bool,
     ) -> Result<Vec<T>, LocalApiError> {
         const PAGE_SIZE: usize = 100;
 
@@ -245,7 +259,7 @@ impl ZoteroApi {
 
             let page: Vec<T> = response.json().await?;
 
-            let finished = page.len() < PAGE_SIZE;
+            let finished = page.len() < PAGE_SIZE || stop_when(&page);
             result.extend(page);
 
             if finished {
@@ -256,7 +270,7 @@ impl ZoteroApi {
 
     /// Enumerate the personal library and all locally available group libraries.
     async fn libraries(&mut self) -> Result<Vec<String>, LocalApiError> {
-        let mut groups: Vec<Group> = self.list("users/0/groups", Vec::new()).await?;
+        let mut groups: Vec<Group> = self.list("users/0/groups", Vec::new(), |_| false).await?;
         groups.sort_unstable_by_key(|group| group.id);
 
         let mut libraries = vec!["users/0".into()];
@@ -304,14 +318,12 @@ impl ZoteroApi {
 
         // Zotero's additional search scopes can exclude trashed items even with `includeTrashed`.
         // Fetch metadata without `itemType` filters, and resolve absent exact keys individually.
-        let mut items: Vec<ApiItem> = match self.list(&format!("{library}/items"), query).await {
+        let mut items: Vec<ApiItem> = match self
+            .list(&format!("{library}/items"), query, |_| false)
+            .await
+        {
             Ok(items) => items,
-            Err(LocalApiError::Request(error))
-                if library.starts_with("groups/")
-                    && error.status().is_some_and(|status| {
-                        status == StatusCode::NOT_FOUND || status.is_server_error()
-                    }) =>
-            {
+            Err(error) if error.is_unavailable_group(library) => {
                 log::warn!("Skipping unavailable Zotero library {library}: {error}");
                 return Ok(Vec::new());
             }
@@ -387,6 +399,21 @@ impl ZoteroApi {
         }
 
         if item.data.link_mode.as_deref() == Some("linked_file") {
+            // NOTE: Maintainers, keep base-relative path exclusion aligned with `parse_library_metadata_sqlite`.
+            // The Linked Attachment Base Directory lives in profile preferences, not SQLite.
+            if item
+                .data
+                .path
+                .as_deref()
+                .is_some_and(|path| path.starts_with("attachments:"))
+            {
+                log::warn!(
+                    "Skipping base-relative Zotero attachment {} in {library}",
+                    item.key
+                );
+                return Ok(None);
+            }
+
             return self.file_path(library, &item.key).await.map(Some);
         }
 
@@ -597,7 +624,24 @@ impl ZoteroApi {
         // A search containing only linked files needs a separate stored attachment to prove identity.
         if !verified {
             for library in libraries {
-                let candidates = self.items(&library, None, "dateAdded", "asc").await?;
+                let query = vec![
+                    ("itemType".into(), "attachment".into()),
+                    ("sort".into(), "dateAdded".into()),
+                    ("direction".into(), "asc".into()),
+                ];
+                let candidates = match self
+                    .list(&format!("{library}/items"), query, |page: &[ApiItem]| {
+                        page.iter().any(|item| item.data.is_stored_attachment())
+                    })
+                    .await
+                {
+                    Ok(items) => items,
+                    Err(error) if error.is_unavailable_group(&library) => {
+                        log::warn!("Skipping unavailable Zotero library {library}: {error}");
+                        continue;
+                    }
+                    Err(error) => return Err(error),
+                };
 
                 if self.verify_library(&library, &candidates, path).await? {
                     verified = true;

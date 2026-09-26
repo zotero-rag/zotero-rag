@@ -294,6 +294,8 @@ fn parse_library_metadata_sqlite(
 
     // NOTE: Maintainers, keep trash inclusion aligned with `ZoteroApi::items`; both readers include trashed items.
     // NOTE: Maintainers, keep parent item types aligned with `ZoteroApi::metadata`.
+    // NOTE: Maintainers, keep base-relative path exclusion aligned with `ZoteroApi::attachment_path`.
+    // Resolving `attachments:` paths requires the profile's Linked Attachment Base Directory.
     // NOTE: Maintainers, keep pagination ordering aligned with `ZoteroApi::metadata`:
     // attachment date added, key, then group ID (zero for the personal library).
     let mut query = "SELECT DISTINCT
@@ -311,6 +313,7 @@ fn parse_library_metadata_sqlite(
             WHERE f.fieldName = 'title'
             AND ia.contentType = 'application/pdf'
             AND ia.path IS NOT NULL AND ia.path != ''
+            AND ia.path NOT LIKE 'attachments:%'
             AND it.typeName IN ('conferencePaper', 'journalArticle', 'preprint')
             ORDER BY i2.dateAdded, i2.key, COALESCE(g.groupID, 0) "
         .to_string();
@@ -791,15 +794,15 @@ mod tests {
         library
     }
 
-    /// Exclude attachments without local paths before pagination while retaining usable PDFs.
+    /// Exclude missing and base-relative paths before pagination while retaining usable PDFs.
     #[test]
-    fn sqlite_metadata_skips_null_and_empty_attachment_paths() {
+    fn sqlite_metadata_skips_missing_and_base_relative_attachment_paths() {
         let library = copy_toy_database();
         let expected = parse_library_metadata_sqlite(library.path(), None, None).unwrap();
         let excluded = &expected[0].library_key;
         let database = Connection::open(library.path().join("zotero.sqlite")).unwrap();
 
-        for path in [None, Some("")] {
+        for path in [None, Some(""), Some("attachments:Papers/linked.pdf")] {
             database.execute(
                 "UPDATE itemAttachments SET path = ?1 WHERE itemID = (SELECT itemID FROM items WHERE key = ?2)",
                 rusqlite::params![path, excluded],

@@ -603,12 +603,17 @@ async fn authors_resolve_sqlite_linked_files_after_parent_title_changes() {
     }});
     let mut linked_reply = Reply::json("/api/users/0/items/7R5XZ5PX/file/view/url", &Value::Null);
     linked_reply.body = Url::from_file_path(&linked_path).unwrap().to_string();
+    let mut candidates = vec![linked.clone(); 100];
+    candidates[99] = attachment();
+    let mut identity_page = Reply::json("/api/users/0/items", &json!(candidates));
+    identity_page.query = vec![("itemType", "attachment".into()), ("start", "0".into())];
+
     let (mut api, _server) = server(vec![
         Reply::json("/api/users/0/groups", &json!([])),
         Reply::json("/api/users/0/items", &json!([linked])),
         Reply::json("/api/users/0/items", &json!([edited_parent])),
         linked_reply,
-        Reply::json("/api/users/0/items", &json!([attachment()])),
+        identity_page,
         file_reply(library.path(), "/api/users/0/items/ATTACH01/file/view/url"),
     ]);
 
@@ -663,4 +668,89 @@ async fn metadata_propagates_connection_failure_after_personal_verification() {
 
     assert!(matches!(api.metadata(library.path(), None, None).await,
         Err(LocalApiError::Request(error)) if error.is_connect()));
+}
+
+/// Skip base-relative linked files before pagination without resolving their file URLs.
+#[tokio::test]
+async fn metadata_skips_base_relative_linked_files() {
+    let library = tempfile::tempdir().unwrap();
+    let mut relative = attachment();
+    relative["key"] = json!("RELATIVE");
+    relative["data"]["linkMode"] = json!("linked_file");
+    relative["data"]["path"] = json!("attachments:Papers/linked.pdf");
+    relative["data"]["dateAdded"] = json!("2000-01-01T00:00:00Z");
+    let mut stored = attachment();
+    stored["data"]["dateAdded"] = json!("2020-01-01T00:00:00Z");
+    let (mut api, _server) = server(vec![
+        Reply::json("/api/users/0/groups", &json!([])),
+        Reply::json("/api/users/0/items", &json!([parent(), relative, stored])),
+        file_reply(library.path(), "/api/users/0/items/ATTACH01/file/view/url"),
+    ]);
+
+    let items = api
+        .metadata(library.path(), Some(0), Some(1))
+        .await
+        .unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].library_key, "ATTACH01");
+}
+
+/// Continue identity discovery past linked-only pages while rejecting concurrent library changes.
+#[tokio::test]
+async fn identity_discovery_paginates_attachments_and_checks_versions() {
+    for version in ["1", "2"] {
+        let library = tempfile::tempdir().unwrap();
+        let linked = json!({"key": "LINKED01", "data": {
+            "itemType": "attachment", "parentItem": "PARENT01", "linkMode": "linked_file"
+        }});
+        let linked_path = library.path().join("linked.pdf");
+        let mut linked_reply =
+            Reply::json("/api/users/0/items/LINKED01/file/view/url", &Value::Null);
+        linked_reply.body = Url::from_file_path(&linked_path).unwrap().to_string();
+        let mut first_page = Reply::json("/api/users/0/items", &json!(vec![linked.clone(); 100]));
+        first_page.query = vec![("itemType", "attachment".into()), ("start", "0".into())];
+        let mut second_page = Reply::json("/api/users/0/items", &json!([attachment()]));
+        second_page.query = vec![("itemType", "attachment".into()), ("start", "100".into())];
+        second_page.version = version;
+        let mut replies = vec![
+            Reply::json("/api/users/0/groups", &json!([])),
+            Reply::json("/api/users/0/items", &json!([linked])),
+            Reply::json("/api/users/0/items", &json!([parent()])),
+            linked_reply,
+            first_page,
+            second_page,
+        ];
+
+        if version == "1" {
+            replies.push(file_reply(
+                library.path(),
+                "/api/users/0/items/ATTACH01/file/view/url",
+            ));
+        }
+
+        let (mut api, _server) = server(replies);
+        let mut items = vec![ZoteroItem {
+            metadata: ZoteroItemMetadata {
+                library_key: "LINKED01".into(),
+                title: "A paper".into(),
+                file_path: linked_path,
+                authors: None,
+            },
+            text: String::new(),
+        }];
+        let result = api.authors(&mut items, library.path()).await;
+
+        if version == "1" {
+            result.unwrap();
+            assert_eq!(
+                items[0].metadata.authors.as_ref().unwrap()[0],
+                "Lovelace, Ada"
+            );
+        } else {
+            assert!(
+                matches!(result, Err(LocalApiError::InvalidData(message)) if message.contains("library changed"))
+            );
+            assert!(items[0].metadata.authors.is_none());
+        }
+    }
 }
