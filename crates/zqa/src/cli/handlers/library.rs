@@ -13,10 +13,10 @@ use crate::common::Context;
 use crate::full_library_to_arrow;
 use crate::store::common::ZoteroStore;
 use crate::utils::arrow::library_to_arrow;
-use crate::utils::library::{
+use crate::utils::terminal::{DIM_TEXT, RESET, read_line};
+use crate::zotero::library::{
     ZoteroItem, ZoteroItemSet, get_new_library_items, parse_library_metadata,
 };
-use crate::utils::terminal::{DIM_TEXT, RESET, read_line};
 
 /// Print table statistics for the current LanceDB database.
 ///
@@ -75,7 +75,7 @@ where
     let item_metadata = if ctx.store.exists().await {
         get_new_library_items(&ctx.store, library_path).await
     } else {
-        parse_library_metadata(library_path, None, None)
+        parse_library_metadata(library_path, None, None).await
     };
 
     if let Err(parse_err) = item_metadata {

@@ -13,7 +13,7 @@ use crate::cli::errors::CLIError;
 use crate::config::Config;
 use crate::store::common::{VectorSearchStats, ZoteroStore};
 use crate::utils::arrow::{DbFields, get_schema, library_to_arrow};
-use crate::utils::library::{ZoteroItem, ZoteroItemSet};
+use crate::zotero::library::{ZoteroItem, ZoteroItemSet};
 
 /// Zotero-specific store backed by LanceDB.
 #[derive(Clone)]
@@ -227,7 +227,7 @@ impl ZoteroStore for LanceZoteroStore {
     /// Returns a [`CLIError`] if the existing rows cannot be fetched.
     async fn existing_item_metadata(
         &self,
-    ) -> Result<Vec<crate::utils::library::ZoteroItemMetadata>, CLIError> {
+    ) -> Result<Vec<crate::zotero::library::ZoteroItemMetadata>, CLIError> {
         let db_items = self
             .backend
             .get_items(&[
@@ -240,13 +240,13 @@ impl ZoteroStore for LanceZoteroStore {
         Ok(db_items
             .iter()
             .flat_map(|batch| {
-                let library_keys = crate::utils::library::get_column_from_batch(batch, 0);
-                let titles = crate::utils::library::get_column_from_batch(batch, 1);
-                let file_paths = crate::utils::library::get_column_from_batch(batch, 2);
+                let library_keys = crate::zotero::library::get_column_from_batch(batch, 0);
+                let titles = crate::zotero::library::get_column_from_batch(batch, 1);
+                let file_paths = crate::zotero::library::get_column_from_batch(batch, 2);
 
                 crate::izip!(library_keys, titles, file_paths)
                     .map(
-                        |(key, title, path)| crate::utils::library::ZoteroItemMetadata {
+                        |(key, title, path)| crate::zotero::library::ZoteroItemMetadata {
                             library_key: key,
                             title,
                             file_path: std::path::PathBuf::from(path),

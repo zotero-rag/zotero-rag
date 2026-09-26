@@ -12,7 +12,7 @@ use zqa_rag::reranking::common::RerankProviderConfig;
 
 use crate::store::common::ZoteroStore;
 use crate::tools::summarization::SUMMARIZATION_TOOL_NAME;
-use crate::utils::library::get_authors;
+use crate::zotero::library::get_authors;
 
 pub(crate) const RETRIEVAL_TOOL_NAME: &str = "retrieval_tool";
 
@@ -117,7 +117,7 @@ where
             rerank_tokens.fetch_add(stats.rerank_tokens as u64, Ordering::Relaxed);
 
             let author_lookup_start = Instant::now();
-            let author_result = get_authors(&mut results, library_path.as_deref());
+            let author_result = get_authors(&mut results, library_path.as_deref()).await;
             log::debug!(
                 "Zotero author lookup took {:.2?}",
                 author_lookup_start.elapsed()

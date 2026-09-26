@@ -5,7 +5,7 @@ use log::LevelFilter;
 use zqa::cli::prompts::{get_extraction_prompt, get_extraction_system_prompt};
 use zqa::common::setup_logger;
 use zqa::config::{AnthropicConfig, GeminiConfig, OpenAIConfig};
-use zqa::utils::library::ZoteroItemMetadata;
+use zqa::zotero::library::ZoteroItemMetadata;
 use zqa_rag::config::LLMClientConfig;
 use zqa_rag::llm::base::{ChatRequest, ContentType};
 use zqa_rag::llm::factory::get_client_with_config;

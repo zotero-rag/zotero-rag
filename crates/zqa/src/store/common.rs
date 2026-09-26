@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use zqa_rag::reranking::common::RerankProviderConfig;
 
-use crate::utils::library::{ZoteroItem, ZoteroItemMetadata};
+use crate::zotero::library::{ZoteroItem, ZoteroItemMetadata};
 
 /// Token statistics from a vector search call, used for cost estimation.
 pub struct VectorSearchStats {

@@ -15,8 +15,8 @@ use zqa_rag::pricing::ModelUsage;
 use crate::cli::prompts::{get_extraction_prompt, get_extraction_system_prompt};
 use crate::store::common::ZoteroStore;
 use crate::tools::retrieval::RETRIEVAL_TOOL_NAME;
-use crate::utils::library::ZoteroItem;
 use crate::utils::rag::ModelResponse;
+use crate::zotero::library::ZoteroItem;
 
 pub(crate) const SUMMARIZATION_TOOL_NAME: &str = "summarization_tool";
 

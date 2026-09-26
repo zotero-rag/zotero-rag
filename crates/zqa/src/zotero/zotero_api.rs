@@ -1,0 +1,536 @@
+//! Read-only access to a running Zotero instance when its SQLite database is locked.
+
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::Duration;
+
+use reqwest::{Client, Response, StatusCode, Url};
+use serde::{Deserialize, de::DeserializeOwned};
+use thiserror::Error;
+
+use super::library::{ZoteroItem, ZoteroItemMetadata};
+
+/// Failures while reading the local API after SQLite reports a lock.
+#[derive(Clone, Debug, Error)]
+pub enum LocalApiError {
+    #[error(
+        "Zotero database is locked and its local API is disabled. Enable Settings > Advanced > Allow other applications on this computer to communicate with Zotero, or close Zotero."
+    )]
+    Disabled,
+    #[error(
+        "Zotero database is locked and its local API request failed: {0}. Check that Zotero's local API is available on port 23119, or close Zotero."
+    )]
+    Request(#[source] Arc<reqwest::Error>),
+    #[error("Could not verify the Zotero library directory: {0}")]
+    Io(#[source] Arc<std::io::Error>),
+    #[error("Zotero's local API returned invalid or inconsistent data: {0}")]
+    InvalidData(String),
+    #[error(
+        "Zotero database is locked, but the running instance could not be matched to {0}. Close Zotero to read the selected library directly."
+    )]
+    UnverifiedLibrary(PathBuf),
+}
+
+impl From<reqwest::Error> for LocalApiError {
+    fn from(error: reqwest::Error) -> Self {
+        Self::Request(Arc::new(error))
+    }
+}
+
+impl From<std::io::Error> for LocalApiError {
+    fn from(error: std::io::Error) -> Self {
+        Self::Io(Arc::new(error))
+    }
+}
+
+/// A group library returned by `/api/users/0/groups`.
+/// Only its ID is needed to read items through `/api/groups/{id}/items`.
+#[derive(Deserialize)]
+struct Group {
+    id: u64,
+}
+
+/// An item response from the local API, containing its library-scoped key and item data.
+/// Bibliographic items and their attachments are separate responses with distinct keys.
+#[derive(Deserialize)]
+struct ApiItem {
+    key: String,
+    data: ItemData,
+}
+
+/// The fields read from an item response's `data` object.
+/// Bibliographic items supply titles and creators; attachments supply parent keys and file metadata.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ItemData {
+    /// Zotero item type, such as `journalArticle`, `preprint`, or `attachment`.
+    item_type: String,
+    /// Item title, defaulting to empty when omitted. PDF metadata uses the parent item's title.
+    #[serde(default)]
+    title: String,
+    /// Parent item's key for a child item, linking a PDF attachment to its bibliographic metadata.
+    parent_item: Option<String>,
+    /// Attachment MIME type, used to select `application/pdf` files.
+    content_type: Option<String>,
+    /// Attachment storage mode, such as `imported_file`, `imported_url`, or `linked_file`.
+    /// Imported files belong to Zotero's storage directory; linked files need path resolution.
+    link_mode: Option<String>,
+    /// Attachment filename. Stored files are located under `storage/<attachment-key>/`.
+    filename: Option<String>,
+    /// Creators in Zotero's stored order, including all returned creator roles.
+    /// Defaults to an empty list when the item has no `creators` field.
+    #[serde(default)]
+    creators: Vec<Creator>,
+}
+
+/// A creator's name from a bibliographic item's ordered `creators` array.
+/// Single-field names, such as organizations, use `name`; other names use first and last names.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Creator {
+    name: Option<String>,
+    #[serde(default)]
+    first_name: String,
+    #[serde(default)]
+    last_name: String,
+}
+
+impl ItemData {
+    /// Identify files managed under the active Zotero data directory's storage folder.
+    fn is_stored_attachment(&self) -> bool {
+        self.item_type == "attachment"
+            && matches!(
+                self.link_mode.as_deref(),
+                Some("imported_file" | "imported_url")
+            )
+    }
+
+    /// Format creators in Zotero's order, including single-field organization names.
+    fn authors(&self) -> Option<Vec<String>> {
+        // NOTE: Maintainers, keep creator ordering and single-field names aligned with `get_authors_sqlite`.
+        let authors: Vec<_> = self
+            .creators
+            .iter()
+            .map(|creator| {
+                creator.name.clone().unwrap_or_else(|| {
+                    if creator.first_name.is_empty() {
+                        creator.last_name.clone()
+                    } else {
+                        format!("{}, {}", creator.last_name, creator.first_name)
+                    }
+                })
+            })
+            .collect();
+
+        (!authors.is_empty()).then_some(authors)
+    }
+}
+
+/// A read-only client for Zotero's local API on port 23119.
+///
+/// Cache the server ID returned by the API and send it on subsequent requests so an
+/// operation fails if a different Zotero instance takes over the port.
+pub(crate) struct ZoteroApi {
+    client: Client,
+    base: String,
+    /// Learned from a response's `Zotero-Server-ID` header; absent until one is received.
+    server_id: Option<String>,
+}
+
+impl ZoteroApi {
+    /// Build a loopback-only client with no proxy, redirects, or automatic retries.
+    pub(crate) fn new() -> Result<Self, LocalApiError> {
+        Ok(Self {
+            client: Client::builder()
+                .no_proxy()
+                .redirect(reqwest::redirect::Policy::none())
+                .retry(reqwest::retry::never())
+                .connect_timeout(Duration::from_millis(250))
+                .timeout(Duration::from_secs(10))
+                .build()?,
+            base: "http://127.0.0.1:23119/api".into(),
+            server_id: None,
+        })
+    }
+
+    /// Send a bounded GET and reject instance changes before accepting response data.
+    async fn get(
+        &mut self,
+        path: &str,
+        query: &[(String, String)],
+    ) -> Result<Response, LocalApiError> {
+        let mut request = self
+            .client
+            .get(format!("{}/{path}", self.base))
+            .query(query);
+
+        if let Some(id) = &self.server_id {
+            request = request.header("Zotero-Server-ID", id);
+        }
+
+        let response = request.send().await?;
+
+        // Zotero returns 403 when the local API is disabled; provide the setting to enable it.
+        if response.status() == StatusCode::FORBIDDEN {
+            return Err(LocalApiError::Disabled);
+        }
+
+        let response = response.error_for_status()?;
+
+        // `error_for_status` rejects only 4xx/5xx. Reject other non-2xx responses too,
+        // particularly 3xx since this client deliberately does not follow redirects.
+        if !response.status().is_success() {
+            return Err(LocalApiError::InvalidData(format!(
+                "unexpected HTTP status {}",
+                response.status()
+            )));
+        }
+
+        let Some(id) = response.headers().get("Zotero-Server-ID") else {
+            return Ok(response);
+        };
+
+        let id = id
+            .to_str()
+            .map_err(|error| LocalApiError::InvalidData(error.to_string()))?;
+
+        if self
+            .server_id
+            .as_deref()
+            .is_some_and(|expected| expected != id)
+        {
+            return Err(LocalApiError::InvalidData(
+                "the running Zotero instance changed during the request".into(),
+            ));
+        }
+
+        self.server_id = Some(id.into());
+
+        Ok(response)
+    }
+
+    /// Collect pages in a stable order, rejecting changes to a library between pages.
+    async fn list<T: DeserializeOwned>(
+        &mut self,
+        path: &str,
+        mut query: Vec<(String, String)>,
+    ) -> Result<Vec<T>, LocalApiError> {
+        const PAGE_SIZE: usize = 100;
+
+        query.extend([
+            ("format".into(), "json".into()),
+            ("limit".into(), PAGE_SIZE.to_string()),
+        ]);
+
+        let mut result = Vec::new();
+        let mut version = None;
+
+        loop {
+            let mut page_query = query.clone();
+            page_query.push(("start".into(), result.len().to_string()));
+            let response = self.get(path, &page_query).await?;
+
+            let current_version = response.headers().get("Last-Modified-Version").cloned();
+            if !result.is_empty() && current_version != version {
+                return Err(LocalApiError::InvalidData(
+                    "the library changed while reading pages; retry the operation".into(),
+                ));
+            }
+
+            version = current_version;
+
+            let page: Vec<T> = response.json().await?;
+
+            let finished = page.len() < PAGE_SIZE;
+            result.extend(page);
+
+            if finished {
+                return Ok(result);
+            }
+        }
+    }
+
+    /// Enumerate the personal library and all locally available group libraries.
+    async fn libraries(&mut self) -> Result<Vec<String>, LocalApiError> {
+        let groups: Vec<Group> = self.list("users/0/groups", Vec::new()).await?;
+
+        let mut libraries = vec!["users/0".into()];
+        libraries.extend(
+            groups
+                .into_iter()
+                .map(|group| format!("groups/{}", group.id)),
+        );
+
+        Ok(libraries)
+    }
+
+    /// Fetch library metadata, or exact keys including trashed items for author lookup.
+    ///
+    /// # Arguments
+    ///
+    /// * `library` - API prefix identifying a personal or group library.
+    /// * `keys` - Item keys to retrieve, or `None` to read the whole library.
+    /// * `sort` - Zotero sort field, such as `dateAdded`, `dateModified`, or `title`.
+    /// * `direction` - Sort direction, either `asc` or `desc`.
+    ///
+    /// # Returns
+    ///
+    /// Items from every response page, with absent exact keys resolved individually.
+    async fn items(
+        &mut self,
+        library: &str,
+        keys: Option<&[String]>,
+        sort: &str,
+        direction: &str,
+    ) -> Result<Vec<ApiItem>, LocalApiError> {
+        // NOTE: Maintainers, keep trash inclusion aligned with the SQLite queries in `library.rs`.
+        // Both readers include trashed items so opening Zotero does not change the indexed set.
+        let mut query = vec![
+            ("includeTrashed".into(), "1".into()),
+            ("sort".into(), sort.into()),
+            ("direction".into(), direction.into()),
+        ];
+
+        if let Some(keys) = keys {
+            query.push(("itemKey".into(), keys.join(",")));
+        }
+
+        // Zotero's additional search scopes can exclude trashed items even with `includeTrashed`.
+        // Fetch metadata without `itemType` filters, and resolve absent exact keys individually.
+        let mut items: Vec<ApiItem> = self.list(&format!("{library}/items"), query).await?;
+
+        let Some(keys) = keys else {
+            return Ok(items);
+        };
+
+        for key in keys {
+            if items.iter().any(|item| &item.key == key) {
+                continue;
+            }
+
+            match self.get(&format!("{library}/items/{key}"), &[]).await {
+                Ok(response) => items.push(response.json().await?),
+                Err(LocalApiError::Request(error))
+                    if error.status() == Some(StatusCode::NOT_FOUND) => {}
+                Err(error) => return Err(error),
+            }
+        }
+
+        Ok(items)
+    }
+
+    /// Resolve an attachment URL without following a redirect or downloading its content.
+    async fn file_path(&mut self, library: &str, key: &str) -> Result<PathBuf, LocalApiError> {
+        let text = self
+            .get(&format!("{library}/items/{key}/file/view/url"), &[])
+            .await?
+            .text()
+            .await?;
+
+        Url::parse(text.trim())
+            .ok()
+            .and_then(|url| url.to_file_path().ok())
+            .ok_or_else(|| {
+                LocalApiError::InvalidData(
+                    "attachment endpoint did not return a local file URL".into(),
+                )
+            })
+    }
+
+    /// Verify the API uses the requested data directory using a stored attachment's location.
+    ///
+    /// The API serves the running profile, which may differ from the selected data directory.
+    /// A server ID detects instance changes but does not identify that directory.
+    /// Linked files cannot establish identity: multiple profiles may link to the same file.
+    async fn verify_library(
+        &mut self,
+        library: &str,
+        items: &[ApiItem],
+        path: &Path,
+    ) -> Result<bool, LocalApiError> {
+        let Some(item) = items.iter().find(|item| item.data.is_stored_attachment()) else {
+            return Ok(false);
+        };
+
+        let file = self.file_path(library, &item.key).await?;
+
+        let Some(root) = file.ancestors().nth(3) else {
+            return Err(LocalApiError::UnverifiedLibrary(path.into()));
+        };
+
+        let is_storage_path = file
+            .parent()
+            .is_some_and(|parent| parent.ends_with(Path::new("storage").join(&item.key)));
+        if !is_storage_path || root.canonicalize()? != path.canonicalize()? {
+            return Err(LocalApiError::UnverifiedLibrary(path.into()));
+        }
+
+        Ok(true)
+    }
+
+    /// Load PDF metadata and verify the selected library before returning any results.
+    pub(crate) async fn metadata(
+        &mut self,
+        path: &Path,
+        start: Option<usize>,
+        limit: Option<usize>,
+    ) -> Result<Vec<ZoteroItemMetadata>, LocalApiError> {
+        let mut result = Vec::new();
+        let mut verified = false;
+
+        for library in self.libraries().await? {
+            let items = self.items(&library, None, "dateAdded", "asc").await?;
+
+            if !verified {
+                verified = self.verify_library(&library, &items, path).await?;
+            }
+
+            let parents: HashMap<_, _> = items
+                .iter()
+                .map(|item| (item.key.as_str(), &item.data))
+                .collect();
+
+            for item in &items {
+                if item.data.content_type.as_deref() != Some("application/pdf") {
+                    continue;
+                }
+
+                let Some(parent) = item
+                    .data
+                    .parent_item
+                    .as_deref()
+                    .and_then(|key| parents.get(key))
+                else {
+                    continue;
+                };
+
+                // NOTE: Maintainers, keep parent item types aligned with `parse_library_metadata_sqlite`.
+                if !matches!(
+                    parent.item_type.as_str(),
+                    "conferencePaper" | "journalArticle" | "preprint"
+                ) {
+                    continue;
+                }
+
+                let file_path = if item.data.is_stored_attachment() {
+                    let filename = item.data.filename.as_deref().ok_or_else(|| {
+                        LocalApiError::InvalidData("stored attachment has no filename".into())
+                    })?;
+
+                    if Path::new(filename)
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        != Some(filename)
+                    {
+                        return Err(LocalApiError::InvalidData(
+                            "stored attachment filename is not a single path component".into(),
+                        ));
+                    }
+
+                    path.join("storage").join(&item.key).join(filename)
+                } else {
+                    self.file_path(&library, &item.key).await?
+                };
+
+                result.push(ZoteroItemMetadata {
+                    library_key: item.key.clone(),
+                    title: parent.title.clone(),
+                    file_path,
+                    authors: parent.authors(),
+                });
+            }
+        }
+
+        if !verified {
+            return Err(LocalApiError::UnverifiedLibrary(path.into()));
+        }
+
+        Ok(result
+            .into_iter()
+            .skip(start.unwrap_or(0))
+            .take(limit.unwrap_or(usize::MAX))
+            .collect())
+    }
+
+    /// Look up attachment parents in batches and apply authors only after identity validation.
+    pub(crate) async fn authors(
+        &mut self,
+        items: &mut [ZoteroItem],
+        path: &Path,
+    ) -> Result<(), LocalApiError> {
+        let keys: Vec<_> = items
+            .iter()
+            .map(|item| item.metadata.library_key.clone())
+            .collect();
+
+        let mut authors = HashMap::new();
+        let mut verified = false;
+        let libraries = self.libraries().await?;
+
+        for library in &libraries {
+            for keys in keys.chunks(50) {
+                let attachments = self.items(library, Some(keys), "dateAdded", "asc").await?;
+
+                if !verified {
+                    verified = self.verify_library(library, &attachments, path).await?;
+                }
+
+                let parent_keys: Vec<_> = attachments
+                    .iter()
+                    .filter_map(|item| item.data.parent_item.clone())
+                    .collect();
+
+                if parent_keys.is_empty() {
+                    continue;
+                }
+
+                let parents = self
+                    .items(library, Some(&parent_keys), "dateAdded", "asc")
+                    .await?;
+
+                let parents: HashMap<_, _> = parents
+                    .iter()
+                    .map(|item| (item.key.as_str(), &item.data))
+                    .collect();
+
+                for attachment in &attachments {
+                    if let Some(parent) = attachment
+                        .data
+                        .parent_item
+                        .as_deref()
+                        .and_then(|key| parents.get(key))
+                    {
+                        authors.insert(attachment.key.clone(), parent.authors());
+                    }
+                }
+            }
+        }
+
+        // A search containing only linked files needs a separate stored attachment to prove identity.
+        if !verified {
+            for library in libraries {
+                let candidates = self.items(&library, None, "dateAdded", "asc").await?;
+
+                if self.verify_library(&library, &candidates, path).await? {
+                    verified = true;
+                    break;
+                }
+            }
+        }
+
+        if !verified {
+            return Err(LocalApiError::UnverifiedLibrary(path.into()));
+        }
+
+        for item in items {
+            item.metadata.authors = authors.remove(&item.metadata.library_key).flatten();
+        }
+
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+#[path = "zotero_api_tests.rs"]
+mod tests;
