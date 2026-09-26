@@ -58,8 +58,11 @@ fn server(replies: Vec<Reply>) -> (ZoteroApi, Server) {
     let thread = thread::spawn(move || {
         let mut expected_server_id = None;
 
-        for reply in replies {
-            let (mut stream, _) = listener.accept().unwrap();
+        let mut listener = Some(listener);
+        let reply_count = replies.len();
+
+        for (index, reply) in replies.into_iter().enumerate() {
+            let (mut stream, _) = listener.as_ref().unwrap().accept().unwrap();
             stream
                 .set_read_timeout(Some(Duration::from_secs(2)))
                 .unwrap();
@@ -97,6 +100,11 @@ fn server(replies: Vec<Reply>) -> (ZoteroApi, Server) {
 
             assert_eq!(request_server_id.as_deref(), expected_server_id);
             expected_server_id = Some(reply.server_id);
+
+            // Close the listener before the final reply so a subsequent request is refused.
+            if index + 1 == reply_count {
+                listener.take();
+            }
 
             write!(stream, "HTTP/1.1 {} Test\r\nContent-Length: {}\r\nContent-Type: application/json\r\nConnection: close\r\nLast-Modified-Version: {}\r\nZotero-Server-ID: {}\r\n\r\n{}", reply.status, reply.body.len(), reply.version, reply.server_id, reply.body).unwrap();
         }
@@ -557,4 +565,102 @@ async fn metadata_orders_dates_and_key_ties_across_libraries() {
         .unwrap();
     assert_eq!(items.len(), 1);
     assert_eq!(items[0].library_key, "AAA00001");
+}
+
+/// Keep linked-file paths usable when SQLite indexing is followed by API author lookup.
+#[tokio::test]
+async fn authors_resolve_sqlite_linked_files_after_parent_title_changes() {
+    let library = tempfile::tempdir().unwrap();
+    let source = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets/Zotero/zotero.sqlite");
+    let database_path = library.path().join("zotero.sqlite");
+    std::fs::copy(source, &database_path).unwrap();
+    let linked_path = library.path().join("linked paper.pdf");
+    let database = rusqlite::Connection::open(database_path).unwrap();
+    database
+        .execute(
+            "UPDATE itemAttachments SET path = ?1, linkMode = 2
+         WHERE itemID = (SELECT itemID FROM items WHERE key = '7R5XZ5PX')",
+            [linked_path.to_str().unwrap()],
+        )
+        .unwrap();
+    drop(database);
+
+    let metadata = super::super::library::parse_library_metadata(Some(library.path()), None, None)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|item| item.library_key == "7R5XZ5PX")
+        .unwrap();
+    assert_eq!(metadata.file_path, linked_path);
+    let mut items = vec![ZoteroItem {
+        metadata,
+        text: String::new(),
+    }];
+    let mut edited_parent = parent();
+    edited_parent["data"]["title"] = json!("Edited after indexing");
+    let linked = json!({"key": "7R5XZ5PX", "data": {
+        "itemType": "attachment", "parentItem": "PARENT01", "linkMode": "linked_file"
+    }});
+    let mut linked_reply = Reply::json("/api/users/0/items/7R5XZ5PX/file/view/url", &Value::Null);
+    linked_reply.body = Url::from_file_path(&linked_path).unwrap().to_string();
+    let (mut api, _server) = server(vec![
+        Reply::json("/api/users/0/groups", &json!([])),
+        Reply::json("/api/users/0/items", &json!([linked])),
+        Reply::json("/api/users/0/items", &json!([edited_parent])),
+        linked_reply,
+        Reply::json("/api/users/0/items", &json!([attachment()])),
+        file_reply(library.path(), "/api/users/0/items/ATTACH01/file/view/url"),
+    ]);
+
+    api.authors(&mut items, library.path()).await.unwrap();
+    assert_eq!(
+        items[0].metadata.authors.as_ref().unwrap()[0],
+        "Lovelace, Ada"
+    );
+}
+
+/// Ignore extra attachment keys before resolving file paths or requesting their parents.
+#[tokio::test]
+async fn authors_do_not_resolve_unrequested_linked_files() {
+    let library = tempfile::tempdir().unwrap();
+    let unrelated = json!({"key": "OTHER001", "data": {
+        "itemType": "attachment", "parentItem": "OTHER002", "linkMode": "linked_file"
+    }});
+    let mut parents = Reply::json("/api/users/0/items", &json!([parent()]));
+    parents.query.push(("itemKey", "PARENT01".into()));
+    let (mut api, _server) = server(vec![
+        Reply::json("/api/users/0/groups", &json!([])),
+        Reply::json("/api/users/0/items", &json!([attachment(), unrelated])),
+        file_reply(library.path(), "/api/users/0/items/ATTACH01/file/view/url"),
+        parents,
+    ]);
+    let mut items = vec![ZoteroItem {
+        metadata: ZoteroItemMetadata {
+            library_key: "ATTACH01".into(),
+            title: "An outdated title".into(),
+            file_path: library.path().join("storage/ATTACH01/A paper.pdf"),
+            authors: None,
+        },
+        text: String::new(),
+    }];
+
+    api.authors(&mut items, library.path()).await.unwrap();
+    assert_eq!(
+        items[0].metadata.authors.as_ref().unwrap()[0],
+        "Lovelace, Ada"
+    );
+}
+
+/// Fail if the shared API exits before the last group request, even after personal verification.
+#[tokio::test]
+async fn metadata_propagates_connection_failure_after_personal_verification() {
+    let library = tempfile::tempdir().unwrap();
+    let (mut api, _server) = server(vec![
+        Reply::json("/api/users/0/groups", &json!([{"id": 42}])),
+        Reply::json("/api/users/0/items", &json!([parent(), attachment()])),
+        file_reply(library.path(), "/api/users/0/items/ATTACH01/file/view/url"),
+    ]);
+
+    assert!(matches!(api.metadata(library.path(), None, None).await,
+        Err(LocalApiError::Request(error)) if error.is_connect()));
 }

@@ -332,14 +332,20 @@ fn parse_library_metadata_sqlite(
     let item_iter: Vec<ZoteroItemMetadata> = stmt
         .query_map([], |row| {
             let res_path: String = row.get(1)?;
-            let split_idx = res_path.find(':').unwrap_or(0);
-            let filename = res_path.split_at(split_idx + 1).1;
             let lib_key: String = row.get(2)?;
 
+            // NOTE: Maintainers, keep local paths aligned with `ZoteroApi::attachment_path`.
+            // Only `storage:` paths belong under Zotero's storage directory. Linked files
+            // retain their absolute paths, including drive letters on Windows.
+            let file_path = match res_path.strip_prefix("storage:") {
+                Some(filename) => path.join("storage").join(&lib_key).join(filename),
+                None => PathBuf::from(res_path),
+            };
+
             Ok(ZoteroItemMetadata {
-                library_key: lib_key.clone(),
+                library_key: lib_key,
                 title: row.get(0)?,
-                file_path: path.join("storage").join(lib_key).join(filename),
+                file_path,
                 authors: None,
             })
         })?

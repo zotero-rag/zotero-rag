@@ -281,8 +281,8 @@ impl ZoteroApi {
     /// # Returns
     ///
     /// Items from every response page, with absent exact keys resolved individually.
-    /// Return an empty list with a warning for an unavailable group. Identity and data
-    /// consistency failures remain errors, including when reading a group.
+    /// Return an empty list with a warning for group-specific HTTP 404/5xx responses.
+    /// Transport, identity, and data consistency failures remain errors for every library.
     async fn items(
         &mut self,
         library: &str,
@@ -308,11 +308,9 @@ impl ZoteroApi {
             Ok(items) => items,
             Err(LocalApiError::Request(error))
                 if library.starts_with("groups/")
-                    && (error.is_connect()
-                        || error.is_timeout()
-                        || error.status().is_some_and(|status| {
-                            status == StatusCode::NOT_FOUND || status.is_server_error()
-                        })) =>
+                    && error.status().is_some_and(|status| {
+                        status == StatusCode::NOT_FOUND || status.is_server_error()
+                    }) =>
             {
                 log::warn!("Skipping unavailable Zotero library {library}: {error}");
                 return Ok(Vec::new());
@@ -369,6 +367,7 @@ impl ZoteroApi {
             return Ok(None);
         }
 
+        // NOTE: Maintainers, keep local paths aligned with `parse_library_metadata_sqlite`.
         if item.data.is_stored_attachment() {
             let filename = item.data.filename.as_deref().ok_or_else(|| {
                 LocalApiError::InvalidData("stored attachment has no filename".into())
@@ -512,7 +511,7 @@ impl ZoteroApi {
 
     /// Look up attachment parents in batches and apply authors only after identity validation.
     ///
-    /// Match indexed keys, paths, and parent titles, retaining the first matching library.
+    /// Match indexed keys and attachment paths, retaining the first matching library.
     /// Exclude resolved items from subsequent libraries' requests.
     pub(crate) async fn authors(
         &mut self,
@@ -538,7 +537,12 @@ impl ZoteroApi {
             }
 
             for keys in keys.chunks(50) {
-                let attachments = self.items(library, Some(keys), "dateAdded", "asc").await?;
+                let attachments: Vec<_> = self
+                    .items(library, Some(keys), "dateAdded", "asc")
+                    .await?
+                    .into_iter()
+                    .filter(|attachment| keys.contains(&attachment.key))
+                    .collect();
 
                 if !verified {
                     verified = self.verify_library(library, &attachments, path).await?;
@@ -577,12 +581,11 @@ impl ZoteroApi {
                         continue;
                     };
 
-                    // Keys are library-scoped. Match the indexed attachment and parent before
-                    // accepting a result, then keep that result when later libraries share its key.
+                    // Keys are library-scoped. Match the indexed attachment's path before
+                    // accepting a result; parent titles may have changed since indexing.
                     for (index, item) in items.iter().enumerate() {
                         if item.metadata.library_key == attachment.key
                             && item.metadata.file_path == file_path
-                            && item.metadata.title == parent.title
                         {
                             authors.entry(index).or_insert_with(|| parent.authors());
                         }
