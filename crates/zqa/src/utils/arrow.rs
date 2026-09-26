@@ -11,10 +11,9 @@ use zqa_rag::embedding::common::{
 use zqa_rag::llm::errors::LLMError;
 use zqa_rag::vector::backends::lance::LanceError;
 
-use super::library::{LibraryParsingError, parse_library};
 use crate::store::common::ZoteroStore;
 use crate::store::lance::LanceZoteroStore;
-use crate::utils::library::ZoteroItem;
+use crate::zotero::library::{LibraryParsingError, ZoteroItem, parse_library};
 
 /// An enum containing the fields stored by our application in `LanceDB`, in order. Implementations
 /// `as_ref()` and `into()` are provided to convert this to `&str` and `String` respectively.
@@ -76,9 +75,12 @@ impl From<lancedb::Error> for ArrowError {
 impl From<LibraryParsingError> for ArrowError {
     fn from(value: LibraryParsingError) -> Self {
         match value {
-            LibraryParsingError::SqlError(msg) => Self::SqliteError(msg),
+            LibraryParsingError::SqlError(msg) => Self::SqliteError(msg.to_string()),
             LibraryParsingError::LanceDBError(msg) => Self::LanceError(msg),
             LibraryParsingError::PdfParsingError(msg) => Self::PdfParsingError(msg),
+            error @ (LibraryParsingError::LibraryNotFound | LibraryParsingError::LocalApi(_)) => {
+                Self::Other(error.to_string())
+            }
         }
     }
 }

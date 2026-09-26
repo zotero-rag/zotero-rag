@@ -84,8 +84,8 @@ use crate::cli::errors::CLIError;
 use crate::common::Context;
 use crate::state::get_state_dir;
 use crate::utils::arrow::library_to_arrow_with_embeddings;
-use crate::utils::library::{ZoteroItem, parse_library};
 use crate::utils::terminal::{read_char, read_number};
+use crate::zotero::library::{ZoteroItem, parse_library};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct BatchItem {
@@ -1089,7 +1089,7 @@ mod tests {
         prompt_and_fetch_batch_results, update_hash_cache, write_batch_metadata,
     };
     use crate::common::test_support::create_test_context;
-    use crate::utils::library::{ZoteroItem, ZoteroItemMetadata};
+    use crate::zotero::library::{ZoteroItem, ZoteroItemMetadata};
 
     /// A [`CacheEntry`] for a VoyageAI batch with the given model and sequence number.
     fn entry(model: &str, seq: usize) -> CacheEntry {

@@ -1,3 +1,5 @@
+//! Zotero library metadata, author lookup, and PDF extraction.
+
 use std::collections::HashSet;
 use std::fmt::Write;
 use std::hash::Hash;
@@ -12,11 +14,12 @@ use arrow_array::RecordBatch;
 use arrow_array::cast::AsArray;
 use directories::UserDirs;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
-use rusqlite::Connection;
+use rusqlite::{Connection, ErrorCode, OpenFlags};
 use serde::Serialize;
 use thiserror::Error;
 use zqa_pdftools::parse::extract_text;
 
+use super::zotero_api::{LocalApiError, ZoteroApi};
 use crate::izip;
 use crate::store::common::ZoteroStore;
 use crate::utils::arrow::DbFields;
@@ -145,8 +148,12 @@ impl From<Vec<RecordBatch>> for ZoteroItemSet {
 #[derive(Clone, Debug, Error)]
 #[non_exhaustive]
 pub enum LibraryParsingError {
-    #[error("SQLite error: {0}. Try closing Zotero, which can sometimes hold a lock.")]
-    SqlError(String),
+    #[error("SQLite error: {0}")]
+    SqlError(#[source] Arc<rusqlite::Error>),
+    #[error("Zotero library directory could not be found")]
+    LibraryNotFound,
+    #[error(transparent)]
+    LocalApi(#[from] LocalApiError),
     #[error("LanceDB error when parsing library: {0}")]
     LanceDBError(String),
     #[error("PDF parsing error: {0}")]
@@ -155,8 +162,26 @@ pub enum LibraryParsingError {
 
 impl From<rusqlite::Error> for LibraryParsingError {
     fn from(e: rusqlite::Error) -> Self {
-        LibraryParsingError::SqlError(e.to_string())
+        LibraryParsingError::SqlError(Arc::new(e))
     }
+}
+
+impl LibraryParsingError {
+    /// Identifies contention before converting database errors to display strings.
+    fn is_locked(&self) -> bool {
+        matches!(self, Self::SqlError(error) if matches!(
+            error.sqlite_error_code(),
+            Some(ErrorCode::DatabaseBusy | ErrorCode::DatabaseLocked)
+        ))
+    }
+}
+
+/// Opens an existing Zotero database read-only and disables SQLite's five-second busy wait.
+fn open_library_database(path: &Path) -> Result<Connection, rusqlite::Error> {
+    let conn =
+        Connection::open_with_flags(path.join("zotero.sqlite"), OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    conn.busy_timeout(std::time::Duration::ZERO)?;
+    Ok(conn)
 }
 
 impl From<Box<dyn std::error::Error>> for LibraryParsingError {
@@ -190,8 +215,9 @@ pub(crate) fn get_column_from_batch(batch: &RecordBatch, column: usize) -> Vec<S
 ///
 /// # Errors
 ///
-/// * `LibraryParsingError::SqliteError` if the library path was not found, the query could not be prepared, or
-///   columns from the result set could not be parsed, or `query_map` fails.
+/// * `LibraryParsingError::LibraryNotFound` if the library directory cannot be resolved.
+/// * `LibraryParsingError::SqlError` if the database cannot be opened or queried.
+/// * `LibraryParsingError::LocalApi` if a locked database's API fallback fails or cannot verify the library.
 /// * `LibraryParsingError::LanceDBError` if fetching the rows from LanceDB fails.
 pub async fn get_new_library_items<T: ZoteroStore>(
     store: &T,
@@ -202,7 +228,7 @@ pub async fn get_new_library_items<T: ZoteroStore>(
         .await
         .map_err(|e| LibraryParsingError::LanceDBError(e.to_string()))?;
 
-    let library_items = parse_library_metadata(library_path, None, None)?;
+    let library_items = parse_library_metadata(library_path, None, None).await?;
     let library_count = library_items.len();
 
     let db_items_set: HashSet<_> = metadata_vecs.iter().collect();
@@ -219,7 +245,8 @@ pub async fn get_new_library_items<T: ZoteroStore>(
     Ok(new_items)
 }
 
-/// Parses the Zotero library metadata. If successful, returns a list of metadata for each item.
+/// Parses Zotero metadata, using its local API immediately if the SQLite database is locked.
+/// The API's storage directory must match the selected library before results are accepted.
 ///
 /// # Arguments
 ///
@@ -231,21 +258,45 @@ pub async fn get_new_library_items<T: ZoteroStore>(
 ///
 /// # Errors
 ///
-/// * `LibraryParsingError::SqliteError` if the library path was not found, the query could not be prepared, or
-///   columns from the result set could not be parsed, or `query_map` fails.
-pub fn parse_library_metadata(
+/// * `LibraryParsingError::LibraryNotFound` if the library directory cannot be resolved.
+/// * `LibraryParsingError::SqlError` if the database cannot be opened or queried.
+/// * `LibraryParsingError::LocalApi` if a locked database's API fallback fails or cannot verify the library.
+pub async fn parse_library_metadata(
     library_path: Option<&Path>,
     start_from: Option<usize>,
     limit: Option<usize>,
 ) -> Result<Vec<ZoteroItemMetadata>, LibraryParsingError> {
-    if let Some(path) = resolve_lib_path(library_path) {
-        log::debug!(
-            "Reading Zotero metadata: path={}, offset={start_from:?}, limit={limit:?}",
-            path.display()
-        );
-        let conn = Connection::open(path.join("zotero.sqlite"))?;
+    let path = resolve_lib_path(library_path).ok_or(LibraryParsingError::LibraryNotFound)?;
+    log::debug!(
+        "Reading Zotero metadata: path={}, offset={start_from:?}, limit={limit:?}",
+        path.display()
+    );
 
-        let mut query = "SELECT DISTINCT
+    let items = with_api_fallback(
+        parse_library_metadata_sqlite(&path, start_from, limit),
+        async { ZoteroApi::new()?.metadata(&path, start_from, limit).await },
+    )
+    .await?;
+
+    log::debug!("Read {} Zotero metadata items", items.len());
+    Ok(items)
+}
+
+/// Read metadata directly, without waiting for another connection's SQLite locks.
+pub(super) fn parse_library_metadata_sqlite(
+    path: &Path,
+    start_from: Option<usize>,
+    limit: Option<usize>,
+) -> Result<Vec<ZoteroItemMetadata>, LibraryParsingError> {
+    let conn = open_library_database(path)?;
+
+    // NOTE: Maintainers, keep trash inclusion aligned with `ZoteroApi::items`; both readers include trashed items.
+    // NOTE: Maintainers, keep parent item types aligned with `ZoteroApi::metadata`.
+    // NOTE: Maintainers, keep base-relative path exclusion aligned with `ZoteroApi::attachment_path`.
+    // Resolving `attachments:` paths requires the profile's Linked Attachment Base Directory.
+    // NOTE: Maintainers, keep pagination ordering aligned with `ZoteroApi::metadata`:
+    // attachment date added, key, then group ID (zero for the personal library).
+    let mut query = "SELECT DISTINCT
                 idv.value AS title,
                 ia.path AS filePath,
                 i2.key AS libraryKey
@@ -256,53 +307,60 @@ pub fn parse_library_metadata(
             JOIN itemTypes it ON i.itemTypeID = it.itemTypeID
             LEFT JOIN itemAttachments ia ON i.itemID = ia.parentItemID
             JOIN items i2 ON ia.itemID = i2.itemID
+            LEFT JOIN groups g ON i2.libraryID = g.libraryID
             WHERE f.fieldName = 'title'
             AND ia.contentType = 'application/pdf'
-            AND it.typeName IN ('conferencePaper', 'journalArticle', 'preprint') "
-            .to_string();
+            AND ia.path IS NOT NULL AND ia.path != ''
+            AND ia.path NOT LIKE 'attachments:%'
+            AND it.typeName IN ('conferencePaper', 'journalArticle', 'preprint')
+            ORDER BY i2.dateAdded, i2.key, COALESCE(g.groupID, 0) "
+        .to_string();
 
-        // Useful for debugging
-        if let Some(limit_val) = limit {
-            let _ = write!(query, " LIMIT {limit_val}");
-        }
-
-        if let Some(offset) = start_from {
-            let _ = write!(query, " OFFSET {offset}");
-        }
-
-        let mut stmt = conn.prepare(&query)?;
-
-        let item_iter: Vec<ZoteroItemMetadata> = stmt
-            .query_map([], |row| {
-                let res_path: String = row.get(1)?;
-                let split_idx = res_path.find(':').unwrap_or(0);
-                let filename = res_path.split_at(split_idx + 1).1;
-                let lib_key: String = row.get(2)?;
-
-                Ok(ZoteroItemMetadata {
-                    library_key: lib_key.clone(),
-                    title: row.get(0)?,
-                    file_path: path.join("storage").join(lib_key).join(filename),
-                    authors: None,
-                })
-            })?
-            .filter_map(|row| {
-                row.inspect_err(|error| {
-                    log::debug!("Skipping invalid Zotero metadata row: {error}");
-                })
-                .ok()
-            })
-            .collect();
-        log::debug!("Read {} Zotero metadata items", item_iter.len());
-        Ok(item_iter)
-    } else {
-        Err(LibraryParsingError::SqlError(
-            "Library not found!".to_string(),
-        ))
+    // Useful for debugging
+    if let Some(limit_val) = limit {
+        let _ = write!(query, " LIMIT {limit_val}");
     }
+
+    if let Some(offset) = start_from {
+        if limit.is_none() {
+            query.push_str(" LIMIT -1");
+        }
+        let _ = write!(query, " OFFSET {offset}");
+    }
+
+    let mut stmt = conn.prepare(&query)?;
+
+    let item_iter: Vec<ZoteroItemMetadata> = stmt
+        .query_map([], |row| {
+            let res_path: String = row.get(1)?;
+            let lib_key: String = row.get(2)?;
+
+            // NOTE: Maintainers, keep local paths aligned with `ZoteroApi::attachment_path`.
+            // Only `storage:` paths belong under Zotero's storage directory. Linked files
+            // retain their absolute paths, including drive letters on Windows.
+            let file_path = match res_path.strip_prefix("storage:") {
+                Some(filename) => path.join("storage").join(&lib_key).join(filename),
+                None => PathBuf::from(res_path),
+            };
+
+            Ok(ZoteroItemMetadata {
+                library_key: lib_key,
+                title: row.get(0)?,
+                file_path,
+                authors: None,
+            })
+        })?
+        .inspect(|row| {
+            if let Err(error) = row {
+                log::debug!("Failed to read Zotero metadata row: {error}");
+            }
+        })
+        .collect::<Result<_, _>>()?;
+
+    Ok(item_iter)
 }
 
-/// Given a set of `items`, set the authors metadata in-place.
+/// Sets authors in-place, using the matching local Zotero API when SQLite is locked.
 ///
 /// # Arguments
 ///
@@ -312,78 +370,70 @@ pub fn parse_library_metadata(
 ///
 /// # Errors
 ///
-/// * `LibraryParsingError::SqlError` if the operation failed for any items.
-pub fn get_authors(
+/// * `LibraryParsingError::LibraryNotFound` if the library directory cannot be resolved.
+/// * `LibraryParsingError::SqlError` if a database query fails.
+/// * `LibraryParsingError::LocalApi` if the API fallback fails or cannot verify the library.
+pub async fn get_authors(
     items: &mut [ZoteroItem],
     library_path: Option<&Path>,
 ) -> Result<(), LibraryParsingError> {
-    if let Some(path) = resolve_lib_path(library_path) {
-        let conn = Connection::open(path.join("zotero.sqlite"))?;
+    if items.is_empty() {
+        return Ok(());
+    }
+    let path = resolve_lib_path(library_path).ok_or(LibraryParsingError::LibraryNotFound)?;
 
-        // For some reason, the `key` field in the `items` table (what we call `library_key`) seems
-        // to not completely be a key. Specifically, there are separate keys per item depending on
-        // whether you want the file path or the authors; the item metadata is stored with the file
-        // path, but to get the authors, you need a different key. To save you some debugging
-        // effort, here are some SQL queries that are useful here:
-        //
-        // ```sql
-        // SELECT DISTINCT
-        //   ia.path AS filePath,
-        //   i.key AS authorKey,
-        //   i2.key AS filePathKey
-        // FROM items i
-        // LEFT JOIN itemAttachments ia ON i.itemID = ia.parentItemID
-        // JOIN items i2 ON ia.itemID = i2.itemID;
-        // ```
-        // This gives you the file path and the `key`s associated with that item's author and file path.
-        //
-        // ```sql
-        //  SELECT c.firstName, c.lastName
-        //    FROM items i
-        //    JOIN itemData id ON i.itemID = id.itemID
-        //    JOIN fields f ON id.fieldID = f.fieldID
-        //    JOIN itemCreators ic ON i.itemID = ic.itemID
-        //    JOIN creators c ON ic.creatorID = c.creatorID
-        //    WHERE i.key = 'RQRBISX9'
-        //    AND f.fieldName = 'title'
-        //    ORDER BY ic.orderIndex;
-        // ```
-        // For a given (author-associated) key, this gives you the ordered first and last name pairs of
-        // the authors for that paper.
-        //
-        // The query below basically just uses the ideas from the above two queries, except that it
-        // does away with having to deal with one row per author per paper by using `GROUP_CONCAT`.
+    with_api_fallback(get_authors_sqlite(items, &path), async {
+        ZoteroApi::new()?.authors(items, &path).await
+    })
+    .await
+}
 
-        let query = "
-            SELECT GROUP_CONCAT(c.lastName || ', ' || c.firstName, ';') AS authors
-            FROM items i
-            LEFT JOIN itemAttachments ia ON i.itemID = ia.parentItemID
-            JOIN items i2 ON ia.itemID = i2.itemID
-            LEFT JOIN itemCreators ic ON i.itemID = ic.itemID
-            LEFT JOIN creators c ON ic.creatorID = c.creatorID
-            WHERE i2.key = ?1
-            GROUP BY i.key
-            ORDER BY MIN(ic.orderIndex);"
-            .to_string();
+/// Run the local API future only for SQLite contention, preserving all other database errors.
+pub(super) async fn with_api_fallback<T>(
+    sqlite_result: Result<T, LibraryParsingError>,
+    fallback: impl std::future::Future<Output = Result<T, LocalApiError>>,
+) -> Result<T, LibraryParsingError> {
+    match sqlite_result {
+        Err(error) if error.is_locked() => Ok(fallback.await?),
+        result => result,
+    }
+}
 
-        let mut stmt = conn.prepare(&query)?;
-        for item in items {
-            let library_key = &item.metadata.library_key;
-            if let Some(row) = stmt.query(rusqlite::params![library_key])?.next()? {
-                let authors: String = row.get(0)?;
-                let split_authors: Vec<_> = authors
-                    .split(';')
-                    .map(str::trim)
-                    .map(String::from)
-                    .collect();
+/// Fill author metadata through SQLite without retrying locked reads.
+pub(super) fn get_authors_sqlite(
+    items: &mut [ZoteroItem],
+    path: &Path,
+) -> Result<(), LibraryParsingError> {
+    let conn = open_library_database(path)?;
 
-                item.metadata.authors = Some(split_authors);
-            }
-        }
-    } else {
-        return Err(LibraryParsingError::SqlError(
-            "Library not found when fetching authors.".into(),
-        ));
+    // Zotero represents a paper and its PDF attachment as separate rows in `items`, each with
+    // its own key. Our `library_key` identifies the attachment, since that key also identifies
+    // its storage folder. The paper's title and creators belong to the parent item instead.
+    // To look up creators, first match the attachment's key through `ia.itemID = i.itemID`,
+    // then follow `ia.parentItemID` to the parent's rows in `itemCreators`.
+    //
+    // Return one row per creator in `orderIndex` order so the resulting vector preserves
+    // Zotero's creator order. Each row contains a complete name, including any punctuation
+    // within that name. Single-field creators, such as organizations,
+    // have an empty firstName and should be returned without a trailing comma.
+    //
+    // NOTE: Maintainers, keep creator ordering and single-field names aligned with `ItemData::authors`.
+    let query = "
+        SELECT CASE WHEN c.firstName = '' THEN c.lastName
+                    ELSE c.lastName || ', ' || c.firstName END
+        FROM itemAttachments ia
+        JOIN items i ON ia.itemID = i.itemID
+        JOIN itemCreators ic ON ia.parentItemID = ic.itemID
+        JOIN creators c ON ic.creatorID = c.creatorID
+        WHERE i.key = ?1
+        ORDER BY ic.orderIndex";
+
+    let mut stmt = conn.prepare(query)?;
+    for item in items {
+        let authors = stmt
+            .query_map([&item.metadata.library_key], |row| row.get(0))?
+            .collect::<Result<Vec<String>, _>>()?;
+        item.metadata.authors = (!authors.is_empty()).then_some(authors);
     }
 
     Ok(())
@@ -454,7 +504,7 @@ pub async fn parse_library<T: ZoteroStore>(
     let metadata = if store_exists {
         get_new_library_items(store, library_path).await?
     } else {
-        parse_library_metadata(library_path, start_from, limit)?
+        parse_library_metadata(library_path, start_from, limit).await?
     };
 
     if metadata.is_empty() {
@@ -662,19 +712,173 @@ mod tests {
     use crate::LanceZoteroStore;
     use crate::common::setup_logger;
 
+    /// Author order follows orderIndex, including institutional names and absent creators.
     #[test]
-    fn test_library_fetching_works() {
+    fn sqlite_authors_preserve_creator_order_and_missing_values() {
+        let library = tempfile::tempdir().unwrap();
+        let database = Connection::open(library.path().join("zotero.sqlite")).unwrap();
+        database
+            .execute_batch(
+                "CREATE TABLE items (itemID INTEGER, key TEXT);
+            CREATE TABLE itemAttachments (itemID INTEGER, parentItemID INTEGER);
+            CREATE TABLE itemCreators (itemID INTEGER, creatorID INTEGER, orderIndex INTEGER);
+            CREATE TABLE creators (creatorID INTEGER, firstName TEXT, lastName TEXT);
+            INSERT INTO items VALUES (2, 'ATTACH01'), (3, 'ATTACH02');
+            INSERT INTO itemAttachments VALUES (2, 1), (3, 4);
+            INSERT INTO creators VALUES (1, '', 'Institute'), (2, 'Ada', 'Lovelace');
+            INSERT INTO itemCreators VALUES (1, 1, 1), (1, 2, 0);",
+            )
+            .unwrap();
+        let mut items: Vec<_> = ["ATTACH01", "ATTACH02"]
+            .into_iter()
+            .map(|key| ZoteroItem {
+                metadata: ZoteroItemMetadata {
+                    library_key: key.into(),
+                    title: String::new(),
+                    file_path: PathBuf::new(),
+                    authors: None,
+                },
+                text: String::new(),
+            })
+            .collect();
+        get_authors_sqlite(&mut items, library.path()).unwrap();
+        assert_eq!(
+            items[0].metadata.authors.as_ref().unwrap(),
+            &["Lovelace, Ada", "Institute"]
+        );
+        assert!(items[1].metadata.authors.is_none());
+    }
+
+    /// A missing or malformed database must not be created or mistaken for a lock.
+    #[tokio::test]
+    async fn database_errors_do_not_trigger_api_fallback() {
+        let library = tempfile::tempdir().unwrap();
+        let error = parse_library_metadata(Some(library.path()), None, None)
+            .await
+            .unwrap_err();
+        assert!(matches!(error, LibraryParsingError::SqlError(_)));
+        assert!(!error.is_locked());
+        assert!(!library.path().join("zotero.sqlite").exists());
+        std::fs::write(library.path().join("zotero.sqlite"), b"not a database").unwrap();
+        let error = parse_library_metadata(Some(library.path()), None, None)
+            .await
+            .unwrap_err();
+        assert!(matches!(error, LibraryParsingError::SqlError(_)));
+        assert!(!error.is_locked());
+    }
+
+    /// Copy the toy database so regression tests can change attachment rows independently.
+    fn copy_toy_database() -> tempfile::TempDir {
+        let library = tempfile::tempdir().unwrap();
+        let source = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets/Zotero/zotero.sqlite");
+        std::fs::copy(source, library.path().join("zotero.sqlite")).unwrap();
+        library
+    }
+
+    /// Exclude missing and base-relative paths before pagination while retaining usable PDFs.
+    #[test]
+    fn sqlite_metadata_skips_missing_and_base_relative_attachment_paths() {
+        let library = copy_toy_database();
+        let expected = parse_library_metadata_sqlite(library.path(), None, None).unwrap();
+        let excluded = &expected[0].library_key;
+        let database = Connection::open(library.path().join("zotero.sqlite")).unwrap();
+
+        for path in [None, Some(""), Some("attachments:Papers/linked.pdf")] {
+            database.execute(
+                "UPDATE itemAttachments SET path = ?1 WHERE itemID = (SELECT itemID FROM items WHERE key = ?2)",
+                rusqlite::params![path, excluded],
+            ).unwrap();
+
+            let actual = parse_library_metadata_sqlite(library.path(), None, None).unwrap();
+            assert_eq!(actual, expected[1..]);
+            let first = parse_library_metadata_sqlite(library.path(), Some(0), Some(1)).unwrap();
+            assert_eq!(first, expected[1..2]);
+        }
+    }
+
+    /// Break date ties by attachment key and apply offsets to that deterministic order.
+    #[test]
+    fn sqlite_pagination_uses_attachment_dates_and_keys() {
+        let library = copy_toy_database();
+        let database = Connection::open(library.path().join("zotero.sqlite")).unwrap();
+        database
+            .execute("UPDATE items SET dateAdded = '2020-01-01 00:00:00'", [])
+            .unwrap();
+        let mut expected = parse_library_metadata_sqlite(library.path(), None, None).unwrap();
+        expected.sort_by(|left, right| left.library_key.cmp(&right.library_key));
+
+        let actual = parse_library_metadata_sqlite(library.path(), Some(1), Some(3)).unwrap();
+        assert_eq!(actual, expected[1..4]);
+        let remaining = parse_library_metadata_sqlite(library.path(), Some(1), None).unwrap();
+        assert_eq!(remaining, expected[1..]);
+    }
+
+    /// Check the fixture titles and authors shared by metadata and PDF integration tests.
+    fn assert_toy_library_authors(items: &[ZoteroItem]) {
+        let expected: [(&str, &[&str]); 5] = [
+            (
+                "An expert system",
+                &["Yedida", "Krishna", "Kalia", "Menzies", "Xiao", "Vukovic"],
+            ),
+            (
+                "Online Learning Rate Adaptation",
+                &["Baydin", "Cornish", "Rubio", "Schmidt", "Wood"],
+            ),
+            (
+                "Mono2Micro",
+                &["Krishna", "Xiao", "Vukovic", "Kalia", "Sinha", "Banerjee"],
+            ),
+            (
+                "Anomaly Detection",
+                &["Yedida", "Mehendale", "Challa", "Danda", "Sarkar", "Saha"],
+            ),
+            (
+                "Learning Rate Curriculum",
+                &["Croitoru", "Ristea", "Ionescu", "Sebe"],
+            ),
+        ];
+        assert!(items.iter().all(|item| item.metadata.authors.is_some()));
+
+        for (title, expected_authors) in expected {
+            let item = items
+                .iter()
+                .find(|item| item.metadata.title.contains(title))
+                .expect(title);
+            let authors = item.metadata.authors.as_ref().unwrap();
+
+            for expected_author in expected_authors {
+                assert!(
+                    authors
+                        .iter()
+                        .any(|author| author.contains(expected_author)),
+                    "Author {expected_author} not found in {authors:?}"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_library_fetching_works() {
         dotenv().ok();
         // Read the toy library shipped in `assets/` rather than a real `~/Zotero`, so this does not
         // depend on the developer's library (which may be locked by a running Zotero app).
         let library_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("assets")
             .join("Zotero");
-        let library_items = parse_library_metadata(Some(&library_path), None, None);
+        let library_items = parse_library_metadata(Some(&library_path), Some(0), Some(7)).await;
 
         test_ok!(library_items);
-        let items = library_items.unwrap();
-        assert!(!items.is_empty());
+        let mut items: Vec<_> = library_items
+            .unwrap()
+            .into_iter()
+            .map(|metadata| ZoteroItem {
+                metadata,
+                text: String::new(),
+            })
+            .collect();
+        assert_eq!(items.len(), 7);
+        get_authors(&mut items, Some(&library_path)).await.unwrap();
+        assert_toy_library_authors(&items);
     }
 
     /// Test that on CI, the toy library is loaded instead of searching for a non-existent "real"
@@ -684,9 +888,9 @@ mod tests {
     /// This is never meant to run on CI! Use this locally to ensure that the `get_lib_path`
     /// function correctly handles CI instead, by removing the `#[ignore]` and adding a `FAKE_CI`
     /// variable to your `.env`. The value of this does not matter, it just has to exist.
-    #[test]
+    #[tokio::test]
     #[ignore = "This test is meant to be run locally only"]
-    fn test_toy_library_loaded_in_ci() {
+    async fn test_toy_library_loaded_in_ci() {
         dotenv().ok();
 
         if env::var("FAKE_CI").is_ok() {
@@ -696,7 +900,7 @@ mod tests {
             let lib_path = lib_path.unwrap();
             assert!(lib_path.to_str().unwrap().contains("zqa"));
 
-            let library_items = parse_library_metadata(None, None, None);
+            let library_items = parse_library_metadata(None, None, None).await;
             test_ok!(library_items);
 
             let items = library_items.unwrap();
@@ -712,23 +916,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_parse_library() {
-        // Check the titles/authors are in the expected order and pairs.
-        // The parsing might change; we only care about keywords
-        const EXPECTED_TITLES: [&str; 5] = [
-            "An expert system",
-            "Online Learning Rate Adaptation",
-            "Mono2Micro",
-            "Anomaly Detection",
-            "Learning Rate Curriculum",
-        ];
-        let expected_authors = [
-            vec!["Yedida", "Krishna", "Kalia", "Menzies", "Xiao", "Vukovic"],
-            vec!["Baydin", "Cornish", "Rubio", "Schmidt", "Wood"],
-            vec!["Krishna", "Xiao", "Vukovic", "Kalia", "Sinha", "Banerjee"],
-            vec!["Yedida", "Mehendale", "Challa", "Danda", "Sarkar", "Saha"],
-            vec!["Croitoru", "Ristea", "Ionescu", "Sebe"],
-        ];
-
         dotenv().ok();
         let _ = setup_logger(log::LevelFilter::Info);
 
@@ -768,34 +955,10 @@ mod tests {
         test_eq!(items.len(), 7);
 
         // Now fetch authors from the Zotero DB
-        let authors_result = get_authors(&mut items, Some(&library_path));
+        let authors_result = get_authors(&mut items, Some(&library_path)).await;
         test_ok!(authors_result);
 
-        let mut found_bits = 0;
-
-        for item in &items {
-            assert!(item.metadata.authors.is_some());
-
-            let authors = item.metadata.authors.as_ref().unwrap();
-            let idx = EXPECTED_TITLES
-                .iter()
-                .enumerate()
-                .find(|(_, title)| item.metadata.title.contains(**title));
-
-            if let Some((idx, _)) = idx {
-                for expected_author in &expected_authors[idx] {
-                    assert!(
-                        authors.iter().any(|a| a.contains(expected_author)),
-                        "Author {expected_author} not found in {authors:?}"
-                    );
-                }
-
-                // At this point, all checks have passed, so mark it as found
-                found_bits |= 1 << idx;
-            }
-        }
-
-        test_eq!(found_bits, 0b11111);
+        assert_toy_library_authors(&items);
     }
 
     #[test]

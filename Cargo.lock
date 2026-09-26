@@ -12376,6 +12376,7 @@ dependencies = [
  "lancedb",
  "log",
  "nucleo-matcher",
+ "reqwest 0.13.4",
  "rpassword",
  "rusqlite",
  "rustyline",

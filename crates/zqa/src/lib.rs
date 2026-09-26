@@ -15,6 +15,7 @@ pub mod state;
 pub mod store;
 pub mod tools;
 pub mod utils;
+pub mod zotero;
 
 // Re-export commonly used items
 use cli::app::cli;

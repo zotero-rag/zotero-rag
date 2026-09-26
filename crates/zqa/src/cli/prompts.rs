@@ -1,6 +1,6 @@
 use crate::tools::retrieval::RETRIEVAL_TOOL_NAME;
 use crate::tools::summarization::SUMMARIZATION_TOOL_NAME;
-use crate::utils::library::ZoteroItemMetadata;
+use crate::zotero::library::ZoteroItemMetadata;
 
 /// Get the system prompt used to extract relevant passages from a paper.
 ///
