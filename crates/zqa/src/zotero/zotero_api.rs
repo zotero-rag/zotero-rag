@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
+use reqwest::header::HeaderValue;
 use reqwest::{Client, Response, StatusCode, Url};
 use serde::{Deserialize, de::DeserializeOwned};
 use thiserror::Error;
@@ -151,6 +152,8 @@ pub(crate) struct ZoteroApi {
     base: String,
     /// Learned from a response's `Zotero-Server-ID` header; absent until one is received.
     server_id: Option<String>,
+    /// Collection versions retained across related reads within one fallback operation.
+    versions: HashMap<String, Option<HeaderValue>>,
 }
 
 impl ZoteroApi {
@@ -166,6 +169,7 @@ impl ZoteroApi {
                 .build()?,
             base: "http://127.0.0.1:23119/api".into(),
             server_id: None,
+            versions: HashMap::new(),
         })
     }
 
@@ -202,6 +206,22 @@ impl ZoteroApi {
             )));
         }
 
+        // Single-item responses report the item's version, not the library's version.
+        // Compare only collection headers, keeping each library's version independent.
+        if path.ends_with("/items") || path == "users/0/groups" {
+            let current = response.headers().get("Last-Modified-Version").cloned();
+            let expected = self
+                .versions
+                .entry(path.into())
+                .or_insert_with(|| current.clone());
+
+            if *expected != current {
+                return Err(LocalApiError::InvalidData(
+                    "the library changed during the operation; retry the operation".into(),
+                ));
+            }
+        }
+
         let Some(id) = response.headers().get("Zotero-Server-ID") else {
             return Ok(response);
         };
@@ -226,7 +246,7 @@ impl ZoteroApi {
     }
 
     /// Collect pages in a stable order until the endpoint is exhausted or `stop_when` matches.
-    /// Reject library version changes between pages.
+    /// Reject library version changes across pages and related requests.
     async fn list<T: DeserializeOwned>(
         &mut self,
         path: &str,
@@ -241,21 +261,11 @@ impl ZoteroApi {
         ]);
 
         let mut result = Vec::new();
-        let mut version = None;
 
         loop {
             let mut page_query = query.clone();
             page_query.push(("start".into(), result.len().to_string()));
             let response = self.get(path, &page_query).await?;
-
-            let current_version = response.headers().get("Last-Modified-Version").cloned();
-            if !result.is_empty() && current_version != version {
-                return Err(LocalApiError::InvalidData(
-                    "the library changed while reading pages; retry the operation".into(),
-                ));
-            }
-
-            version = current_version;
 
             let page: Vec<T> = response.json().await?;
 
@@ -334,17 +344,27 @@ impl ZoteroApi {
             return Ok(items);
         };
 
+        let mut read_individually = false;
+
         for key in keys {
             if items.iter().any(|item| &item.key == key) {
                 continue;
             }
 
+            read_individually = true;
             match self.get(&format!("{library}/items/{key}"), &[]).await {
                 Ok(response) => items.push(response.json().await?),
                 Err(LocalApiError::Request(error))
                     if error.status() == Some(StatusCode::NOT_FOUND) => {}
                 Err(error) => return Err(error),
             }
+        }
+
+        // Individual item versions cannot establish library consistency. Recheck the
+        // collection after exact-key reads, including keys that disappeared with a 404.
+        if read_individually {
+            self.get(&format!("{library}/items"), &[("limit".into(), "1".into())])
+                .await?;
         }
 
         Ok(items)
@@ -407,7 +427,7 @@ impl ZoteroApi {
                 .as_deref()
                 .is_some_and(|path| path.starts_with("attachments:"))
             {
-                log::warn!(
+                log::debug!(
                     "Skipping base-relative Zotero attachment {} in {library}",
                     item.key
                 );
@@ -622,10 +642,11 @@ impl ZoteroApi {
         }
 
         // A search containing only linked files needs a separate stored attachment to prove identity.
+        // Include trash without search scopes, which can hide the only stored attachment.
         if !verified {
             for library in libraries {
                 let query = vec![
-                    ("itemType".into(), "attachment".into()),
+                    ("includeTrashed".into(), "1".into()),
                     ("sort".into(), "dateAdded".into()),
                     ("direction".into(), "asc".into()),
                 ];

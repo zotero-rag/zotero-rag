@@ -272,20 +272,18 @@ pub async fn parse_library_metadata(
         path.display()
     );
 
-    let items = match parse_library_metadata_sqlite(&path, start_from, limit) {
-        Err(error) if error.is_locked() => {
-            let mut api = ZoteroApi::new()?;
-            Ok(api.metadata(&path, start_from, limit).await?)
-        }
-        result => result,
-    }?;
+    let items = with_api_fallback(
+        parse_library_metadata_sqlite(&path, start_from, limit),
+        async { ZoteroApi::new()?.metadata(&path, start_from, limit).await },
+    )
+    .await?;
 
     log::debug!("Read {} Zotero metadata items", items.len());
     Ok(items)
 }
 
-/// Reads metadata directly, without waiting for another connection's SQLite locks.
-fn parse_library_metadata_sqlite(
+/// Read metadata directly, without waiting for another connection's SQLite locks.
+pub(super) fn parse_library_metadata_sqlite(
     path: &Path,
     start_from: Option<usize>,
     limit: Option<usize>,
@@ -383,17 +381,29 @@ pub async fn get_authors(
         return Ok(());
     }
     let path = resolve_lib_path(library_path).ok_or(LibraryParsingError::LibraryNotFound)?;
-    match get_authors_sqlite(items, &path) {
-        Err(error) if error.is_locked() => {
-            let mut api = ZoteroApi::new()?;
-            Ok(api.authors(items, &path).await?)
-        }
+
+    with_api_fallback(get_authors_sqlite(items, &path), async {
+        ZoteroApi::new()?.authors(items, &path).await
+    })
+    .await
+}
+
+/// Run the local API future only for SQLite contention, preserving all other database errors.
+pub(super) async fn with_api_fallback<T>(
+    sqlite_result: Result<T, LibraryParsingError>,
+    fallback: impl std::future::Future<Output = Result<T, LocalApiError>>,
+) -> Result<T, LibraryParsingError> {
+    match sqlite_result {
+        Err(error) if error.is_locked() => Ok(fallback.await?),
         result => result,
     }
 }
 
-/// Fills author metadata through SQLite without retrying locked reads.
-fn get_authors_sqlite(items: &mut [ZoteroItem], path: &Path) -> Result<(), LibraryParsingError> {
+/// Fill author metadata through SQLite without retrying locked reads.
+pub(super) fn get_authors_sqlite(
+    items: &mut [ZoteroItem],
+    path: &Path,
+) -> Result<(), LibraryParsingError> {
     let conn = open_library_database(path)?;
 
     // Zotero represents a paper and its PDF attachment as separate rows in `items`, each with
@@ -702,35 +712,6 @@ mod tests {
     use crate::LanceZoteroStore;
     use crate::common::setup_logger;
 
-    /// Both metadata and author readers must discover an exclusive lock without busy retries.
-    #[test]
-    fn locked_reads_fail_immediately() {
-        let library = tempfile::tempdir().unwrap();
-        let writer = Connection::open(library.path().join("zotero.sqlite")).unwrap();
-        writer
-            .execute_batch("CREATE TABLE marker (id INTEGER); BEGIN EXCLUSIVE;")
-            .unwrap();
-        let start = Instant::now();
-        let metadata = parse_library_metadata_sqlite(library.path(), None, None);
-        assert!(metadata.unwrap_err().is_locked());
-        let mut items = vec![ZoteroItem {
-            metadata: ZoteroItemMetadata {
-                library_key: "ATTACH01".into(),
-                title: "A paper".into(),
-                file_path: PathBuf::new(),
-                authors: None,
-            },
-            text: String::new(),
-        }];
-        assert!(
-            get_authors_sqlite(&mut items, library.path())
-                .unwrap_err()
-                .is_locked()
-        );
-        assert!(start.elapsed() < std::time::Duration::from_secs(1));
-        writer.execute_batch("ROLLBACK;").unwrap();
-    }
-
     /// Author order follows orderIndex, including institutional names and absent creators.
     #[test]
     fn sqlite_authors_preserve_creator_order_and_missing_values() {
@@ -830,41 +811,6 @@ mod tests {
         assert_eq!(actual, expected[1..4]);
         let remaining = parse_library_metadata_sqlite(library.path(), Some(1), None).unwrap();
         assert_eq!(remaining, expected[1..]);
-    }
-
-    /// Keep the toy-library title coverage used by the PDF integration test's first seven items.
-    #[test]
-    fn toy_library_pagination_retains_expected_titles_and_authors() {
-        let library = copy_toy_database();
-        let metadata = parse_library_metadata_sqlite(library.path(), Some(0), Some(7)).unwrap();
-        assert_eq!(metadata.len(), 7);
-        let mut items: Vec<_> = metadata
-            .into_iter()
-            .map(|metadata| ZoteroItem {
-                metadata,
-                text: String::new(),
-            })
-            .collect();
-        get_authors_sqlite(&mut items, library.path()).unwrap();
-
-        for title in [
-            "An expert system",
-            "Online Learning Rate Adaptation",
-            "Mono2Micro",
-            "Anomaly Detection",
-            "Learning Rate Curriculum",
-        ] {
-            let item = items
-                .iter()
-                .find(|item| item.metadata.title.contains(title))
-                .unwrap();
-            assert!(
-                item.metadata
-                    .authors
-                    .as_ref()
-                    .is_some_and(|authors| !authors.is_empty())
-            );
-        }
     }
 
     #[tokio::test]

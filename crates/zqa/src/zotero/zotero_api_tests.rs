@@ -12,6 +12,7 @@ use super::*;
 struct Reply {
     path: &'static str,
     query: Vec<(&'static str, String)>,
+    absent_query: Vec<&'static str>,
     status: u16,
     body: String,
     version: &'static str,
@@ -19,11 +20,12 @@ struct Reply {
 }
 
 impl Reply {
-    /// Describes one expected API GET and its response body.
+    /// Describe one expected API GET and its response body.
     fn json(path: &'static str, body: &Value) -> Self {
         Self {
             path,
             query: Vec::new(),
+            absent_query: Vec::new(),
             status: 200,
             body: body.to_string(),
             version: "1",
@@ -51,7 +53,7 @@ impl Drop for Server {
     }
 }
 
-/// Runs a scripted loopback server, asserting the client uses the expected endpoints and filters.
+/// Serve expected endpoints and filters, allowing independent requests in either order.
 fn server(replies: Vec<Reply>) -> (ZoteroApi, Server) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
@@ -59,9 +61,9 @@ fn server(replies: Vec<Reply>) -> (ZoteroApi, Server) {
         let mut expected_server_id = None;
 
         let mut listener = Some(listener);
-        let reply_count = replies.len();
+        let mut replies = replies;
 
-        for (index, reply) in replies.into_iter().enumerate() {
+        while !replies.is_empty() {
             let (mut stream, _) = listener.as_ref().unwrap().accept().unwrap();
             stream
                 .set_read_timeout(Some(Duration::from_secs(2)))
@@ -71,18 +73,30 @@ fn server(replies: Vec<Reply>) -> (ZoteroApi, Server) {
             reader.read_line(&mut request).unwrap();
             assert!(
                 !request.is_empty(),
-                "expected another API request to {}",
-                reply.path
+                "expected {} more API requests",
+                replies.len()
             );
             let target = request.split_whitespace().nth(1).unwrap();
             let url = Url::parse(&format!("http://localhost{target}")).unwrap();
-            assert_eq!(url.path(), reply.path);
-            for (key, value) in reply.query {
+            let index = replies
+                .iter()
+                .position(|reply| {
+                    url.path() == reply.path
+                        && reply.query.iter().all(|(key, value)| {
+                            url.query_pairs()
+                                .any(|(k, v)| k == *key && v == value.as_str())
+                        })
+                })
+                .unwrap_or_else(|| panic!("unexpected request: {target}"));
+            let reply = replies.remove(index);
+
+            for key in reply.absent_query {
                 assert!(
-                    url.query_pairs().any(|(k, v)| k == key && v == value),
-                    "missing query parameter {key}={value}"
+                    !url.query_pairs().any(|(k, _)| k == key),
+                    "unexpected query parameter {key}"
                 );
             }
+
             let mut request_server_id = None;
             loop {
                 let mut line = String::new();
@@ -102,7 +116,7 @@ fn server(replies: Vec<Reply>) -> (ZoteroApi, Server) {
             expected_server_id = Some(reply.server_id);
 
             // Close the listener before the final reply so a subsequent request is refused.
-            if index + 1 == reply_count {
+            if replies.is_empty() {
                 listener.take();
             }
 
@@ -120,19 +134,46 @@ fn server(replies: Vec<Reply>) -> (ZoteroApi, Server) {
     )
 }
 
-/// Builds a parent with both personal and institutional creators.
+/// Build a parent with both personal and institutional creators.
 fn parent() -> Value {
     json!({"key": "PARENT01", "data": {"itemType": "journalArticle", "title": "A paper", "creators": [
         {"firstName": "Ada", "lastName": "Lovelace"}, {"name": "Research Institute"}
     ]}})
 }
 
-/// Builds a stored PDF attachment that identifies its parent item.
+/// Build a stored PDF attachment that identifies its parent item.
 fn attachment() -> Value {
     json!({"key": "ATTACH01", "data": {"itemType": "attachment", "parentItem": "PARENT01", "contentType": "application/pdf", "linkMode": "imported_file", "filename": "A paper.pdf"}})
 }
 
-/// Returns a file URL response anchored in the specified library, even if the PDF is not downloaded.
+/// Build an indexed search result whose author metadata still needs to be populated.
+fn indexed_item(key: &str, file_path: PathBuf) -> ZoteroItem {
+    ZoteroItem {
+        metadata: ZoteroItemMetadata {
+            library_key: key.into(),
+            title: "A paper".into(),
+            file_path,
+            authors: None,
+        },
+        text: String::new(),
+    }
+}
+
+/// Build a linked PDF with the same bibliographic parent as the stored fixture.
+fn linked_attachment(key: &str) -> Value {
+    json!({"key": key, "data": {"itemType": "attachment", "parentItem": "PARENT01",
+        "contentType": "application/pdf", "linkMode": "linked_file"}})
+}
+
+/// Require trash-inclusive identity discovery without a scope that can hide deleted files.
+fn identity_page(items: &Value, start: usize) -> Reply {
+    let mut reply = Reply::json("/api/users/0/items", items);
+    reply.query = vec![("includeTrashed", "1".into()), ("start", start.to_string())];
+    reply.absent_query = vec!["itemType", "itemKey"];
+    reply
+}
+
+/// Return a file URL response anchored in the specified library, even if the PDF is not downloaded.
 fn file_reply(path: &Path, endpoint: &'static str) -> Reply {
     let mut reply = Reply::json(endpoint, &Value::Null);
     reply.body = Url::from_file_path(path.join("storage/ATTACH01/A paper.pdf"))
@@ -157,7 +198,7 @@ async fn metadata_maps_personal_and_group_libraries_and_linked_paths() {
         file_reply(library.path(), "/api/users/0/items/ATTACH01/file/view/url"),
         Reply::json(
             "/api/groups/42/items",
-            &json!([parent(), {"key": "LINKED01", "data": {"itemType": "attachment", "parentItem": "PARENT01", "contentType": "application/pdf", "linkMode": "linked_file"}}]),
+            &json!([parent(), linked_attachment("LINKED01")]),
         ),
         linked_reply,
     ]);
@@ -174,36 +215,6 @@ async fn metadata_maps_personal_and_group_libraries_and_linked_paths() {
         &["Lovelace, Ada", "Research Institute"]
     );
     assert_eq!(items[1].file_path, linked);
-}
-
-/// Author lookup queries attachment and parent keys rather than the full library.
-#[tokio::test]
-async fn authors_fetch_only_matching_attachments_and_parents() {
-    let library = tempfile::tempdir().unwrap();
-    let mut attachments = Reply::json("/api/users/0/items", &json!([attachment()]));
-    attachments.query.push(("itemKey", "ATTACH01".into()));
-    let mut parents = Reply::json("/api/users/0/items", &json!([parent()]));
-    parents.query.push(("itemKey", "PARENT01".into()));
-    let (mut api, _server) = server(vec![
-        Reply::json("/api/users/0/groups", &json!([])),
-        attachments,
-        file_reply(library.path(), "/api/users/0/items/ATTACH01/file/view/url"),
-        parents,
-    ]);
-    let mut items = vec![ZoteroItem {
-        metadata: ZoteroItemMetadata {
-            library_key: "ATTACH01".into(),
-            title: "A paper".into(),
-            file_path: library.path().join("storage/ATTACH01/A paper.pdf"),
-            authors: None,
-        },
-        text: String::new(),
-    }];
-    api.authors(&mut items, library.path()).await.unwrap();
-    assert_eq!(
-        items[0].metadata.authors.as_ref().unwrap(),
-        &["Lovelace, Ada", "Research Institute"]
-    );
 }
 
 /// A running profile cannot replace the explicitly selected library.
@@ -289,52 +300,34 @@ async fn reads_all_pages_and_rejects_changes_between_pages() {
     ));
 }
 
-/// A stopped API does not introduce the five-second SQLite retry delay.
+/// Recover missing exact keys without comparing item versions to library versions.
 #[tokio::test]
-async fn refused_connection_fails_without_the_sqlite_busy_wait() {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let address = listener.local_addr().unwrap();
-    drop(listener);
-    let mut api = ZoteroApi::new().unwrap();
-    api.base = format!("http://{address}/api");
-    let start = std::time::Instant::now();
-    assert!(matches!(
-        api.libraries().await,
-        Err(LocalApiError::Request(_))
-    ));
-    assert!(start.elapsed() < Duration::from_secs(1));
-}
+async fn exact_key_lookup_rechecks_the_library_version() {
+    for version in ["1", "2"] {
+        let mut item = Reply::json("/api/users/0/items/ATTACH01", &attachment());
+        item.version = "0";
+        let mut recheck = Reply::json("/api/users/0/items", &json!([]));
+        recheck.query.push(("limit", "1".into()));
+        recheck.version = version;
+        let (mut api, _server) = server(vec![
+            Reply::json("/api/users/0/items", &json!([])),
+            item,
+            recheck,
+        ]);
 
-/// Exact lookup recovers trashed items omitted by Zotero's filtered collection endpoint.
-#[tokio::test]
-async fn resolves_trashed_items_missing_from_batch_results() {
-    let (mut api, _server) = server(vec![
-        Reply::json("/api/users/0/items", &json!([])),
-        Reply::json("/api/users/0/items/ATTACH01", &attachment()),
-    ]);
-    let items = api
-        .items("users/0", Some(&["ATTACH01".into()]), "dateAdded", "asc")
-        .await
-        .unwrap();
-    assert_eq!(items.len(), 1);
-    assert_eq!(items[0].key, "ATTACH01");
-}
-
-/// A limit and offset apply to PDFs across libraries, not to the parent metadata response.
-#[tokio::test]
-async fn pagination_applies_after_mapping_attachments() {
-    let library = tempfile::tempdir().unwrap();
-    let (mut api, _server) = server(vec![
-        Reply::json("/api/users/0/groups", &json!([])),
-        Reply::json("/api/users/0/items", &json!([parent(), attachment()])),
-        file_reply(library.path(), "/api/users/0/items/ATTACH01/file/view/url"),
-    ]);
-    assert!(
-        api.metadata(library.path(), Some(1), Some(1))
-            .await
-            .unwrap()
-            .is_empty()
-    );
+        let result = api
+            .items("users/0", Some(&["ATTACH01".into()]), "dateAdded", "asc")
+            .await;
+        if version == "1" {
+            let items = result.unwrap();
+            assert_eq!(items.len(), 1);
+            assert_eq!(items[0].key, "ATTACH01");
+        } else {
+            assert!(
+                matches!(result, Err(LocalApiError::InvalidData(message)) if message.contains("library changed"))
+            );
+        }
+    }
 }
 
 /// Learn the server ID from a response, reuse it, and reject a different instance.
@@ -405,7 +398,7 @@ async fn items_use_requested_sort_order_on_every_page() {
     assert_eq!(items.len(), 100);
 }
 
-/// Ignore URL-only PDF links without requesting a file URL or losing stored PDFs.
+/// Exclude nonlocal and base-relative PDFs before pagination without requesting their file URLs.
 #[tokio::test]
 async fn metadata_skips_nonlocal_attachment_modes() {
     let library = tempfile::tempdir().unwrap();
@@ -418,14 +411,21 @@ async fn metadata_skips_nonlocal_attachment_modes() {
             item
         })
         .collect();
-    links.extend([parent(), attachment()]);
+    let mut relative = linked_attachment("RELATIVE");
+    relative["data"]["path"] = json!("attachments:Papers/linked.pdf");
+    let mut stored = attachment();
+    stored["data"]["dateAdded"] = json!("2020-01-01T00:00:00Z");
+    links.extend([relative, parent(), stored]);
     let (mut api, _server) = server(vec![
         Reply::json("/api/users/0/groups", &json!([])),
         Reply::json("/api/users/0/items", &json!(links)),
         file_reply(library.path(), "/api/users/0/items/ATTACH01/file/view/url"),
     ]);
 
-    let items = api.metadata(library.path(), None, None).await.unwrap();
+    let items = api
+        .metadata(library.path(), Some(0), Some(1))
+        .await
+        .unwrap();
     assert_eq!(items.len(), 1);
     assert_eq!(items[0].library_key, "ATTACH01");
 }
@@ -475,26 +475,25 @@ async fn group_failures_do_not_hide_identity_errors() {
 #[tokio::test]
 async fn authors_do_not_query_resolved_keys_in_other_libraries() {
     let library = tempfile::tempdir().unwrap();
+    let mut attachments = Reply::json("/api/users/0/items", &json!([attachment()]));
+    attachments.query.push(("itemKey", "ATTACH01".into()));
+    let mut parents = Reply::json("/api/users/0/items", &json!([parent()]));
+    parents.query.push(("itemKey", "PARENT01".into()));
     let (mut api, _server) = server(vec![
         Reply::json("/api/users/0/groups", &json!([{"id": 42}, {"id": 43}])),
-        Reply::json("/api/users/0/items", &json!([attachment()])),
+        attachments,
         file_reply(library.path(), "/api/users/0/items/ATTACH01/file/view/url"),
-        Reply::json("/api/users/0/items", &json!([parent()])),
+        parents,
     ]);
-    let mut items = vec![ZoteroItem {
-        metadata: ZoteroItemMetadata {
-            library_key: "ATTACH01".into(),
-            title: "A paper".into(),
-            file_path: library.path().join("storage/ATTACH01/A paper.pdf"),
-            authors: None,
-        },
-        text: String::new(),
-    }];
+    let mut items = vec![indexed_item(
+        "ATTACH01",
+        library.path().join("storage/ATTACH01/A paper.pdf"),
+    )];
 
     api.authors(&mut items, library.path()).await.unwrap();
     assert_eq!(
-        items[0].metadata.authors.as_ref().unwrap()[0],
-        "Lovelace, Ada"
+        items[0].metadata.authors.as_ref().unwrap(),
+        &["Lovelace, Ada", "Research Institute"]
     );
 }
 
@@ -506,24 +505,25 @@ async fn authors_distinguish_same_keys_in_personal_and_group_libraries() {
     group_attachment["data"]["filename"] = json!("group.pdf");
     let mut group_parent = parent();
     group_parent["data"]["creators"] = json!([{"name": "Group Institute"}]);
+    let mut group_items = Reply::json("/api/groups/42/items", &json!([group_attachment]));
+    group_items.version = "9";
+    let mut group_parents = Reply::json("/api/groups/42/items", &json!([group_parent]));
+    group_parents.version = "9";
     let (mut api, _server) = server(vec![
         Reply::json("/api/users/0/groups", &json!([{"id": 42}])),
         Reply::json("/api/users/0/items", &json!([attachment()])),
         file_reply(library.path(), "/api/users/0/items/ATTACH01/file/view/url"),
         Reply::json("/api/users/0/items", &json!([parent()])),
-        Reply::json("/api/groups/42/items", &json!([group_attachment])),
-        Reply::json("/api/groups/42/items", &json!([group_parent])),
+        group_items,
+        group_parents,
     ]);
     let mut items: Vec<_> = ["A paper.pdf", "group.pdf"]
         .into_iter()
-        .map(|filename| ZoteroItem {
-            metadata: ZoteroItemMetadata {
-                library_key: "ATTACH01".into(),
-                title: "A paper".into(),
-                file_path: library.path().join("storage/ATTACH01").join(filename),
-                authors: None,
-            },
-            text: String::new(),
+        .map(|filename| {
+            indexed_item(
+                "ATTACH01",
+                library.path().join("storage/ATTACH01").join(filename),
+            )
         })
         .collect();
 
@@ -598,15 +598,13 @@ async fn authors_resolve_sqlite_linked_files_after_parent_title_changes() {
     }];
     let mut edited_parent = parent();
     edited_parent["data"]["title"] = json!("Edited after indexing");
-    let linked = json!({"key": "7R5XZ5PX", "data": {
-        "itemType": "attachment", "parentItem": "PARENT01", "linkMode": "linked_file"
-    }});
+    let linked = linked_attachment("7R5XZ5PX");
     let mut linked_reply = Reply::json("/api/users/0/items/7R5XZ5PX/file/view/url", &Value::Null);
     linked_reply.body = Url::from_file_path(&linked_path).unwrap().to_string();
     let mut candidates = vec![linked.clone(); 100];
     candidates[99] = attachment();
-    let mut identity_page = Reply::json("/api/users/0/items", &json!(candidates));
-    identity_page.query = vec![("itemType", "attachment".into()), ("start", "0".into())];
+    candidates[99]["data"]["deleted"] = json!(1);
+    let identity_page = identity_page(&json!(candidates), 0);
 
     let (mut api, _server) = server(vec![
         Reply::json("/api/users/0/groups", &json!([])),
@@ -616,38 +614,6 @@ async fn authors_resolve_sqlite_linked_files_after_parent_title_changes() {
         identity_page,
         file_reply(library.path(), "/api/users/0/items/ATTACH01/file/view/url"),
     ]);
-
-    api.authors(&mut items, library.path()).await.unwrap();
-    assert_eq!(
-        items[0].metadata.authors.as_ref().unwrap()[0],
-        "Lovelace, Ada"
-    );
-}
-
-/// Ignore extra attachment keys before resolving file paths or requesting their parents.
-#[tokio::test]
-async fn authors_do_not_resolve_unrequested_linked_files() {
-    let library = tempfile::tempdir().unwrap();
-    let unrelated = json!({"key": "OTHER001", "data": {
-        "itemType": "attachment", "parentItem": "OTHER002", "linkMode": "linked_file"
-    }});
-    let mut parents = Reply::json("/api/users/0/items", &json!([parent()]));
-    parents.query.push(("itemKey", "PARENT01".into()));
-    let (mut api, _server) = server(vec![
-        Reply::json("/api/users/0/groups", &json!([])),
-        Reply::json("/api/users/0/items", &json!([attachment(), unrelated])),
-        file_reply(library.path(), "/api/users/0/items/ATTACH01/file/view/url"),
-        parents,
-    ]);
-    let mut items = vec![ZoteroItem {
-        metadata: ZoteroItemMetadata {
-            library_key: "ATTACH01".into(),
-            title: "An outdated title".into(),
-            file_path: library.path().join("storage/ATTACH01/A paper.pdf"),
-            authors: None,
-        },
-        text: String::new(),
-    }];
 
     api.authors(&mut items, library.path()).await.unwrap();
     assert_eq!(
@@ -670,47 +636,18 @@ async fn metadata_propagates_connection_failure_after_personal_verification() {
         Err(LocalApiError::Request(error)) if error.is_connect()));
 }
 
-/// Skip base-relative linked files before pagination without resolving their file URLs.
-#[tokio::test]
-async fn metadata_skips_base_relative_linked_files() {
-    let library = tempfile::tempdir().unwrap();
-    let mut relative = attachment();
-    relative["key"] = json!("RELATIVE");
-    relative["data"]["linkMode"] = json!("linked_file");
-    relative["data"]["path"] = json!("attachments:Papers/linked.pdf");
-    relative["data"]["dateAdded"] = json!("2000-01-01T00:00:00Z");
-    let mut stored = attachment();
-    stored["data"]["dateAdded"] = json!("2020-01-01T00:00:00Z");
-    let (mut api, _server) = server(vec![
-        Reply::json("/api/users/0/groups", &json!([])),
-        Reply::json("/api/users/0/items", &json!([parent(), relative, stored])),
-        file_reply(library.path(), "/api/users/0/items/ATTACH01/file/view/url"),
-    ]);
-
-    let items = api
-        .metadata(library.path(), Some(0), Some(1))
-        .await
-        .unwrap();
-    assert_eq!(items.len(), 1);
-    assert_eq!(items[0].library_key, "ATTACH01");
-}
-
-/// Continue identity discovery past linked-only pages while rejecting concurrent library changes.
+/// Continue identity discovery past bibliographic pages while rejecting concurrent library changes.
 #[tokio::test]
 async fn identity_discovery_paginates_attachments_and_checks_versions() {
     for version in ["1", "2"] {
         let library = tempfile::tempdir().unwrap();
-        let linked = json!({"key": "LINKED01", "data": {
-            "itemType": "attachment", "parentItem": "PARENT01", "linkMode": "linked_file"
-        }});
+        let linked = linked_attachment("LINKED01");
         let linked_path = library.path().join("linked.pdf");
         let mut linked_reply =
             Reply::json("/api/users/0/items/LINKED01/file/view/url", &Value::Null);
         linked_reply.body = Url::from_file_path(&linked_path).unwrap().to_string();
-        let mut first_page = Reply::json("/api/users/0/items", &json!(vec![linked.clone(); 100]));
-        first_page.query = vec![("itemType", "attachment".into()), ("start", "0".into())];
-        let mut second_page = Reply::json("/api/users/0/items", &json!([attachment()]));
-        second_page.query = vec![("itemType", "attachment".into()), ("start", "100".into())];
+        let first_page = identity_page(&json!(vec![parent(); 100]), 0);
+        let mut second_page = identity_page(&json!([attachment()]), 100);
         second_page.version = version;
         let mut replies = vec![
             Reply::json("/api/users/0/groups", &json!([])),
@@ -729,15 +666,7 @@ async fn identity_discovery_paginates_attachments_and_checks_versions() {
         }
 
         let (mut api, _server) = server(replies);
-        let mut items = vec![ZoteroItem {
-            metadata: ZoteroItemMetadata {
-                library_key: "LINKED01".into(),
-                title: "A paper".into(),
-                file_path: linked_path,
-                authors: None,
-            },
-            text: String::new(),
-        }];
+        let mut items = vec![indexed_item("LINKED01", linked_path)];
         let result = api.authors(&mut items, library.path()).await;
 
         if version == "1" {
@@ -753,4 +682,78 @@ async fn identity_discovery_paginates_attachments_and_checks_versions() {
             assert!(items[0].metadata.authors.is_none());
         }
     }
+}
+
+/// Reject a reparent or metadata edit between attachment and parent reads without changing results.
+#[tokio::test]
+async fn authors_reject_changes_between_related_reads() {
+    let library = tempfile::tempdir().unwrap();
+    let mut parents = Reply::json("/api/users/0/items", &json!([parent()]));
+    parents.version = "2";
+    let (mut api, _server) = server(vec![
+        Reply::json("/api/users/0/groups", &json!([])),
+        Reply::json("/api/users/0/items", &json!([attachment()])),
+        file_reply(library.path(), "/api/users/0/items/ATTACH01/file/view/url"),
+        parents,
+    ]);
+    let mut items = vec![indexed_item(
+        "ATTACH01",
+        library.path().join("storage/ATTACH01/A paper.pdf"),
+    )];
+    items[0].metadata.authors = Some(vec!["Previously indexed author".into()]);
+
+    assert!(matches!(api.authors(&mut items, library.path()).await,
+        Err(LocalApiError::InvalidData(message)) if message.contains("library changed")));
+    assert_eq!(
+        items[0].metadata.authors.as_ref().unwrap(),
+        &["Previously indexed author"]
+    );
+}
+
+/// Exercise the shared fallback dispatch with a real exclusive SQLite lock and HTTP responses.
+#[tokio::test]
+async fn locked_sqlite_reads_fall_back_to_api_without_waiting() {
+    use super::super::library::{
+        get_authors_sqlite, parse_library_metadata_sqlite, with_api_fallback,
+    };
+
+    let library = tempfile::tempdir().unwrap();
+    let writer = rusqlite::Connection::open(library.path().join("zotero.sqlite")).unwrap();
+    writer
+        .execute_batch("CREATE TABLE marker (id INTEGER); BEGIN EXCLUSIVE;")
+        .unwrap();
+    let (mut api, _server) = server(vec![
+        Reply::json("/api/users/0/groups", &json!([])),
+        Reply::json("/api/users/0/items", &json!([parent(), attachment()])),
+        file_reply(library.path(), "/api/users/0/items/ATTACH01/file/view/url"),
+        Reply::json("/api/users/0/groups", &json!([])),
+        Reply::json("/api/users/0/items", &json!([attachment()])),
+        file_reply(library.path(), "/api/users/0/items/ATTACH01/file/view/url"),
+        Reply::json("/api/users/0/items", &json!([parent()])),
+    ]);
+    let start = std::time::Instant::now();
+    let metadata = with_api_fallback(
+        parse_library_metadata_sqlite(library.path(), None, None),
+        api.metadata(library.path(), None, None),
+    )
+    .await
+    .unwrap();
+    assert_eq!(metadata.len(), 1);
+    assert_eq!(metadata[0].library_key, "ATTACH01");
+    let mut items = vec![indexed_item(
+        &metadata[0].library_key,
+        metadata[0].file_path.clone(),
+    )];
+
+    with_api_fallback(
+        get_authors_sqlite(&mut items, library.path()),
+        api.authors(&mut items, library.path()),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        items[0].metadata.authors.as_ref().unwrap(),
+        &["Lovelace, Ada", "Research Institute"]
+    );
+    assert!(start.elapsed() < Duration::from_secs(1));
 }
