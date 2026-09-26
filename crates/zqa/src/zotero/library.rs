@@ -813,6 +813,50 @@ mod tests {
         assert_eq!(remaining, expected[1..]);
     }
 
+    /// Check the fixture titles and authors shared by metadata and PDF integration tests.
+    fn assert_toy_library_authors(items: &[ZoteroItem]) {
+        let expected: [(&str, &[&str]); 5] = [
+            (
+                "An expert system",
+                &["Yedida", "Krishna", "Kalia", "Menzies", "Xiao", "Vukovic"],
+            ),
+            (
+                "Online Learning Rate Adaptation",
+                &["Baydin", "Cornish", "Rubio", "Schmidt", "Wood"],
+            ),
+            (
+                "Mono2Micro",
+                &["Krishna", "Xiao", "Vukovic", "Kalia", "Sinha", "Banerjee"],
+            ),
+            (
+                "Anomaly Detection",
+                &["Yedida", "Mehendale", "Challa", "Danda", "Sarkar", "Saha"],
+            ),
+            (
+                "Learning Rate Curriculum",
+                &["Croitoru", "Ristea", "Ionescu", "Sebe"],
+            ),
+        ];
+        assert!(items.iter().all(|item| item.metadata.authors.is_some()));
+
+        for (title, expected_authors) in expected {
+            let item = items
+                .iter()
+                .find(|item| item.metadata.title.contains(title))
+                .expect(title);
+            let authors = item.metadata.authors.as_ref().unwrap();
+
+            for expected_author in expected_authors {
+                assert!(
+                    authors
+                        .iter()
+                        .any(|author| author.contains(expected_author)),
+                    "Author {expected_author} not found in {authors:?}"
+                );
+            }
+        }
+    }
+
     #[tokio::test]
     async fn test_library_fetching_works() {
         dotenv().ok();
@@ -821,11 +865,20 @@ mod tests {
         let library_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("assets")
             .join("Zotero");
-        let library_items = parse_library_metadata(Some(&library_path), None, None).await;
+        let library_items = parse_library_metadata(Some(&library_path), Some(0), Some(7)).await;
 
         test_ok!(library_items);
-        let items = library_items.unwrap();
-        assert!(!items.is_empty());
+        let mut items: Vec<_> = library_items
+            .unwrap()
+            .into_iter()
+            .map(|metadata| ZoteroItem {
+                metadata,
+                text: String::new(),
+            })
+            .collect();
+        assert_eq!(items.len(), 7);
+        get_authors(&mut items, Some(&library_path)).await.unwrap();
+        assert_toy_library_authors(&items);
     }
 
     /// Test that on CI, the toy library is loaded instead of searching for a non-existent "real"
@@ -863,23 +916,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_parse_library() {
-        // Check the titles/authors are in the expected order and pairs.
-        // The parsing might change; we only care about keywords
-        const EXPECTED_TITLES: [&str; 5] = [
-            "An expert system",
-            "Online Learning Rate Adaptation",
-            "Mono2Micro",
-            "Anomaly Detection",
-            "Learning Rate Curriculum",
-        ];
-        let expected_authors = [
-            vec!["Yedida", "Krishna", "Kalia", "Menzies", "Xiao", "Vukovic"],
-            vec!["Baydin", "Cornish", "Rubio", "Schmidt", "Wood"],
-            vec!["Krishna", "Xiao", "Vukovic", "Kalia", "Sinha", "Banerjee"],
-            vec!["Yedida", "Mehendale", "Challa", "Danda", "Sarkar", "Saha"],
-            vec!["Croitoru", "Ristea", "Ionescu", "Sebe"],
-        ];
-
         dotenv().ok();
         let _ = setup_logger(log::LevelFilter::Info);
 
@@ -922,31 +958,7 @@ mod tests {
         let authors_result = get_authors(&mut items, Some(&library_path)).await;
         test_ok!(authors_result);
 
-        let mut found_bits = 0;
-
-        for item in &items {
-            assert!(item.metadata.authors.is_some());
-
-            let authors = item.metadata.authors.as_ref().unwrap();
-            let idx = EXPECTED_TITLES
-                .iter()
-                .enumerate()
-                .find(|(_, title)| item.metadata.title.contains(**title));
-
-            if let Some((idx, _)) = idx {
-                for expected_author in &expected_authors[idx] {
-                    assert!(
-                        authors.iter().any(|a| a.contains(expected_author)),
-                        "Author {expected_author} not found in {authors:?}"
-                    );
-                }
-
-                // At this point, all checks have passed, so mark it as found
-                found_bits |= 1 << idx;
-            }
-        }
-
-        test_eq!(found_bits, 0b11111);
+        assert_toy_library_authors(&items);
     }
 
     #[test]

@@ -206,6 +206,24 @@ impl ZoteroApi {
             )));
         }
 
+        if let Some(id) = response.headers().get("Zotero-Server-ID") {
+            let id = id
+                .to_str()
+                .map_err(|error| LocalApiError::InvalidData(error.to_string()))?;
+
+            if self
+                .server_id
+                .as_deref()
+                .is_some_and(|expected| expected != id)
+            {
+                return Err(LocalApiError::InvalidData(
+                    "the running Zotero instance changed during the request".into(),
+                ));
+            }
+
+            self.server_id = Some(id.into());
+        }
+
         // Single-item responses report the item's version, not the library's version.
         // Compare only collection headers, keeping each library's version independent.
         if path.ends_with("/items") || path == "users/0/groups" {
@@ -221,26 +239,6 @@ impl ZoteroApi {
                 ));
             }
         }
-
-        let Some(id) = response.headers().get("Zotero-Server-ID") else {
-            return Ok(response);
-        };
-
-        let id = id
-            .to_str()
-            .map_err(|error| LocalApiError::InvalidData(error.to_string()))?;
-
-        if self
-            .server_id
-            .as_deref()
-            .is_some_and(|expected| expected != id)
-        {
-            return Err(LocalApiError::InvalidData(
-                "the running Zotero instance changed during the request".into(),
-            ));
-        }
-
-        self.server_id = Some(id.into());
 
         Ok(response)
     }
@@ -299,8 +297,6 @@ impl ZoteroApi {
     ///
     /// * `library` - API prefix identifying a personal or group library.
     /// * `keys` - Item keys to retrieve, or `None` to read the whole library.
-    /// * `sort` - Zotero sort field, such as `dateAdded`, `dateModified`, or `title`.
-    /// * `direction` - Sort direction, either `asc` or `desc`.
     ///
     /// # Returns
     ///
@@ -311,15 +307,13 @@ impl ZoteroApi {
         &mut self,
         library: &str,
         keys: Option<&[String]>,
-        sort: &str,
-        direction: &str,
     ) -> Result<Vec<ApiItem>, LocalApiError> {
         // NOTE: Maintainers, keep trash inclusion aligned with the SQLite queries in `library.rs`.
         // Both readers include trashed items so opening Zotero does not change the indexed set.
         let mut query = vec![
             ("includeTrashed".into(), "1".into()),
-            ("sort".into(), sort.into()),
-            ("direction".into(), direction.into()),
+            ("sort".into(), "dateAdded".into()),
+            ("direction".into(), "asc".into()),
         ];
 
         if let Some(keys) = keys {
@@ -482,7 +476,7 @@ impl ZoteroApi {
         let mut verified = false;
 
         for library in self.libraries().await? {
-            let items = self.items(&library, None, "dateAdded", "asc").await?;
+            let items = self.items(&library, None).await?;
 
             if !verified {
                 verified = self.verify_library(&library, &items, path).await?;
@@ -585,7 +579,7 @@ impl ZoteroApi {
 
             for keys in keys.chunks(50) {
                 let attachments: Vec<_> = self
-                    .items(library, Some(keys), "dateAdded", "asc")
+                    .items(library, Some(keys))
                     .await?
                     .into_iter()
                     .filter(|attachment| keys.contains(&attachment.key))
@@ -604,9 +598,7 @@ impl ZoteroApi {
                     continue;
                 }
 
-                let parents = self
-                    .items(library, Some(&parent_keys), "dateAdded", "asc")
-                    .await?;
+                let parents = self.items(library, Some(&parent_keys)).await?;
 
                 let parents: HashMap<_, _> = parents
                     .iter()
@@ -641,32 +633,39 @@ impl ZoteroApi {
             }
         }
 
-        // A search containing only linked files needs a separate stored attachment to prove identity.
-        // Include trash without search scopes, which can hide the only stored attachment.
+        // Look for active attachments first. If none prove identity, include trash without
+        // search scopes, which can hide the only stored attachment in the library.
         if !verified {
-            for library in libraries {
-                let query = vec![
-                    ("includeTrashed".into(), "1".into()),
-                    ("sort".into(), "dateAdded".into()),
-                    ("direction".into(), "asc".into()),
-                ];
-                let candidates = match self
-                    .list(&format!("{library}/items"), query, |page: &[ApiItem]| {
-                        page.iter().any(|item| item.data.is_stored_attachment())
-                    })
-                    .await
-                {
-                    Ok(items) => items,
-                    Err(error) if error.is_unavailable_group(&library) => {
-                        log::warn!("Skipping unavailable Zotero library {library}: {error}");
-                        continue;
-                    }
-                    Err(error) => return Err(error),
-                };
+            'libraries: for library in libraries {
+                for item_type in [Some("attachment"), None] {
+                    let mut query = vec![
+                        ("includeTrashed".into(), "1".into()),
+                        ("sort".into(), "dateAdded".into()),
+                        ("direction".into(), "asc".into()),
+                    ];
 
-                if self.verify_library(&library, &candidates, path).await? {
-                    verified = true;
-                    break;
+                    if let Some(item_type) = item_type {
+                        query.push(("itemType".into(), item_type.into()));
+                    }
+
+                    let candidates = match self
+                        .list(&format!("{library}/items"), query, |page: &[ApiItem]| {
+                            page.iter().any(|item| item.data.is_stored_attachment())
+                        })
+                        .await
+                    {
+                        Ok(items) => items,
+                        Err(error) if error.is_unavailable_group(&library) => {
+                            log::warn!("Skipping unavailable Zotero library {library}: {error}");
+                            continue 'libraries;
+                        }
+                        Err(error) => return Err(error),
+                    };
+
+                    if self.verify_library(&library, &candidates, path).await? {
+                        verified = true;
+                        break 'libraries;
+                    }
                 }
             }
         }

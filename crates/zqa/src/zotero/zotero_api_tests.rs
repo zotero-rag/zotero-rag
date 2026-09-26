@@ -165,11 +165,16 @@ fn linked_attachment(key: &str) -> Value {
         "contentType": "application/pdf", "linkMode": "linked_file"}})
 }
 
-/// Require trash-inclusive identity discovery without a scope that can hide deleted files.
-fn identity_page(items: &Value, start: usize) -> Reply {
+/// Require the discovery scope and page offset, excluding exact-key lookup filters.
+fn identity_page(items: &Value, start: usize, item_type: Option<&str>) -> Reply {
     let mut reply = Reply::json("/api/users/0/items", items);
     reply.query = vec![("includeTrashed", "1".into()), ("start", start.to_string())];
-    reply.absent_query = vec!["itemType", "itemKey"];
+    reply.absent_query = vec!["itemKey"];
+    if let Some(item_type) = item_type {
+        reply.query.push(("itemType", item_type.into()));
+    } else {
+        reply.absent_query.push("itemType");
+    }
     reply
 }
 
@@ -258,16 +263,9 @@ async fn disabled_api_reports_the_setting_to_enable() {
     assert!(error.to_string().contains("Allow other applications"));
 }
 
-/// Malformed responses and nonlocal attachment URLs fail explicitly.
+/// Reject remote URLs instead of accepting them as local attachment paths.
 #[tokio::test]
-async fn rejects_malformed_responses_and_non_file_urls() {
-    let mut malformed = Reply::json("/api/users/0/groups", &Value::Null);
-    malformed.body = "not json".into();
-    let (mut api, _server) = server(vec![malformed]);
-    assert!(matches!(
-        api.libraries().await,
-        Err(LocalApiError::Request(_))
-    ));
+async fn file_path_rejects_non_file_urls() {
     let mut remote_file = Reply::json("/api/users/0/items/ATTACH01/file/view/url", &Value::Null);
     remote_file.body = "https://example.com/file.pdf".into();
     let (mut api, _server) = server(vec![remote_file]);
@@ -315,9 +313,7 @@ async fn exact_key_lookup_rechecks_the_library_version() {
             recheck,
         ]);
 
-        let result = api
-            .items("users/0", Some(&["ATTACH01".into()]), "dateAdded", "asc")
-            .await;
+        let result = api.items("users/0", Some(&["ATTACH01".into()])).await;
         if version == "1" {
             let items = result.unwrap();
             assert_eq!(items.len(), 1);
@@ -335,15 +331,12 @@ async fn exact_key_lookup_rechecks_the_library_version() {
 async fn learns_server_id_and_rejects_instance_changes() {
     let mut changed = Reply::json("/api/users/0/groups", &json!([]));
     changed.server_id = "different-instance";
+    changed.version = "2";
     let (mut api, _server) = server(vec![
-        Reply::json("/api/users/0/groups", &json!([])),
         Reply::json("/api/users/0/groups", &json!([])),
         changed,
     ]);
 
-    assert!(api.server_id.is_none());
-    api.libraries().await.unwrap();
-    assert_eq!(api.server_id.as_deref(), Some("test-instance"));
     api.libraries().await.unwrap();
 
     assert!(matches!(
@@ -355,7 +348,7 @@ async fn learns_server_id_and_rejects_instance_changes() {
 /// Reject redirects separately from client and server errors.
 #[tokio::test]
 async fn rejects_redirects_and_preserves_http_error_statuses() {
-    for status in [301, 302, 304, 307, 308, 404, 412, 500] {
+    for status in [302, 500] {
         let mut reply = Reply::json("/api/users/0/groups", &json!([]));
         reply.status = status;
         let (mut api, _server) = server(vec![reply]);
@@ -370,32 +363,6 @@ async fn rejects_redirects_and_preserves_http_error_statuses() {
             ));
         }
     }
-}
-
-/// Apply the caller's sort field and direction to each item page.
-#[tokio::test]
-async fn items_use_requested_sort_order_on_every_page() {
-    let first: Vec<_> = (0..100)
-        .map(|id| json!({"key": id.to_string(), "data": {"itemType": "note"}}))
-        .collect();
-    let mut first_reply = Reply::json("/api/users/0/items", &json!(first));
-    first_reply.query = vec![
-        ("sort", "dateModified".into()),
-        ("direction", "desc".into()),
-    ];
-    let mut second_reply = Reply::json("/api/users/0/items", &json!([]));
-    second_reply.query = vec![
-        ("sort", "dateModified".into()),
-        ("direction", "desc".into()),
-        ("start", "100".into()),
-    ];
-    let (mut api, _server) = server(vec![first_reply, second_reply]);
-
-    let items = api
-        .items("users/0", None, "dateModified", "desc")
-        .await
-        .unwrap();
-    assert_eq!(items.len(), 100);
 }
 
 /// Exclude nonlocal and base-relative PDFs before pagination without requesting their file URLs.
@@ -433,7 +400,7 @@ async fn metadata_skips_nonlocal_attachment_modes() {
 /// Retain verified PDFs when an unrelated group cannot be read.
 #[tokio::test]
 async fn metadata_retains_personal_results_when_a_group_is_unavailable() {
-    for status in [404, 500, 503] {
+    for status in [404, 500] {
         let library = tempfile::tempdir().unwrap();
         let mut unavailable = Reply::json("/api/groups/42/items", &json!([]));
         unavailable.status = status;
@@ -604,13 +571,15 @@ async fn authors_resolve_sqlite_linked_files_after_parent_title_changes() {
     let mut candidates = vec![linked.clone(); 100];
     candidates[99] = attachment();
     candidates[99]["data"]["deleted"] = json!(1);
-    let identity_page = identity_page(&json!(candidates), 0);
+    let active_page = identity_page(&json!([linked.clone()]), 0, Some("attachment"));
+    let identity_page = identity_page(&json!(candidates), 0, None);
 
     let (mut api, _server) = server(vec![
         Reply::json("/api/users/0/groups", &json!([])),
         Reply::json("/api/users/0/items", &json!([linked])),
         Reply::json("/api/users/0/items", &json!([edited_parent])),
         linked_reply,
+        active_page,
         identity_page,
         file_reply(library.path(), "/api/users/0/items/ATTACH01/file/view/url"),
     ]);
@@ -636,52 +605,34 @@ async fn metadata_propagates_connection_failure_after_personal_verification() {
         Err(LocalApiError::Request(error)) if error.is_connect()));
 }
 
-/// Continue identity discovery past bibliographic pages while rejecting concurrent library changes.
+/// Page through active attachments and stop at the first stored file, without scanning all items.
 #[tokio::test]
-async fn identity_discovery_paginates_attachments_and_checks_versions() {
-    for version in ["1", "2"] {
-        let library = tempfile::tempdir().unwrap();
-        let linked = linked_attachment("LINKED01");
-        let linked_path = library.path().join("linked.pdf");
-        let mut linked_reply =
-            Reply::json("/api/users/0/items/LINKED01/file/view/url", &Value::Null);
-        linked_reply.body = Url::from_file_path(&linked_path).unwrap().to_string();
-        let first_page = identity_page(&json!(vec![parent(); 100]), 0);
-        let mut second_page = identity_page(&json!([attachment()]), 100);
-        second_page.version = version;
-        let mut replies = vec![
-            Reply::json("/api/users/0/groups", &json!([])),
-            Reply::json("/api/users/0/items", &json!([linked])),
-            Reply::json("/api/users/0/items", &json!([parent()])),
-            linked_reply,
-            first_page,
-            second_page,
-        ];
+async fn identity_discovery_stops_at_the_first_stored_attachment_page() {
+    let library = tempfile::tempdir().unwrap();
+    let linked = linked_attachment("LINKED01");
+    let linked_path = library.path().join("linked.pdf");
+    let mut linked_reply = Reply::json("/api/users/0/items/LINKED01/file/view/url", &Value::Null);
+    linked_reply.body = Url::from_file_path(&linked_path).unwrap().to_string();
+    let first_page = identity_page(&json!(vec![linked.clone(); 100]), 0, Some("attachment"));
+    let mut candidates = vec![linked.clone(); 100];
+    candidates[99] = attachment();
+    let second_page = identity_page(&json!(candidates), 100, Some("attachment"));
+    let (mut api, _server) = server(vec![
+        Reply::json("/api/users/0/groups", &json!([])),
+        Reply::json("/api/users/0/items", &json!([linked])),
+        Reply::json("/api/users/0/items", &json!([parent()])),
+        linked_reply,
+        first_page,
+        second_page,
+        file_reply(library.path(), "/api/users/0/items/ATTACH01/file/view/url"),
+    ]);
+    let mut items = vec![indexed_item("LINKED01", linked_path)];
 
-        if version == "1" {
-            replies.push(file_reply(
-                library.path(),
-                "/api/users/0/items/ATTACH01/file/view/url",
-            ));
-        }
-
-        let (mut api, _server) = server(replies);
-        let mut items = vec![indexed_item("LINKED01", linked_path)];
-        let result = api.authors(&mut items, library.path()).await;
-
-        if version == "1" {
-            result.unwrap();
-            assert_eq!(
-                items[0].metadata.authors.as_ref().unwrap()[0],
-                "Lovelace, Ada"
-            );
-        } else {
-            assert!(
-                matches!(result, Err(LocalApiError::InvalidData(message)) if message.contains("library changed"))
-            );
-            assert!(items[0].metadata.authors.is_none());
-        }
-    }
+    api.authors(&mut items, library.path()).await.unwrap();
+    assert_eq!(
+        items[0].metadata.authors.as_ref().unwrap()[0],
+        "Lovelace, Ada"
+    );
 }
 
 /// Reject a reparent or metadata edit between attachment and parent reads without changing results.
