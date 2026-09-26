@@ -396,3 +396,165 @@ async fn items_use_requested_sort_order_on_every_page() {
         .unwrap();
     assert_eq!(items.len(), 100);
 }
+
+/// Ignore URL-only PDF links without requesting a file URL or losing stored PDFs.
+#[tokio::test]
+async fn metadata_skips_nonlocal_attachment_modes() {
+    let library = tempfile::tempdir().unwrap();
+    let mut links: Vec<_> = ["linked_url", "embedded_image", "unknown"]
+        .into_iter()
+        .map(|mode| {
+            let mut item = attachment();
+            item["key"] = json!(mode);
+            item["data"]["linkMode"] = json!(mode);
+            item
+        })
+        .collect();
+    links.extend([parent(), attachment()]);
+    let (mut api, _server) = server(vec![
+        Reply::json("/api/users/0/groups", &json!([])),
+        Reply::json("/api/users/0/items", &json!(links)),
+        file_reply(library.path(), "/api/users/0/items/ATTACH01/file/view/url"),
+    ]);
+
+    let items = api.metadata(library.path(), None, None).await.unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].library_key, "ATTACH01");
+}
+
+/// Retain verified PDFs when an unrelated group cannot be read.
+#[tokio::test]
+async fn metadata_retains_personal_results_when_a_group_is_unavailable() {
+    for status in [404, 500, 503] {
+        let library = tempfile::tempdir().unwrap();
+        let mut unavailable = Reply::json("/api/groups/42/items", &json!([]));
+        unavailable.status = status;
+        let mut available = attachment();
+        available["key"] = json!("SECOND01");
+        let (mut api, _server) = server(vec![
+            Reply::json("/api/users/0/groups", &json!([{"id": 42}, {"id": 43}])),
+            Reply::json("/api/users/0/items", &json!([parent(), attachment()])),
+            file_reply(library.path(), "/api/users/0/items/ATTACH01/file/view/url"),
+            unavailable,
+            Reply::json("/api/groups/43/items", &json!([parent(), available])),
+        ]);
+
+        let items = api.metadata(library.path(), None, None).await.unwrap();
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].library_key, "ATTACH01");
+        assert_eq!(items[1].library_key, "SECOND01");
+    }
+}
+
+/// Reject instance changes even when they occur in an unrelated group.
+#[tokio::test]
+async fn group_failures_do_not_hide_identity_errors() {
+    let library = tempfile::tempdir().unwrap();
+    let mut changed = Reply::json("/api/groups/42/items", &json!([]));
+    changed.status = 412;
+    let (mut api, _server) = server(vec![
+        Reply::json("/api/users/0/groups", &json!([{"id": 42}])),
+        Reply::json("/api/users/0/items", &json!([parent(), attachment()])),
+        file_reply(library.path(), "/api/users/0/items/ATTACH01/file/view/url"),
+        changed,
+    ]);
+
+    assert!(matches!(api.metadata(library.path(), None, None).await,
+        Err(LocalApiError::Request(error)) if error.status() == Some(StatusCode::PRECONDITION_FAILED)));
+}
+
+/// Stop after resolving all requested items, without querying unrelated group libraries.
+#[tokio::test]
+async fn authors_do_not_query_resolved_keys_in_other_libraries() {
+    let library = tempfile::tempdir().unwrap();
+    let (mut api, _server) = server(vec![
+        Reply::json("/api/users/0/groups", &json!([{"id": 42}, {"id": 43}])),
+        Reply::json("/api/users/0/items", &json!([attachment()])),
+        file_reply(library.path(), "/api/users/0/items/ATTACH01/file/view/url"),
+        Reply::json("/api/users/0/items", &json!([parent()])),
+    ]);
+    let mut items = vec![ZoteroItem {
+        metadata: ZoteroItemMetadata {
+            library_key: "ATTACH01".into(),
+            title: "A paper".into(),
+            file_path: library.path().join("storage/ATTACH01/A paper.pdf"),
+            authors: None,
+        },
+        text: String::new(),
+    }];
+
+    api.authors(&mut items, library.path()).await.unwrap();
+    assert_eq!(
+        items[0].metadata.authors.as_ref().unwrap()[0],
+        "Lovelace, Ada"
+    );
+}
+
+/// Match same-key attachments to their indexed files without overwriting an earlier result.
+#[tokio::test]
+async fn authors_distinguish_same_keys_in_personal_and_group_libraries() {
+    let library = tempfile::tempdir().unwrap();
+    let mut group_attachment = attachment();
+    group_attachment["data"]["filename"] = json!("group.pdf");
+    let mut group_parent = parent();
+    group_parent["data"]["creators"] = json!([{"name": "Group Institute"}]);
+    let (mut api, _server) = server(vec![
+        Reply::json("/api/users/0/groups", &json!([{"id": 42}])),
+        Reply::json("/api/users/0/items", &json!([attachment()])),
+        file_reply(library.path(), "/api/users/0/items/ATTACH01/file/view/url"),
+        Reply::json("/api/users/0/items", &json!([parent()])),
+        Reply::json("/api/groups/42/items", &json!([group_attachment])),
+        Reply::json("/api/groups/42/items", &json!([group_parent])),
+    ]);
+    let mut items: Vec<_> = ["A paper.pdf", "group.pdf"]
+        .into_iter()
+        .map(|filename| ZoteroItem {
+            metadata: ZoteroItemMetadata {
+                library_key: "ATTACH01".into(),
+                title: "A paper".into(),
+                file_path: library.path().join("storage/ATTACH01").join(filename),
+                authors: None,
+            },
+            text: String::new(),
+        })
+        .collect();
+
+    api.authors(&mut items, library.path()).await.unwrap();
+    assert_eq!(
+        items[0].metadata.authors.as_ref().unwrap()[0],
+        "Lovelace, Ada"
+    );
+    assert_eq!(
+        items[1].metadata.authors.as_ref().unwrap(),
+        &["Group Institute"]
+    );
+}
+
+/// Apply global date/key ordering before offset and limit, including across library boundaries.
+#[tokio::test]
+async fn metadata_orders_dates_and_key_ties_across_libraries() {
+    let library = tempfile::tempdir().unwrap();
+    let mut first = attachment();
+    first["data"]["dateAdded"] = json!("2020-01-01T00:00:00Z");
+    let mut group_first = first.clone();
+    group_first["key"] = json!("AAA00001");
+    let mut older = first.clone();
+    older["key"] = json!("ZZZ00001");
+    older["data"]["dateAdded"] = json!("2019-01-01T00:00:00Z");
+    let (mut api, _server) = server(vec![
+        Reply::json("/api/users/0/groups", &json!([{"id": 42}])),
+        Reply::json("/api/users/0/items", &json!([parent(), first])),
+        file_reply(library.path(), "/api/users/0/items/ATTACH01/file/view/url"),
+        Reply::json(
+            "/api/groups/42/items",
+            &json!([parent(), group_first, older]),
+        ),
+    ]);
+
+    let items = api
+        .metadata(library.path(), Some(1), Some(1))
+        .await
+        .unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].library_key, "AAA00001");
+}

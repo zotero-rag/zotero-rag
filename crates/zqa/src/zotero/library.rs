@@ -294,6 +294,8 @@ fn parse_library_metadata_sqlite(
 
     // NOTE: Maintainers, keep trash inclusion aligned with `ZoteroApi::items`; both readers include trashed items.
     // NOTE: Maintainers, keep parent item types aligned with `ZoteroApi::metadata`.
+    // NOTE: Maintainers, keep pagination ordering aligned with `ZoteroApi::metadata`:
+    // attachment date added, key, then group ID (zero for the personal library).
     let mut query = "SELECT DISTINCT
                 idv.value AS title,
                 ia.path AS filePath,
@@ -305,9 +307,12 @@ fn parse_library_metadata_sqlite(
             JOIN itemTypes it ON i.itemTypeID = it.itemTypeID
             LEFT JOIN itemAttachments ia ON i.itemID = ia.parentItemID
             JOIN items i2 ON ia.itemID = i2.itemID
+            LEFT JOIN groups g ON i2.libraryID = g.libraryID
             WHERE f.fieldName = 'title'
             AND ia.contentType = 'application/pdf'
-            AND it.typeName IN ('conferencePaper', 'journalArticle', 'preprint') "
+            AND ia.path IS NOT NULL AND ia.path != ''
+            AND it.typeName IN ('conferencePaper', 'journalArticle', 'preprint')
+            ORDER BY i2.dateAdded, i2.key, COALESCE(g.groupID, 0) "
         .to_string();
 
     // Useful for debugging
@@ -770,6 +775,87 @@ mod tests {
             .unwrap_err();
         assert!(matches!(error, LibraryParsingError::SqlError(_)));
         assert!(!error.is_locked());
+    }
+
+    /// Copy the toy database so regression tests can change attachment rows independently.
+    fn copy_toy_database() -> tempfile::TempDir {
+        let library = tempfile::tempdir().unwrap();
+        let source = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets/Zotero/zotero.sqlite");
+        std::fs::copy(source, library.path().join("zotero.sqlite")).unwrap();
+        library
+    }
+
+    /// Exclude attachments without local paths before pagination while retaining usable PDFs.
+    #[test]
+    fn sqlite_metadata_skips_null_and_empty_attachment_paths() {
+        let library = copy_toy_database();
+        let expected = parse_library_metadata_sqlite(library.path(), None, None).unwrap();
+        let excluded = &expected[0].library_key;
+        let database = Connection::open(library.path().join("zotero.sqlite")).unwrap();
+
+        for path in [None, Some("")] {
+            database.execute(
+                "UPDATE itemAttachments SET path = ?1 WHERE itemID = (SELECT itemID FROM items WHERE key = ?2)",
+                rusqlite::params![path, excluded],
+            ).unwrap();
+
+            let actual = parse_library_metadata_sqlite(library.path(), None, None).unwrap();
+            assert_eq!(actual, expected[1..]);
+            let first = parse_library_metadata_sqlite(library.path(), Some(0), Some(1)).unwrap();
+            assert_eq!(first, expected[1..2]);
+        }
+    }
+
+    /// Break date ties by attachment key and apply offsets to that deterministic order.
+    #[test]
+    fn sqlite_pagination_uses_attachment_dates_and_keys() {
+        let library = copy_toy_database();
+        let database = Connection::open(library.path().join("zotero.sqlite")).unwrap();
+        database
+            .execute("UPDATE items SET dateAdded = '2020-01-01 00:00:00'", [])
+            .unwrap();
+        let mut expected = parse_library_metadata_sqlite(library.path(), None, None).unwrap();
+        expected.sort_by(|left, right| left.library_key.cmp(&right.library_key));
+
+        let actual = parse_library_metadata_sqlite(library.path(), Some(1), Some(3)).unwrap();
+        assert_eq!(actual, expected[1..4]);
+        let remaining = parse_library_metadata_sqlite(library.path(), Some(1), None).unwrap();
+        assert_eq!(remaining, expected[1..]);
+    }
+
+    /// Keep the toy-library title coverage used by the PDF integration test's first seven items.
+    #[test]
+    fn toy_library_pagination_retains_expected_titles_and_authors() {
+        let library = copy_toy_database();
+        let metadata = parse_library_metadata_sqlite(library.path(), Some(0), Some(7)).unwrap();
+        assert_eq!(metadata.len(), 7);
+        let mut items: Vec<_> = metadata
+            .into_iter()
+            .map(|metadata| ZoteroItem {
+                metadata,
+                text: String::new(),
+            })
+            .collect();
+        get_authors_sqlite(&mut items, library.path()).unwrap();
+
+        for title in [
+            "An expert system",
+            "Online Learning Rate Adaptation",
+            "Mono2Micro",
+            "Anomaly Detection",
+            "Learning Rate Curriculum",
+        ] {
+            let item = items
+                .iter()
+                .find(|item| item.metadata.title.contains(title))
+                .unwrap();
+            assert!(
+                item.metadata
+                    .authors
+                    .as_ref()
+                    .is_some_and(|authors| !authors.is_empty())
+            );
+        }
     }
 
     #[tokio::test]
