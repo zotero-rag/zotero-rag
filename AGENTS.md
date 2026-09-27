@@ -83,7 +83,7 @@ Run them via: `cargo test -p zqa-pdftools <test_name> -- --ignored --nocapture`
 
 - Assess that the PR code follows idiomatic Rust and the coding standards set above.
 - In general, bias heavily for performance, particularly in `zqa-pdftools`. Avoid heap allocations (`String`, `Vec`) where borrowed slices (`&str`, `&[u8]`) can be used. However, there may be cases where some efficiency is traded off for readability or better UX; but this should be limited. Performance (`perf`) PRs MUST include benchmark results. (Note: AI agents should generally avoid creating `perf` PRs for `zqa-pdftools`).
-- PRs should, generally speaking, contain tests for the code they add. This should be exempted in very limited situations where there is a good reason.
+- PRs should, generally speaking, include tests for new branches, contracts, or regression paths that existing tests do not cover. Prefer a new case in an existing test over a new test function or mock-server scenario. Do not request tests for dependency behavior (serde, reqwest, std) or options nothing uses. Do not request dedicated regression tests for issues found in earlier revisions of the same PR: the point of review is to catch and fix the issues, not to bloat the test corpus. If such a fix adds a branch that callers depend on, one case in an existing test is enough.
 - Minimize the use of emojis unless you need to strongly emphasize something; use standard Markdown instead.
 - Do not leave inline comments unless you have specific recommendations for improvements.
 - Do not leave inline comments to state that something has improved or is better than before.
@@ -91,7 +91,9 @@ Run them via: `cargo test -p zqa-pdftools <test_name> -- --ignored --nocapture`
 - If an inline comment you leave is pedantic or otherwise minor, prefix it with "nit: ", and keep it short, about one sentence. This is not to discourage pedantry, but nits should be non-blocking. The sentence immediately following "nit: " should not start with a capital letter. Example: "nit: prefer `is_some_and(..)` over `is_some(..) && ..`".
 - In general, the repo favors using tests to ensure that things that can go out of sync don't. See `test_all_reasoning_effort_values_mapped` in `crates/zqa-rag/src/llm/base.rs` or the various tests in `crates/zqa-rag/src/capabilities.rs`. This isn't strictly necessary, or blocking, however.
 - When two files have code that is shared, similar, or otherwise would need to be updated together, if it would not be obvious to a maintainer that the two locations should be kept in sync, the repo uses `NOTE:` comments in *both* places. Such a comment must use the word "maintainers".
-- When reviewing a revision of a PR, you should check not only whether the previous comments were addressed, but also whether the changed code itself follows the style guides, introduces new bugs, has inefficiencies, etc.
+- You should review PRs thoroughly for correctness, efficiency/performance, and code style. If a maintainer or the PR description asks to focus on an aspect, you should do so in addition to a thorough review.
+- Report every correctness finding in one review. When reviewing a revision, raise new findings only on code changed since your last review, plus earlier findings that are still unresolved. Always report a correctness bug, even in code that has not changed since your last review, and say that you missed it earlier.
+- When a fix needs coverage, name the existing test that should hold the new case, unless it is genuinely not covered by any test.
 
 # Important Files
 
