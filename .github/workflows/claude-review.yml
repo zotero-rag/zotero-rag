@@ -32,7 +32,7 @@ jobs:
             PR NUMBER: ${{ github.event.pull_request.number }}
             HEAD SHA: ${{ github.event.pull_request.head.sha }}
 
-            Your previous review names the commit it reviewed; diff from that commit to HEAD SHA. If that commit is unavailable (for example after a force-push), review the full PR diff and say so in your summary.
+            Your previous review names the commit it reviewed; diff from that commit to HEAD SHA. If that commit is unavailable (for example after a force-push), review the full PR diff and say so in your summary. In your current review, list the HEAD SHA that you are reviewing.
 
             Please review this pull request with a focus on:
             - Code quality and best practices
