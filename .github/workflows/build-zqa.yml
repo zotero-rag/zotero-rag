@@ -64,7 +64,7 @@ jobs:
         GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         COHERE_API_KEY: ${{ secrets.COHERE_API_KEY }}
         OPENROUTER_MODEL: openai/gpt-6-luna
-        ANTHROPIC_MODEL: claude-haiku-4-5-20251001
+        ANTHROPIC_MODEL: claude-haiku-4-5
         OPENAI_MODEL: gpt-6-luna
         VOYAGE_AI_MODEL: voyage-4-lite
         OPENAI_EMBEDDING_MODEL: text-embedding-3-large
