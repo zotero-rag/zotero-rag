@@ -53,7 +53,9 @@ where
             config: Some(config),
         }
     }
+}
 
+impl<T: HttpClient + Clone> CohereClient<T> {
     fn compute_embeddings_internal(
         &self,
         source: Arc<dyn arrow_array::Array>,
@@ -69,6 +71,16 @@ where
             || env::var("COHERE_API_KEY"),
             |config| Ok(config.api_key.clone()),
         )?;
+        let model = self
+            .config
+            .as_ref()
+            .map_or(DEFAULT_COHERE_EMBEDDING_MODEL, |c| {
+                c.embedding_model.as_str()
+            });
+        let output_dimension = self
+            .config
+            .as_ref()
+            .map_or(DEFAULT_COHERE_EMBEDDING_DIM, |c| c.embedding_dims as u32);
 
         tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(compute_embeddings_async::<
@@ -82,16 +94,16 @@ where
                 self.client.clone(),
                 |texts| CohereEmbedRequest {
                     texts,
-                    model: DEFAULT_COHERE_EMBEDDING_MODEL.to_string(),
+                    model: model.to_string(),
                     input_type: input_type.into(),
-                    output_dimension: DEFAULT_COHERE_EMBEDDING_DIM,
+                    output_dimension,
                     // Requesting float vectors explicitly for newer APIs; ignored by older
                     embedding_types: Some(vec!["float".into()]),
                 },
                 EmbeddingProvider::Cohere.as_str().to_string(),
                 BATCH_SIZE,
                 WAIT_AFTER_REQUEST_S,
-                DEFAULT_COHERE_EMBEDDING_DIM as usize,
+                output_dimension as usize,
             ))
         })
     }
@@ -157,7 +169,7 @@ impl EmbeddingApiResponse for CohereAIResponse {
     }
 }
 
-impl<T: HttpClient + Default + Clone + std::fmt::Debug> EmbeddingFunction for CohereClient<T> {
+impl<T: HttpClient + Clone + std::fmt::Debug> EmbeddingFunction for CohereClient<T> {
     fn name(&self) -> &'static str {
         "Cohere"
     }
@@ -167,9 +179,16 @@ impl<T: HttpClient + Default + Clone + std::fmt::Debug> EmbeddingFunction for Co
     }
 
     fn dest_type(&self) -> Result<Cow<'_, DataType>, lancedb::Error> {
+        let dim = self
+            .config
+            .as_ref()
+            .map_or(DEFAULT_COHERE_EMBEDDING_DIM as i32, |c| {
+                c.embedding_dims as i32
+            });
+
         Ok(Cow::Owned(DataType::FixedSizeList(
             Arc::new(Field::new("item", DataType::Float32, true)),
-            DEFAULT_COHERE_EMBEDDING_DIM as i32,
+            dim,
         )))
     }
 
@@ -206,10 +225,55 @@ mod tests {
 
     use arrow_array::Array;
     use dotenv::dotenv;
+    use lancedb::embeddings::EmbeddingFunction;
+    use serde_json::json;
     use zqa_macros::{test_eq, test_ok};
 
     use super::{CohereClient, DEFAULT_COHERE_EMBEDDING_DIM};
-    use crate::http_client::ReqwestClient;
+    use crate::config::CohereConfig;
+    use crate::http_client::{RecordingSequentialMockHttpClient, ReqwestClient};
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn test_configured_embeddings() {
+        let config = CohereConfig {
+            api_key: "test-key".into(),
+            embedding_model: "embed-v4.0".into(),
+            embedding_dims: 256,
+            reranker: String::new(),
+        };
+        let response = json!({"embeddings": {"float": [vec![0.5; config.embedding_dims]]}});
+        let http_client = RecordingSequentialMockHttpClient::new([response.clone(), response]);
+        let client = CohereClient {
+            client: http_client.clone(),
+            config: Some(config.clone()),
+        };
+
+        for input_type in ["search_document", "search_query"] {
+            let input = Arc::new(arrow_array::StringArray::from(vec!["configured input"]));
+
+            let embeddings = if input_type == "search_document" {
+                client.compute_source_embeddings(input)
+            } else {
+                client.compute_query_embeddings(input)
+            }
+            .unwrap();
+
+            let vector = arrow_array::cast::as_fixed_size_list_array(&embeddings);
+
+            assert_eq!(vector.len(), 1);
+            assert_eq!(vector.value_length(), config.embedding_dims as i32);
+            assert_eq!(embeddings.data_type(), client.dest_type().unwrap().as_ref());
+        }
+
+        let requests = http_client.requests();
+        assert_eq!(requests.len(), 2);
+
+        for (request, input_type) in requests.iter().zip(["search_document", "search_query"]) {
+            assert_eq!(request["model"], config.embedding_model);
+            assert_eq!(request["output_dimension"], config.embedding_dims);
+            assert_eq!(request["input_type"], input_type);
+        }
+    }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
     async fn test_compute_embeddings() {
