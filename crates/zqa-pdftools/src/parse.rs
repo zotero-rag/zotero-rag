@@ -6,9 +6,9 @@
 use std::collections::HashMap;
 use std::error::Error;
 use std::rc::Rc;
+use std::str;
 use std::str::Utf8Error;
 use std::sync::LazyLock;
-use std::{f32, str};
 
 use itertools::Itertools;
 use log;
