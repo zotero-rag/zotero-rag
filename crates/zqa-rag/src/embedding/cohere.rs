@@ -77,10 +77,19 @@ impl<T: HttpClient + Clone> CohereClient<T> {
             .map_or(DEFAULT_COHERE_EMBEDDING_MODEL, |c| {
                 c.embedding_model.as_str()
             });
-        let output_dimension = self
+        let embedding_dims = self
             .config
             .as_ref()
             .map_or(DEFAULT_COHERE_EMBEDDING_DIM, |c| c.embedding_dims as u32);
+
+        // Embed v3 models have fixed widths and do not support output_dimension.
+        let output_dimension = match model {
+            "embed-english-v3.0"
+            | "embed-english-light-v3.0"
+            | "embed-multilingual-v3.0"
+            | "embed-multilingual-light-v3.0" => None,
+            _ => Some(embedding_dims),
+        };
 
         tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(compute_embeddings_async::<
@@ -103,7 +112,7 @@ impl<T: HttpClient + Clone> CohereClient<T> {
                 EmbeddingProvider::Cohere.as_str().to_string(),
                 BATCH_SIZE,
                 WAIT_AFTER_REQUEST_S,
-                output_dimension as usize,
+                embedding_dims as usize,
             ))
         })
     }
@@ -115,7 +124,8 @@ struct CohereEmbedRequest {
     texts: Vec<String>,
     model: String,
     input_type: String,
-    output_dimension: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    output_dimension: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     embedding_types: Option<Vec<String>>,
 }
@@ -235,43 +245,48 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
     async fn test_configured_embeddings() {
-        let config = CohereConfig {
-            api_key: "test-key".into(),
-            embedding_model: "embed-v4.0".into(),
-            embedding_dims: 256,
-            reranker: String::new(),
-        };
-        let response = json!({"embeddings": {"float": [vec![0.5; config.embedding_dims]]}});
-        let http_client = RecordingSequentialMockHttpClient::new([response.clone(), response]);
-        let client = CohereClient {
-            client: http_client.clone(),
-            config: Some(config.clone()),
-        };
+        for (embedding_model, embedding_dims, output_dimension) in [
+            ("embed-v4.0", 256, Some(json!(256))),
+            ("embed-english-v3.0", 1024, None),
+        ] {
+            let config = CohereConfig {
+                api_key: "test-key".into(),
+                embedding_model: embedding_model.into(),
+                embedding_dims,
+                reranker: String::new(),
+            };
+            let response = json!({"embeddings": {"float": [vec![0.5; config.embedding_dims]]}});
+            let http_client = RecordingSequentialMockHttpClient::new([response.clone(), response]);
+            let client = CohereClient {
+                client: http_client.clone(),
+                config: Some(config.clone()),
+            };
 
-        for input_type in ["search_document", "search_query"] {
-            let input = Arc::new(arrow_array::StringArray::from(vec!["configured input"]));
+            for input_type in ["search_document", "search_query"] {
+                let input = Arc::new(arrow_array::StringArray::from(vec!["configured input"]));
 
-            let embeddings = if input_type == "search_document" {
-                client.compute_source_embeddings(input)
-            } else {
-                client.compute_query_embeddings(input)
+                let embeddings = if input_type == "search_document" {
+                    client.compute_source_embeddings(input)
+                } else {
+                    client.compute_query_embeddings(input)
+                }
+                .unwrap();
+
+                let vector = arrow_array::cast::as_fixed_size_list_array(&embeddings);
+
+                assert_eq!(vector.len(), 1);
+                assert_eq!(vector.value_length(), config.embedding_dims as i32);
+                assert_eq!(embeddings.data_type(), client.dest_type().unwrap().as_ref());
             }
-            .unwrap();
 
-            let vector = arrow_array::cast::as_fixed_size_list_array(&embeddings);
+            let requests = http_client.requests();
+            assert_eq!(requests.len(), 2);
 
-            assert_eq!(vector.len(), 1);
-            assert_eq!(vector.value_length(), config.embedding_dims as i32);
-            assert_eq!(embeddings.data_type(), client.dest_type().unwrap().as_ref());
-        }
-
-        let requests = http_client.requests();
-        assert_eq!(requests.len(), 2);
-
-        for (request, input_type) in requests.iter().zip(["search_document", "search_query"]) {
-            assert_eq!(request["model"], config.embedding_model);
-            assert_eq!(request["output_dimension"], config.embedding_dims);
-            assert_eq!(request["input_type"], input_type);
+            for (request, input_type) in requests.iter().zip(["search_document", "search_query"]) {
+                assert_eq!(request["model"], config.embedding_model);
+                assert_eq!(request.get("output_dimension"), output_dimension.as_ref());
+                assert_eq!(request["input_type"], input_type);
+            }
         }
     }
 
