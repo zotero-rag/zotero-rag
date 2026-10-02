@@ -4,7 +4,9 @@ use arrow_array::cast::AsArray;
 use arrow_array::{ArrayRef, FixedSizeListArray, Float32Array, RecordBatch, StringArray};
 use arrow_schema;
 use thiserror::Error;
-use zqa_rag::embedding::common::{EmbeddingProviderConfig, get_embedding_provider_with_config};
+use zqa_rag::embedding::common::{
+    EmbeddingProviderConfig, get_embedding_dims_by_provider, get_embedding_provider_with_config,
+};
 use zqa_rag::llm::errors::LLMError;
 use zqa_rag::vector::backends::lance::LanceError;
 
@@ -88,10 +90,11 @@ impl From<LanceError> for ArrowError {
 
 /// Get the schema for our `LanceDB` table. This is required for both getting library items and
 /// checkhealth.
+/// Uses configured Cohere dimensions and provider defaults for other providers.
 ///
 /// # Arguments
 ///
-/// * `embedding_config` - The embedding configuration, including the table's vector dimensions.
+/// * `embedding_config` - The embedding provider and its configuration.
 /// * `include_embeddings` - Whether to include the embeddings field in the schema.
 ///
 /// # Returns
@@ -100,7 +103,7 @@ impl From<LanceError> for ArrowError {
 ///
 /// # Panics
 ///
-/// * If embeddings are included and their configured dimensions exceed Arrow's `i32` limit.
+/// * If embeddings are included and configured Cohere dimensions exceed Arrow's `i32` limit.
 #[must_use]
 pub fn get_schema(
     embedding_config: &EmbeddingProviderConfig,
@@ -116,6 +119,11 @@ pub fn get_schema(
     ];
 
     if include_embeddings {
+        let embedding_dims = match embedding_config {
+            EmbeddingProviderConfig::Cohere(config) => config.embedding_dims,
+            _ => get_embedding_dims_by_provider(embedding_config.provider()) as usize,
+        };
+
         schema_fields.push(arrow_schema::Field::new(
             DbFields::Embeddings,
             arrow_schema::DataType::FixedSizeList(
@@ -124,7 +132,7 @@ pub fn get_schema(
                     arrow_schema::DataType::Float32,
                     true,
                 )),
-                i32::try_from(embedding_config.dims())
+                i32::try_from(embedding_dims)
                     .expect("Embedding dimensions exceed Arrow's i32 limit"),
             ),
             false,
@@ -348,7 +356,8 @@ mod tests {
     use arrow_array::RecordBatchIterator;
     use dotenv::dotenv;
     use zqa_rag::constants::{
-        DEFAULT_VOYAGE_EMBEDDING_DIM, DEFAULT_VOYAGE_EMBEDDING_MODEL, DEFAULT_VOYAGE_RERANK_MODEL,
+        DEFAULT_GEMINI_EMBEDDING_DIM, DEFAULT_VOYAGE_EMBEDDING_DIM, DEFAULT_VOYAGE_EMBEDDING_MODEL,
+        DEFAULT_VOYAGE_RERANK_MODEL,
     };
 
     use super::*;
@@ -457,5 +466,15 @@ mod tests {
         assert_eq!(batch.column(4).as_fixed_size_list().value_length(), 256);
         store.upsert_batches(vec![batch]).await.unwrap();
         assert_eq!(store.existing_item_metadata().await.unwrap().len(), 2);
+
+        let embedding_config = EmbeddingProviderConfig::Gemini(zqa_rag::config::GeminiConfig {
+            embedding_dims: 768,
+            ..Default::default()
+        });
+        let batch = library_to_arrow(&[], &embedding_config, true).unwrap();
+        assert_eq!(
+            batch.column(4).as_fixed_size_list().value_length(),
+            DEFAULT_GEMINI_EMBEDDING_DIM as i32
+        );
     }
 }

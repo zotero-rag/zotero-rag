@@ -11,7 +11,7 @@ use std::{fs, io};
 use arrow_array::cast::AsArray;
 use arrow_array::types::{Float32Type, Int64Type};
 use arrow_array::{RecordBatch, RecordBatchIterator, StringArray, record_batch};
-use arrow_schema::{ArrowError, Schema};
+use arrow_schema::{ArrowError, DataType, Schema};
 use async_trait::async_trait;
 use futures::TryStreamExt;
 use lancedb::database::CreateTableMode;
@@ -1020,7 +1020,6 @@ fn calculate_directory_size(path: &std::path::Path) -> Result<u64, io::Error> {
 /// # Arguments
 ///
 /// * `tbl` - The LanceDB table to query
-/// * `embedding_dims` - The configured dimensions of the embeddings in the table.
 /// * `query_limit` - Limit on the number of rows in the table to query
 ///
 /// # Returns
@@ -1031,12 +1030,25 @@ fn calculate_directory_size(path: &std::path::Path) -> Result<u64, io::Error> {
 ///     * An `InvalidStateError` if the table is in some invalid state
 async fn get_zero_vectors(
     tbl: &lancedb::table::Table,
-    embedding_dims: usize,
     query_limit: usize,
 ) -> Result<Vec<RecordBatch>, LanceError> {
+    let schema = tbl.schema().await?;
+
+    let DataType::FixedSizeList(_, embedding_dims) =
+        schema.field_with_name("embeddings")?.data_type()
+    else {
+        return Err(LanceError::InvalidStateError(
+            "The embeddings column must be a fixed-size list".into(),
+        ));
+    };
+    let embedding_dims = usize::try_from(*embedding_dims).map_err(|_| {
+        LanceError::InvalidStateError("The embeddings column has negative dimensions".into())
+    })?;
+
     let stream = tbl
         .query()
         .nearest_to(vec![0.0; embedding_dims])?
+        .column("embeddings")
         .distance_range(Some(0.0), Some(1e-8))
         .limit(query_limit)
         .execute()
@@ -1159,7 +1171,7 @@ impl HealthCheckable for LanceBackend {
         // We can't have `result.num_rows` be `None` at this point.
         if let Some(query_limit) = &result.num_rows {
             result.zero_embedding_items = match query_limit {
-                Ok(count) => Some(get_zero_vectors(&tbl, self.config.dims(), *count).await),
+                Ok(count) => Some(get_zero_vectors(&tbl, *count).await),
                 Err(e) => Some(Err(LanceError::QueryError(e.to_string()))),
             }
         }
@@ -1195,7 +1207,7 @@ mod tests {
     use super::*;
     use crate::capabilities::EmbeddingProvider;
     use crate::clients::openai::OpenAIClient;
-    use crate::config::{CohereConfig, OpenAIConfig, VoyageAIConfig};
+    use crate::config::{CohereConfig, GeminiConfig, OpenAIConfig, VoyageAIConfig};
     use crate::constants::{
         DEFAULT_OPENAI_EMBEDDING_DIM, DEFAULT_OPENAI_EMBEDDING_MODEL, DEFAULT_OPENAI_MODEL,
         DEFAULT_VOYAGE_EMBEDDING_DIM, DEFAULT_VOYAGE_EMBEDDING_MODEL, DEFAULT_VOYAGE_RERANK_MODEL,
@@ -1268,21 +1280,34 @@ mod tests {
     #[tokio::test]
     async fn test_health_check_with_database() {
         let configs = [
-            get_test_voyage_embedding_config(),
-            EmbeddingProviderConfig::Cohere(CohereConfig {
-                api_key: "test-key".into(),
-                embedding_model: "embed-v4.0".into(),
-                embedding_dims: 256,
-                reranker: String::new(),
-            }),
+            (
+                get_test_voyage_embedding_config(),
+                DEFAULT_VOYAGE_EMBEDDING_DIM as usize,
+            ),
+            (
+                EmbeddingProviderConfig::Cohere(CohereConfig {
+                    api_key: "test-key".into(),
+                    embedding_model: "embed-v4.0".into(),
+                    embedding_dims: 256,
+                    reranker: String::new(),
+                }),
+                256,
+            ),
+            (
+                EmbeddingProviderConfig::Gemini(GeminiConfig {
+                    embedding_dims: 768,
+                    ..GeminiConfig::default()
+                }),
+                3072,
+            ),
         ];
 
-        for config in configs {
+        for (config, stored_dims) in configs {
             let (_db_dir, uri) = temp_db();
             let pdf_text_data = StringArray::from(vec!["Hello world", "Test document"]);
             let embeddings = FixedSizeListArray::from_iter_primitive::<Float32Type, _, _>(
-                [0.0, 1.0].map(|value| Some(vec![Some(value); config.dims()])),
-                config.dims() as i32,
+                [0.0, 1.0].map(|value| Some(vec![Some(value); stored_dims])),
+                stored_dims as i32,
             );
             let record_batch = RecordBatch::try_from_iter([
                 ("pdf_text", Arc::new(pdf_text_data) as Arc<dyn Array>),
