@@ -83,7 +83,7 @@ impl LanceZoteroStore {
     /// Create a Lance-backed Zotero store from an embedding configuration.
     #[must_use]
     pub fn from_embedding_config(embedding_config: EmbeddingProviderConfig) -> Self {
-        let schema = Arc::new(get_schema(embedding_config.provider(), true));
+        let schema = Arc::new(get_schema(&embedding_config, true));
         Self::from_schema(embedding_config, schema)
     }
 

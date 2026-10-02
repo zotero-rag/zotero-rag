@@ -21,8 +21,7 @@ use lancedb::query::{ExecutableQuery, QueryBase};
 use lancedb::{Connection, Error as LanceDbError, connect};
 use thiserror::Error;
 
-use crate::capabilities::EmbeddingProvider;
-use crate::embedding::common::{EmbeddingProviderConfig, get_embedding_dims_by_provider};
+use crate::embedding::common::EmbeddingProviderConfig;
 use crate::providers::ProviderId;
 use crate::providers::registry::provider_registry;
 use crate::vector::backends::backend::VectorBackend;
@@ -1021,7 +1020,7 @@ fn calculate_directory_size(path: &std::path::Path) -> Result<u64, io::Error> {
 /// # Arguments
 ///
 /// * `tbl` - The LanceDB table to query
-/// * `provider_id` - The embedding provider ID. Must correspond to a known embedding provider.
+/// * `embedding_dims` - The configured dimensions of the embeddings in the table.
 /// * `query_limit` - Limit on the number of rows in the table to query
 ///
 /// # Returns
@@ -1032,18 +1031,12 @@ fn calculate_directory_size(path: &std::path::Path) -> Result<u64, io::Error> {
 ///     * An `InvalidStateError` if the table is in some invalid state
 async fn get_zero_vectors(
     tbl: &lancedb::table::Table,
-    provider_id: ProviderId,
+    embedding_dims: usize,
     query_limit: usize,
 ) -> Result<Vec<RecordBatch>, LanceError> {
-    let embedding_provider: EmbeddingProvider =
-        provider_id.try_into().map_err(|message: String| {
-            LanceError::ParameterError(format!("Could not determine embedding provider: {message}"))
-        })?;
-    let embedding_size = get_embedding_dims_by_provider(embedding_provider);
-
     let stream = tbl
         .query()
-        .nearest_to(vec![0.0; embedding_size as usize])?
+        .nearest_to(vec![0.0; embedding_dims])?
         .distance_range(Some(0.0), Some(1e-8))
         .limit(query_limit)
         .execute()
@@ -1166,7 +1159,7 @@ impl HealthCheckable for LanceBackend {
         // We can't have `result.num_rows` be `None` at this point.
         if let Some(query_limit) = &result.num_rows {
             result.zero_embedding_items = match query_limit {
-                Ok(count) => Some(get_zero_vectors(&tbl, self.config.provider_id(), *count).await),
+                Ok(count) => Some(get_zero_vectors(&tbl, self.config.dims(), *count).await),
                 Err(e) => Some(Err(LanceError::QueryError(e.to_string()))),
             }
         }
@@ -1191,7 +1184,7 @@ mod tests {
 
     use arrow_array::cast::{as_fixed_size_list_array, as_string_array};
     use arrow_array::types::Float32Type;
-    use arrow_array::{Array, StringArray};
+    use arrow_array::{Array, FixedSizeListArray, StringArray};
     use dotenv::dotenv;
     use futures::StreamExt;
     use lancedb::embeddings::EmbeddingFunction;
@@ -1202,7 +1195,7 @@ mod tests {
     use super::*;
     use crate::capabilities::EmbeddingProvider;
     use crate::clients::openai::OpenAIClient;
-    use crate::config::{OpenAIConfig, VoyageAIConfig};
+    use crate::config::{CohereConfig, OpenAIConfig, VoyageAIConfig};
     use crate::constants::{
         DEFAULT_OPENAI_EMBEDDING_DIM, DEFAULT_OPENAI_EMBEDDING_MODEL, DEFAULT_OPENAI_MODEL,
         DEFAULT_VOYAGE_EMBEDDING_DIM, DEFAULT_VOYAGE_EMBEDDING_MODEL, DEFAULT_VOYAGE_RERANK_MODEL,
@@ -1274,28 +1267,60 @@ mod tests {
 
     #[tokio::test]
     async fn test_health_check_with_database() {
-        dotenv().ok();
+        let configs = [
+            get_test_voyage_embedding_config(),
+            EmbeddingProviderConfig::Cohere(CohereConfig {
+                api_key: "test-key".into(),
+                embedding_model: "embed-v4.0".into(),
+                embedding_dims: 256,
+                reranker: String::new(),
+            }),
+        ];
 
-        let (_db_dir, uri) = temp_db();
-        let backend = get_backend("pdf_text", get_test_voyage_embedding_config(), &uri);
-
-        let pdf_text_data = StringArray::from(vec!["Hello world", "Test document"]);
-        let record_batch = RecordBatch::try_new(
-            Arc::new(get_schema("pdf_text")),
-            vec![Arc::new(pdf_text_data)],
-        )
-        .unwrap();
-        backend
-            .insert_items(vec![record_batch], None)
-            .await
+        for config in configs {
+            let (_db_dir, uri) = temp_db();
+            let pdf_text_data = StringArray::from(vec!["Hello world", "Test document"]);
+            let embeddings = FixedSizeListArray::from_iter_primitive::<Float32Type, _, _>(
+                [0.0, 1.0].map(|value| Some(vec![Some(value); config.dims()])),
+                config.dims() as i32,
+            );
+            let record_batch = RecordBatch::try_from_iter([
+                ("pdf_text", Arc::new(pdf_text_data) as Arc<dyn Array>),
+                ("embeddings", Arc::new(embeddings) as Arc<dyn Array>),
+            ])
             .unwrap();
+            let backend =
+                LanceBackend::new(config, record_batch.schema(), "pdf_text".into()).with_uri(uri);
 
-        let health_result = backend.health_check().await;
+            let db = backend.connect().await.unwrap();
+            db.create_table(LANCE_DATA_TABLE_NAME, vec![record_batch])
+                .execute()
+                .await
+                .unwrap();
+            ensure_metadata_table(&db, backend.embedding_config())
+                .await
+                .unwrap();
 
-        assert!(health_result.storage_exists);
-        assert!(health_result.storage_size.unwrap().is_ok_and(|x| x > 0));
-        assert!(health_result.table_accessible.unwrap().is_ok());
-        assert!(health_result.num_rows.unwrap().is_ok_and(|x| x == 2));
+            let health_result = backend.health_check().await;
+
+            assert!(health_result.storage_exists);
+            assert!(health_result.storage_size.unwrap().is_ok_and(|x| x > 0));
+            assert!(health_result.table_accessible.unwrap().is_ok());
+            assert!(health_result.num_rows.unwrap().is_ok_and(|x| x == 2));
+
+            let zero_embeddings = health_result.zero_embedding_items.unwrap().unwrap();
+            assert_eq!(
+                zero_embeddings
+                    .iter()
+                    .map(RecordBatch::num_rows)
+                    .sum::<usize>(),
+                1
+            );
+            assert_eq!(
+                as_string_array(zero_embeddings[0].column_by_name("pdf_text").unwrap()).value(0),
+                "Hello world"
+            );
+        }
     }
 
     #[tokio::test]
