@@ -1171,8 +1171,8 @@ mod tests {
 
         let doc = result.unwrap();
         test_eq!(doc.filename, path.to_str().unwrap());
-        assert!(!doc.contents.text_content.is_empty());
-        assert!(!doc.summary.is_empty());
+        assert_ne!(doc.contents.text_content, "");
+        assert_ne!(doc.summary, "");
     }
 
     #[test]

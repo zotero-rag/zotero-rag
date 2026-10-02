@@ -523,7 +523,10 @@ mod tests {
         ]))
         .unwrap();
 
-        assert!(map_response_to_chat_contents(&parts[..1]).is_empty());
+        assert_eq!(
+            map_response_to_chat_contents(&parts[..1]),
+            [] as [ChatHistoryContent; 0]
+        );
         assert_eq!(
             map_response_to_chat_contents(&parts),
             [

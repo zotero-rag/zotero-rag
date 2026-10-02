@@ -1570,7 +1570,7 @@ mod tests {
         let result = backend.search_by_column("category", &[]).await;
         test_ok!(result);
         let batches = result.unwrap();
-        assert!(batches.is_empty());
+        assert_eq!(batches, [] as [RecordBatch; 0]);
 
         // Test with non-existent values
         let values = vec!["nonexistent".to_string()];

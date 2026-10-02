@@ -1473,7 +1473,7 @@ mod tests {
         test_ok!(content);
 
         let content = content.unwrap();
-        assert!(!content.sections.is_empty());
+        assert_ne!(content.sections, [] as [SectionBoundary; 0]);
 
         for section in &content.sections {
             let section_text = content.text_content[section.byte_index..][..30].to_string();

@@ -497,7 +497,7 @@ mod tests {
         assert!(output.contains("Successfully parsed library!"));
 
         let err = String::from_utf8(ctx.err.into_inner()).unwrap();
-        assert!(err.is_empty());
+        assert_eq!(err, "");
     }
 
     #[retry(3)]

@@ -789,7 +789,7 @@ mod tests {
 
         let response: CompletionApiResponse = serde_json::from_value(serialized).unwrap();
 
-        assert!(response.history_additions.is_empty());
+        assert_eq!(response.history_additions, [] as [ChatHistoryItem; 0]);
     }
 
     #[tokio::test]

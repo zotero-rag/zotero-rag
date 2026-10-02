@@ -674,7 +674,7 @@ mod tests {
 
         test_ok!(library_items);
         let items = library_items.unwrap();
-        assert!(!items.is_empty());
+        assert_ne!(items, [] as [ZoteroItemMetadata; 0]);
     }
 
     /// Test that on CI, the toy library is loaded instead of searching for a non-existent "real"
@@ -700,7 +700,7 @@ mod tests {
             test_ok!(library_items);
 
             let items = library_items.unwrap();
-            assert!(!items.is_empty());
+            assert_ne!(items, [] as [ZoteroItemMetadata; 0]);
             assert_eq!(items.len(), 10);
         } else {
             panic!(concat!(

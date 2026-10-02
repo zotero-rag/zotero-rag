@@ -498,7 +498,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(out, b"The answer.\n");
-        assert!(err.is_empty());
+        assert_eq!(err, b"");
     }
 
     #[retry(3)]
