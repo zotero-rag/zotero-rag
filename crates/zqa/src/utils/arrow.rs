@@ -4,10 +4,7 @@ use arrow_array::cast::AsArray;
 use arrow_array::{ArrayRef, FixedSizeListArray, Float32Array, RecordBatch, StringArray};
 use arrow_schema;
 use thiserror::Error;
-use zqa_rag::capabilities::EmbeddingProvider;
-use zqa_rag::embedding::common::{
-    EmbeddingProviderConfig, get_embedding_dims_by_provider, get_embedding_provider_with_config,
-};
+use zqa_rag::embedding::common::{EmbeddingProviderConfig, get_embedding_provider_with_config};
 use zqa_rag::llm::errors::LLMError;
 use zqa_rag::vector::backends::lance::LanceError;
 
@@ -94,15 +91,19 @@ impl From<LanceError> for ArrowError {
 ///
 /// # Arguments
 ///
-/// * `embedding_provider` - The embedding used by the current DB.
+/// * `embedding_config` - The embedding configuration, including the table's vector dimensions.
 /// * `include_embeddings` - Whether to include the embeddings field in the schema.
 ///
 /// # Returns
 ///
 /// The schema in Arrow format.
+///
+/// # Panics
+///
+/// * If embeddings are included and their configured dimensions exceed Arrow's `i32` limit.
 #[must_use]
 pub fn get_schema(
-    embedding_provider: EmbeddingProvider,
+    embedding_config: &EmbeddingProviderConfig,
     include_embeddings: bool,
 ) -> arrow_schema::Schema {
     // Convert ZoteroItemMetadata to something that can be converted to Arrow
@@ -123,7 +124,8 @@ pub fn get_schema(
                     arrow_schema::DataType::Float32,
                     true,
                 )),
-                get_embedding_dims_by_provider(embedding_provider) as i32,
+                i32::try_from(embedding_config.dims())
+                    .expect("Embedding dimensions exceed Arrow's i32 limit"),
             ),
             false,
         ));
@@ -155,7 +157,7 @@ pub fn library_to_arrow(
     embedding_config: &EmbeddingProviderConfig,
     include_embeddings: bool,
 ) -> Result<RecordBatch, ArrowError> {
-    let schema = Arc::new(get_schema(embedding_config.provider(), include_embeddings));
+    let schema = Arc::new(get_schema(embedding_config, include_embeddings));
 
     // Convert ZoteroItemMetadata to Arrow arrays
     let library_keys = StringArray::from(
@@ -311,7 +313,7 @@ pub fn library_to_arrow_with_embeddings(
         )));
     }
 
-    let schema = Arc::new(get_schema(embedding_config.provider(), true));
+    let schema = Arc::new(get_schema(embedding_config, true));
     let library_keys = StringArray::from(Vec::from(library_keys));
     let titles = StringArray::from(Vec::from(titles));
     let pdf_texts = StringArray::from(Vec::from(pdf_texts));
@@ -352,6 +354,7 @@ mod tests {
     use super::*;
     use crate::common::setup_logger;
     use crate::config::{Config, VoyageAIConfig};
+    use crate::utils::library::ZoteroItemSet;
 
     fn get_config() -> Config {
         let mut config = Config {
@@ -389,7 +392,7 @@ mod tests {
             .join("assets")
             .join("Zotero");
         let embedding_config = config.get_embedding_config().unwrap();
-        let schema = Arc::new(get_schema(embedding_config.provider(), true));
+        let schema = Arc::new(get_schema(&embedding_config, true));
         let store = LanceZoteroStore::from_schema(embedding_config, schema).with_uri(&db_uri);
         let record_batch =
             full_library_to_arrow(&store, Some(&library_path), Some(0), Some(5)).await;
@@ -425,5 +428,34 @@ mod tests {
             batch.num_rows() <= 5,
             "Expected fewer than five rows in record batch"
         );
+
+        let embedding_config = EmbeddingProviderConfig::Cohere(zqa_rag::config::CohereConfig {
+            api_key: "test-key".into(),
+            embedding_model: "embed-v4.0".into(),
+            embedding_dims: 256,
+            reranker: String::new(),
+        });
+        let store =
+            LanceZoteroStore::from_embedding_config(embedding_config.clone()).with_uri(&db_uri);
+        let mut item = ZoteroItemSet::from(vec![batch]).items.remove(0);
+        // Empty text exercises configured zero embeddings without calling the live API.
+        item.text.clear();
+
+        // Cover both initial table creation and ingestion into an existing table.
+        store.upsert_items(vec![item.clone()]).await.unwrap();
+        store.upsert_items(vec![item]).await.unwrap();
+
+        let batch = library_to_arrow_with_embeddings(
+            &["configured"],
+            &["Configured embeddings"],
+            &["paper.pdf"],
+            &["Text with precomputed embeddings"],
+            vec![vec![0.5; embedding_config.dims()]],
+            &embedding_config,
+        )
+        .unwrap();
+        assert_eq!(batch.column(4).as_fixed_size_list().value_length(), 256);
+        store.upsert_batches(vec![batch]).await.unwrap();
+        assert_eq!(store.existing_item_metadata().await.unwrap().len(), 2);
     }
 }
