@@ -200,6 +200,8 @@ impl<T: HttpClient + Default + std::fmt::Debug> EmbeddingFunction for GeminiClie
     }
 
     fn dest_type(&self) -> Result<Cow<'_, DataType>, lancedb::Error> {
+        // NOTE: maintainers: if this client starts honoring configured dimensions, update
+        // zqa::utils::arrow::get_schema to use them too.
         Ok(Cow::Owned(DataType::FixedSizeList(
             Arc::new(Field::new("item", DataType::Float32, true)),
             DEFAULT_GEMINI_EMBEDDING_DIM as i32,
