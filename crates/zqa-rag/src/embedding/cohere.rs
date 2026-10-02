@@ -83,12 +83,21 @@ impl<T: HttpClient + Clone> CohereClient<T> {
             .map_or(DEFAULT_COHERE_EMBEDDING_DIM, |c| c.embedding_dims as u32);
 
         // Embed v3 models have fixed widths and do not support output_dimension.
-        let output_dimension = match model {
-            "embed-english-v3.0"
-            | "embed-english-light-v3.0"
-            | "embed-multilingual-v3.0"
-            | "embed-multilingual-light-v3.0" => None,
-            _ => Some(embedding_dims),
+        let fixed_dims = match model {
+            "embed-english-v3.0" | "embed-multilingual-v3.0" => Some(1024),
+            "embed-english-light-v3.0" | "embed-multilingual-light-v3.0" => Some(384),
+            _ => None,
+        };
+        let output_dimension = match fixed_dims {
+            Some(expected_dims) => {
+                if embedding_dims != expected_dims {
+                    return Err(LLMError::GenericLLMError(format!(
+                        "Cohere model {model} requires {expected_dims} embedding dimensions, got {embedding_dims}"
+                    )));
+                }
+                None
+            }
+            None => Some(embedding_dims),
         };
 
         tokio::task::block_in_place(|| {
@@ -248,6 +257,7 @@ mod tests {
         for (embedding_model, embedding_dims, output_dimension) in [
             ("embed-v4.0", 256, Some(json!(256))),
             ("embed-english-v3.0", 1024, None),
+            ("embed-english-light-v3.0", 384, None),
         ] {
             let config = CohereConfig {
                 api_key: "test-key".into(),
@@ -288,6 +298,25 @@ mod tests {
                 assert_eq!(request["input_type"], input_type);
             }
         }
+
+        let http_client = RecordingSequentialMockHttpClient::new::<serde_json::Value>([]);
+        let client = CohereClient {
+            client: http_client.clone(),
+            config: Some(CohereConfig {
+                api_key: "test-key".into(),
+                embedding_model: "embed-english-v3.0".into(),
+                embedding_dims: 256,
+                reranker: String::new(),
+            }),
+        };
+        let input = Arc::new(arrow_array::StringArray::from(vec!["configured input"]));
+        let error = client.compute_source_embeddings(input).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("requires 1024 embedding dimensions, got 256")
+        );
+        assert_eq!(http_client.requests(), Vec::<serde_json::Value>::new());
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
