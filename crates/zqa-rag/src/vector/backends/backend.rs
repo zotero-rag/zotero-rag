@@ -46,11 +46,9 @@ pub trait VectorBackend: Send + Sync {
     fn get_db_path(&self) -> String;
 
     /// Whether the path specified by [`get_db_path`] exists.
-    #[must_use]
     async fn db_exists(&self) -> bool;
 
     /// Get the metadata for the database.
-    #[must_use]
     async fn get_metadata(&self) -> Result<Self::Metadata, Self::Error>;
 
     /// Create indices for the database. The details of the type of index are left to the trait
