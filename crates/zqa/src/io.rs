@@ -455,7 +455,7 @@ mod tests {
                 .unwrap();
             let (actual, unused) = if is_error { (err, out) } else { (out, err) };
             test_eq!(actual, expected.as_bytes());
-            assert!(unused.is_empty());
+            assert_eq!(unused, [] as [u8; 0]);
         }
     }
 
@@ -564,8 +564,8 @@ mod tests {
             .unwrap_err();
         test_eq!(error.kind(), io::ErrorKind::InvalidInput);
         test_eq!(input, b"1\n");
-        assert!(out.is_empty());
-        assert!(err.is_empty());
+        assert_eq!(out, [] as [u8; 0]);
+        assert_eq!(err, [] as [u8; 0]);
         test_eq!(answer.try_recv(), Err(oneshot::error::TryRecvError::Closed));
     }
 
