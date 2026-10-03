@@ -4,7 +4,6 @@ use arrow_array::cast::AsArray;
 use arrow_array::{ArrayRef, FixedSizeListArray, Float32Array, RecordBatch, StringArray};
 use arrow_schema;
 use thiserror::Error;
-use zqa_rag::constants::DEFAULT_GEMINI_EMBEDDING_DIM;
 use zqa_rag::embedding::common::{EmbeddingProviderConfig, get_embedding_provider_with_config};
 use zqa_rag::llm::errors::LLMError;
 use zqa_rag::vector::backends::lance::LanceError;
@@ -87,9 +86,8 @@ impl From<LanceError> for ArrowError {
     }
 }
 
-/// Get the schema for our `LanceDB` table. This is required for both getting library items and
-/// checkhealth.
-/// Uses configured dimensions except for Gemini, whose client emits its default width.
+/// Get the schema for our `LanceDB` table using the configured embedding dimensions.
+/// This is required for both getting library items and checkhealth.
 ///
 /// # Arguments
 ///
@@ -118,13 +116,6 @@ pub fn get_schema(
     ];
 
     if include_embeddings {
-        // NOTE: maintainers: Gemini ignores configured dimensions. Keep this in sync with
-        // GeminiClient::dest_type if the client starts honoring them.
-        let embedding_dims = match embedding_config {
-            EmbeddingProviderConfig::Gemini(_) => DEFAULT_GEMINI_EMBEDDING_DIM as usize,
-            _ => embedding_config.dims(),
-        };
-
         schema_fields.push(arrow_schema::Field::new(
             DbFields::Embeddings,
             arrow_schema::DataType::FixedSizeList(
@@ -133,7 +124,7 @@ pub fn get_schema(
                     arrow_schema::DataType::Float32,
                     true,
                 )),
-                i32::try_from(embedding_dims)
+                i32::try_from(embedding_config.dims())
                     .expect("Embedding dimensions exceed Arrow's i32 limit"),
             ),
             false,
@@ -386,12 +377,7 @@ mod tests {
         let _ = setup_logger(log::LevelFilter::Info);
 
         let temp_dir = tempfile::tempdir().unwrap();
-        let db_uri = temp_dir
-            .path()
-            .join("lancedb-table")
-            .to_str()
-            .unwrap()
-            .to_string();
+        let db_uri = temp_dir.path().join("lancedb-table");
 
         let config = get_config();
 
@@ -402,17 +388,11 @@ mod tests {
             .join("Zotero");
         let embedding_config = config.get_embedding_config().unwrap();
         let schema = Arc::new(get_schema(&embedding_config, true));
-        let store = LanceZoteroStore::from_schema(embedding_config, schema).with_uri(&db_uri);
-        let record_batch =
-            full_library_to_arrow(&store, Some(&library_path), Some(0), Some(5)).await;
-
-        assert!(
-            record_batch.is_ok(),
-            "Failed to fetch library: {:?}",
-            record_batch.err()
-        );
-
-        let record_batch = record_batch.unwrap();
+        let store = LanceZoteroStore::from_schema(embedding_config, schema)
+            .with_uri(db_uri.to_str().unwrap());
+        let record_batch = full_library_to_arrow(&store, Some(&library_path), Some(0), Some(5))
+            .await
+            .expect("Failed to fetch library");
         let schema = record_batch.schema();
         let batches = vec![Ok(record_batch)];
         let mut batch_iter = RecordBatchIterator::new(batches.into_iter(), schema);
@@ -430,44 +410,24 @@ mod tests {
             "Expected 4 or 5 columns in record batch"
         );
         assert!(
-            batch.num_rows() > 0,
-            "Expected non-zero rows in record batch"
-        );
-        assert!(
-            batch.num_rows() <= 5,
-            "Expected fewer than five rows in record batch"
+            (1..=5).contains(&batch.num_rows()),
+            "Expected between one and five rows in record batch"
         );
 
-        let embedding_config = EmbeddingProviderConfig::Cohere(zqa_rag::config::CohereConfig {
-            api_key: "test-key".into(),
-            embedding_model: "embed-v4.0".into(),
-            embedding_dims: 256,
-            reranker: String::new(),
-        });
-        let store =
-            LanceZoteroStore::from_embedding_config(embedding_config.clone()).with_uri(&db_uri);
         let mut item = ZoteroItemSet::from(vec![batch]).items.remove(0);
         // Empty text exercises configured zero embeddings without calling the live API.
         item.text.clear();
 
-        // Cover both initial table creation and ingestion into an existing table.
-        store.upsert_items(vec![item.clone()]).await.unwrap();
-        store.upsert_items(vec![item]).await.unwrap();
-
-        let batch = library_to_arrow_with_embeddings(
-            &["configured"],
-            &["Configured embeddings"],
-            &["paper.pdf"],
-            &["Text with precomputed embeddings"],
-            vec![vec![0.5; embedding_config.dims()]],
-            &embedding_config,
-        )
-        .unwrap();
-        assert_eq!(batch.column(4).as_fixed_size_list().value_length(), 256);
-        store.upsert_batches(vec![batch]).await.unwrap();
-        assert_eq!(store.existing_item_metadata().await.unwrap().len(), 2);
-
         for (embedding_config, expected_dims) in [
+            (
+                EmbeddingProviderConfig::Cohere(zqa_rag::config::CohereConfig {
+                    api_key: "test-key".into(),
+                    embedding_model: "embed-v4.0".into(),
+                    embedding_dims: 256,
+                    reranker: String::new(),
+                }),
+                256,
+            ),
             (
                 EmbeddingProviderConfig::VoyageAI(zqa_rag::config::VoyageAIConfig {
                     api_key: "test-key".into(),
@@ -482,13 +442,47 @@ mod tests {
                     embedding_dims: 768,
                     ..Default::default()
                 }),
-                DEFAULT_GEMINI_EMBEDDING_DIM as i32,
+                768,
             ),
         ] {
             let batch = library_to_arrow(&[], &embedding_config, true).unwrap();
             assert_eq!(
                 batch.column(4).as_fixed_size_list().value_length(),
                 expected_dims
+            );
+
+            let uri = temp_dir.path().join(embedding_config.provider_name());
+            let store = LanceZoteroStore::from_embedding_config(embedding_config.clone())
+                .with_uri(uri.to_str().unwrap());
+
+            let initial_rows = if matches!(embedding_config, EmbeddingProviderConfig::Cohere(_)) {
+                // Cover both initial table creation and ingestion into an existing table.
+                store.upsert_items(vec![item.clone()]).await.unwrap();
+                store.upsert_items(vec![item.clone()]).await.unwrap();
+                1
+            } else {
+                let source_batch = library_to_arrow(&[], &embedding_config, false).unwrap();
+                store.upsert_batches(vec![source_batch]).await.unwrap();
+                0
+            };
+
+            let batch = library_to_arrow_with_embeddings(
+                &["configured"],
+                &["Configured embeddings"],
+                &["paper.pdf"],
+                &["Text with precomputed embeddings"],
+                vec![vec![0.5; embedding_config.dims()]],
+                &embedding_config,
+            )
+            .unwrap();
+            assert_eq!(
+                batch.column(4).as_fixed_size_list().value_length(),
+                expected_dims
+            );
+            store.upsert_batches(vec![batch]).await.unwrap();
+            assert_eq!(
+                store.existing_item_metadata().await.unwrap().len(),
+                initial_rows + 1
             );
         }
     }
