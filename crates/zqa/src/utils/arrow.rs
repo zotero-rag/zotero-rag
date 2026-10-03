@@ -348,6 +348,7 @@ pub fn library_to_arrow_with_embeddings(
 mod tests {
     use arrow_array::RecordBatchIterator;
     use dotenv::dotenv;
+    use zqa_macros::test_eq;
     use zqa_rag::constants::{
         DEFAULT_VOYAGE_EMBEDDING_DIM, DEFAULT_VOYAGE_EMBEDDING_MODEL, DEFAULT_VOYAGE_RERANK_MODEL,
     };
@@ -447,7 +448,7 @@ mod tests {
             ),
         ] {
             let batch = library_to_arrow(&[], &embedding_config, true).unwrap();
-            assert_eq!(
+            test_eq!(
                 batch.column(4).as_fixed_size_list().value_length(),
                 expected_dims
             );
@@ -476,12 +477,12 @@ mod tests {
                 &embedding_config,
             )
             .unwrap();
-            assert_eq!(
+            test_eq!(
                 batch.column(4).as_fixed_size_list().value_length(),
                 expected_dims
             );
             store.upsert_batches(vec![batch]).await.unwrap();
-            assert_eq!(
+            test_eq!(
                 store.existing_item_metadata().await.unwrap().len(),
                 initial_rows + 1
             );

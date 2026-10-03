@@ -694,7 +694,7 @@ mod tests {
     async fn test_compute_embeddings_mock() {
         for (model, expected_values) in [
             ("gemini-embedding-2", [3.0, 4.0, 4.0, 3.0]),
-            ("models/gemini-embedding-001", [0.6, 0.8, 0.8, 0.6]),
+            ("gemini-embedding-001", [0.6, 0.8, 0.8, 0.6]),
         ] {
             let config = GeminiConfig {
                 api_key: "configured-key".into(),
@@ -702,12 +702,16 @@ mod tests {
                 embedding_dims: 768,
                 ..GeminiConfig::default()
             };
+
             let mut first = vec![0.0; config.embedding_dims];
             first[..2].copy_from_slice(&[3.0, 4.0]);
+
             let mut second = vec![0.0; config.embedding_dims];
             second[..2].copy_from_slice(&[4.0, 3.0]);
+
             let first = serde_json::json!({"embedding": {"values": first}});
             let second = serde_json::json!({"embedding": {"values": second}});
+
             let http_client = RecordingSequentialMockHttpClient::new([
                 first.clone(),
                 second.clone(),
@@ -715,10 +719,12 @@ mod tests {
                 second,
                 serde_json::json!({"embedding": {"values": [1.0, 0.0, -1.0]}}),
             ]);
+
             let client = GeminiClient {
                 client: http_client.clone(),
                 config: Some(config),
             };
+            let dest_type = client.dest_type().unwrap();
 
             for is_query in [false, true] {
                 let input = Arc::new(arrow_array::StringArray::from(vec!["A", "B"]));
@@ -731,9 +737,10 @@ mod tests {
                 .unwrap();
 
                 let vector = arrow_array::cast::as_fixed_size_list_array(&embeddings);
-                assert_eq!(vector.len(), 2);
-                assert_eq!(vector.value_length(), 768);
-                assert_eq!(embeddings.data_type(), client.dest_type().unwrap().as_ref());
+                test_eq!(vector.len(), 2);
+                test_eq!(vector.value_length(), 768);
+                test_eq!(embeddings.data_type(), dest_type.as_ref());
+
                 let values = arrow_array::cast::as_primitive_array::<arrow_array::types::Float32Type>(
                     vector.values(),
                 );
@@ -748,26 +755,35 @@ mod tests {
                     Vec::<&str>::new(),
                 )))
                 .unwrap();
-            assert_eq!(empty.len(), 0);
-            assert_eq!(empty.data_type(), client.dest_type().unwrap().as_ref());
+
+            test_eq!(empty.len(), 0);
+            test_eq!(empty.data_type(), dest_type.as_ref());
 
             let requests = http_client.requests();
-            assert_eq!(requests.len(), 4);
-            let expected_model =
-                format!("models/{}", model.strip_prefix("models/").unwrap_or(model));
+            test_eq!(requests.len(), 4);
+
+            let expected_model = format!("models/{model}");
 
             for (request, text) in requests.iter().zip(["A", "B", "A", "B"]) {
-                assert_eq!(request["model"], expected_model);
-                assert_eq!(request["outputDimensionality"], 768);
-                assert_eq!(request["content"]["parts"][0]["text"], text);
+                test_eq!(request["model"], expected_model);
+                test_eq!(request["content"]["parts"][0]["text"], text);
+
+                if model == "gemini-embedding-001" {
+                    test_eq!(request["outputDimensionality"], 768);
+                    test_eq!(request.get("embedContentConfig"), None);
+                } else {
+                    test_eq!(request["embedContentConfig"]["outputDimensionality"], 768);
+                    test_eq!(request.get("outputDimensionality"), None);
+                }
             }
 
             let malformed =
                 client.compute_query_embeddings(Arc::new(arrow_array::StringArray::from(vec![
                     "wrong width",
                 ])));
+
             assert!(malformed.is_err());
-            assert_eq!(http_client.requests().len(), 5);
+            test_eq!(http_client.requests().len(), 5);
         }
     }
 

@@ -283,19 +283,20 @@ mod tests {
                 .unwrap();
 
                 let vector = arrow_array::cast::as_fixed_size_list_array(&embeddings);
+                let dest_type = client.dest_type().unwrap();
 
-                assert_eq!(vector.len(), 1);
-                assert_eq!(vector.value_length(), config.embedding_dims as i32);
-                assert_eq!(embeddings.data_type(), client.dest_type().unwrap().as_ref());
+                test_eq!(vector.len(), 1);
+                test_eq!(vector.value_length(), config.embedding_dims as i32);
+                test_eq!(embeddings.data_type(), dest_type.as_ref());
             }
 
             let requests = http_client.requests();
-            assert_eq!(requests.len(), 2);
+            test_eq!(requests.len(), 2);
 
             for (request, input_type) in requests.iter().zip(["search_document", "search_query"]) {
-                assert_eq!(request["model"], config.embedding_model);
-                assert_eq!(request.get("output_dimension"), output_dimension.as_ref());
-                assert_eq!(request["input_type"], input_type);
+                test_eq!(request["model"], config.embedding_model);
+                test_eq!(request.get("output_dimension"), output_dimension.as_ref());
+                test_eq!(request["input_type"], input_type);
             }
         }
 
@@ -316,7 +317,7 @@ mod tests {
                 .to_string()
                 .contains("requires 1024 embedding dimensions, got 256")
         );
-        assert_eq!(http_client.requests(), Vec::<serde_json::Value>::new());
+        test_eq!(http_client.requests(), Vec::<serde_json::Value>::new());
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
