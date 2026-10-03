@@ -188,7 +188,8 @@ struct GeminiEmbeddingRequestContent {
 struct GeminiEmbeddingRequest {
     model: String,
     content: GeminiEmbeddingRequestContent,
-    embed_content_config: GeminiEmbedContentConfig,
+    // Gemini Embedding 001 ignores the nested embedContentConfig version of this field.
+    output_dimensionality: usize,
 }
 
 impl GeminiEmbeddingRequest {
@@ -202,18 +203,9 @@ impl GeminiEmbeddingRequest {
                     thought_signature: None,
                 }],
             },
-            embed_content_config: GeminiEmbedContentConfig {
-                output_dimensionality: embedding_dim,
-            },
+            output_dimensionality: embedding_dim,
         }
     }
-}
-
-/// Configuration for the Gemini embedContent request.
-#[derive(Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct GeminiEmbedContentConfig {
-    output_dimensionality: usize,
 }
 
 /// A vector containing the embeddings, returned as a nested object by Gemini's embedding API.
