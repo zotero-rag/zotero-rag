@@ -1,14 +1,12 @@
 //! Native GUI front-end for zqa, built on GPUI Kit.
 //!
-//! The window is a chat-style harness over the same engine the CLI drives:
-//! [`bridge`] runs the tokio-based pipeline on a dedicated thread and streams output
-//! back as [`UiEvent`]s, which this view folds into a transcript of turns.
+//! The window is a chat-style harness over the same engine the CLI drives: [`bridge`] runs the tokio-based
+//! pipeline on a dedicated thread and streams output back as [`UiEvent`]s, which this view folds into a
+//! transcript of turns.
 //!
-//! Layout follows the usual desktop AI-harness pattern: a translucent sidebar
-//! (window vibrancy shows through on macOS) with session and library commands, and an
-//! opaque main pane holding the conversation. There is no system title bar; the top
-//! strip of each pane drags the window instead.
-
+//! Layout follows the usual desktop AI-harness pattern: a translucent sidebar (window vibrancy shows through
+//! on macOS) with session and library commands, and an opaque main pane holding the conversation. There is
+//! no system title bar; the top strip of each pane drags the window instead.
 mod bridge;
 #[cfg(target_os = "macos")]
 mod macos;
@@ -32,9 +30,9 @@ use gpui_kit::component::{
 use gpui_kit::prelude::*;
 use gpui_kit::{
     AnyElement, App, Context, Decorations, Div, Entity, Focusable as _, FontWeight, IntoElement,
-    KeyBinding, MouseButton, Pixels, Rems, Render, ScrollHandle, SharedString, Stateful,
-    Subscription, Window, WindowBackgroundAppearance, WindowBounds, actions, div, px, rems, size,
-    transparent_black,
+    KeyBinding, MouseButton, Pixels, PromptButton, PromptLevel, Rems, Render, ScrollHandle,
+    SharedString, Stateful, Subscription, Window, WindowBackgroundAppearance, WindowBounds,
+    actions, div, px, rems, size, transparent_black,
 };
 use prompt_card::{PromptCard, PromptEvent};
 use prompts::PromptRequest;
@@ -148,6 +146,7 @@ enum Phase {
     Running,
     Resuming,
     Stopping,
+    ShuttingDown,
     Ended,
 }
 
@@ -181,6 +180,7 @@ struct ZqaApp {
     conversation_history: Result<Vec<Arc<SavedChatHistory>>, zqa::state::StateError>,
     /// What the engine thread is doing right now.
     phase: Phase,
+    exit_confirmation_open: bool,
     /// Whether a `/new` reset is in flight; the transcript clears only when the engine confirms it, so a failed
     /// save cannot lose the visible copy.
     pending_reset: bool,
@@ -220,6 +220,11 @@ impl ZqaApp {
         });
 
         Self::focus_input(&input_state, window, cx);
+        let app = cx.entity().downgrade();
+        window.on_window_should_close(cx, move |window, cx| {
+            let _ = app.update(cx, |app, cx| app.request_exit(window, cx));
+            false
+        });
 
         // Submit on Enter as well as via the button.
         let subscription = cx.subscribe_in(
@@ -240,10 +245,22 @@ impl ZqaApp {
                 let update = this.update_in(cx, |app, window, cx| {
                     match event {
                         UiEvent::Engine(event) => app.handle_engine_event(event, window, cx),
+                        UiEvent::ShutdownComplete(result) => match result {
+                            Ok(()) => cx.quit(),
+                            Err(message) => {
+                                app.phase = Phase::Ready;
+                                app.pane = Pane::Chat;
+                                app.rows.push(ChatRow::Failed(message.into()));
+                                Self::focus_input(&app.input_state, window, cx);
+                            }
+                        },
                         UiEvent::Done(result) => {
                             app.clear_prompts();
                             Self::focus_input(&app.input_state, window, cx);
-                            app.phase = Phase::Ready;
+
+                            if app.phase != Phase::ShuttingDown {
+                                app.phase = Phase::Ready;
+                            }
 
                             let refresh_history = app.pending_reset && result.is_ok();
                             Self::finish_command(&mut app.rows, &mut app.pending_reset, result);
@@ -254,7 +271,10 @@ impl ZqaApp {
                         UiEvent::ConversationResumed(result) => {
                             app.clear_prompts();
                             Self::focus_input(&app.input_state, window, cx);
-                            app.phase = Phase::Ready;
+
+                            if app.phase != Phase::ShuttingDown {
+                                app.phase = Phase::Ready;
+                            }
 
                             match result {
                                 Ok(conversation) => {
@@ -268,7 +288,10 @@ impl ZqaApp {
                         UiEvent::Cancelled => {
                             app.clear_prompts();
                             Self::focus_input(&app.input_state, window, cx);
-                            app.phase = Phase::Ready;
+
+                            if app.phase != Phase::ShuttingDown {
+                                app.phase = Phase::Ready;
+                            }
 
                             // A cancelled reset may or may not have taken effect engine-side; keeping the transcript
                             // is the conservative reading.
@@ -303,6 +326,7 @@ impl ZqaApp {
             rows: Vec::new(),
             conversation_history,
             phase: Phase::Ready,
+            exit_confirmation_open: false,
             pending_reset: false,
             pane: Pane::Chat,
             dark_theme,
@@ -459,9 +483,8 @@ impl ZqaApp {
 
     /// Fold a chunk of command stdout into the transcript.
     ///
-    /// Chunks append to the trailing answer row so one command renders as a single
-    /// bubble; a whitespace-only chunk before any answer text is dropped rather than
-    /// opening an empty row.
+    /// Chunks append to the trailing answer row so one command renders as a single bubble; a whitespace-only
+    /// chunk before any answer text is dropped rather than opening an empty row.
     fn fold_stdout(rows: &mut Vec<ChatRow>, text: &str) {
         if let Some(ChatRow::Answer(existing)) = rows.last_mut() {
             existing.push_str(text);
@@ -474,8 +497,8 @@ impl ZqaApp {
 
     /// Fold stderr lines (timings, warnings) into the transcript.
     ///
-    /// Consecutive lines merge into one muted block; stdout arriving between them
-    /// splits them again, which preserves chronological order.
+    /// Consecutive lines merge into one muted block; stdout arriving between them splits them again, which
+    /// preserves chronological order.
     fn fold_stderr(rows: &mut Vec<ChatRow>, text: &str) {
         for line in text.lines().filter(|line| !line.trim().is_empty()) {
             match rows.last_mut() {
@@ -490,9 +513,8 @@ impl ZqaApp {
 
     /// Record a dispatched command in the transcript state.
     ///
-    /// `/new` is a reset rather than a conversational turn: it is not echoed as a
-    /// user bubble, and it only arms the deferred reset that [`Self::finish_command`]
-    /// commits or drops.
+    /// `/new` is a reset rather than a conversational turn: it is not echoed as a user bubble, and it only
+    /// arms the deferred reset that [`Self::finish_command`] commits or drops.
     fn record_command(rows: &mut Vec<ChatRow>, pending_reset: &mut bool, command: &str) {
         if command == "/new" {
             *pending_reset = true;
@@ -503,9 +525,9 @@ impl ZqaApp {
 
     /// Apply a finished command's result to the transcript and any pending reset.
     ///
-    /// A pending `/new` reset is committed only on success: if the engine could not
-    /// save the old conversation, the failure surfaces as a [`ChatRow::Failed`] next
-    /// to the retained transcript instead of silently discarding it.
+    /// A pending `/new` reset is committed only on success: if the engine could not save the old conversation,
+    /// the failure surfaces as a [`ChatRow::Failed`] next to the retained transcript instead of silently
+    /// discarding it.
     fn finish_command(
         rows: &mut Vec<ChatRow>,
         pending_reset: &mut bool,
@@ -528,17 +550,16 @@ impl ZqaApp {
     ///
     /// # Returns
     ///
-    /// Whether the command was dispatched; false when it is empty or the engine is
-    /// busy or ended.
+    /// Whether the command was dispatched; false when it is empty or the engine is busy or ended.
     fn dispatch(&mut self, command: String, cx: &mut Context<Self>) -> bool {
         let command = command.trim().to_string();
         if command.is_empty() || !self.phase.accepts_commands() {
             return false;
         }
 
-        // `/new` starts a fresh engine conversation, so the visible transcript restarts
-        // with it. The reset is deferred until the engine confirms it, and the command
-        // itself is not echoed; see [`record_command`] and [`finish_command`].
+        // `/new` starts a fresh engine conversation, so the visible transcript restarts with it. The reset
+        // is deferred until the engine confirms it, and the command itself is not echoed; see [`record_command`]
+        // and [`finish_command`].
         Self::record_command(&mut self.rows, &mut self.pending_reset, &command);
 
         self.phase = Phase::Running;
@@ -568,9 +589,9 @@ impl ZqaApp {
 
     /// Ask the engine to cancel the in-flight command.
     ///
-    /// `phase` moves to `Stopping` immediately so further clicks and submissions are
-    /// rejected, and returns to `Ready` only when the engine confirms with
-    /// [`UiEvent::Cancelled`] (or [`UiEvent::Done`] if the command finished first).
+    /// `phase` moves to `Stopping` immediately so further clicks and submissions are rejected, and returns
+    /// to `Ready` only when the engine confirms with [`UiEvent::Cancelled`] (or [`UiEvent::Done`] if the
+    /// command finished first).
     fn request_stop(&mut self, cx: &mut Context<Self>) {
         if self.phase != Phase::Running {
             return;
@@ -581,11 +602,69 @@ impl ZqaApp {
         cx.notify();
     }
 
+    /// Confirm interruption of active work, then request a save before exiting.
+    ///
+    /// Repeated close requests share one dialog. Dismissing it leaves the engine untouched;
+    /// accepting it starts shutdown, but the app stays open until the engine acknowledges saving.
+    fn request_exit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.exit_confirmation_open || self.phase == Phase::ShuttingDown {
+            return;
+        }
+
+        if matches!(self.phase, Phase::Ready | Phase::Ended) {
+            self.begin_shutdown(cx);
+            return;
+        }
+
+        self.exit_confirmation_open = true;
+        let answer = window.prompt(
+            PromptLevel::Warning,
+            "Quit while work is in progress?",
+            Some("The unfinished operation may be interrupted and its answer lost. Completed conversation history will be saved before quitting."),
+            &[PromptButton::cancel("Keep working"), PromptButton::new("Quit")],
+            cx,
+        );
+        cx.spawn(async move |this, cx| {
+            let answer = answer.await;
+            let _ = this.update(cx, |this, cx| {
+                this.exit_confirmation_open = false;
+
+                if answer == Ok(1) {
+                    this.begin_shutdown(cx);
+                }
+
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Stop active dispatch and queue shutdown. Save failures leave the engine available for retry.
+    fn begin_shutdown(&mut self, cx: &mut Context<Self>) {
+        if self.phase == Phase::Ended {
+            cx.quit();
+            return;
+        }
+
+        if self.cmd_tx.send(EngineCommand::Shutdown).is_err() {
+            self.rows.push(ChatRow::Failed(
+                "The engine is unavailable; could not save before exit.".into(),
+            ));
+            self.pane = Pane::Chat;
+            cx.notify();
+            return;
+        }
+
+        self.phase = Phase::ShuttingDown;
+        self.clear_prompts();
+        cx.notify();
+    }
+
     /// Make a pane's top strip drag the window, with double-click to zoom.
     ///
-    /// The press is armed on mouse down and consumed by the next mouse move, mirroring
-    /// gpui-component's `TitleBar`: starting the drag directly from mouse down makes
-    /// macOS delay clicks while it disambiguates double clicks.
+    /// The press is armed on mouse down and consumed by the next mouse move, mirroring gpui-component's
+    /// `TitleBar`: starting the drag directly from mouse down makes macOS delay clicks while it disambiguates
+    /// double clicks.
     fn make_draggable(&mut self, surface: Stateful<Div>, cx: &mut Context<Self>) -> Stateful<Div> {
         surface
             .on_mouse_down(
@@ -975,6 +1054,7 @@ impl ZqaApp {
                 Phase::Running => (cx.theme().info, "Working"),
                 Phase::Resuming => (cx.theme().info, "Resuming"),
                 Phase::Stopping => (cx.theme().warning, "Stopping"),
+                Phase::ShuttingDown => (cx.theme().warning, "Saving before exit"),
                 Phase::Ended => (cx.theme().muted_foreground, "Session ended"),
             };
             h_flex()
@@ -1033,7 +1113,7 @@ impl ZqaApp {
     fn render_transcript(&self, cx: &Context<Self>) -> AnyElement {
         let busy = matches!(
             self.phase,
-            Phase::Running | Phase::Resuming | Phase::Stopping
+            Phase::Running | Phase::Resuming | Phase::Stopping | Phase::ShuttingDown
         );
 
         let scroll = || {
@@ -1077,6 +1157,7 @@ impl ZqaApp {
                                 .child(match self.phase {
                                     Phase::Resuming => "Resuming...",
                                     Phase::Stopping => "Stopping...",
+                                    Phase::ShuttingDown => "Saving before exit...",
                                     _ => "Working...",
                                 }),
                         ),
@@ -1252,7 +1333,7 @@ impl ZqaApp {
         }
 
         let stoppable = matches!(self.phase, Phase::Running | Phase::Stopping);
-        let resuming = self.phase == Phase::Resuming;
+        let resuming = matches!(self.phase, Phase::Resuming | Phase::ShuttingDown);
         let busy = stoppable || resuming;
 
         let action = div()
@@ -1327,12 +1408,12 @@ impl ZqaApp {
 impl Render for ZqaApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         h_flex()
-            .on_action(|_: &CloseWindow, window, _| {
-                window.remove_window();
-            })
-            .on_action(|_: &QuitApp, _window, cx: &mut App| {
-                cx.quit();
-            })
+            .on_action(cx.listener(|this, _: &CloseWindow, window, cx| {
+                this.request_exit(window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &QuitApp, window, cx| {
+                this.request_exit(window, cx);
+            }))
             .size_full()
             .text_color(cx.theme().foreground)
             .child(self.render_sidebar(window, cx))
@@ -1601,6 +1682,76 @@ mod tests {
     }
 
     #[gpui_kit::test]
+    fn gui_exit_confirms_busy_work_and_waits_for_save(cx: &mut TestAppContext) {
+        let (mut harness, cx) = GuiHarness::new(cx);
+
+        for phase in [Phase::Running, Phase::Resuming, Phase::Stopping] {
+            harness.app.update(cx, |app, _| app.phase = phase);
+            cx.update(|window, cx| {
+                harness.app.update(cx, |app, cx| {
+                    app.request_exit(window, cx);
+                    app.request_exit(window, cx);
+                });
+            });
+            assert!(cx.has_pending_prompt());
+            cx.simulate_prompt_answer("Keep working");
+            cx.run_until_parked();
+            assert!(harness.commands.try_recv().is_err());
+            assert!(harness.cancellations.try_recv().is_err());
+            harness.app.read_with(cx, |app, _| {
+                test_eq!(app.phase, phase);
+                assert!(!app.exit_confirmation_open);
+            });
+        }
+
+        harness.app.update(cx, |app, _| app.phase = Phase::Running);
+        cx.update(|window, cx| {
+            harness
+                .app
+                .update(cx, |app, cx| app.request_exit(window, cx));
+        });
+        cx.simulate_prompt_answer("Quit");
+        cx.run_until_parked();
+        assert!(matches!(
+            harness.commands.try_recv(),
+            Ok(EngineCommand::Shutdown)
+        ));
+        assert!(harness.cancellations.try_recv().is_err());
+        harness.events.unbounded_send(UiEvent::Cancelled).unwrap();
+        cx.run_until_parked();
+        harness.app.read_with(cx, |app, _| {
+            test_eq!(app.phase, Phase::ShuttingDown);
+        });
+        cx.update(|window, cx| {
+            harness
+                .app
+                .update(cx, |app, cx| app.request_exit(window, cx));
+        });
+        assert!(!cx.has_pending_prompt());
+        assert!(harness.commands.try_recv().is_err());
+
+        harness
+            .events
+            .unbounded_send(UiEvent::ShutdownComplete(Err("Save failed".into())))
+            .unwrap();
+        cx.run_until_parked();
+        harness.app.read_with(cx, |app, _| {
+            test_eq!(app.phase, Phase::Ready);
+            assert!(matches!(app.rows.last(), Some(ChatRow::Failed(message)) if message.as_ref() == "Save failed"));
+        });
+        cx.update(|window, cx| {
+            harness
+                .app
+                .update(cx, |app, cx| app.request_exit(window, cx));
+        });
+        assert!(!cx.has_pending_prompt());
+        assert!(matches!(
+            harness.commands.try_recv(),
+            Ok(EngineCommand::Shutdown)
+        ));
+    }
+
+    #[gpui_kit::test]
     fn gui_skip_cancels_and_clears_queued_prompts(cx: &mut TestAppContext) {
         let (mut harness, cx) = GuiHarness::new(cx);
         harness.app.update(cx, |app, cx| {
@@ -1766,6 +1917,7 @@ mod tests {
         assert!(!Phase::Running.accepts_commands());
         assert!(!Phase::Resuming.accepts_commands());
         assert!(!Phase::Stopping.accepts_commands());
+        assert!(!Phase::ShuttingDown.accepts_commands());
         assert!(!Phase::Ended.accepts_commands());
     }
 
