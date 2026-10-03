@@ -12,10 +12,7 @@ use reqwest::header::HeaderMap;
 use serde::{Deserialize, Serialize};
 
 use crate::capabilities::EmbeddingProvider;
-use crate::constants::{
-    DEFAULT_COHERE_EMBEDDING_DIM, DEFAULT_GEMINI_EMBEDDING_DIM, DEFAULT_MAX_CONCURRENT_REQUESTS,
-    DEFAULT_OLLAMA_EMBEDDING_DIM, DEFAULT_OPENAI_EMBEDDING_DIM, DEFAULT_VOYAGE_EMBEDDING_DIM,
-};
+use crate::constants::DEFAULT_MAX_CONCURRENT_REQUESTS;
 use crate::http_client::HttpClient;
 use crate::llm::errors::LLMError;
 use crate::providers::ProviderId;
@@ -48,26 +45,6 @@ impl std::fmt::Display for FailedTexts {
         }
 
         Ok(())
-    }
-}
-
-/// Returns the embedding dimension given an embedding provider.
-///
-/// # Arguments
-///
-/// * `embedding_provider` - Embedding provider enum.
-///
-/// # Returns
-///
-/// The dimensions of the embedding provider.
-#[must_use]
-pub fn get_embedding_dims_by_provider(embedding_provider: EmbeddingProvider) -> u32 {
-    match embedding_provider {
-        EmbeddingProvider::OpenAI => DEFAULT_OPENAI_EMBEDDING_DIM,
-        EmbeddingProvider::VoyageAI => DEFAULT_VOYAGE_EMBEDDING_DIM,
-        EmbeddingProvider::Gemini => DEFAULT_GEMINI_EMBEDDING_DIM,
-        EmbeddingProvider::Ollama => DEFAULT_OLLAMA_EMBEDDING_DIM as u32,
-        EmbeddingProvider::Cohere => DEFAULT_COHERE_EMBEDDING_DIM,
     }
 }
 

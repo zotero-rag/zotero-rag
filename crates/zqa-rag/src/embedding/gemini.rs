@@ -9,7 +9,6 @@ use lancedb::embeddings::EmbeddingFunction;
 use serde::{Deserialize, Serialize};
 
 use crate::clients::gemini::{GeminiClient, get_gemini_api_key};
-use crate::config::GeminiConfig;
 use crate::constants::{
     DEFAULT_GEMINI_EMBEDDING_DIM, DEFAULT_GEMINI_EMBEDDING_MODEL, DEFAULT_MAX_CONCURRENT_REQUESTS,
     DEFAULT_MAX_RETRIES,
@@ -18,6 +17,9 @@ use crate::http_client::HttpClient;
 use crate::llm::errors::LLMError;
 use crate::llm::gemini::GeminiPart;
 use crate::requests::request_with_backoff;
+
+/// Native output width of Gemini Embedding 001 before dimensionality reduction.
+const GEMINI_EMBEDDING_001_NATIVE_DIM: usize = 3072;
 
 impl<T> GeminiClient<T>
 where
@@ -61,38 +63,50 @@ where
             .iter()
             .filter_map(|s| Some(s?.to_owned()))
             .collect();
-        let embedding_dim = self
-            .config
-            .as_ref()
-            .map_or(DEFAULT_GEMINI_EMBEDDING_DIM as usize, |config| {
-                config.embedding_dims
-            });
-
-        // Create a stream of futures
-        let futures = texts.iter().map(|text| {
-            call_gemini_embedding_api(
-                &self.client,
-                text.clone(),
-                self.config.as_ref(),
-                embedding_dim,
-            )
+        let config = self.config.as_ref();
+        let embedding_dim = config.map_or(DEFAULT_GEMINI_EMBEDDING_DIM as usize, |config| {
+            config.embedding_dims
         });
 
-        // Preserve input order so vectors remain associated with their source rows.
-        let max_concurrent = env::var("MAX_CONCURRENT_REQUESTS")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(DEFAULT_MAX_CONCURRENT_REQUESTS)
-            .max(1);
+        let embeddings: Vec<Vec<f32>> = if texts.is_empty() {
+            Vec::new()
+        } else {
+            let api_key =
+                config.map_or_else(get_gemini_api_key, |config| Ok(config.api_key.clone()))?;
+            let model = config.map_or_else(
+                || {
+                    env::var("GEMINI_EMBEDDING_MODEL")
+                        .unwrap_or_else(|_| DEFAULT_GEMINI_EMBEDDING_MODEL.to_string())
+                },
+                |config| config.embedding_model.clone(),
+            );
+            let model = format!("models/{}", model.strip_prefix("models/").unwrap_or(&model));
+            let url =
+                format!("https://generativelanguage.googleapis.com/v1beta/{model}:embedContent");
+            let mut headers = HeaderMap::new();
+            headers.insert("content-type", "application/json".parse()?);
+            headers.insert("x-goog-api-key", api_key.parse()?);
 
-        // Process futures with limited concurrency
-        let results = stream::iter(futures)
-            .buffered(max_concurrent)
-            .collect::<Vec<_>>()
-            .await;
+            let max_concurrent = env::var("MAX_CONCURRENT_REQUESTS")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(DEFAULT_MAX_CONCURRENT_REQUESTS)
+                .max(1);
 
-        // Process results and construct Arrow array
-        let embeddings: Vec<Vec<f32>> = results.into_iter().collect::<Result<_, _>>()?;
+            let futures = texts.into_iter().map(|text| {
+                let request_body =
+                    GeminiEmbeddingRequest::from_text(text, model.clone(), embedding_dim);
+                call_gemini_embedding_api(&self.client, &url, &headers, request_body)
+            });
+
+            // Preserve input order so vectors remain associated with their source rows.
+            let results = stream::iter(futures)
+                .buffered(max_concurrent)
+                .collect::<Vec<_>>()
+                .await;
+
+            results.into_iter().collect::<Result<_, _>>()?
+        };
 
         // Convert to Arrow FixedSizeListArray
         let flattened: Vec<f32> = embeddings.iter().flatten().copied().collect();
@@ -116,45 +130,30 @@ where
 
 /// Call the Gemini embeddings API.
 ///
-/// # Arguments:
+/// # Arguments
 ///
-/// * `client`: An `HTTPClient` implementation.
-/// * `text`: The text to embed.
-/// * `config`: The configured credentials and model, or environment-based defaults.
-/// * `embedding_dim`: The requested output width, also used for Arrow conversion.
+/// * `client` - An `HTTPClient` implementation.
+/// * `url` - The endpoint for the configured model.
+/// * `headers` - Request headers containing the configured API key.
+/// * `request_body` - The text, model, and output dimensions for this request.
 ///
 /// # Returns
 ///
-/// An embedding vector if the request was successful.
+/// An embedding vector of the requested width, normalized for reduced-width Gemini Embedding 001 requests.
 async fn call_gemini_embedding_api(
     client: &impl HttpClient,
-    text: String,
-    config: Option<&GeminiConfig>,
-    embedding_dim: usize,
+    url: &str,
+    headers: &HeaderMap,
+    request_body: GeminiEmbeddingRequest,
 ) -> Result<Vec<f32>, LLMError> {
-    let api_key = config.map_or_else(get_gemini_api_key, |config| Ok(config.api_key.clone()))?;
-    let model = config.map_or_else(
-        || {
-            env::var("GEMINI_EMBEDDING_MODEL")
-                .unwrap_or_else(|_| DEFAULT_GEMINI_EMBEDDING_MODEL.to_string())
-        },
-        |config| config.embedding_model.clone(),
-    );
-    let model = format!("models/{}", model.strip_prefix("models/").unwrap_or(&model));
-
-    let mut headers = HeaderMap::new();
-    headers.insert("content-type", "application/json".parse()?);
-    headers.insert("x-goog-api-key", api_key.parse()?);
-
-    let url = format!("https://generativelanguage.googleapis.com/v1beta/{model}:embedContent");
-    let request_body = GeminiEmbeddingRequest::from_text(text, model, embedding_dim);
-
     let res =
-        request_with_backoff(client, &url, &headers, &request_body, DEFAULT_MAX_RETRIES).await?;
+        request_with_backoff(client, url, headers, &request_body, DEFAULT_MAX_RETRIES).await?;
     let body = res.text().await?;
     let json: serde_json::Value = serde_json::from_str(&body)?;
     let parsed: GeminiEmbeddingResponse = serde_json::from_value(json)?;
     let mut values = parsed.embedding.values;
+    let embedding_dim = request_body.output_dimensionality;
+
     if values.len() != embedding_dim {
         return Err(LLMError::GenericLLMError(format!(
             "Gemini embeddings must have the requested dimension {embedding_dim}, got {}",
@@ -163,8 +162,11 @@ async fn call_gemini_embedding_api(
     }
 
     // Gemini Embedding 001 leaves reduced-width vectors unnormalized.
-    if request_body.model == "models/gemini-embedding-001" && embedding_dim < 3072 {
+    if request_body.model == "models/gemini-embedding-001"
+        && embedding_dim < GEMINI_EMBEDDING_001_NATIVE_DIM
+    {
         let norm = values.iter().map(|value| value * value).sum::<f32>().sqrt();
+
         if norm > 0.0 {
             for value in &mut values {
                 *value /= norm;

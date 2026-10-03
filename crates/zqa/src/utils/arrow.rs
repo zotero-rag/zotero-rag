@@ -87,6 +87,7 @@ impl From<LanceError> for ArrowError {
 }
 
 /// Get the schema for our `LanceDB` table using the configured embedding dimensions.
+///
 /// This is required for both getting library items and checkhealth.
 ///
 /// # Arguments
