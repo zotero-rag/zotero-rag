@@ -758,7 +758,7 @@ mod tests {
 
             for (request, text) in requests.iter().zip(["A", "B", "A", "B"]) {
                 assert_eq!(request["model"], expected_model);
-                assert_eq!(request["embedContentConfig"]["outputDimensionality"], 768);
+                assert_eq!(request["outputDimensionality"], 768);
                 assert_eq!(request["content"]["parts"][0]["text"], text);
             }
 
