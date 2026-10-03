@@ -506,6 +506,7 @@ mod tests {
 
     use super::*;
     use crate::clients::gemini::GeminiClient;
+    use crate::config::GeminiConfig;
     use crate::constants::DEFAULT_GEMINI_EMBEDDING_DIM;
     use crate::http_client::{MockHttpClient, RecordingSequentialMockHttpClient, ReqwestClient};
     use crate::llm::base::{AgenticClient, ChatHistoryItem, ChatRequest, ContentType};
@@ -691,39 +692,83 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
     async fn test_compute_embeddings_mock() {
-        dotenv().ok();
+        for (model, expected_values) in [
+            ("gemini-embedding-2", [3.0, 4.0, 4.0, 3.0]),
+            ("models/gemini-embedding-001", [0.6, 0.8, 0.8, 0.6]),
+        ] {
+            let config = GeminiConfig {
+                api_key: "configured-key".into(),
+                embedding_model: model.into(),
+                embedding_dims: 768,
+                ..GeminiConfig::default()
+            };
+            let mut first = vec![0.0; config.embedding_dims];
+            first[..2].copy_from_slice(&[3.0, 4.0]);
+            let mut second = vec![0.0; config.embedding_dims];
+            second[..2].copy_from_slice(&[4.0, 3.0]);
+            let first = serde_json::json!({"embedding": {"values": first}});
+            let second = serde_json::json!({"embedding": {"values": second}});
+            let http_client = RecordingSequentialMockHttpClient::new([
+                first.clone(),
+                second.clone(),
+                first,
+                second,
+                serde_json::json!({"embedding": {"values": [1.0, 0.0, -1.0]}}),
+            ]);
+            let client = GeminiClient {
+                client: http_client.clone(),
+                config: Some(config),
+            };
 
-        // Build a deterministic mock response that returns a 3-length embedding
-        #[derive(Debug, Serialize, Deserialize, Clone, Default)]
-        struct MockEmbeddingResp {
-            embedding: MockEmbeddingVec,
+            for is_query in [false, true] {
+                let input = Arc::new(arrow_array::StringArray::from(vec!["A", "B"]));
+
+                let embeddings = if is_query {
+                    client.compute_query_embeddings(input)
+                } else {
+                    client.compute_source_embeddings(input)
+                }
+                .unwrap();
+
+                let vector = arrow_array::cast::as_fixed_size_list_array(&embeddings);
+                assert_eq!(vector.len(), 2);
+                assert_eq!(vector.value_length(), 768);
+                assert_eq!(embeddings.data_type(), client.dest_type().unwrap().as_ref());
+                let values = arrow_array::cast::as_primitive_array::<arrow_array::types::Float32Type>(
+                    vector.values(),
+                );
+
+                for (index, expected) in [0, 1, 768, 769].into_iter().zip(expected_values) {
+                    assert!((values.value(index) - expected).abs() < f32::EPSILON);
+                }
+            }
+
+            let empty = client
+                .compute_source_embeddings(Arc::new(arrow_array::StringArray::from(
+                    Vec::<&str>::new(),
+                )))
+                .unwrap();
+            assert_eq!(empty.len(), 0);
+            assert_eq!(empty.data_type(), client.dest_type().unwrap().as_ref());
+
+            let requests = http_client.requests();
+            assert_eq!(requests.len(), 4);
+            let expected_model =
+                format!("models/{}", model.strip_prefix("models/").unwrap_or(model));
+
+            for (request, text) in requests.iter().zip(["A", "B", "A", "B"]) {
+                assert_eq!(request["model"], expected_model);
+                assert_eq!(request["embedContentConfig"]["outputDimensionality"], 768);
+                assert_eq!(request["content"]["parts"][0]["text"], text);
+            }
+
+            let malformed =
+                client.compute_query_embeddings(Arc::new(arrow_array::StringArray::from(vec![
+                    "wrong width",
+                ])));
+            assert!(malformed.is_err());
+            assert_eq!(http_client.requests().len(), 5);
         }
-        #[derive(Debug, Serialize, Deserialize, Clone, Default)]
-        struct MockEmbeddingVec {
-            values: Vec<f32>,
-        }
-
-        let mock = MockEmbeddingResp {
-            embedding: MockEmbeddingVec {
-                values: vec![1.0, 0.0, -1.0],
-            },
-        };
-
-        let mock_http = MockHttpClient::new(mock);
-        let client = GeminiClient {
-            client: mock_http,
-            config: None,
-        };
-
-        let array = arrow_array::StringArray::from(vec!["A", "B", " ", "C"]);
-        let embeddings = client.compute_source_embeddings(Arc::new(array));
-
-        test_ok!(embeddings);
-        let embeddings = embeddings.unwrap();
-        let vector = arrow_array::cast::as_fixed_size_list_array(&embeddings);
-        test_eq!(vector.len(), 4);
-        // With mock 3-length vectors, value_length should be 3
-        test_eq!(vector.value_length(), 3);
     }
 
     #[tokio::test]
