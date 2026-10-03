@@ -1,9 +1,10 @@
 //! The runtime bridge between GPUI (which owns the main thread and its own executor)
 //! and the tokio-based zqa pipeline.
 //!
-//! [`spawn_engine`] owns a tokio runtime and [`Session`] on a dedicated thread. It drives
-//! commands sequentially and forwards typed engine events, including input requests, to GPUI.
-//! Cancellation drops the in-flight dispatch future.
+//! [`spawn_engine`] dedicates one OS thread to a tokio runtime and [`Session`]. It receives
+//! commands sequentially and forwards typed engine events to GPUI. Dispatch can be cancelled
+//! by dropping its future; shutdown itself cannot be cancelled and acknowledges a successful
+//! save before exiting. A failed save leaves the engine available for retry.
 
 use std::sync::Arc;
 use std::thread;
@@ -21,6 +22,8 @@ pub enum EngineCommand {
     Dispatch(String),
     /// Resume a saved conversation without an interactive prompt.
     ResumeConversation(Arc<SavedChatHistory>),
+    /// Save the conversation and stop the engine only if saving succeeds.
+    Shutdown,
 }
 
 /// A single piece of output streamed from the engine thread to the UI.
@@ -35,6 +38,8 @@ pub enum UiEvent {
     ConversationResumed(Result<Arc<SavedChatHistory>, String>),
     /// The in-flight command was cancelled by the user before it finished.
     Cancelled,
+    /// Shutdown finished saving, or failed with the engine still available for retry.
+    ShutdownComplete(Result<(), String>),
 }
 
 impl From<EngineEvent> for UiEvent {
@@ -95,13 +100,27 @@ pub fn spawn_engine(
             };
 
             runtime.block_on(async move {
-                while let Some(command) = cmd_rx.recv().await {
-                    // Drop any cancel signals that arrived while idle, so a late click on a
-                    // previous command can't abort this fresh one.
+                let mut pending_command = None;
+
+                loop {
+                    let command = match pending_command.take() {
+                        Some(command) => command,
+                        None => match cmd_rx.recv().await {
+                            Some(command) => command,
+                            None => break,
+                        },
+                    };
+                    let shutting_down = matches!(command, EngineCommand::Shutdown);
+
+                    // A late stop click must not cancel the next command.
                     while cancel_rx.try_recv().is_ok() {}
 
                     match command {
-                        EngineCommand::Dispatch(command) => {
+                        command @ (EngineCommand::Dispatch(_) | EngineCommand::Shutdown) => {
+                            let command = match command {
+                                EngineCommand::Dispatch(command) => command,
+                                _ => "/quit".into(),
+                            };
                             // `None` means the dispatch was cancelled; dropping the future here
                             // aborts the request in flight.
                             //
@@ -119,8 +138,16 @@ pub fn spawn_engine(
                                         // Dismissing a prompt also drops its reply sender. Prefer the
                                         // cancel signal to the resulting receive error from dispatch.
                                         biased;
-                                        Some(()) = cancel_rx.recv() => {
+                                        Some(()) = cancel_rx.recv(), if !shutting_down => {
                                             break None;
+                                        }
+                                        Some(command) = cmd_rx.recv(), if !shutting_down && pending_command.is_none() => {
+                                            let shutdown_requested = matches!(command, EngineCommand::Shutdown);
+                                            pending_command = Some(command);
+
+                                            if shutdown_requested {
+                                                break None;
+                                            }
                                         }
                                         result = &mut dispatch => {
                                             break Some(result.map_err(|e| e.to_string()));
@@ -147,6 +174,18 @@ pub fn spawn_engine(
                                 if event_tx.unbounded_send(UiEvent::Engine(event)).is_err() {
                                     return;
                                 }
+                            }
+
+                            if shutting_down {
+                                let result = result.expect("shutdown cannot be cancelled").map(|_| ());
+                                let saved = result.is_ok();
+                                let _ = event_tx.unbounded_send(UiEvent::ShutdownComplete(result));
+
+                                if saved {
+                                    break;
+                                }
+
+                                continue;
                             }
 
                             match result {
