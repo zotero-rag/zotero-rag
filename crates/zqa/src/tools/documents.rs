@@ -921,7 +921,8 @@ mod tests {
             .expect("results should be an array");
         assert!(
             !results.is_empty(),
-            "{provider_name} results should not be empty"
+            "{provider_name} results should not be empty; errors: {}",
+            value["errors"]
         );
 
         println!(
