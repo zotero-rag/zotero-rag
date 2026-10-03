@@ -1638,36 +1638,48 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_or_update_indexes() {
-        dotenv().ok();
-
         // IVF-PQ index creation requires at least 256 rows
         let row_count = 256;
-        let schema = Arc::new(arrow_schema::Schema::new(vec![
-            arrow_schema::Field::new("id", arrow_schema::DataType::Utf8, false),
-            arrow_schema::Field::new("text", arrow_schema::DataType::Utf8, false),
-        ]));
+        // Keep index training independent of live APIs and production embedding dimensions.
+        let embedding_dims = 16;
         let id_data: StringArray = (0..row_count).map(|i| Some(i.to_string())).collect();
         let text_data: StringArray = (0..row_count)
             .map(|i| Some(format!("Sample text for row {i}")))
             .collect();
-        let record_batch =
-            RecordBatch::try_new(schema.clone(), vec![Arc::new(id_data), Arc::new(text_data)])
-                .unwrap();
+        let embeddings = FixedSizeListArray::from_iter_primitive::<Float32Type, _, _>(
+            (0..row_count).map(|row| {
+                Some((0..embedding_dims).map(move |dim| Some((row * embedding_dims + dim) as f32)))
+            }),
+            embedding_dims as i32,
+        );
+        let record_batch = RecordBatch::try_from_iter([
+            ("id", Arc::new(id_data) as Arc<dyn Array>),
+            ("text", Arc::new(text_data)),
+            ("embeddings", Arc::new(embeddings)),
+        ])
+        .unwrap();
 
-        let embedding_config = get_test_openai_embedding_config();
+        let embedding_config = EmbeddingProviderConfig::OpenAI(OpenAIConfig {
+            embedding_dims,
+            ..OpenAIConfig::default()
+        });
         let (_db_dir, uri) = temp_db();
         let backend =
-            LanceBackend::new(embedding_config, schema, "text".into()).with_uri(uri.as_str());
-        backend
-            .insert_items(vec![record_batch], None)
+            LanceBackend::new(embedding_config, record_batch.schema(), "text".into()).with_uri(uri);
+        let db = backend.connect().await.unwrap();
+        db.create_table(LANCE_DATA_TABLE_NAME, vec![record_batch])
+            .execute()
+            .await
+            .unwrap();
+        ensure_metadata_table(&db, backend.embedding_config())
             .await
             .unwrap();
 
-        // First call — should create both indices
+        // First call should create both indices.
         let result = backend.create_or_update_indices("text", "embeddings").await;
         test_ok!(result);
 
-        // Second call — should be idempotent when indices already exist
+        // Second call should be idempotent when indices already exist.
         let result = backend.create_or_update_indices("text", "embeddings").await;
         test_ok!(result);
     }
