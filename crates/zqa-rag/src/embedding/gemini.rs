@@ -18,9 +18,6 @@ use crate::llm::errors::LLMError;
 use crate::llm::gemini::GeminiPart;
 use crate::requests::request_with_backoff;
 
-/// Native output width of Gemini Embedding 001 before dimensionality reduction.
-const GEMINI_EMBEDDING_001_NATIVE_DIM: usize = 3072;
-
 impl<T> GeminiClient<T>
 where
     T: HttpClient,
@@ -80,7 +77,7 @@ where
                 },
                 |config| config.embedding_model.clone(),
             );
-            let model = format!("models/{}", model.strip_prefix("models/").unwrap_or(&model));
+            let model = format!("models/{model}");
             let url =
                 format!("https://generativelanguage.googleapis.com/v1beta/{model}:embedContent");
             let mut headers = HeaderMap::new();
@@ -140,6 +137,7 @@ where
 /// # Returns
 ///
 /// An embedding vector of the requested width, normalized for reduced-width Gemini Embedding 001 requests.
+/// See: [Google's normalization guidance](https://ai.google.dev/gemini-api/docs/embeddings#ensuring-quality-for-smaller-dimensions).
 async fn call_gemini_embedding_api(
     client: &impl HttpClient,
     url: &str,
@@ -152,7 +150,12 @@ async fn call_gemini_embedding_api(
     let json: serde_json::Value = serde_json::from_str(&body)?;
     let parsed: GeminiEmbeddingResponse = serde_json::from_value(json)?;
     let mut values = parsed.embedding.values;
-    let embedding_dim = request_body.output_dimensionality;
+    let embedding_dim = match request_body.dimensions {
+        GeminiEmbeddingDimensions::OutputDimensionality(dimensions)
+        | GeminiEmbeddingDimensions::EmbedContentConfig {
+            output_dimensionality: dimensions,
+        } => dimensions,
+    };
 
     if values.len() != embedding_dim {
         return Err(LLMError::GenericLLMError(format!(
@@ -162,6 +165,7 @@ async fn call_gemini_embedding_api(
     }
 
     // Gemini Embedding 001 leaves reduced-width vectors unnormalized.
+    const GEMINI_EMBEDDING_001_NATIVE_DIM: usize = 3072;
     if request_body.model == "models/gemini-embedding-001"
         && embedding_dim < GEMINI_EMBEDDING_001_NATIVE_DIM
     {
@@ -190,12 +194,29 @@ struct GeminiEmbeddingRequestContent {
 struct GeminiEmbeddingRequest {
     model: String,
     content: GeminiEmbeddingRequestContent,
-    // Gemini Embedding 001 ignores the nested embedContentConfig version of this field.
-    output_dimensionality: usize,
+    #[serde(flatten)]
+    dimensions: GeminiEmbeddingDimensions,
+}
+
+/// Model-specific placement of the requested Gemini embedding dimensions.
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
+enum GeminiEmbeddingDimensions {
+    // Gemini Embedding 001 ignores the nested embedContentConfig field.
+    OutputDimensionality(usize),
+    EmbedContentConfig { output_dimensionality: usize },
 }
 
 impl GeminiEmbeddingRequest {
     fn from_text(text: String, model: String, embedding_dim: usize) -> Self {
+        let dimensions = if model == "models/gemini-embedding-001" {
+            GeminiEmbeddingDimensions::OutputDimensionality(embedding_dim)
+        } else {
+            GeminiEmbeddingDimensions::EmbedContentConfig {
+                output_dimensionality: embedding_dim,
+            }
+        };
+
         Self {
             model,
             content: GeminiEmbeddingRequestContent {
@@ -205,7 +226,7 @@ impl GeminiEmbeddingRequest {
                     thought_signature: None,
                 }],
             },
-            output_dimensionality: embedding_dim,
+            dimensions,
         }
     }
 }

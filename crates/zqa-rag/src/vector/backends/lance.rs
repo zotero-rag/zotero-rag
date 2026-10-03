@@ -1334,14 +1334,14 @@ mod tests {
             assert!(health_result.num_rows.unwrap().is_ok_and(|x| x == 2));
 
             let zero_embeddings = health_result.zero_embedding_items.unwrap().unwrap();
-            assert_eq!(
+            test_eq!(
                 zero_embeddings
                     .iter()
                     .map(RecordBatch::num_rows)
                     .sum::<usize>(),
                 1
             );
-            assert_eq!(
+            test_eq!(
                 as_string_array(zero_embeddings[0].column_by_name("pdf_text").unwrap()).value(0),
                 "Hello world"
             );
