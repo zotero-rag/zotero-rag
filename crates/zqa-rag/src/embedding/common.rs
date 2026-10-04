@@ -15,6 +15,7 @@ use crate::http_client::HttpClient;
 use crate::llm::errors::LLMError;
 use crate::providers::ProviderId;
 use crate::providers::registry::provider_registry;
+use crate::requests::request_with_backoff;
 
 /// A struct containing information about texts that failed to embed.
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
@@ -160,6 +161,11 @@ pub trait EmbeddingApiResponse {
 /// those types, and then use this function to handle the details of the request batching and error
 /// handling.
 ///
+/// Rate-limited requests and transient server errors are retried with exponential backoff (see
+/// [`request_with_backoff`]) before a batch counts as failed. A batch also counts as failed, rather
+/// than returning an error, when the provider returns any other unsuccessful status or a body that
+/// cannot be parsed.
+///
 /// Note that in case of failed requests, this function adds zero vectors in place of texts that
 /// failed. This is currently implemented this way because Arrow arrays are somewhat obnoxious to
 /// work with and it's not the easiest thing to remove values by index. This is, admittedly, not
@@ -188,6 +194,7 @@ pub trait EmbeddingApiResponse {
 /// * `wait_after_request_s` - See `batch_size`.
 /// * `embedding_dim` - The embedding dimensions you expect to receive.
 /// * `max_concurrent` - The maximum number of batches to request at once.
+/// * `max_retries` - The maximum number of retries for a batch that fails in a retryable way.
 ///
 /// # Returns
 ///
@@ -196,10 +203,7 @@ pub trait EmbeddingApiResponse {
 /// # Errors
 ///
 /// * `LLMError::TimeoutError` - If the HTTP request times out
-/// * `LLMError::CredentialError` - If the API returns 401 or 403 status
-/// * `LLMError::HttpStatusError` - If the API returns other unsuccessful HTTP status codes
 /// * `LLMError::NetworkError` - If a network connectivity error occurs
-/// * `LLMError::DeserializationError` - If the API response cannot be parsed
 /// * `LLMError::InvalidHeaderError` - If header values cannot be parsed
 /// * `LLMError::GenericLLMError` - If other HTTP errors occur or Arrow array creation fails
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
@@ -214,6 +218,7 @@ pub(crate) async fn compute_embeddings_async<T, U, F>(
     wait_after_request_s: u64,
     embedding_dim: usize,
     max_concurrent: usize,
+    max_retries: usize,
 ) -> Result<Arc<dyn arrow_array::Array>, LLMError>
 where
     T: Serialize + Send + Sync + std::fmt::Debug,
@@ -277,45 +282,55 @@ where
 
             let start_time = Instant::now();
             let request = make_request(cur_texts);
-            let response = api_client.post_json(&api_url, headers, &request).await?;
-            let status = response.status();
-            let body = response.text().await?;
+            let outcome: Result<Vec<Vec<f32>>, String> =
+                match request_with_backoff(&api_client, &api_url, &headers, &request, max_retries).await {
+                    Ok(response) => {
+                        let body = response.text().await?;
+                        match serde_json::from_str::<U>(&body) {
+                            Ok(api_response) if api_response.is_success() => api_response
+                                .get_embeddings()
+                                .ok_or_else(|| String::from("No embeddings in response.")),
+                            Ok(api_response) => Err(api_response
+                                .get_error_message()
+                                .unwrap_or_else(|| String::from("No error found."))),
+                            Err(e) => Err(format!("Could not parse response ({e}): {body}")),
+                        }
+                    }
+                    // The status was not retryable, or retries ran out: record the batch as failed
+                    // instead of discarding the batches that succeeded.
+                    Err(LLMError::HttpStatusError(body)) => Err(body),
+                    Err(e) => return Err(e),
+                };
             log::debug!(
-                "{embedding_provider} embedding batch {}: status={status}, elapsed={:.1?}",
-                i + 1, start_time.elapsed()
+                "{embedding_provider} embedding batch {}: succeeded={}, elapsed={:.1?}",
+                i + 1, outcome.is_ok(), start_time.elapsed()
             );
 
-            let api_response: U = serde_json::from_str(&body)?;
-
-            let (embeddings_opt, error_message) = if api_response.is_success() {
-                (api_response.get_embeddings(), None)
-            } else {
-                (None, api_response.get_error_message())
-            };
-
-            let result: BatchResult = if let Some(emb) = embeddings_opt {
-                let expected = mask.iter().filter(|&&is_real| is_real).count();
-                log::debug!("{embedding_provider} embedding batch {}: expected_vectors={expected}, returned_vectors={}, empty_inputs={}, missing_vectors_replaced_with_zeros={}",
-                    i + 1, emb.len(), batch.len() - expected, expected.saturating_sub(emb.len()));
-                let mut it = emb.into_iter();
-                let mut batch_embs = Vec::with_capacity(batch.len());
-                let masked_count = batch.len() - expected;
-                for &is_real in &mask {
-                    if is_real && let Some(embedding) = it.next() {
-                        batch_embs.push(embedding);
-                    } else {
-                        batch_embs.push(vec![0.0_f32; embedding_dim]);
+            let result: BatchResult = match outcome {
+                Ok(emb) => {
+                    let expected = mask.iter().filter(|&&is_real| is_real).count();
+                    log::debug!("{embedding_provider} embedding batch {}: expected_vectors={expected}, returned_vectors={}, empty_inputs={}, missing_vectors_replaced_with_zeros={}",
+                        i + 1, emb.len(), batch.len() - expected, expected.saturating_sub(emb.len()));
+                    let mut it = emb.into_iter();
+                    let mut batch_embs = Vec::with_capacity(batch.len());
+                    let masked_count = batch.len() - expected;
+                    for &is_real in &mask {
+                        if is_real && let Some(embedding) = it.next() {
+                            batch_embs.push(embedding);
+                        } else {
+                            batch_embs.push(vec![0.0_f32; embedding_dim]);
+                        }
                     }
+                    (batch_embs, 0, vec![], masked_count)
                 }
-                (batch_embs, 0, vec![], masked_count)
-            } else {
-                let error_msg = error_message.unwrap_or_else(|| String::from("No error found."));
-                log::error!("{embedding_provider} embedding batch {} failed (HTTP {status}): {}", i + 1, crate::logging::preview(&error_msg));
-                log::debug!("{embedding_provider} embedding batch {}: replacing {} failed inputs with zero vectors", i + 1, batch.len());
-                let fail_texts: Vec<String> =
-                    batch.iter().filter_map(|t| t.as_ref()).cloned().collect();
-                let zeros = std::iter::repeat_n(vec![0.0f32; embedding_dim], batch.len()).collect();
-                (zeros, batch.len(), fail_texts, 0)
+                Err(error_msg) => {
+                    log::error!("{embedding_provider} embedding batch {} failed: {}", i + 1, crate::logging::preview(&error_msg));
+                    log::debug!("{embedding_provider} embedding batch {}: replacing {} failed inputs with zero vectors", i + 1, batch.len());
+                    let fail_texts: Vec<String> =
+                        batch.iter().filter_map(|t| t.as_ref()).cloned().collect();
+                    let zeros = std::iter::repeat_n(vec![0.0f32; embedding_dim], batch.len()).collect();
+                    (zeros, batch.len(), fail_texts, 0)
+                }
             };
 
             if wait_after_request_s > 0 && i < num_batches - 1 {

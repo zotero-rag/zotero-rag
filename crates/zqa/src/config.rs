@@ -1051,6 +1051,7 @@ impl VoyageAIConfig {
             reranker: self
                 .reranker
                 .unwrap_or_else(|| DEFAULT_VOYAGE_RERANK_MODEL.to_string()),
+            max_retries: app_config.max_retries,
             max_concurrent_requests: app_config.max_concurrent_requests,
         }
     }
@@ -1093,6 +1094,7 @@ impl CohereConfig {
             reranker: self
                 .reranker
                 .unwrap_or_else(|| DEFAULT_COHERE_RERANK_MODEL.to_string()),
+            max_retries: app_config.max_retries,
             max_concurrent_requests: app_config.max_concurrent_requests,
         }
     }
@@ -1199,20 +1201,23 @@ mod tests {
             panic!("Expected a Voyage AI embedding config");
         };
         test_eq!(embedding.max_concurrent_requests, 5);
+        test_eq!(embedding.max_retries, 7);
         for provider in [ProviderId::Cohere, ProviderId::Gemini, ProviderId::Ollama] {
-            let max_concurrent_requests = match config.get_embedding_provider_config(provider) {
-                Some(EmbeddingProviderConfig::Cohere(embedding)) => {
-                    embedding.max_concurrent_requests
-                }
-                Some(EmbeddingProviderConfig::Gemini(embedding)) => {
-                    embedding.max_concurrent_requests
-                }
-                Some(EmbeddingProviderConfig::Ollama(embedding)) => {
-                    embedding.max_concurrent_requests
-                }
-                _ => panic!("Expected a {provider:?} embedding config"),
-            };
+            let (max_concurrent_requests, max_retries) =
+                match config.get_embedding_provider_config(provider) {
+                    Some(EmbeddingProviderConfig::Cohere(embedding)) => {
+                        (embedding.max_concurrent_requests, embedding.max_retries)
+                    }
+                    Some(EmbeddingProviderConfig::Gemini(embedding)) => {
+                        (embedding.max_concurrent_requests, embedding.max_retries)
+                    }
+                    Some(EmbeddingProviderConfig::Ollama(embedding)) => {
+                        (embedding.max_concurrent_requests, embedding.max_retries)
+                    }
+                    _ => panic!("Expected a {provider:?} embedding config"),
+                };
             test_eq!(max_concurrent_requests, 5);
+            test_eq!(max_retries, 7);
         }
 
         let anthropic = config.anthropic.unwrap();

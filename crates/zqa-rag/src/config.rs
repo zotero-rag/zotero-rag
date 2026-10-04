@@ -167,6 +167,8 @@ pub struct VoyageAIConfig {
     pub reranker: String,
     /// Maximum number of concurrent embedding requests
     pub max_concurrent_requests: usize,
+    /// Maximum number of retries for a request that fails in a retryable way
+    pub max_retries: usize,
 }
 
 /// Configuration for Cohere embedding and reranking provider
@@ -182,6 +184,8 @@ pub struct CohereConfig {
     pub reranker: String,
     /// Maximum number of concurrent embedding requests
     pub max_concurrent_requests: usize,
+    /// Maximum number of retries for a request that fails in a retryable way
+    pub max_retries: usize,
 }
 
 /// Configuration for OpenRouter provider

@@ -14,7 +14,8 @@ use serde_jsonlines::{json_lines, write_json_lines};
 
 use crate::capabilities::{BatchAPIProvider, BatchJobState, EmbeddingProvider};
 use crate::constants::{
-    DEFAULT_MAX_CONCURRENT_REQUESTS, DEFAULT_VOYAGE_EMBEDDING_DIM, DEFAULT_VOYAGE_EMBEDDING_MODEL,
+    DEFAULT_MAX_CONCURRENT_REQUESTS, DEFAULT_MAX_RETRIES, DEFAULT_VOYAGE_EMBEDDING_DIM,
+    DEFAULT_VOYAGE_EMBEDDING_MODEL,
 };
 use crate::embedding::common::{
     BatchEmbeddingError, BatchEmbeddingRequest, BatchEmbeddingResult, BatchEmbeddingResults,
@@ -111,6 +112,10 @@ where
             .map_or(DEFAULT_MAX_CONCURRENT_REQUESTS, |c| {
                 c.max_concurrent_requests
             });
+        let max_retries = self
+            .config
+            .as_ref()
+            .map_or(DEFAULT_MAX_RETRIES, |c| c.max_retries);
 
         tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(compute_embeddings_async::<
@@ -135,6 +140,7 @@ where
                 WAIT_AFTER_REQUEST_S,
                 output_dimension as usize,
                 max_concurrent,
+                max_retries,
             ))
         })
     }
@@ -881,6 +887,7 @@ mod tests {
             embedding_dims: DEFAULT_VOYAGE_EMBEDDING_DIM as usize,
             reranker: "rerank-2.5".into(),
             max_concurrent_requests: crate::constants::DEFAULT_MAX_CONCURRENT_REQUESTS,
+            max_retries: crate::constants::DEFAULT_MAX_RETRIES,
         };
         let client = VoyageAIClient {
             client: MockHttpClient::new(()),
@@ -915,6 +922,7 @@ mod tests {
                 embedding_dims: DEFAULT_VOYAGE_EMBEDDING_DIM as usize,
                 reranker: "rerank-2".to_string(),
                 max_concurrent_requests: crate::constants::DEFAULT_MAX_CONCURRENT_REQUESTS,
+                max_retries: crate::constants::DEFAULT_MAX_RETRIES,
             }),
         };
 
@@ -945,6 +953,7 @@ mod tests {
                 embedding_dims: DEFAULT_VOYAGE_EMBEDDING_DIM as usize,
                 reranker: "rerank-2".to_string(),
                 max_concurrent_requests: crate::constants::DEFAULT_MAX_CONCURRENT_REQUESTS,
+                max_retries: crate::constants::DEFAULT_MAX_RETRIES,
             }),
         };
 
@@ -977,6 +986,7 @@ mod tests {
                 embedding_dims: DEFAULT_VOYAGE_EMBEDDING_DIM as usize,
                 reranker: "rerank-2".to_string(),
                 max_concurrent_requests: crate::constants::DEFAULT_MAX_CONCURRENT_REQUESTS,
+                max_retries: crate::constants::DEFAULT_MAX_RETRIES,
             }),
         };
 
@@ -1051,6 +1061,7 @@ mod tests {
                 embedding_dims: DEFAULT_VOYAGE_EMBEDDING_DIM as usize,
                 reranker: "rerank-2".to_string(),
                 max_concurrent_requests: crate::constants::DEFAULT_MAX_CONCURRENT_REQUESTS,
+                max_retries: crate::constants::DEFAULT_MAX_RETRIES,
             }),
         };
 

@@ -13,6 +13,7 @@ use super::common::EmbeddingApiResponse;
 use crate::capabilities::EmbeddingProvider;
 use crate::constants::{
     DEFAULT_COHERE_EMBEDDING_DIM, DEFAULT_COHERE_EMBEDDING_MODEL, DEFAULT_MAX_CONCURRENT_REQUESTS,
+    DEFAULT_MAX_RETRIES,
 };
 use crate::embedding::common::compute_embeddings_async;
 use crate::http_client::{HttpClient, ReqwestClient};
@@ -107,6 +108,10 @@ impl<T: HttpClient + Clone> CohereClient<T> {
             .map_or(DEFAULT_MAX_CONCURRENT_REQUESTS, |c| {
                 c.max_concurrent_requests
             });
+        let max_retries = self
+            .config
+            .as_ref()
+            .map_or(DEFAULT_MAX_RETRIES, |c| c.max_retries);
 
         tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(compute_embeddings_async::<
@@ -131,6 +136,7 @@ impl<T: HttpClient + Clone> CohereClient<T> {
                 WAIT_AFTER_REQUEST_S,
                 embedding_dims as usize,
                 max_concurrent,
+                max_retries,
             ))
         })
     }
@@ -263,6 +269,54 @@ mod tests {
         ConcurrencyTrackingMockHttpClient, RecordingSequentialMockHttpClient, ReqwestClient,
     };
 
+    /// Build an `embed-v4.0` config with 256 dimensions and the given request limits.
+    fn embed_v4_config(max_concurrent_requests: usize, max_retries: usize) -> CohereConfig {
+        CohereConfig {
+            api_key: "test-key".into(),
+            embedding_model: "embed-v4.0".into(),
+            embedding_dims: 256,
+            reranker: String::new(),
+            max_concurrent_requests,
+            max_retries,
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn test_failed_batch_keeps_successful_batches() {
+        // A failed batch is zero-filled without discarding or reordering the batches that succeeded,
+        // whether the provider returns an error status or a body that is not JSON.
+        let batch_response = json!({"embeddings": {"float": vec![vec![0.5_f32; 256]; 30]}});
+        let http_client = RecordingSequentialMockHttpClient::from_status_bodies([
+            (200, batch_response.to_string()),
+            (502, String::from("<html>502 Bad Gateway</html>")),
+            (200, String::from("<html>not JSON</html>")),
+            (
+                200,
+                json!({"embeddings": {"float": [vec![0.25_f32; 256]]}}).to_string(),
+            ),
+        ]);
+        let client = CohereClient {
+            client: http_client.clone(),
+            config: Some(embed_v4_config(1, 0)),
+        };
+        let input = Arc::new(arrow_array::StringArray::from(vec!["configured input"; 91]));
+        let embeddings = client.compute_source_embeddings(input).unwrap();
+        let vectors = arrow_array::cast::as_fixed_size_list_array(&embeddings);
+        let values = vectors
+            .values()
+            .as_any()
+            .downcast_ref::<arrow_array::Float32Array>()
+            .unwrap()
+            .values();
+        test_eq!(vectors.len(), 91);
+        test_eq!(http_client.requests().len(), 4);
+        let (first, rest) = values.split_at(30 * 256);
+        let (failed, last) = rest.split_at(60 * 256);
+        assert!(first.iter().all(|v| (v - 0.5).abs() < f32::EPSILON));
+        assert!(failed.iter().all(|v| v.abs() < f32::EPSILON));
+        assert!(last.iter().all(|v| (v - 0.25).abs() < f32::EPSILON));
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
     async fn test_configured_embeddings() {
         for (embedding_model, embedding_dims, output_dimension) in [
@@ -276,6 +330,7 @@ mod tests {
                 embedding_dims,
                 reranker: String::new(),
                 max_concurrent_requests: crate::constants::DEFAULT_MAX_CONCURRENT_REQUESTS,
+                max_retries: crate::constants::DEFAULT_MAX_RETRIES,
             };
             let response = json!({"embeddings": {"float": [vec![0.5; config.embedding_dims]]}});
             let http_client = RecordingSequentialMockHttpClient::new([response.clone(), response]);
@@ -318,13 +373,7 @@ mod tests {
             ConcurrencyTrackingMockHttpClient::new(std::iter::repeat_n(batch_response, 4));
         let client = CohereClient {
             client: http_client.clone(),
-            config: Some(CohereConfig {
-                api_key: "test-key".into(),
-                embedding_model: "embed-v4.0".into(),
-                embedding_dims: 256,
-                reranker: String::new(),
-                max_concurrent_requests: 2,
-            }),
+            config: Some(embed_v4_config(2, crate::constants::DEFAULT_MAX_RETRIES)),
         };
         let input = Arc::new(arrow_array::StringArray::from(vec![
             "configured input";
@@ -343,6 +392,7 @@ mod tests {
                 embedding_dims: 256,
                 reranker: String::new(),
                 max_concurrent_requests: crate::constants::DEFAULT_MAX_CONCURRENT_REQUESTS,
+                max_retries: crate::constants::DEFAULT_MAX_RETRIES,
             }),
         };
         let input = Arc::new(arrow_array::StringArray::from(vec!["configured input"]));

@@ -124,7 +124,7 @@ async fn debug_logs_are_bounded_without_changing_http_payloads() {
 
     let logs = LOG.0.lock().unwrap();
     let combined = logs.join("\n");
-    assert!(combined.contains("Rate limited on attempt 1"));
+    assert!(combined.contains("Got 429 Too Many Requests on attempt 1"));
     assert!(combined.contains("attempt 2 returned 400"));
     assert!(combined.contains("Generation turn 1 failed"));
     assert!(combined.contains("truncated;"));

@@ -339,6 +339,7 @@ mod tests {
             embedding_dims: 1024,
             reranker: "rerank-test".into(),
             max_concurrent_requests: crate::constants::DEFAULT_MAX_CONCURRENT_REQUESTS,
+            max_retries: crate::constants::DEFAULT_MAX_RETRIES,
         })
     }
 
@@ -349,6 +350,7 @@ mod tests {
             embedding_dims: 1024,
             reranker: "rerank-test".into(),
             max_concurrent_requests: crate::constants::DEFAULT_MAX_CONCURRENT_REQUESTS,
+            max_retries: crate::constants::DEFAULT_MAX_RETRIES,
         })
     }
 
@@ -359,6 +361,7 @@ mod tests {
             embedding_dims: 1024,
             reranker: "rerank-test".into(),
             max_concurrent_requests: crate::constants::DEFAULT_MAX_CONCURRENT_REQUESTS,
+            max_retries: crate::constants::DEFAULT_MAX_RETRIES,
         })
     }
 
@@ -369,6 +372,7 @@ mod tests {
             embedding_dims: 1024,
             reranker: "rerank-test".into(),
             max_concurrent_requests: crate::constants::DEFAULT_MAX_CONCURRENT_REQUESTS,
+            max_retries: crate::constants::DEFAULT_MAX_RETRIES,
         })
     }
 
