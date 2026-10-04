@@ -117,7 +117,7 @@ pub(crate) async fn request_with_backoff<T: HttpClient>(
             preview(&body)
         );
 
-        return Err(LLMError::HttpStatusError(body));
+        return Err(LLMError::from_status(status, body));
     }
 }
 
@@ -134,6 +134,7 @@ mod tests {
     use zqa_macros::{test_eq, test_ok};
 
     use crate::http_client::HttpClient;
+    use crate::llm::errors::LLMError;
     use crate::requests::{calculate_backoff_delay, request_with_backoff};
 
     struct MockRateLimitClient {
@@ -262,6 +263,27 @@ mod tests {
         // Verify we made max_retries + 1 calls (3 total: initial + 2 retries)
         let call_count = *client.call_count.lock().unwrap();
         test_eq!(call_count, 3);
+    }
+
+    #[tokio::test]
+    async fn test_request_with_backoff_classifies_failures() {
+        let headers = HeaderMap::new();
+        let request = json!({"test": "data"});
+
+        for (status, is_credential_error) in [(401, true), (403, true), (404, false)] {
+            let client = MockRateLimitClient::new(1).with_failure_status(status);
+
+            let result =
+                request_with_backoff(&client, "http://test.com", &headers, &request, 3).await;
+
+            if is_credential_error {
+                assert!(matches!(result, Err(LLMError::CredentialError(_))));
+            } else {
+                assert!(matches!(result, Err(LLMError::HttpStatusError(_))));
+            }
+            // Only rate limits and server errors are retried.
+            test_eq!(*client.call_count.lock().unwrap(), 1);
+        }
     }
 
     #[tokio::test]

@@ -488,14 +488,15 @@ impl From<VoyageAIBatchError> for BatchEmbeddingError {
     }
 }
 
-/// Returns the response body as text, or an [`LLMError::HttpStatusError`] carrying the body if the
-/// HTTP status is not a success. The Voyage batch methods below don't use reqwest's
+/// Returns the response body as text, or an error carrying the body if the HTTP status is not a
+/// success (see [`LLMError::from_status`]). The Voyage batch methods below don't use reqwest's
 /// `error_for_status`, so we check explicitly here to surface clear failures instead of an opaque
 /// deserialization error when the API returns a non-2xx response.
 async fn body_or_status_error(res: reqwest::Response, context: &str) -> Result<String, LLMError> {
-    if !res.status().is_success() {
+    let status = res.status();
+    if !status.is_success() {
         let body = res.text().await.unwrap_or_default();
-        return Err(LLMError::HttpStatusError(format!("{context}: {body}")));
+        return Err(LLMError::from_status(status, format!("{context}: {body}")));
     }
     Ok(res.text().await?)
 }

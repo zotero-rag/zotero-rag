@@ -241,7 +241,6 @@ impl SequentialMockHttpClient {
     /// # Panics
     ///
     /// * When a request is made, if a status code is not a valid HTTP status code.
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn from_status_bodies(responses: impl IntoIterator<Item = (u16, String)>) -> Self {
         Self {
             responses: Arc::new(Mutex::new(responses.into_iter().collect())),

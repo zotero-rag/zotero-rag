@@ -268,6 +268,7 @@ mod tests {
     use crate::http_client::{
         ConcurrencyTrackingMockHttpClient, RecordingSequentialMockHttpClient, ReqwestClient,
     };
+    use crate::llm::errors::LLMError;
 
     /// Build an `embed-v4.0` config with 256 dimensions and the given request limits.
     fn embed_v4_config(max_concurrent_requests: usize, max_retries: usize) -> CohereConfig {
@@ -315,6 +316,22 @@ mod tests {
         assert!(first.iter().all(|v| (v - 0.5).abs() < f32::EPSILON));
         assert!(failed.iter().all(|v| v.abs() < f32::EPSILON));
         assert!(last.iter().all(|v| (v - 0.25).abs() < f32::EPSILON));
+
+        // A rejected API key fails every batch, so it stops the run, without sending the remaining
+        // batches, instead of zero-filling.
+        let http_client = RecordingSequentialMockHttpClient::from_status_bodies([
+            (200, batch_response.to_string()),
+            (401, String::from("invalid api token")),
+            (200, batch_response.to_string()),
+        ]);
+        let client = CohereClient {
+            client: http_client.clone(),
+            config: Some(embed_v4_config(1, 0)),
+        };
+        let input = Arc::new(arrow_array::StringArray::from(vec!["configured input"; 90]));
+        let result = client.compute_embeddings_internal(input, "search_document");
+        assert!(matches!(result, Err(LLMError::CredentialError(_))));
+        test_eq!(http_client.requests().len(), 2);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
