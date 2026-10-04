@@ -277,8 +277,7 @@ impl ZoteroStore for LanceZoteroStore {
     ///
     /// Returns a [`CLIError`] if the upsert fails.
     async fn upsert_items(&self, items: Vec<ZoteroItem>) -> Result<(), Self::StoreError> {
-        let include_embeddings = self.exists().await;
-        let batch = library_to_arrow(&items, &self.embedding_config, include_embeddings)?;
+        let batch = library_to_arrow(&items, &self.embedding_config)?;
         self.upsert_batches(vec![batch]).await
     }
 

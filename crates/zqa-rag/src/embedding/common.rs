@@ -4,6 +4,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use arrow_array::builder::{FixedSizeListBuilder, Float32Builder};
 use arrow_schema::{DataType, Field};
 use futures::{StreamExt, TryStreamExt, stream};
 use lancedb::embeddings::EmbeddingFunction;
@@ -166,13 +167,10 @@ pub trait EmbeddingApiResponse {
 /// than returning an error, when the provider returns any other unsuccessful status or a body that
 /// cannot be parsed.
 ///
-/// Note that in case of failed requests, this function adds zero vectors in place of texts that
-/// failed. This is currently implemented this way because Arrow arrays are somewhat obnoxious to
-/// work with and it's not the easiest thing to remove values by index. This is, admittedly, not
-/// the best UX, and the workaround provided is the `/embed` command that retries these at a later
-/// time.
-///
-/// TODO: Consider making this more robust later.
+/// Texts in a failed batch, and texts the provider returned no vector for, are null entries in
+/// the returned array, so callers can tell them apart from real embeddings: search should fail on
+/// them, and ingestion should skip those rows and retry them later. Empty texts are not sent to
+/// the provider and get zero vectors.
 ///
 /// # Arguments:
 ///
@@ -198,7 +196,8 @@ pub trait EmbeddingApiResponse {
 ///
 /// # Returns
 ///
-/// If successful, an Arrow array containing the embeddings.
+/// If successful, an Arrow array containing the embeddings, with a null entry for each text that
+/// could not be embedded.
 ///
 /// # Errors
 ///
@@ -263,13 +262,14 @@ where
             log::debug!("{embedding_provider} embedding batch {}/{num_batches}: inputs={}, nonempty={}",
                 i + 1, batch.len(), cur_texts.len());
 
-            // (embeddings_for_batch, fail_count, failed_texts, masked_count)
-            type BatchResult = (Vec<Vec<f32>>, usize, Vec<String>, usize);
+            // (embeddings_for_batch, fail_count, failed_texts, masked_count). A `None` embedding
+            // marks a text that could not be embedded.
+            type BatchResult = (Vec<Option<Vec<f32>>>, usize, Vec<String>, usize);
 
             if cur_texts.is_empty() {
                 log::debug!("{embedding_provider} embedding batch {}: skipping API call, {} empty inputs replaced with zero vectors", i + 1, batch.len());
                 let embeddings =
-                    std::iter::repeat_n(vec![0.0f32; embedding_dim], batch.len()).collect();
+                    std::iter::repeat_n(Some(vec![0.0f32; embedding_dim]), batch.len()).collect();
                 if wait_after_request_s > 0 && i < num_batches - 1 {
                     tokio::time::sleep(Duration::from_secs(wait_after_request_s)).await;
                 }
@@ -310,27 +310,38 @@ where
             let result: BatchResult = match outcome {
                 Ok(emb) => {
                     let expected = mask.iter().filter(|&&is_real| is_real).count();
-                    log::debug!("{embedding_provider} embedding batch {}: expected_vectors={expected}, returned_vectors={}, empty_inputs={}, missing_vectors_replaced_with_zeros={}",
-                        i + 1, emb.len(), batch.len() - expected, expected.saturating_sub(emb.len()));
+                    let missing = expected.saturating_sub(emb.len());
+                    log::debug!("{embedding_provider} embedding batch {}: expected_vectors={expected}, returned_vectors={}, empty_inputs={}, missing_vectors={missing}",
+                        i + 1, emb.len(), batch.len() - expected);
                     let mut it = emb.into_iter();
                     let mut batch_embs = Vec::with_capacity(batch.len());
                     let masked_count = batch.len() - expected;
                     for &is_real in &mask {
-                        if is_real && let Some(embedding) = it.next() {
-                            batch_embs.push(embedding);
+                        if is_real {
+                            // `None` if the provider returned fewer vectors than texts.
+                            batch_embs.push(it.next());
                         } else {
-                            batch_embs.push(vec![0.0_f32; embedding_dim]);
+                            batch_embs.push(Some(vec![0.0_f32; embedding_dim]));
                         }
                     }
-                    (batch_embs, 0, vec![], masked_count)
+                    (batch_embs, missing, vec![], masked_count)
                 }
                 Err(error_msg) => {
                     log::error!("{embedding_provider} embedding batch {} failed: {}", i + 1, crate::logging::preview(&error_msg));
-                    log::debug!("{embedding_provider} embedding batch {}: replacing {} failed inputs with zero vectors", i + 1, batch.len());
-                    let fail_texts: Vec<String> =
-                        batch.iter().filter_map(|t| t.as_ref()).cloned().collect();
-                    let zeros = std::iter::repeat_n(vec![0.0f32; embedding_dim], batch.len()).collect();
-                    (zeros, batch.len(), fail_texts, 0)
+
+                    // Empty texts were never sent, so they keep their zero vectors.
+                    let fail_texts: Vec<String> = batch
+                        .iter()
+                        .zip(&mask)
+                        .filter(|&(_, &is_real)| is_real)
+                        .filter_map(|(t, _)| t.clone())
+                        .collect();
+                    let embs = mask
+                        .iter()
+                        .map(|&is_real| (!is_real).then(|| vec![0.0_f32; embedding_dim]))
+                        .collect();
+                    let fail_count = fail_texts.len();
+                    (embs, fail_count, fail_texts, batch.len() - fail_count)
                 }
             };
 
@@ -349,7 +360,7 @@ where
         .try_collect()
         .await?;
 
-    let mut all_embeddings: Vec<Vec<f32>> = Vec::new();
+    let mut all_embeddings: Vec<Option<Vec<f32>>> = Vec::new();
     let mut fail_count = 0;
     let mut total_masked = 0;
     let mut failed_texts: Vec<String> = Vec::new();
@@ -372,18 +383,33 @@ where
         "Processing finished. Statistics:\n{fail_count} items failed.\n{total_masked} items were empty."
     );
 
-    // Convert to Arrow FixedSizeListArray
-    let flattened = all_embeddings.iter().flatten().copied();
-    let values = arrow_array::Float32Array::from_iter_values(flattened);
-
-    let list_array = arrow_array::FixedSizeListArray::try_new(
-        Arc::new(Field::new("item", DataType::Float32, true)),
+    // Convert to an Arrow FixedSizeListArray, with a null entry for each text that failed.
+    let mut builder = FixedSizeListBuilder::with_capacity(
+        Float32Builder::with_capacity(all_embeddings.len() * embedding_dim),
         embedding_dim as i32,
-        Arc::new(values),
-        None,
+        all_embeddings.len(),
     )
-    .map_err(|e| LLMError::GenericLLMError(format!("Failed to create FixedSizeListArray: {e}")))?;
+    .with_field(Arc::new(Field::new("item", DataType::Float32, true)));
+    for embedding in &all_embeddings {
+        match embedding {
+            Some(embedding) if embedding.len() == embedding_dim => {
+                builder.values().append_slice(embedding);
+                builder.append(true);
+            }
+            Some(embedding) => {
+                return Err(LLMError::GenericLLMError(format!(
+                    "Failed to create FixedSizeListArray: expected {embedding_dim} dimensions, got {}",
+                    embedding.len()
+                )));
+            }
+            None => {
+                builder.values().append_nulls(embedding_dim);
+                builder.append(false);
+            }
+        }
+    }
 
+    let list_array = builder.finish();
     Ok(Arc::new(list_array) as Arc<dyn arrow_array::Array>)
 }
 

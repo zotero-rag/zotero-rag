@@ -5,9 +5,9 @@ use std::path::Path;
 use std::pin::Pin;
 use std::sync::{Arc, RwLock};
 
-use arrow_array::StringArray;
 use arrow_array::cast::AsArray;
 use arrow_array::types::Float32Type;
+use arrow_array::{Array, StringArray};
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
 use lancedb::embeddings::EmbeddingFunction;
@@ -298,12 +298,15 @@ fn get_embeddings(
     let embeddings = embedding_provider.compute_source_embeddings(Arc::new(StringArray::from(
         texts.iter().map(|s| &**s).collect::<Vec<_>>(),
     )))?;
-    let embeddings: &[f32] = embeddings
-        .as_ref()
-        .as_fixed_size_list()
-        .values()
-        .as_primitive::<Float32Type>()
-        .values();
+    let embeddings = embeddings.as_ref().as_fixed_size_list();
+    if embeddings.null_count() > 0 {
+        return Err(DocumentError::DocumentProcessingFailed(format!(
+            "{} of {} texts could not be embedded",
+            embeddings.null_count(),
+            texts.len()
+        )));
+    }
+    let embeddings: &[f32] = embeddings.values().as_primitive::<Float32Type>().values();
 
     Ok(embeddings.to_vec())
 }

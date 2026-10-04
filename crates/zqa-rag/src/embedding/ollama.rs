@@ -309,7 +309,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
-    async fn test_compute_embeddings_error_response_yields_zero_vectors() {
+    async fn test_compute_embeddings_error_response_yields_null_entries() {
         let dim = 4_usize;
         let mock_response = serde_json::json!({"error": "model not found"});
 
@@ -324,13 +324,14 @@ mod tests {
         let array = arrow_array::StringArray::from(vec!["hello"]);
         let result = client.compute_embeddings_internal(Arc::new(array));
 
-        // Error responses produce zero vectors
+        // Error responses produce null entries rather than zero vectors
         test_ok!(result);
 
         let embeddings = result.unwrap();
         let list_array = arrow_array::cast::as_fixed_size_list_array(&embeddings);
         test_eq!(list_array.len(), 1);
         test_eq!(list_array.value_length(), dim as i32);
+        assert!(list_array.is_null(0));
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 1)]

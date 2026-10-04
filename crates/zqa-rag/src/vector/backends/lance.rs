@@ -10,7 +10,7 @@ use std::{fs, io};
 
 use arrow_array::cast::AsArray;
 use arrow_array::types::{Float32Type, Int64Type};
-use arrow_array::{RecordBatch, RecordBatchIterator, StringArray, record_batch};
+use arrow_array::{Array, RecordBatch, RecordBatchIterator, StringArray, record_batch};
 use arrow_schema::{ArrowError, DataType, Schema};
 use async_trait::async_trait;
 use futures::TryStreamExt;
@@ -718,6 +718,7 @@ impl VectorBackend for LanceBackend {
     /// * `LanceError::ParameterError` - If the embedding provider is not recognized
     /// * `LanceError::ConnectionError` - If the database connection fails
     /// * `LanceError::InvalidStateError` - If the table doesn't exist or embedding provider not in registry
+    /// * `LanceError::QueryError` - If the provider could not embed the query
     /// * `LanceError::Other` - If embedding computation or query execution fails
     async fn vector_search(
         &self,
@@ -758,8 +759,16 @@ impl VectorBackend for LanceBackend {
         // converting an Arrow Array to a `Vec`.
         let query_vec: Vec<f32> = {
             let list_array = arrow_array::cast::as_fixed_size_list_array(&query_vec);
-            let values = list_array.values().as_primitive::<Float32Type>();
-            values.iter().map(|v| v.unwrap_or(0.0)).collect()
+
+            // A null entry means the provider failed to embed the query. Searching with a
+            // placeholder vector would return arbitrary rows, so fail instead.
+            if list_array.is_empty() || list_array.is_null(0) {
+                return Err(LanceError::QueryError(
+                    "Could not compute the query embedding".into(),
+                ));
+            }
+            let values = list_array.value(0);
+            values.as_primitive::<Float32Type>().values().to_vec()
         };
 
         let start_time = Instant::now();
@@ -968,10 +977,21 @@ impl VectorBackend for LanceBackend {
             ensure_metadata_table(&db, &self.config).await?;
             log::debug!("LanceDB write: creating or overwriting data table");
 
-            // Create a new table and add rows
-            db.create_table(LANCE_DATA_TABLE_NAME, items)
-                .mode(CreateTableMode::Overwrite)
-                .add_embedding(embedding_params)?
+            // Create a new table and add rows. Callers that computed embeddings themselves (so they
+            // could leave out rows that failed to embed) pass them in the batches; otherwise
+            // LanceDB computes them with the registered embedding function, and rows that fail to
+            // embed are stored with null embeddings. Those rows never match a vector search and
+            // `get_zero_vectors` does not find them, so callers that care should embed first.
+            let has_embeddings = items
+                .first()
+                .is_some_and(|batch| batch.schema().column_with_name("embeddings").is_some());
+            let mut create = db
+                .create_table(LANCE_DATA_TABLE_NAME, items)
+                .mode(CreateTableMode::Overwrite);
+            if !has_embeddings {
+                create = create.add_embedding(embedding_params)?;
+            }
+            create
                 .execute()
                 .await
                 .map_err(|e| LanceError::TableUpdateError(e.to_string()))?;
