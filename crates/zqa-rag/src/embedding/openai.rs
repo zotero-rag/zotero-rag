@@ -68,6 +68,8 @@ where
 /// * `texts` - The list of texts to embed.
 /// * `api_key` - The OpenAI API key.
 /// * `model` - The OpenAI model to use.
+/// * `dims` - The requested embedding dimensions.
+/// * `max_retries` - The maximum number of retries for a rate-limited request.
 ///
 /// # Returns
 ///
@@ -78,6 +80,7 @@ async fn get_openai_embeddings(
     api_key: String,
     model: String,
     dims: usize,
+    max_retries: usize,
 ) -> Result<Vec<Vec<f32>>, LLMError> {
     #[derive(Serialize)]
     struct EmbeddingRequest {
@@ -131,7 +134,7 @@ async fn get_openai_embeddings(
         "https://api.openai.com/v1/embeddings",
         &headers,
         &request_body,
-        DEFAULT_MAX_RETRIES,
+        max_retries,
     )
     .await?;
 
@@ -173,11 +176,12 @@ pub(crate) async fn compute_openai_embeddings_async(
         .filter_map(|s| Some(s?.to_owned()))
         .collect();
 
-    let (api_key, model, dims) = if let Some(config) = config {
+    let (api_key, model, dims, max_retries) = if let Some(config) = config {
         (
             config.api_key.clone(),
             config.embedding_model.clone(),
             config.embedding_dims,
+            config.max_retries,
         )
     } else {
         (
@@ -188,6 +192,7 @@ pub(crate) async fn compute_openai_embeddings_async(
                 .ok()
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(DEFAULT_OPENAI_EMBEDDING_DIM as usize),
+            DEFAULT_MAX_RETRIES,
         )
     };
 
@@ -195,7 +200,14 @@ pub(crate) async fn compute_openai_embeddings_async(
     // Batch size of 100 to respect API limits and efficiency
     let batch_size = 100;
     let futures = texts.chunks(batch_size).map(|chunk| {
-        get_openai_embeddings(client, chunk.to_vec(), api_key.clone(), model.clone(), dims)
+        get_openai_embeddings(
+            client,
+            chunk.to_vec(),
+            api_key.clone(),
+            model.clone(),
+            dims,
+            max_retries,
+        )
     });
 
     // Convert to a stream and process with buffered to limit concurrency but preserve order

@@ -7,6 +7,7 @@ use zqa::common::setup_logger;
 use zqa::config::{AnthropicConfig, GeminiConfig, OpenAIConfig};
 use zqa::utils::library::ZoteroItemMetadata;
 use zqa_rag::config::LLMClientConfig;
+use zqa_rag::constants::DEFAULT_MAX_RETRIES;
 use zqa_rag::llm::base::{ChatRequest, ContentType};
 use zqa_rag::llm::factory::get_client_with_config;
 
@@ -112,8 +113,10 @@ async fn test_extraction_prompt_openai() {
         reasoning_effort: None,
     };
 
-    let client = get_client_with_config(&LLMClientConfig::OpenAI(config.into()))
-        .expect("Failed to create OpenAI client");
+    let client = get_client_with_config(&LLMClientConfig::OpenAI(
+        config.into_rag_config(DEFAULT_MAX_RETRIES),
+    ))
+    .expect("Failed to create OpenAI client");
 
     run_extraction_test(client, "OpenAI").await;
 }
@@ -142,8 +145,10 @@ async fn test_extraction_prompt_anthropic() {
         reasoning_effort: None,
     };
 
-    let client = get_client_with_config(&LLMClientConfig::Anthropic(config.into()))
-        .expect("Failed to create Anthropic client");
+    let client = get_client_with_config(&LLMClientConfig::Anthropic(
+        config.into_rag_config(DEFAULT_MAX_RETRIES),
+    ))
+    .expect("Failed to create Anthropic client");
 
     run_extraction_test(client, "Anthropic").await;
 }
@@ -174,8 +179,10 @@ async fn test_extraction_prompt_gemini() {
         reasoning_effort: None,
     };
 
-    let client = get_client_with_config(&LLMClientConfig::Gemini(config.into()))
-        .expect("Failed to create Gemini client");
+    let client = get_client_with_config(&LLMClientConfig::Gemini(
+        config.into_rag_config(DEFAULT_MAX_RETRIES),
+    ))
+    .expect("Failed to create Gemini client");
 
     run_extraction_test(client, "Gemini").await;
 }

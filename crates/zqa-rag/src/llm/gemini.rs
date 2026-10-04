@@ -423,9 +423,12 @@ impl<T: HttpClient> AgenticClient for GeminiClient<T> {
         max_tokens: Option<u32>,
     ) -> Result<super::base::ProviderTurn<Self::HistoryItem>, LLMError> {
         let key = get_gemini_api_key()?;
-        let model = match &self.config {
-            None => env::var("GEMINI_MODEL").unwrap_or_else(|_| DEFAULT_GEMINI_MODEL.to_string()),
-            Some(config) => config.model.clone(),
+        let (model, max_retries) = match &self.config {
+            None => (
+                env::var("GEMINI_MODEL").unwrap_or_else(|_| DEFAULT_GEMINI_MODEL.to_string()),
+                DEFAULT_MAX_RETRIES,
+            ),
+            Some(config) => (config.model.clone(), config.max_retries),
         };
 
         let mut headers = HeaderMap::new();
@@ -457,7 +460,8 @@ impl<T: HttpClient> AgenticClient for GeminiClient<T> {
         let mut attempt = 0;
         loop {
             let response: GeminiResponseBody =
-                send_generation_request(&self.client, &request, &headers, &url).await?;
+                send_generation_request(&self.client, &request, &headers, &url, max_retries)
+                    .await?;
             usage += response.usage_metadata.into();
 
             let first_candidate = response.candidates.into_iter().next().ok_or_else(|| {
@@ -467,7 +471,7 @@ impl<T: HttpClient> AgenticClient for GeminiClient<T> {
             if matches!(
                 finish_reason.as_str(),
                 "MALFORMED_RESPONSE" | "MALFORMED_FUNCTION_CALL"
-            ) && attempt < DEFAULT_MAX_RETRIES
+            ) && attempt < max_retries
             {
                 log::warn!("Gemini returned {finish_reason}; retrying generation");
                 // Retry this turn before executing tools or modifying the conversation history.
@@ -884,13 +888,17 @@ mod tests {
         for finish_reason in ["MALFORMED_RESPONSE", "MALFORMED_FUNCTION_CALL"] {
             let mut response: serde_json::Value = serde_json::from_str(MALFORMED_RESPONSE).unwrap();
             response["candidates"][0]["finishReason"] = finish_reason.into();
+            let max_retries = 1;
             let http_client = RecordingSequentialMockHttpClient::new(std::iter::repeat_n(
                 response,
-                DEFAULT_MAX_RETRIES + 1,
+                max_retries + 1,
             ));
             let client = GeminiClient {
                 client: http_client.clone(),
-                config: None,
+                config: Some(GeminiConfig {
+                    max_retries,
+                    ..GeminiConfig::default()
+                }),
             };
 
             let result = client.send_message(&ChatRequest::default()).await;
@@ -901,7 +909,7 @@ mod tests {
                     if reason == finish_reason
             ));
             let requests = http_client.requests();
-            test_eq!(requests.len(), DEFAULT_MAX_RETRIES + 1);
+            test_eq!(requests.len(), max_retries + 1);
             assert!(requests.iter().all(|request| request == &requests[0]));
         }
     }

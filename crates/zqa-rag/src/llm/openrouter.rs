@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use super::base::{ChatHistoryItem, ChatRequest};
 use super::errors::LLMError;
 use crate::clients::openrouter::OpenRouterClient;
-use crate::constants::DEFAULT_OPENROUTER_MAX_TOKENS;
+use crate::constants::{DEFAULT_MAX_RETRIES, DEFAULT_OPENROUTER_MAX_TOKENS};
 use crate::http_client::HttpClient;
 use crate::llm::base::{
     AgenticClient, ChatHistoryContent, MessageRole, ProviderTurn, ReasoningConfig, ToolCallRequest,
@@ -376,17 +376,20 @@ impl<T: HttpClient> AgenticClient for OpenRouterClient<T> {
         max_tokens: Option<u32>,
     ) -> Result<ProviderTurn<Self::HistoryItem>, LLMError> {
         // Use config if available, otherwise fall back to env vars
-        let (api_key, model, config_max_tokens) = if let Some(ref config) = self.config {
+        let (api_key, model, config_max_tokens, max_retries) = if let Some(ref config) = self.config
+        {
             (
                 config.api_key.clone(),
                 config.model.clone(),
                 config.max_tokens,
+                config.max_retries,
             )
         } else {
             (
                 env::var("OPENROUTER_API_KEY")?,
                 env::var("OPENROUTER_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.to_string()),
                 DEFAULT_OPENROUTER_MAX_TOKENS,
+                DEFAULT_MAX_RETRIES,
             )
         };
 
@@ -434,6 +437,7 @@ impl<T: HttpClient> AgenticClient for OpenRouterClient<T> {
             request_body,
             &headers,
             "https://openrouter.ai/api/v1/chat/completions",
+            max_retries,
         )
         .await?;
         let usage = response.usage.into();

@@ -1209,8 +1209,9 @@ mod tests {
     use crate::clients::openai::OpenAIClient;
     use crate::config::{CohereConfig, GeminiConfig, OpenAIConfig, VoyageAIConfig};
     use crate::constants::{
-        DEFAULT_OPENAI_EMBEDDING_DIM, DEFAULT_OPENAI_EMBEDDING_MODEL, DEFAULT_OPENAI_MODEL,
-        DEFAULT_VOYAGE_EMBEDDING_DIM, DEFAULT_VOYAGE_EMBEDDING_MODEL, DEFAULT_VOYAGE_RERANK_MODEL,
+        DEFAULT_MAX_RETRIES, DEFAULT_OPENAI_EMBEDDING_DIM, DEFAULT_OPENAI_EMBEDDING_MODEL,
+        DEFAULT_OPENAI_MODEL, DEFAULT_VOYAGE_EMBEDDING_DIM, DEFAULT_VOYAGE_EMBEDDING_MODEL,
+        DEFAULT_VOYAGE_RERANK_MODEL,
     };
     use crate::http_client::ReqwestClient;
 
@@ -1222,6 +1223,7 @@ mod tests {
             embedding_model: DEFAULT_OPENAI_EMBEDDING_MODEL.into(),
             embedding_dims: DEFAULT_OPENAI_EMBEDDING_DIM as usize,
             reasoning_effort: None,
+            max_retries: DEFAULT_MAX_RETRIES,
         })
     }
 

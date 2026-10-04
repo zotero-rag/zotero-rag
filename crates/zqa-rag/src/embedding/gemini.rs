@@ -61,9 +61,10 @@ where
             .filter_map(|s| Some(s?.to_owned()))
             .collect();
         let config = self.config.as_ref();
-        let embedding_dim = config.map_or(DEFAULT_GEMINI_EMBEDDING_DIM as usize, |config| {
-            config.embedding_dims
-        });
+        let (embedding_dim, max_retries) = config.map_or(
+            (DEFAULT_GEMINI_EMBEDDING_DIM as usize, DEFAULT_MAX_RETRIES),
+            |config| (config.embedding_dims, config.max_retries),
+        );
 
         let embeddings: Vec<Vec<f32>> = if texts.is_empty() {
             Vec::new()
@@ -93,7 +94,7 @@ where
             let futures = texts.into_iter().map(|text| {
                 let request_body =
                     GeminiEmbeddingRequest::from_text(text, model.clone(), embedding_dim);
-                call_gemini_embedding_api(&self.client, &url, &headers, request_body)
+                call_gemini_embedding_api(&self.client, &url, &headers, request_body, max_retries)
             });
 
             // Preserve input order so vectors remain associated with their source rows.
@@ -133,6 +134,7 @@ where
 /// * `url` - The endpoint for the configured model.
 /// * `headers` - Request headers containing the configured API key.
 /// * `request_body` - The text, model, and output dimensions for this request.
+/// * `max_retries` - The maximum number of retries for a rate-limited request.
 ///
 /// # Returns
 ///
@@ -143,9 +145,9 @@ async fn call_gemini_embedding_api(
     url: &str,
     headers: &HeaderMap,
     request_body: GeminiEmbeddingRequest,
+    max_retries: usize,
 ) -> Result<Vec<f32>, LLMError> {
-    let res =
-        request_with_backoff(client, url, headers, &request_body, DEFAULT_MAX_RETRIES).await?;
+    let res = request_with_backoff(client, url, headers, &request_body, max_retries).await?;
     let body = res.text().await?;
     let json: serde_json::Value = serde_json::from_str(&body)?;
     let parsed: GeminiEmbeddingResponse = serde_json::from_value(json)?;

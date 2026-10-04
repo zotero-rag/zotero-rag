@@ -225,6 +225,7 @@ mod tests {
         AnthropicConfig, CohereConfig, GeminiConfig, OllamaConfig, OpenAIConfig, OpenRouterConfig,
         VoyageAIConfig,
     };
+    use crate::constants::DEFAULT_MAX_RETRIES;
     use crate::embedding::common::EmbeddingProviderConfig;
     use crate::llm::factory::LLMClient;
     use crate::providers::registry::provider_registry;
@@ -239,6 +240,7 @@ mod tests {
             embedding_model: "text-embedding-test".into(),
             embedding_dims: 1536,
             reasoning_effort: None,
+            max_retries: DEFAULT_MAX_RETRIES,
         })
     }
 
@@ -249,6 +251,7 @@ mod tests {
             max_tokens: 1024,
             reasoning_budget: None,
             reasoning_effort: None,
+            max_retries: DEFAULT_MAX_RETRIES,
         })
     }
 
@@ -260,6 +263,7 @@ mod tests {
             embedding_dims: 3072,
             reasoning_budget: None,
             reasoning_effort: None,
+            max_retries: DEFAULT_MAX_RETRIES,
         })
     }
 
@@ -271,6 +275,7 @@ mod tests {
             embedding_dims: 768,
             base_url: "http://127.0.0.1:11434".into(),
             reasoning_budget: None,
+            max_retries: DEFAULT_MAX_RETRIES,
         })
     }
 
@@ -281,6 +286,7 @@ mod tests {
             model: "anthropic/test-model".into(),
             reasoning_effort: None,
             reasoning_budget: None,
+            max_retries: DEFAULT_MAX_RETRIES,
         })
     }
 
@@ -292,6 +298,7 @@ mod tests {
             embedding_model: "text-embedding-test".into(),
             embedding_dims: 1536,
             reasoning_effort: None,
+            max_retries: DEFAULT_MAX_RETRIES,
         })
     }
 
@@ -303,6 +310,7 @@ mod tests {
             embedding_dims: 3072,
             reasoning_budget: None,
             reasoning_effort: None,
+            max_retries: DEFAULT_MAX_RETRIES,
         })
     }
 
@@ -314,6 +322,7 @@ mod tests {
             embedding_dims: 768,
             base_url: "http://127.0.0.1:11434".into(),
             reasoning_budget: None,
+            max_retries: DEFAULT_MAX_RETRIES,
         })
     }
 

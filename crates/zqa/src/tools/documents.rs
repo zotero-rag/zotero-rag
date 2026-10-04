@@ -866,9 +866,10 @@ mod tests {
     };
     use zqa_rag::constants::{
         DEFAULT_COHERE_EMBEDDING_DIM, DEFAULT_COHERE_EMBEDDING_MODEL, DEFAULT_COHERE_RERANK_MODEL,
-        DEFAULT_GEMINI_EMBEDDING_DIM, DEFAULT_GEMINI_EMBEDDING_MODEL, DEFAULT_OPENAI_EMBEDDING_DIM,
-        DEFAULT_OPENAI_EMBEDDING_MODEL, DEFAULT_OPENAI_MAX_TOKENS, DEFAULT_OPENAI_MODEL_SMALL,
-        DEFAULT_VOYAGE_EMBEDDING_DIM, DEFAULT_VOYAGE_EMBEDDING_MODEL, DEFAULT_VOYAGE_RERANK_MODEL,
+        DEFAULT_GEMINI_EMBEDDING_DIM, DEFAULT_GEMINI_EMBEDDING_MODEL, DEFAULT_MAX_RETRIES,
+        DEFAULT_OPENAI_EMBEDDING_DIM, DEFAULT_OPENAI_EMBEDDING_MODEL, DEFAULT_OPENAI_MAX_TOKENS,
+        DEFAULT_OPENAI_MODEL_SMALL, DEFAULT_VOYAGE_EMBEDDING_DIM, DEFAULT_VOYAGE_EMBEDDING_MODEL,
+        DEFAULT_VOYAGE_RERANK_MODEL,
     };
     use zqa_rag::llm::factory::get_client_with_config;
 
@@ -953,6 +954,7 @@ mod tests {
                 embedding_model: DEFAULT_OPENAI_EMBEDDING_MODEL.to_string(),
                 embedding_dims: DEFAULT_OPENAI_EMBEDDING_DIM as usize,
                 reasoning_effort: None,
+                max_retries: DEFAULT_MAX_RETRIES,
             }),
             reranker_config: Some(RerankProviderConfig::VoyageAI(VoyageAIConfig {
                 api_key: voyage_api_key,
@@ -1045,6 +1047,7 @@ mod tests {
                 embedding_dims: DEFAULT_GEMINI_EMBEDDING_DIM as usize,
                 reasoning_budget: None,
                 reasoning_effort: None,
+                max_retries: DEFAULT_MAX_RETRIES,
             }),
             reranker_config: Some(RerankProviderConfig::VoyageAI(VoyageAIConfig {
                 api_key: voyage_api_key,
@@ -1076,6 +1079,7 @@ mod tests {
                 embedding_model: DEFAULT_OPENAI_EMBEDDING_MODEL.to_string(),
                 embedding_dims: DEFAULT_OPENAI_EMBEDDING_DIM as usize,
                 reasoning_effort: None,
+                max_retries: DEFAULT_MAX_RETRIES,
             }))
             .expect("Failed to create OpenAI client");
 
@@ -1092,6 +1096,7 @@ mod tests {
                 embedding_model: DEFAULT_OPENAI_EMBEDDING_MODEL.to_string(),
                 embedding_dims: DEFAULT_OPENAI_EMBEDDING_DIM as usize,
                 reasoning_effort: None,
+                max_retries: DEFAULT_MAX_RETRIES,
             }),
             reranker_config: Some(RerankProviderConfig::VoyageAI(VoyageAIConfig {
                 api_key: voyage_api_key,
