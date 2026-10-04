@@ -201,8 +201,8 @@ where
 #[cfg(any(test, feature = "mock"))]
 #[derive(Debug, Clone)]
 pub(crate) struct SequentialMockHttpClient {
-    /// The queue of JSON-serialized responses to return, in order.
-    responses: Arc<Mutex<VecDeque<String>>>,
+    /// The queue of status codes and JSON-serialized responses to return, in order.
+    responses: Arc<Mutex<VecDeque<(u16, String)>>>,
 }
 
 #[cfg(any(test, feature = "mock"))]
@@ -220,7 +220,7 @@ impl SequentialMockHttpClient {
     pub(crate) fn new<T: serde::Serialize>(responses: impl IntoIterator<Item = T>) -> Self {
         let queue = responses
             .into_iter()
-            .map(|r| serde_json::to_string(&r).unwrap())
+            .map(|r| (200, serde_json::to_string(&r).unwrap()))
             .collect();
         Self {
             responses: Arc::new(Mutex::new(queue)),
@@ -232,6 +232,17 @@ impl SequentialMockHttpClient {
     /// Unlike [`SequentialMockHttpClient::new`], the strings are used verbatim as the response
     /// bodies, so callers that already have the exact bytes to return aren't double-serialized.
     pub(crate) fn from_bodies(responses: impl IntoIterator<Item = String>) -> Self {
+        Self::from_status_bodies(responses.into_iter().map(|body| (200, body)))
+    }
+
+    /// Create a new `SequentialMockHttpClient` from status codes and raw response bodies, so tests
+    /// can exercise error and retry paths.
+    ///
+    /// # Panics
+    ///
+    /// * When a request is made, if a status code is not a valid HTTP status code.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn from_status_bodies(responses: impl IntoIterator<Item = (u16, String)>) -> Self {
         Self {
             responses: Arc::new(Mutex::new(responses.into_iter().collect())),
         }
@@ -248,14 +259,14 @@ impl HttpClient for SequentialMockHttpClient {
     ) -> Pin<Box<dyn Future<Output = Result<reqwest::Response, reqwest::Error>> + Send + 'a>> {
         let responses = Arc::clone(&self.responses);
         Box::pin(async move {
-            let json = responses
+            let (status, json) = responses
                 .lock()
                 .unwrap()
                 .pop_front()
                 .expect("SequentialMockHttpClient: no more responses in queue");
             let bytes = bytes::Bytes::from(json);
             let http_response = http::Response::builder()
-                .status(200)
+                .status(status)
                 .header("content-type", "application/json")
                 .body(bytes)
                 .unwrap();
@@ -303,6 +314,14 @@ impl RecordingSequentialMockHttpClient {
     pub(crate) fn new<T: serde::Serialize>(responses: impl IntoIterator<Item = T>) -> Self {
         Self {
             client: SequentialMockHttpClient::new(responses),
+            requests: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
+    /// Create a recording mock from status codes and raw response bodies, returned in order.
+    pub(crate) fn from_status_bodies(responses: impl IntoIterator<Item = (u16, String)>) -> Self {
+        Self {
+            client: SequentialMockHttpClient::from_status_bodies(responses),
             requests: Arc::new(Mutex::new(Vec::new())),
         }
     }

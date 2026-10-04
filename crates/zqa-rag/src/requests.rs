@@ -59,8 +59,9 @@ pub(crate) fn exponential_backoff_delay(attempt: usize) -> Duration {
 
 /// Perform a request with exponential backoff. This allows for retries without overwhelming the
 /// server with too many requests. It retries up to `max_retries` times, with a delay of
-/// `2^attempt * base_delay` milliseconds, where `base_delay` is 1000 milliseconds by default. If
-/// the API returns a 429 Too Many Requests with a "Retry-After" header, that is respected instead.
+/// `2^attempt * base_delay` milliseconds (the exponent is capped at `MAX_BACKOFF_EXPONENT`), where
+/// `base_delay` is 1000 milliseconds by default. If the API returns a 429 Too Many Requests with a
+/// "Retry-After" header, that is respected instead.
 ///
 /// # Errors
 ///
