@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use arrow_schema::{DataType, Field};
-use futures::{StreamExt, stream};
+use futures::{StreamExt, TryStreamExt, stream};
 use lancedb::embeddings::EmbeddingFunction;
 use reqwest::header::HeaderMap;
 use serde::{Deserialize, Serialize};
@@ -204,6 +204,7 @@ pub trait EmbeddingApiResponse {
 ///
 /// * `LLMError::TimeoutError` - If the HTTP request times out
 /// * `LLMError::NetworkError` - If a network connectivity error occurs
+/// * `LLMError::CredentialError` - If the API returns 401 or 403
 /// * `LLMError::InvalidHeaderError` - If header values cannot be parsed
 /// * `LLMError::GenericLLMError` - If other HTTP errors occur or Arrow array creation fails
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
@@ -341,26 +342,23 @@ where
         }
     });
 
-    let results = stream::iter(futures)
+    // `try_collect` stops at the first error (such as a rejected API key), so the remaining batches
+    // are not sent.
+    let results: Vec<_> = stream::iter(futures)
         .buffered(max_concurrent)
-        .collect::<Vec<_>>()
-        .await;
+        .try_collect()
+        .await?;
 
     let mut all_embeddings: Vec<Vec<f32>> = Vec::new();
     let mut fail_count = 0;
     let mut total_masked = 0;
     let mut failed_texts: Vec<String> = Vec::new();
 
-    for result in results {
-        match result {
-            Ok((batch_embs, batch_fail_count, batch_failed_texts, batch_masked)) => {
-                all_embeddings.extend(batch_embs);
-                fail_count += batch_fail_count;
-                total_masked += batch_masked;
-                failed_texts.extend(batch_failed_texts);
-            }
-            Err(e) => return Err(e),
-        }
+    for (batch_embs, batch_fail_count, batch_failed_texts, batch_masked) in results {
+        all_embeddings.extend(batch_embs);
+        fail_count += batch_fail_count;
+        total_masked += batch_masked;
+        failed_texts.extend(batch_failed_texts);
     }
 
     if fail_count > 0 {

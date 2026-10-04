@@ -77,8 +77,12 @@ impl<T: HttpClient> Rerank for VoyageAIClient<T> {
                 .post_json(RERANK_API_URL, headers, &request)
                 .await?;
 
+            let status = response.status();
             let body = response.text().await?;
             log::debug!("Voyage AI rerank request took {:.1?}", start_time.elapsed());
+            if !status.is_success() {
+                return Err(LLMError::from_status(status, body));
+            }
 
             let voyage_response: VoyageAIRerankResponse =
                 serde_json::from_str(&body).map_err(|e| {
@@ -110,8 +114,37 @@ mod tests {
     use zqa_macros::{test_eq, test_ok};
 
     use super::VoyageAIClient;
-    use crate::http_client::ReqwestClient;
+    use crate::config::VoyageAIConfig;
+    use crate::http_client::{ReqwestClient, SequentialMockHttpClient};
+    use crate::llm::errors::LLMError;
     use crate::reranking::common::Rerank;
+
+    #[tokio::test]
+    async fn test_rerank_classifies_error_statuses() {
+        for (status, is_credential_error) in [(401, true), (403, true), (500, false)] {
+            let client = VoyageAIClient {
+                client: SequentialMockHttpClient::from_status_bodies([(
+                    status,
+                    String::from("request rejected"),
+                )]),
+                config: Some(VoyageAIConfig {
+                    api_key: "test-key".into(),
+                    embedding_model: String::new(),
+                    embedding_dims: 0,
+                    reranker: "test-reranker".into(),
+                    max_concurrent_requests: crate::constants::DEFAULT_MAX_CONCURRENT_REQUESTS,
+                    max_retries: crate::constants::DEFAULT_MAX_RETRIES,
+                }),
+            };
+
+            let result = client.rerank(&["a document"], "a query").await;
+            if is_credential_error {
+                assert!(matches!(result, Err(LLMError::CredentialError(_))));
+            } else {
+                assert!(matches!(result, Err(LLMError::HttpStatusError(_))));
+            }
+        }
+    }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
     async fn test_rerank() {

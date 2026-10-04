@@ -59,19 +59,36 @@ pub enum LLMError {
     BatchNotCompleted(String),
 }
 
+impl LLMError {
+    /// Classify an unsuccessful HTTP response from a provider.
+    ///
+    /// # Arguments
+    ///
+    /// * `status` - The HTTP status code of the response.
+    /// * `body` - The response body, which usually contains the provider's error message.
+    ///
+    /// # Returns
+    ///
+    /// [`LLMError::CredentialError`] for 401 Unauthorized and 403 Forbidden responses, and
+    /// [`LLMError::HttpStatusError`] otherwise.
+    #[must_use]
+    pub fn from_status(status: http::StatusCode, body: String) -> Self {
+        match status {
+            http::StatusCode::UNAUTHORIZED | http::StatusCode::FORBIDDEN => {
+                Self::CredentialError(body)
+            }
+            _ => Self::HttpStatusError(body),
+        }
+    }
+}
+
 /// From<...> implementations begin here
 impl From<reqwest::Error> for LLMError {
     fn from(error: reqwest::Error) -> LLMError {
         if error.is_timeout() {
             return LLMError::TimeoutError;
         } else if let Some(status) = error.status() {
-            if status == reqwest::StatusCode::UNAUTHORIZED
-                || status == reqwest::StatusCode::FORBIDDEN
-            {
-                return LLMError::CredentialError(error.to_string());
-            }
-
-            return LLMError::HttpStatusError(error.to_string());
+            return LLMError::from_status(status, error.to_string());
         } else if error.is_connect() {
             return LLMError::NetworkError;
         }
