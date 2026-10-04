@@ -9,8 +9,8 @@ use super::base::ChatRequest;
 use super::errors::LLMError;
 use crate::clients::ollama::OllamaClient;
 use crate::constants::{
-    DEFAULT_ANTHROPIC_REASONING_BUDGET, DEFAULT_OLLAMA_BASE_URL, DEFAULT_OLLAMA_MAX_TOKENS,
-    DEFAULT_OLLAMA_MODEL,
+    DEFAULT_ANTHROPIC_REASONING_BUDGET, DEFAULT_MAX_RETRIES, DEFAULT_OLLAMA_BASE_URL,
+    DEFAULT_OLLAMA_MAX_TOKENS, DEFAULT_OLLAMA_MODEL,
 };
 use crate::http_client::HttpClient;
 use crate::llm::anthropic::{
@@ -55,17 +55,21 @@ impl<T: HttpClient> AgenticClient for OllamaClient<T> {
         max_tokens: Option<u32>,
     ) -> Result<ProviderTurn<Self::HistoryItem>, LLMError> {
         // Use config if available, otherwise fall back to env vars
-        let (model, config_max_tokens, base_url) = if let Some(ref config) = self.config {
+        let (model, config_max_tokens, base_url, max_retries) = if let Some(ref config) =
+            self.config
+        {
             (
                 config.model.clone(),
                 config.max_tokens,
                 config.base_url.clone(),
+                config.max_retries,
             )
         } else {
             (
                 env::var("OLLAMA_MODEL").unwrap_or_else(|_| DEFAULT_OLLAMA_MODEL.to_string()),
                 DEFAULT_OLLAMA_MAX_TOKENS,
                 env::var("OLLAMA_BASE_URL").unwrap_or_else(|_| DEFAULT_OLLAMA_BASE_URL.to_string()),
+                DEFAULT_MAX_RETRIES,
             )
         };
 
@@ -91,7 +95,8 @@ impl<T: HttpClient> AgenticClient for OllamaClient<T> {
 
         let url = format!("{base_url}/v1/messages");
         let response: OllamaResponse =
-            send_generation_request(&self.client, &request_body, &headers, &url).await?;
+            send_generation_request(&self.client, &request_body, &headers, &url, max_retries)
+                .await?;
 
         Ok(ProviderTurn {
             contents: map_response_to_chat_contents(&response.content),

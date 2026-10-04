@@ -299,22 +299,19 @@ impl Config {
                 .cohere
                 .as_ref()
                 .map(|c| EmbeddingProviderConfig::Cohere(c.clone().into())),
-            EmbeddingProvider::OpenAI => self
-                .openai
-                .as_ref()
-                .map(|c| EmbeddingProviderConfig::OpenAI(c.clone().into())),
+            EmbeddingProvider::OpenAI => self.openai.as_ref().map(|c| {
+                EmbeddingProviderConfig::OpenAI(c.clone().into_rag_config(self.max_retries))
+            }),
             EmbeddingProvider::VoyageAI => self
                 .voyageai
                 .as_ref()
                 .map(|c| EmbeddingProviderConfig::VoyageAI(c.clone().into())),
-            EmbeddingProvider::Gemini => self
-                .gemini
-                .as_ref()
-                .map(|c| EmbeddingProviderConfig::Gemini(c.clone().into())),
-            EmbeddingProvider::Ollama => self
-                .ollama
-                .as_ref()
-                .map(|c| EmbeddingProviderConfig::Ollama(c.clone().into())),
+            EmbeddingProvider::Gemini => self.gemini.as_ref().map(|c| {
+                EmbeddingProviderConfig::Gemini(c.clone().into_rag_config(self.max_retries))
+            }),
+            EmbeddingProvider::Ollama => self.ollama.as_ref().map(|c| {
+                EmbeddingProviderConfig::Ollama(c.clone().into_rag_config(self.max_retries))
+            }),
             _ => None,
         }
     }
@@ -488,26 +485,24 @@ impl Config {
     #[must_use]
     pub fn get_generation_config(&self) -> Option<LLMClientConfig> {
         match self.model_provider {
-            ModelProvider::Anthropic => self
-                .anthropic
-                .as_ref()
-                .map(|cfg| LLMClientConfig::Anthropic(cfg.clone().into())),
+            ModelProvider::Anthropic => self.anthropic.as_ref().map(|cfg| {
+                LLMClientConfig::Anthropic(cfg.clone().into_rag_config(self.max_retries))
+            }),
             ModelProvider::Ollama => self
                 .ollama
                 .as_ref()
-                .map(|cfg| LLMClientConfig::Ollama(cfg.clone().into())),
+                .map(|cfg| LLMClientConfig::Ollama(cfg.clone().into_rag_config(self.max_retries))),
             ModelProvider::OpenAI => self
                 .openai
                 .as_ref()
-                .map(|cfg| LLMClientConfig::OpenAI(cfg.clone().into())),
+                .map(|cfg| LLMClientConfig::OpenAI(cfg.clone().into_rag_config(self.max_retries))),
             ModelProvider::Gemini => self
                 .gemini
                 .as_ref()
-                .map(|cfg| LLMClientConfig::Gemini(cfg.clone().into())),
-            ModelProvider::OpenRouter => self
-                .openrouter
-                .as_ref()
-                .map(|cfg| LLMClientConfig::OpenRouter(cfg.clone().into())),
+                .map(|cfg| LLMClientConfig::Gemini(cfg.clone().into_rag_config(self.max_retries))),
+            ModelProvider::OpenRouter => self.openrouter.as_ref().map(|cfg| {
+                LLMClientConfig::OpenRouter(cfg.clone().into_rag_config(self.max_retries))
+            }),
             #[cfg(test)]
             ModelProvider::Mock => self
                 .mock
@@ -875,77 +870,131 @@ impl Default for Config {
     }
 }
 
-// Convert zqa configs to rag configs using From trait
-impl From<AnthropicConfig> for zqa_rag::config::AnthropicConfig {
-    fn from(config: AnthropicConfig) -> Self {
-        Self {
-            api_key: config
+// Convert zqa configs to rag configs
+impl AnthropicConfig {
+    /// Convert this configuration into the `zqa-rag` Anthropic configuration.
+    ///
+    /// # Arguments
+    ///
+    /// * `max_retries` - The maximum number of retries for retryable request failures.
+    ///
+    /// # Returns
+    ///
+    /// The `zqa-rag` configuration for Anthropic clients.
+    ///
+    /// # Panics
+    ///
+    /// If no API key is configured.
+    #[must_use]
+    pub fn into_rag_config(self, max_retries: usize) -> zqa_rag::config::AnthropicConfig {
+        zqa_rag::config::AnthropicConfig {
+            api_key: self
                 .api_key
                 .expect("Anthropic API key not found. Please set it in your config file or as ANTHROPIC_API_KEY."),
-            model: config.model.unwrap_or(DEFAULT_ANTHROPIC_MODEL.into()),
-            max_tokens: config.max_tokens,
-            reasoning_budget: config.reasoning_budget,
-            reasoning_effort: config.reasoning_effort.map(|r| r.to_string()),
+            model: self.model.unwrap_or(DEFAULT_ANTHROPIC_MODEL.into()),
+            max_tokens: self.max_tokens,
+            reasoning_budget: self.reasoning_budget,
+            reasoning_effort: self.reasoning_effort.map(|r| r.to_string()),
+            max_retries,
         }
     }
 }
 
-impl From<OllamaConfig> for zqa_rag::config::OllamaConfig {
-    fn from(config: OllamaConfig) -> Self {
-        Self {
-            model: config.model.unwrap_or(DEFAULT_OLLAMA_MODEL.into()),
-            max_tokens: config.max_tokens.unwrap_or(DEFAULT_OLLAMA_MAX_TOKENS),
-            embedding_model: config
+impl OllamaConfig {
+    /// Convert this configuration into the `zqa-rag` `ollama` configuration.
+    ///
+    /// # Arguments
+    ///
+    /// * `max_retries` - The maximum number of retries for retryable request failures.
+    ///
+    /// # Returns
+    ///
+    /// The `zqa-rag` configuration for `ollama` clients.
+    #[must_use]
+    pub fn into_rag_config(self, max_retries: usize) -> zqa_rag::config::OllamaConfig {
+        zqa_rag::config::OllamaConfig {
+            model: self.model.unwrap_or(DEFAULT_OLLAMA_MODEL.into()),
+            max_tokens: self.max_tokens.unwrap_or(DEFAULT_OLLAMA_MAX_TOKENS),
+            embedding_model: self
                 .embedding_model
                 .unwrap_or(DEFAULT_OLLAMA_EMBEDDING_MODEL.into()),
-            embedding_dims: config
-                .embedding_dims
-                .unwrap_or(DEFAULT_OLLAMA_EMBEDDING_DIM),
-            base_url: config.base_url.unwrap_or(DEFAULT_OLLAMA_BASE_URL.into()),
-            reasoning_budget: config.reasoning_budget,
+            embedding_dims: self.embedding_dims.unwrap_or(DEFAULT_OLLAMA_EMBEDDING_DIM),
+            base_url: self.base_url.unwrap_or(DEFAULT_OLLAMA_BASE_URL.into()),
+            reasoning_budget: self.reasoning_budget,
+            max_retries,
         }
     }
 }
 
-impl From<OpenAIConfig> for zqa_rag::config::OpenAIConfig {
-    fn from(config: OpenAIConfig) -> Self {
-        Self {
-            api_key: config
+impl OpenAIConfig {
+    /// Convert this configuration into the `zqa-rag` OpenAI configuration.
+    ///
+    /// # Arguments
+    ///
+    /// * `max_retries` - The maximum number of retries for retryable request failures.
+    ///
+    /// # Returns
+    ///
+    /// The `zqa-rag` configuration for OpenAI clients.
+    ///
+    /// # Panics
+    ///
+    /// If no API key is configured.
+    #[must_use]
+    pub fn into_rag_config(self, max_retries: usize) -> zqa_rag::config::OpenAIConfig {
+        zqa_rag::config::OpenAIConfig {
+            api_key: self
                 .api_key
                 .or_else(|| env::var("OPENAI_API_KEY").ok())
                 .expect(
                 "OpenAI API key not found. Please set it in your config file or as OPENAI_API_KEY.",
             ),
-            model: config.model.unwrap_or(DEFAULT_OPENAI_MODEL.into()),
-            max_tokens: config.max_tokens,
-            embedding_model: config
+            model: self.model.unwrap_or(DEFAULT_OPENAI_MODEL.into()),
+            max_tokens: self.max_tokens,
+            embedding_model: self
                 .embedding_model
                 .unwrap_or_else(|| DEFAULT_OPENAI_EMBEDDING_MODEL.to_string()),
-            embedding_dims: config
+            embedding_dims: self
                 .embedding_dims
                 .unwrap_or(DEFAULT_OPENAI_EMBEDDING_DIM as usize),
-            reasoning_effort: config.reasoning_effort,
+            reasoning_effort: self.reasoning_effort,
+            max_retries,
         }
     }
 }
 
-impl From<GeminiConfig> for zqa_rag::config::GeminiConfig {
-    fn from(config: GeminiConfig) -> Self {
+impl GeminiConfig {
+    /// Convert this configuration into the `zqa-rag` Gemini configuration.
+    ///
+    /// # Arguments
+    ///
+    /// * `max_retries` - The maximum number of retries for retryable request failures.
+    ///
+    /// # Returns
+    ///
+    /// The `zqa-rag` configuration for Gemini clients.
+    ///
+    /// # Panics
+    ///
+    /// If no API key is configured.
+    #[must_use]
+    pub fn into_rag_config(self, max_retries: usize) -> zqa_rag::config::GeminiConfig {
         use zqa_rag::constants::{DEFAULT_GEMINI_EMBEDDING_DIM, DEFAULT_GEMINI_EMBEDDING_MODEL};
 
-        Self {
-            api_key: config.api_key.expect(
+        zqa_rag::config::GeminiConfig {
+            api_key: self.api_key.expect(
                 "Gemini API key not found. Please set it in your config file or as GEMINI_API_KEY.",
             ),
-            model: config.model.unwrap_or(DEFAULT_GEMINI_MODEL.into()),
-            embedding_model: config
+            model: self.model.unwrap_or(DEFAULT_GEMINI_MODEL.into()),
+            embedding_model: self
                 .embedding_model
                 .unwrap_or_else(|| DEFAULT_GEMINI_EMBEDDING_MODEL.to_string()),
-            embedding_dims: config
+            embedding_dims: self
                 .embedding_dims
                 .unwrap_or(DEFAULT_GEMINI_EMBEDDING_DIM as usize),
-            reasoning_budget: config.reasoning_budget,
-            reasoning_effort: config.reasoning_effort.map(|effort| effort.to_string()),
+            reasoning_budget: self.reasoning_budget,
+            reasoning_effort: self.reasoning_effort.map(|effort| effort.to_string()),
+            max_retries,
         }
     }
 }
@@ -1011,17 +1060,32 @@ impl From<CohereConfig> for zqa_rag::config::CohereConfig {
     }
 }
 
-impl From<OpenRouterConfig> for zqa_rag::config::OpenRouterConfig {
-    fn from(config: OpenRouterConfig) -> Self {
-        Self {
-            api_key: config
+impl OpenRouterConfig {
+    /// Convert this configuration into the `zqa-rag` OpenRouter configuration.
+    ///
+    /// # Arguments
+    ///
+    /// * `max_retries` - The maximum number of retries for retryable request failures.
+    ///
+    /// # Returns
+    ///
+    /// The `zqa-rag` configuration for OpenRouter clients.
+    ///
+    /// # Panics
+    ///
+    /// If no API key is configured.
+    #[must_use]
+    pub fn into_rag_config(self, max_retries: usize) -> zqa_rag::config::OpenRouterConfig {
+        zqa_rag::config::OpenRouterConfig {
+            api_key: self
                 .api_key
                 .or_else(|| env::var("OPENROUTER_API_KEY").ok())
                 .expect("OpenRouter API key not found. Please set it in your config file or as OPENROUTER_API_KEY."),
-            model: config.model.unwrap_or(DEFAULT_OPENROUTER_MODEL.into()),
-            max_tokens: config.max_tokens.unwrap_or(DEFAULT_OPENROUTER_MAX_TOKENS),
-            reasoning_effort: config.reasoning_effort,
-            reasoning_budget: config.reasoning_budget,
+            model: self.model.unwrap_or(DEFAULT_OPENROUTER_MODEL.into()),
+            max_tokens: self.max_tokens.unwrap_or(DEFAULT_OPENROUTER_MAX_TOKENS),
+            reasoning_effort: self.reasoning_effort,
+            reasoning_budget: self.reasoning_budget,
+            max_retries,
         }
     }
 }
@@ -1039,7 +1103,7 @@ mod tests {
             embedding_provider = "voyageai"
             reranker_provider = "voyageai"
             max_concurrent_requests = 5
-            max_retries = 3
+            max_retries = 7
 
             [anthropic]
             model = "claude-sonnet-4-5"
@@ -1064,7 +1128,18 @@ mod tests {
         test_eq!(config.model_provider, ModelProvider::Anthropic);
         test_eq!(config.embedding_provider, EmbeddingProvider::VoyageAI);
         test_eq!(config.max_concurrent_requests, 5);
-        test_eq!(config.max_retries, 3);
+        test_eq!(config.max_retries, 7);
+
+        let Some(LLMClientConfig::Anthropic(generation)) = config.get_generation_config() else {
+            panic!("Expected an Anthropic generation config");
+        };
+        test_eq!(generation.max_retries, 7);
+        let Some(EmbeddingProviderConfig::OpenAI(embedding)) =
+            config.get_embedding_provider_config(ProviderId::OpenAI)
+        else {
+            panic!("Expected an OpenAI embedding config");
+        };
+        test_eq!(embedding.max_retries, 7);
 
         let anthropic = config.anthropic.unwrap();
         test_eq!(anthropic.model, Some("claude-sonnet-4-5".into()));
@@ -1105,7 +1180,7 @@ mod tests {
         test_eq!(reasoning.max_tokens, None);
         test_eq!(reasoning.effort.as_deref(), Some("high"));
 
-        let rag_config: zqa_rag::config::GeminiConfig = gemini.into();
+        let rag_config = gemini.into_rag_config(DEFAULT_MAX_RETRIES);
         test_eq!(rag_config.reasoning_effort.as_deref(), Some("high"));
     }
 

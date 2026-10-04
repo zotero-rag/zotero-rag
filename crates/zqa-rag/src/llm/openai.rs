@@ -20,7 +20,8 @@ use super::base::{ChatHistoryItem, ChatRequest};
 use super::errors::LLMError;
 use crate::clients::openai::OpenAIClient;
 use crate::constants::{
-    DEFAULT_OPENAI_EMBEDDING_DIM, DEFAULT_OPENAI_MODEL, DEFAULT_OPENAI_REASONING_EFFORT,
+    DEFAULT_MAX_RETRIES, DEFAULT_OPENAI_EMBEDDING_DIM, DEFAULT_OPENAI_MODEL,
+    DEFAULT_OPENAI_REASONING_EFFORT,
 };
 use crate::http_client::HttpClient;
 use crate::llm::base::{
@@ -462,12 +463,17 @@ impl<T: HttpClient> AgenticClient for OpenAIClient<T> {
         max_tokens: Option<u32>,
     ) -> Result<ProviderTurn<Self::HistoryItem>, LLMError> {
         // Use config if available, otherwise fall back to env vars
-        let (api_key, model) = if let Some(ref config) = self.config {
-            (config.api_key.clone(), config.model.clone())
+        let (api_key, model, max_retries) = if let Some(ref config) = self.config {
+            (
+                config.api_key.clone(),
+                config.model.clone(),
+                config.max_retries,
+            )
         } else {
             (
                 env::var("OPENAI_API_KEY")?,
                 env::var("OPENAI_MODEL").unwrap_or_else(|_| DEFAULT_OPENAI_MODEL.to_string()),
+                DEFAULT_MAX_RETRIES,
             )
         };
 
@@ -490,6 +496,7 @@ impl<T: HttpClient> AgenticClient for OpenAIClient<T> {
             &request_body,
             &headers,
             "https://api.openai.com/v1/responses",
+            max_retries,
         )
         .await?;
 

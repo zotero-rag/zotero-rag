@@ -6,11 +6,11 @@
 
 use crate::constants::{
     DEFAULT_ANTHROPIC_MAX_TOKENS, DEFAULT_ANTHROPIC_MODEL, DEFAULT_GEMINI_EMBEDDING_DIM,
-    DEFAULT_GEMINI_EMBEDDING_MODEL, DEFAULT_GEMINI_MODEL, DEFAULT_OLLAMA_BASE_URL,
-    DEFAULT_OLLAMA_EMBEDDING_DIM, DEFAULT_OLLAMA_EMBEDDING_MODEL, DEFAULT_OLLAMA_MAX_TOKENS,
-    DEFAULT_OLLAMA_MODEL, DEFAULT_OPENAI_EMBEDDING_DIM, DEFAULT_OPENAI_EMBEDDING_MODEL,
-    DEFAULT_OPENAI_MAX_TOKENS, DEFAULT_OPENAI_MODEL, DEFAULT_OPENROUTER_MAX_TOKENS,
-    DEFAULT_OPENROUTER_MODEL,
+    DEFAULT_GEMINI_EMBEDDING_MODEL, DEFAULT_GEMINI_MODEL, DEFAULT_MAX_RETRIES,
+    DEFAULT_OLLAMA_BASE_URL, DEFAULT_OLLAMA_EMBEDDING_DIM, DEFAULT_OLLAMA_EMBEDDING_MODEL,
+    DEFAULT_OLLAMA_MAX_TOKENS, DEFAULT_OLLAMA_MODEL, DEFAULT_OPENAI_EMBEDDING_DIM,
+    DEFAULT_OPENAI_EMBEDDING_MODEL, DEFAULT_OPENAI_MAX_TOKENS, DEFAULT_OPENAI_MODEL,
+    DEFAULT_OPENROUTER_MAX_TOKENS, DEFAULT_OPENROUTER_MODEL,
 };
 use crate::providers::ProviderId;
 
@@ -29,6 +29,8 @@ pub struct AnthropicConfig {
     /// Reasoning effort level ("low", "medium", "high", "xhigh", "max") for models with
     /// adaptive thinking (Claude Opus 4.6+ and Claude 5 models). `None` uses the model default.
     pub reasoning_effort: Option<String>,
+    /// Maximum number of retries for a request that fails in a retryable way
+    pub max_retries: usize,
 }
 
 impl Default for AnthropicConfig {
@@ -39,6 +41,7 @@ impl Default for AnthropicConfig {
             max_tokens: DEFAULT_ANTHROPIC_MAX_TOKENS,
             reasoning_budget: None,
             reasoning_effort: None,
+            max_retries: DEFAULT_MAX_RETRIES,
         }
     }
 }
@@ -58,6 +61,8 @@ pub struct OpenAIConfig {
     pub embedding_dims: usize,
     /// Reasoning effort level (e.g., "high"). `None` disables reasoning.
     pub reasoning_effort: Option<String>,
+    /// Maximum number of retries for a request that fails in a retryable way
+    pub max_retries: usize,
 }
 
 impl Default for OpenAIConfig {
@@ -69,6 +74,7 @@ impl Default for OpenAIConfig {
             embedding_model: DEFAULT_OPENAI_EMBEDDING_MODEL.into(),
             embedding_dims: DEFAULT_OPENAI_EMBEDDING_DIM as usize,
             reasoning_effort: None,
+            max_retries: DEFAULT_MAX_RETRIES,
         }
     }
 }
@@ -88,6 +94,8 @@ pub struct OllamaConfig {
     pub base_url: String,
     /// Token budget for extended thinking. `None` disables thinking.
     pub reasoning_budget: Option<u32>,
+    /// Maximum number of retries for a request that fails in a retryable way
+    pub max_retries: usize,
 }
 
 impl Default for OllamaConfig {
@@ -99,6 +107,7 @@ impl Default for OllamaConfig {
             embedding_dims: DEFAULT_OLLAMA_EMBEDDING_DIM,
             base_url: DEFAULT_OLLAMA_BASE_URL.into(),
             reasoning_budget: None,
+            max_retries: DEFAULT_MAX_RETRIES,
         }
     }
 }
@@ -118,6 +127,8 @@ pub struct GeminiConfig {
     pub reasoning_budget: Option<u32>,
     /// Reasoning effort for Gemini 3 thinking levels. `None` uses the model default.
     pub reasoning_effort: Option<String>,
+    /// Maximum number of retries for a request that fails in a retryable way
+    pub max_retries: usize,
 }
 
 impl Default for GeminiConfig {
@@ -129,6 +140,7 @@ impl Default for GeminiConfig {
             embedding_dims: DEFAULT_GEMINI_EMBEDDING_DIM as usize,
             reasoning_budget: None,
             reasoning_effort: None,
+            max_retries: DEFAULT_MAX_RETRIES,
         }
     }
 }
@@ -172,6 +184,8 @@ pub struct OpenRouterConfig {
     pub reasoning_effort: Option<String>,
     /// Token budget for extended thinking. `None` disables thinking.
     pub reasoning_budget: Option<u32>,
+    /// Maximum number of retries for a request that fails in a retryable way
+    pub max_retries: usize,
 }
 
 impl Default for OpenRouterConfig {
@@ -182,6 +196,7 @@ impl Default for OpenRouterConfig {
             model: DEFAULT_OPENROUTER_MODEL.into(),
             reasoning_effort: None,
             reasoning_budget: None,
+            max_retries: DEFAULT_MAX_RETRIES,
         }
     }
 }

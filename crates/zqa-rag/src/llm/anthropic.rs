@@ -10,6 +10,7 @@ use super::errors::LLMError;
 use crate::clients::anthropic::AnthropicClient;
 use crate::constants::{
     DEFAULT_ANTHROPIC_MAX_TOKENS, DEFAULT_ANTHROPIC_MODEL, DEFAULT_ANTHROPIC_REASONING_BUDGET,
+    DEFAULT_MAX_RETRIES,
 };
 use crate::http_client::HttpClient;
 use crate::llm::base::{
@@ -456,17 +457,20 @@ impl<T: HttpClient> AgenticClient for AnthropicClient<T> {
         max_tokens: Option<u32>,
     ) -> Result<super::base::ProviderTurn<Self::HistoryItem>, LLMError> {
         // Use config if available, otherwise fall back to env vars
-        let (api_key, model, config_max_tokens) = if let Some(ref config) = self.config {
+        let (api_key, model, config_max_tokens, max_retries) = if let Some(ref config) = self.config
+        {
             (
                 config.api_key.clone(),
                 config.model.clone(),
                 config.max_tokens,
+                config.max_retries,
             )
         } else {
             (
                 env::var("ANTHROPIC_API_KEY")?,
                 env::var("ANTHROPIC_MODEL").unwrap_or_else(|_| DEFAULT_CLAUDE_MODEL.to_string()),
                 DEFAULT_ANTHROPIC_MAX_TOKENS,
+                DEFAULT_MAX_RETRIES,
             )
         };
 
@@ -491,6 +495,7 @@ impl<T: HttpClient> AgenticClient for AnthropicClient<T> {
             &request,
             &headers,
             "https://api.anthropic.com/v1/messages",
+            max_retries,
         )
         .await?;
 
@@ -519,6 +524,7 @@ mod tests {
         supports_adaptive_thinking,
     };
     use crate::config::AnthropicConfig;
+    use crate::constants::DEFAULT_MAX_RETRIES;
     use crate::http_client::{MockHttpClient, RecordingSequentialMockHttpClient, ReqwestClient};
     use crate::llm::anthropic::{
         AnthropicOutputTokensDetails, AnthropicTextResponseContent, DEFAULT_CLAUDE_MODEL,
@@ -988,6 +994,7 @@ mod tests {
                 max_tokens: 2048,
                 reasoning_budget: None,
                 reasoning_effort: None,
+                max_retries: DEFAULT_MAX_RETRIES,
             }),
         };
         let request = ChatRequest {

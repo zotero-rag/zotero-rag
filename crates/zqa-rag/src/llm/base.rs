@@ -10,7 +10,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
 use super::errors::LLMError;
-use crate::constants::{DEFAULT_MAX_RETRIES, DEFAULT_MAX_TOOL_ITERATIONS};
+use crate::constants::DEFAULT_MAX_TOOL_ITERATIONS;
 use crate::http_client::HttpClient;
 use crate::llm::tools::{CallbackFn, SerializedTool, Tool, get_owned_tools, process_tool_calls};
 use crate::pricing::ModelUsage;
@@ -452,12 +452,13 @@ pub(crate) async fn send_generation_request<R, S>(
     request: R,
     headers: &HeaderMap,
     api_url: &str,
+    max_retries: usize,
 ) -> Result<S, LLMError>
 where
     R: Serialize + Send + Sync,
     S: DeserializeOwned,
 {
-    let res = request_with_backoff(client, api_url, headers, &request, DEFAULT_MAX_RETRIES).await?;
+    let res = request_with_backoff(client, api_url, headers, &request, max_retries).await?;
 
     let body = res.text().await?;
     let json: serde_json::Value = serde_json::from_str(&body).map_err(|err| {
