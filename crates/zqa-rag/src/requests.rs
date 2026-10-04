@@ -26,8 +26,31 @@ fn calculate_backoff_delay(attempt: usize, response: &Response) -> Duration {
         }
     }
 
+    exponential_backoff_delay(attempt)
+}
+
+/// The largest exponent used for exponential backoff. With a base delay of one second, this caps
+/// the delay before jitter at 64 seconds, so a large configured `max_retries` cannot lead to
+/// absurdly long sleeps.
+const MAX_BACKOFF_EXPONENT: u32 = 6;
+
+/// Compute an exponential backoff delay, with jitter, for a retry attempt.
+///
+/// # Arguments
+///
+/// * `attempt` - The zero-based retry attempt.
+///
+/// # Returns
+///
+/// A delay of `2^attempt` seconds plus up to 100% jitter, with the exponent capped at
+/// `MAX_BACKOFF_EXPONENT`.
+pub(crate) fn exponential_backoff_delay(attempt: usize) -> Duration {
+    let exponent = u32::try_from(attempt)
+        .unwrap_or(u32::MAX)
+        .min(MAX_BACKOFF_EXPONENT);
+    let base_delay = f64::from(1000_u32 << exponent);
+
     // Adding a jitter helps mitigate the thundering herd problem
-    let base_delay = 1000.0 * 2.0_f64.powi(attempt as i32);
     let jitter = base_delay * rand::random::<f64>();
 
     #[allow(clippy::cast_sign_loss)]
@@ -256,5 +279,10 @@ mod tests {
         // Should be between 2000ms and 4000ms (base 2000ms + jitter)
         assert!(delay >= Duration::from_secs(2));
         assert!(delay <= Duration::from_secs(4));
+
+        // Large attempt numbers (from a large configured `max_retries`) are capped at 64s + jitter
+        let delay = calculate_backoff_delay(100, &response);
+        assert!(delay >= Duration::from_secs(64));
+        assert!(delay <= Duration::from_secs(128));
     }
 }
