@@ -889,7 +889,7 @@ impl AnthropicConfig {
     ///
     /// # Panics
     ///
-    /// If no API key is configured.
+    /// * If no API key is configured.
     #[must_use]
     pub fn into_rag_config(self, app_config: &Config) -> zqa_rag::config::AnthropicConfig {
         zqa_rag::config::AnthropicConfig {
@@ -945,7 +945,7 @@ impl OpenAIConfig {
     ///
     /// # Panics
     ///
-    /// If no API key is configured.
+    /// * If no API key is configured.
     #[must_use]
     pub fn into_rag_config(self, app_config: &Config) -> zqa_rag::config::OpenAIConfig {
         zqa_rag::config::OpenAIConfig {
@@ -983,7 +983,7 @@ impl GeminiConfig {
     ///
     /// # Panics
     ///
-    /// If no API key is configured.
+    /// * If no API key is configured.
     #[must_use]
     pub fn into_rag_config(self, app_config: &Config) -> zqa_rag::config::GeminiConfig {
         use zqa_rag::constants::{DEFAULT_GEMINI_EMBEDDING_DIM, DEFAULT_GEMINI_EMBEDDING_MODEL};
@@ -1111,7 +1111,7 @@ impl OpenRouterConfig {
     ///
     /// # Panics
     ///
-    /// If no API key is configured.
+    /// * If no API key is configured.
     #[must_use]
     pub fn into_rag_config(self, app_config: &Config) -> zqa_rag::config::OpenRouterConfig {
         zqa_rag::config::OpenRouterConfig {

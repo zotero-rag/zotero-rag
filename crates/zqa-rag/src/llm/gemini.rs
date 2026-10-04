@@ -882,7 +882,7 @@ mod tests {
     }"#;
 
     #[tokio::test(start_paused = true)]
-    async fn test_malformed_generation_retry_exhaustion() {
+    async fn test_generation_retry_exhaustion() {
         dotenv().ok();
 
         for finish_reason in ["MALFORMED_RESPONSE", "MALFORMED_FUNCTION_CALL"] {
@@ -912,6 +912,24 @@ mod tests {
             test_eq!(requests.len(), max_retries + 1);
             assert!(requests.iter().all(|request| request == &requests[0]));
         }
+
+        // Rate-limited requests are retried up to the configured limit too, not the default.
+        let max_retries = 1;
+        let http_client = RecordingSequentialMockHttpClient::from_status_bodies(
+            std::iter::repeat_n((429, String::from("{}")), max_retries + 1),
+        );
+        let client = GeminiClient {
+            client: http_client.clone(),
+            config: Some(GeminiConfig {
+                max_retries,
+                ..GeminiConfig::default()
+            }),
+        };
+
+        let result = client.send_message(&ChatRequest::default()).await;
+
+        assert!(matches!(result, Err(LLMError::HttpStatusError(_))));
+        test_eq!(http_client.requests().len(), max_retries + 1);
     }
 
     #[tokio::test]
