@@ -284,8 +284,8 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
     async fn test_failed_batch_keeps_successful_batches() {
-        // A failed batch is zero-filled without discarding or reordering the batches that succeeded,
-        // whether the provider returns an error status or a body that is not JSON.
+        // A failed batch becomes null entries without discarding or reordering the batches that
+        // succeeded, whether the provider returns an error status or a body that is not JSON.
         let batch_response = json!({"embeddings": {"float": vec![vec![0.5_f32; 256]; 30]}});
         let http_client = RecordingSequentialMockHttpClient::from_status_bodies([
             (200, batch_response.to_string()),
@@ -300,7 +300,10 @@ mod tests {
             client: http_client.clone(),
             config: Some(embed_v4_config(1, 0)),
         };
-        let input = Arc::new(arrow_array::StringArray::from(vec!["configured input"; 91]));
+        // Row 31 is empty, so it keeps its zero vector even though its batch fails.
+        let mut texts = vec!["configured input"; 91];
+        texts[31] = "";
+        let input = Arc::new(arrow_array::StringArray::from(texts));
         let embeddings = client.compute_source_embeddings(input).unwrap();
         let vectors = arrow_array::cast::as_fixed_size_list_array(&embeddings);
         let values = vectors
@@ -312,9 +315,10 @@ mod tests {
         test_eq!(vectors.len(), 91);
         test_eq!(http_client.requests().len(), 4);
         let (first, rest) = values.split_at(30 * 256);
-        let (failed, last) = rest.split_at(60 * 256);
+        let (_, last) = rest.split_at(60 * 256);
         assert!(first.iter().all(|v| (v - 0.5).abs() < f32::EPSILON));
-        assert!(failed.iter().all(|v| v.abs() < f32::EPSILON));
+        assert!((0..91).all(|row| vectors.is_null(row) == (row != 31 && (30..90).contains(&row))));
+        assert!(rest[256..512].iter().all(|v| v.abs() < f32::EPSILON));
         assert!(last.iter().all(|v| (v - 0.25).abs() < f32::EPSILON));
 
         // A rejected API key fails every batch, so it stops the run, without sending the remaining

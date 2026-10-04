@@ -329,7 +329,7 @@ mod tests {
         test_eq!(errors.len(), 0);
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_call_successful_summarization() {
         // Set up an isolated test database with the toy library's data.
         let paths = TestPaths::new();

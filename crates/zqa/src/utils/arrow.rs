@@ -1,7 +1,8 @@
 use std::sync::Arc;
 
 use arrow_array::cast::AsArray;
-use arrow_array::{ArrayRef, FixedSizeListArray, Float32Array, RecordBatch, StringArray};
+use arrow_array::types::Float32Type;
+use arrow_array::{Array, ArrayRef, FixedSizeListArray, Float32Array, RecordBatch, StringArray};
 use arrow_schema;
 use thiserror::Error;
 use zqa_rag::embedding::common::{EmbeddingProviderConfig, get_embedding_provider_with_config};
@@ -9,7 +10,6 @@ use zqa_rag::llm::errors::LLMError;
 use zqa_rag::vector::backends::lance::LanceError;
 
 use super::library::{LibraryParsingError, parse_library};
-use crate::store::common::ZoteroStore;
 use crate::store::lance::LanceZoteroStore;
 use crate::utils::library::ZoteroItem;
 
@@ -134,15 +134,17 @@ pub fn get_schema(
     arrow_schema::Schema::new(schema_fields)
 }
 
-/// A helper that converts an arbitrary `Vec<ZoteroItem>` into a `RecordBatch`. Note that because
-/// we need the embedding provider as well, this can't be done with just a `From<..>`
-/// implementation.
+/// A helper that converts an arbitrary `Vec<ZoteroItem>` into a `RecordBatch`, computing their
+/// embeddings. Note that because we need the embedding provider as well, this can't be done with
+/// just a `From<..>` implementation.
+///
+/// Items the embedding provider could not embed are left out of the batch rather than stored with
+/// a placeholder vector. Since they are not in the store, the next `/process` picks them up again.
 ///
 /// # Arguments:
 ///
 /// * `items` - The items to convert to a `RecordBatch`
 /// * `embedding_config` - Configuration for the embedding provider to use when computing embeddings.
-/// * `include_embeddings` - Whether to include the embeddings field in the schema.
 ///
 /// # Errors
 ///
@@ -156,34 +158,61 @@ pub fn get_schema(
 pub fn library_to_arrow(
     items: &[ZoteroItem],
     embedding_config: &EmbeddingProviderConfig,
-    include_embeddings: bool,
 ) -> Result<RecordBatch, ArrowError> {
-    let schema = Arc::new(get_schema(embedding_config, include_embeddings));
-
-    // Convert ZoteroItemMetadata to Arrow arrays
-    let library_keys = StringArray::from(
-        items
-            .iter()
-            .map(|item| item.metadata.library_key.as_str())
-            .collect::<Vec<&str>>(),
-    );
-
-    let titles = StringArray::from(
-        items
-            .iter()
-            .map(|item| item.metadata.title.as_str())
-            .collect::<Vec<&str>>(),
-    );
-
+    let embedding_provider = get_embedding_provider_with_config(embedding_config)?;
     let pdf_texts = StringArray::from(
         items
             .iter()
             .map(|item| item.text.as_str())
             .collect::<Vec<&str>>(),
     );
+    let embeddings = embedding_provider.compute_source_embeddings(Arc::new(pdf_texts))?;
 
-    // Convert file paths to strings, returning an error if any path has invalid UTF-8
-    let file_paths_vec: Result<Vec<&str>, ArrowError> = items
+    embedded_items_to_arrow(items, embeddings.as_fixed_size_list(), embedding_config)
+}
+
+/// Converts Zotero items to a `RecordBatch` without computing their embeddings. This is the
+/// format of the `/process` recovery file, which `/embed` embeds when it replays it.
+///
+/// # Arguments
+///
+/// * `items` - The items to convert to a `RecordBatch`
+/// * `embedding_config` - The embedding config, which determines the schema.
+///
+/// # Errors
+///
+/// * `ArrowError::PathEncodingError` if a Zotero item's path is not valid Unicode.
+/// * `ArrowError::ArrowSchemaError` if creating the final `RecordBatch` fails.
+///
+/// # Returns
+///
+/// A `RecordBatch` with the key, title, file path and text of each item.
+pub fn unembedded_items_to_arrow(
+    items: &[ZoteroItem],
+    embedding_config: &EmbeddingProviderConfig,
+) -> Result<RecordBatch, ArrowError> {
+    let items: Vec<&ZoteroItem> = items.iter().collect();
+    Ok(RecordBatch::try_new(
+        Arc::new(get_schema(embedding_config, false)),
+        item_columns(&items)?,
+    )?)
+}
+
+/// Builds the key, title, file path and text columns for `items`, in schema order.
+///
+/// # Arguments
+///
+/// * `items` - The items to build columns for.
+///
+/// # Errors
+///
+/// * `ArrowError::PathEncodingError` if a Zotero item's path is not valid Unicode.
+///
+/// # Returns
+///
+/// The four columns, in the order `get_schema` lists them.
+fn item_columns(items: &[&ZoteroItem]) -> Result<Vec<ArrayRef>, ArrowError> {
+    let file_paths = items
         .iter()
         .map(|item| {
             item.metadata
@@ -191,26 +220,106 @@ pub fn library_to_arrow(
                 .to_str()
                 .ok_or(ArrowError::PathEncodingError)
         })
+        .collect::<Result<Vec<&str>, ArrowError>>()?;
+    let library_keys: StringArray = items
+        .iter()
+        .map(|item| Some(item.metadata.library_key.as_str()))
         .collect();
-    let file_paths = StringArray::from(file_paths_vec?);
+    let titles: StringArray = items
+        .iter()
+        .map(|item| Some(item.metadata.title.as_str()))
+        .collect();
+    let pdf_texts: StringArray = items.iter().map(|item| Some(item.text.as_str())).collect();
 
-    let mut record_batch_cols = vec![
-        Arc::new(library_keys) as ArrayRef,
-        Arc::new(titles) as ArrayRef,
-        Arc::new(file_paths) as ArrayRef,
-        Arc::new(pdf_texts.clone()) as ArrayRef,
-    ];
+    Ok(vec![
+        Arc::new(library_keys),
+        Arc::new(titles),
+        Arc::new(StringArray::from(file_paths)),
+        Arc::new(pdf_texts),
+    ])
+}
 
-    if include_embeddings {
-        let embedding_provider = get_embedding_provider_with_config(embedding_config)?;
-        let query_vec = embedding_provider.compute_source_embeddings(Arc::new(pdf_texts))?;
-        let query_vec = query_vec.as_fixed_size_list();
-
-        record_batch_cols.push(Arc::new(query_vec.clone()));
+/// Build a `RecordBatch` from items and their computed embeddings, leaving out the items whose
+/// embedding is null because the provider failed to embed them.
+///
+/// # Arguments
+///
+/// * `items` - The items to convert to a `RecordBatch`
+/// * `embeddings` - The embeddings for `items`, in the same order, with a null entry for each item
+///   that could not be embedded.
+/// * `embedding_config` - The embedding config, which determines the schema.
+///
+/// # Errors
+///
+/// * `ArrowError::PathEncodingError` if a Zotero item's path is not valid Unicode.
+/// * `ArrowError::Other` if the number or dimension of the embeddings does not match the items
+///   and the config.
+/// * `ArrowError::ArrowSchemaError` if creating the final `RecordBatch` fails.
+///
+/// # Returns
+///
+/// A `RecordBatch` containing only the items that were embedded.
+fn embedded_items_to_arrow(
+    items: &[ZoteroItem],
+    embeddings: &FixedSizeListArray,
+    embedding_config: &EmbeddingProviderConfig,
+) -> Result<RecordBatch, ArrowError> {
+    if embeddings.len() != items.len() {
+        return Err(ArrowError::Other(format!(
+            "Got {} embeddings for {} items.",
+            embeddings.len(),
+            items.len()
+        )));
     }
-    let record_batch = RecordBatch::try_new(schema.clone(), record_batch_cols)?;
+    let dim = embedding_config.dims();
+    if usize::try_from(embeddings.value_length()).ok() != Some(dim) {
+        return Err(ArrowError::Other(format!(
+            "All embeddings must have dimension {dim}."
+        )));
+    }
 
-    Ok(record_batch)
+    let (embedded, failed): (Vec<_>, Vec<_>) = items
+        .iter()
+        .enumerate()
+        .partition(|&(i, _)| embeddings.is_valid(i));
+    let values = embeddings.values().as_primitive::<Float32Type>();
+    let values = if failed.is_empty() {
+        // The common case: reuse the provider's buffer instead of copying it.
+        values.clone()
+    } else {
+        log::warn!(
+            "{} items could not be embedded and were not saved; they will be retried on the next run: {}",
+            failed.len(),
+            failed
+                .iter()
+                .map(|(_, item)| item.metadata.title.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        embedded
+            .iter()
+            .flat_map(|&(i, _)| &values.values()[i * dim..(i + 1) * dim])
+            .copied()
+            .collect::<Float32Array>()
+    };
+
+    let embedded: Vec<&ZoteroItem> = embedded.into_iter().map(|(_, item)| item).collect();
+    let mut columns = item_columns(&embedded)?;
+    columns.push(Arc::new(FixedSizeListArray::new(
+        Arc::new(arrow_schema::Field::new(
+            "item",
+            arrow_schema::DataType::Float32,
+            true,
+        )),
+        embeddings.value_length(),
+        Arc::new(values),
+        None,
+    )));
+
+    Ok(RecordBatch::try_new(
+        Arc::new(get_schema(embedding_config, true)),
+        columns,
+    )?)
 }
 
 /// Converts new Zotero library items to an Arrow `RecordBatch`.
@@ -254,14 +363,7 @@ pub async fn full_library_to_arrow(
     let lib_items = parse_library(store, library_path, start_from, limit).await?;
     log::info!("Finished parsing library items.");
 
-    // Consult the store itself (which may be pinned to a specific URI) rather than the global
-    // `LANCEDB_URI`, so callers with an explicitly-configured store stay self-consistent.
-    let include_embeddings = store.exists().await;
-    library_to_arrow(
-        &lib_items,
-        &store.get_embedding_config(),
-        include_embeddings,
-    )
+    library_to_arrow(&lib_items, &store.get_embedding_config())
 }
 
 /// Given metadata about Zotero items, *including embeddings*, inserts them into the LanceDB store.
@@ -356,6 +458,7 @@ mod tests {
     use super::*;
     use crate::common::setup_logger;
     use crate::config::{Config, VoyageAIConfig};
+    use crate::store::common::ZoteroStore;
     use crate::utils::library::ZoteroItemSet;
 
     fn get_config() -> Config {
@@ -405,12 +508,7 @@ mod tests {
             .expect("No batches in iterator")
             .expect("Error in batch");
 
-        // Whether it's 4 or 5 depends on whether the DB exists; this isn't technically guaranteed,
-        // but both are valid states.
-        assert!(
-            [4, 5].contains(&batch.num_columns()),
-            "Expected 4 or 5 columns in record batch"
-        );
+        test_eq!(batch.num_columns(), 5);
         assert!(
             (1..=5).contains(&batch.num_rows()),
             "Expected between one and five rows in record batch"
@@ -451,7 +549,7 @@ mod tests {
                 768,
             ),
         ] {
-            let batch = library_to_arrow(&[], &embedding_config, true).unwrap();
+            let batch = library_to_arrow(&[], &embedding_config).unwrap();
             test_eq!(
                 batch.column(4).as_fixed_size_list().value_length(),
                 expected_dims
@@ -467,7 +565,7 @@ mod tests {
                 store.upsert_items(vec![item.clone()]).await.unwrap();
                 1
             } else {
-                let source_batch = library_to_arrow(&[], &embedding_config, false).unwrap();
+                let source_batch = library_to_arrow(&[], &embedding_config).unwrap();
                 store.upsert_batches(vec![source_batch]).await.unwrap();
                 0
             };
@@ -491,5 +589,47 @@ mod tests {
                 initial_rows + 1
             );
         }
+    }
+
+    #[test]
+    fn test_embedded_items_to_arrow_skips_failed_items() {
+        let embedding_config = EmbeddingProviderConfig::Gemini(zqa_rag::config::GeminiConfig {
+            embedding_dims: 4,
+            ..Default::default()
+        });
+        let item = |key: &str| ZoteroItem {
+            metadata: crate::utils::library::ZoteroItemMetadata {
+                library_key: key.into(),
+                title: format!("Paper {key}"),
+                file_path: "paper.pdf".into(),
+                authors: None,
+            },
+            text: "Some text".into(),
+        };
+
+        // The second item's embedding is null because the provider failed to embed it.
+        let embeddings = FixedSizeListArray::new(
+            Arc::new(arrow_schema::Field::new(
+                "item",
+                arrow_schema::DataType::Float32,
+                true,
+            )),
+            4,
+            Arc::new(Float32Array::from(vec![0.5; 12])),
+            Some(vec![true, false, true].into()),
+        );
+        let batch = embedded_items_to_arrow(
+            &[item("a"), item("b"), item("c")],
+            &embeddings,
+            &embedding_config,
+        )
+        .unwrap();
+
+        let keys = batch.column(0).as_string::<i32>();
+        test_eq!(keys.iter().flatten().collect::<Vec<_>>(), vec!["a", "c"]);
+        test_eq!(batch.column(4).null_count(), 0);
+
+        // Mismatched lengths are rejected rather than misaligning items and embeddings.
+        assert!(embedded_items_to_arrow(&[item("a")], &embeddings, &embedding_config).is_err());
     }
 }
