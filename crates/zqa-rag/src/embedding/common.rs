@@ -1,7 +1,6 @@
 //! Structs, functions, and traits shared by embedding clients and other embedding-related code in
 //! this crate.
 
-use std::env;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -12,7 +11,6 @@ use reqwest::header::HeaderMap;
 use serde::{Deserialize, Serialize};
 
 use crate::capabilities::EmbeddingProvider;
-use crate::constants::DEFAULT_MAX_CONCURRENT_REQUESTS;
 use crate::http_client::HttpClient;
 use crate::llm::errors::LLMError;
 use crate::providers::ProviderId;
@@ -189,6 +187,7 @@ pub trait EmbeddingApiResponse {
 ///   wait between requests in seconds.
 /// * `wait_after_request_s` - See `batch_size`.
 /// * `embedding_dim` - The embedding dimensions you expect to receive.
+/// * `max_concurrent` - The maximum number of batches to request at once.
 ///
 /// # Returns
 ///
@@ -214,6 +213,7 @@ pub(crate) async fn compute_embeddings_async<T, U, F>(
     batch_size: usize,
     wait_after_request_s: u64,
     embedding_dim: usize,
+    max_concurrent: usize,
 ) -> Result<Arc<dyn arrow_array::Array>, LLMError>
 where
     T: Serialize + Send + Sync + std::fmt::Debug,
@@ -225,11 +225,7 @@ where
 
     log::info!("Processing {} input texts.", texts.len());
 
-    let max_concurrent = env::var("MAX_CONCURRENT_REQUESTS")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(DEFAULT_MAX_CONCURRENT_REQUESTS)
-        .max(1);
+    let max_concurrent = max_concurrent.max(1);
 
     let api_url = api_url.to_string();
     let api_key = api_key.to_string();

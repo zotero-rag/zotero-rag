@@ -198,6 +198,7 @@ mod tests {
                 embedding_dims: DEFAULT_VOYAGE_EMBEDDING_DIM as usize,
                 api_key: env::var("VOYAGE_AI_API_KEY").unwrap_or_default(),
                 reranker: DEFAULT_VOYAGE_RERANK_MODEL.into(),
+                max_concurrent_requests: crate::constants::DEFAULT_MAX_CONCURRENT_REQUESTS,
             }),
             Arc::clone(&schema),
             "pdf_text".into(),

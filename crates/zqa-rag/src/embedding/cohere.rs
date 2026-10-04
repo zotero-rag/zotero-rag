@@ -11,7 +11,9 @@ use serde::{Deserialize, Serialize};
 
 use super::common::EmbeddingApiResponse;
 use crate::capabilities::EmbeddingProvider;
-use crate::constants::{DEFAULT_COHERE_EMBEDDING_DIM, DEFAULT_COHERE_EMBEDDING_MODEL};
+use crate::constants::{
+    DEFAULT_COHERE_EMBEDDING_DIM, DEFAULT_COHERE_EMBEDDING_MODEL, DEFAULT_MAX_CONCURRENT_REQUESTS,
+};
 use crate::embedding::common::compute_embeddings_async;
 use crate::http_client::{HttpClient, ReqwestClient};
 use crate::llm::errors::LLMError;
@@ -99,6 +101,12 @@ impl<T: HttpClient + Clone> CohereClient<T> {
             }
             None => Some(embedding_dims),
         };
+        let max_concurrent = self
+            .config
+            .as_ref()
+            .map_or(DEFAULT_MAX_CONCURRENT_REQUESTS, |c| {
+                c.max_concurrent_requests
+            });
 
         tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(compute_embeddings_async::<
@@ -122,6 +130,7 @@ impl<T: HttpClient + Clone> CohereClient<T> {
                 BATCH_SIZE,
                 WAIT_AFTER_REQUEST_S,
                 embedding_dims as usize,
+                max_concurrent,
             ))
         })
     }
@@ -264,6 +273,7 @@ mod tests {
                 embedding_model: embedding_model.into(),
                 embedding_dims,
                 reranker: String::new(),
+                max_concurrent_requests: crate::constants::DEFAULT_MAX_CONCURRENT_REQUESTS,
             };
             let response = json!({"embeddings": {"float": [vec![0.5; config.embedding_dims]]}});
             let http_client = RecordingSequentialMockHttpClient::new([response.clone(), response]);
@@ -308,6 +318,7 @@ mod tests {
                 embedding_model: "embed-english-v3.0".into(),
                 embedding_dims: 256,
                 reranker: String::new(),
+                max_concurrent_requests: crate::constants::DEFAULT_MAX_CONCURRENT_REQUESTS,
             }),
         };
         let input = Arc::new(arrow_array::StringArray::from(vec!["configured input"]));
