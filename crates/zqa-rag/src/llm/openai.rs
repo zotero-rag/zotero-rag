@@ -20,8 +20,8 @@ use super::base::{ChatHistoryItem, ChatRequest};
 use super::errors::LLMError;
 use crate::clients::openai::OpenAIClient;
 use crate::constants::{
-    DEFAULT_MAX_RETRIES, DEFAULT_OPENAI_EMBEDDING_DIM, DEFAULT_OPENAI_MODEL,
-    DEFAULT_OPENAI_REASONING_EFFORT,
+    DEFAULT_MAX_RETRIES, DEFAULT_OPENAI_EMBEDDING_DIM, DEFAULT_OPENAI_MAX_TOKENS,
+    DEFAULT_OPENAI_MODEL, DEFAULT_OPENAI_REASONING_EFFORT,
 };
 use crate::http_client::HttpClient;
 use crate::llm::base::{
@@ -221,9 +221,8 @@ pub(crate) struct OpenAIRequest<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     reasoning: Option<OpenAIReasoning>,
 
-    #[serde(skip_serializing_if = "Option::is_none")]
     /// Maximum tokens to generate in the response.
-    max_output_tokens: Option<u32>,
+    max_output_tokens: u32,
 
     /// The tools passed in
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -463,16 +462,19 @@ impl<T: HttpClient> AgenticClient for OpenAIClient<T> {
         max_tokens: Option<u32>,
     ) -> Result<ProviderTurn<Self::HistoryItem>, LLMError> {
         // Use config if available, otherwise fall back to env vars
-        let (api_key, model, max_retries) = if let Some(ref config) = self.config {
+        let (api_key, model, config_max_tokens, max_retries) = if let Some(ref config) = self.config
+        {
             (
                 config.api_key.clone(),
                 config.model.clone(),
+                config.max_tokens,
                 config.max_retries,
             )
         } else {
             (
                 env::var("OPENAI_API_KEY")?,
                 env::var("OPENAI_MODEL").unwrap_or_else(|_| DEFAULT_OPENAI_MODEL.to_string()),
+                DEFAULT_OPENAI_MAX_TOKENS,
                 DEFAULT_MAX_RETRIES,
             )
         };
@@ -483,7 +485,7 @@ impl<T: HttpClient> AgenticClient for OpenAIClient<T> {
             input: history,
             instructions: system_prompt,
             reasoning: reasoning.map(Into::into),
-            max_output_tokens: max_tokens,
+            max_output_tokens: max_tokens.unwrap_or(config_max_tokens),
             tools: wrapped_tools.as_deref(),
         };
 
@@ -582,7 +584,7 @@ mod tests {
         OpenAIResponse, OpenAIUsage,
     };
     use crate::config::OpenAIConfig;
-    use crate::constants::DEFAULT_OPENAI_EMBEDDING_DIM;
+    use crate::constants::{DEFAULT_OPENAI_EMBEDDING_DIM, DEFAULT_OPENAI_MAX_TOKENS};
     use crate::http_client::{MockHttpClient, RecordingSequentialMockHttpClient, ReqwestClient};
     use crate::llm::base::{
         AgenticClient, ChatHistoryContent, ChatHistoryItem, ChatRequest, ContentType, MessageRole,
@@ -786,6 +788,7 @@ mod tests {
         assert_eq!(request["reasoning"]["effort"].as_str(), Some("high"));
         assert_eq!(request["reasoning"]["summary"].as_str(), Some("detailed"));
         assert_eq!(request["tools"][0]["type"].as_str(), Some("function"));
+        assert_eq!(request["max_output_tokens"].as_u64(), Some(1024));
     }
 
     #[test]
@@ -796,7 +799,7 @@ mod tests {
             input: &input,
             instructions: Some("Follow the system instructions."),
             reasoning: None,
-            max_output_tokens: None,
+            max_output_tokens: DEFAULT_OPENAI_MAX_TOKENS,
             tools: None,
         };
 
@@ -878,7 +881,6 @@ mod tests {
         let tool_call_count = Arc::new(Mutex::new(0_usize));
         let text_segments = Arc::new(Mutex::new(Vec::new()));
         let request = ChatRequest {
-            max_tokens: Some(1024),
             message: "Test".into(),
             reasoning: Some(ReasoningConfig {
                 max_tokens: None,
@@ -903,6 +905,7 @@ mod tests {
             config: Some(OpenAIConfig {
                 api_key: "test".into(),
                 model: "gpt-5".into(),
+                max_tokens: 1024,
                 ..OpenAIConfig::default()
             }),
         };
