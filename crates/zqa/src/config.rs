@@ -11,7 +11,7 @@ use zqa_rag::config::LLMClientConfig;
 use zqa_rag::constants::*;
 use zqa_rag::constants::{DEFAULT_OPENAI_EMBEDDING_DIM, DEFAULT_OPENAI_EMBEDDING_MODEL};
 use zqa_rag::embedding::common::EmbeddingProviderConfig;
-use zqa_rag::llm::base::{ReasoningConfig, ReasoningEffort};
+use zqa_rag::llm::base::ReasoningEffort;
 use zqa_rag::providers::ProviderId;
 use zqa_rag::reranking::common::RerankProviderConfig;
 
@@ -323,59 +323,6 @@ impl Config {
     #[must_use]
     pub fn get_embedding_config(&self) -> Option<EmbeddingProviderConfig> {
         self.get_embedding_provider_config(ProviderId::from(&self.embedding_provider))
-    }
-
-    // NOTE: Maintainers: if you change this, you should also update zqa-rag/src/llm/factory.rs
-    #[must_use]
-    pub fn get_reasoning_config(&self) -> Option<ReasoningConfig> {
-        match self.model_provider {
-            ModelProvider::Anthropic => self.anthropic.as_ref().and_then(|c| {
-                if c.reasoning_budget.is_none() && c.reasoning_effort.is_none() {
-                    return None;
-                }
-                Some(ReasoningConfig {
-                    max_tokens: c.reasoning_budget,
-                    effort: c.reasoning_effort.map(|r| r.to_string()),
-                    summary: None,
-                })
-            }),
-            ModelProvider::Ollama => self.ollama.as_ref().and_then(|c| {
-                c.reasoning_budget.map(|budget| ReasoningConfig {
-                    max_tokens: Some(budget),
-                    effort: None,
-                    summary: None,
-                })
-            }),
-            ModelProvider::OpenAI => self.openai.as_ref().and_then(|c| {
-                c.reasoning_effort.as_ref().map(|effort| ReasoningConfig {
-                    max_tokens: None,
-                    effort: Some(effort.clone()),
-                    summary: None,
-                })
-            }),
-            ModelProvider::Gemini => self.gemini.as_ref().and_then(|c| {
-                if c.reasoning_budget.is_none() && c.reasoning_effort.is_none() {
-                    return None;
-                }
-                Some(ReasoningConfig {
-                    max_tokens: c.reasoning_budget,
-                    effort: c.reasoning_effort.map(|effort| effort.to_string()),
-                    summary: None,
-                })
-            }),
-            ModelProvider::OpenRouter => self.openrouter.as_ref().and_then(|c| {
-                if c.reasoning_effort.is_none() && c.reasoning_budget.is_none() {
-                    return None;
-                }
-
-                Some(ReasoningConfig {
-                    max_tokens: c.reasoning_budget,
-                    effort: c.reasoning_effort.clone(),
-                    summary: None,
-                })
-            }),
-            _ => None,
-        }
     }
 
     #[must_use]
@@ -1249,16 +1196,6 @@ mod tests {
             reasoning_effort: Some(ReasoningEffort::High),
             ..GeminiConfig::default()
         };
-        let config = Config {
-            model_provider: ModelProvider::Gemini,
-            gemini: Some(gemini.clone()),
-            ..Config::default()
-        };
-
-        let reasoning = config.get_reasoning_config().unwrap();
-        test_eq!(reasoning.max_tokens, None);
-        test_eq!(reasoning.effort.as_deref(), Some("high"));
-
         let rag_config = gemini.into_rag_config(&Config::default());
         test_eq!(rag_config.reasoning_effort.as_deref(), Some("high"));
     }

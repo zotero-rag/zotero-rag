@@ -312,7 +312,7 @@ where
             max_tokens: None,
             message: get_summarize_prompt(&query),
             system_prompt: Some(get_summarize_system_prompt()),
-            reasoning: ctx.config.get_reasoning_config(),
+            reasoning: llm_client.get_reasoning_config(),
             tools: Some(&tools),
             on_tool_call: None,
             on_text: Some(on_text),

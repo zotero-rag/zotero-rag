@@ -53,7 +53,10 @@ impl LLMClient {
     }
 
     /// Get the reasoning config from the client's config.
-    // NOTE: Maintainers: if you change this, you should also update zqa/src/config.rs
+    ///
+    /// # Returns
+    ///
+    /// The reasoning config, or `None` if the client's config does not enable reasoning.
     #[must_use]
     pub fn get_reasoning_config(&self) -> Option<ReasoningConfig> {
         match self {
@@ -67,15 +70,19 @@ impl LLMClient {
                     summary: None,
                 })
             }),
-            LLMClient::Ollama(client) => client.config.as_ref().map(|c| ReasoningConfig {
-                max_tokens: c.reasoning_budget,
-                effort: None,
-                summary: None,
+            LLMClient::Ollama(client) => client.config.as_ref().and_then(|c| {
+                c.reasoning_budget.map(|budget| ReasoningConfig {
+                    max_tokens: Some(budget),
+                    effort: None,
+                    summary: None,
+                })
             }),
-            LLMClient::OpenAI(client) => client.config.as_ref().map(|c| ReasoningConfig {
-                max_tokens: None,
-                effort: c.reasoning_effort.clone(),
-                summary: None,
+            LLMClient::OpenAI(client) => client.config.as_ref().and_then(|c| {
+                c.reasoning_effort.as_ref().map(|effort| ReasoningConfig {
+                    max_tokens: None,
+                    effort: Some(effort.clone()),
+                    summary: None,
+                })
             }),
             LLMClient::OpenRouter(client) => client.config.as_ref().map(|config| {
                 if config.reasoning_effort.is_none() && config.reasoning_budget.is_none() {
@@ -263,12 +270,14 @@ impl BatchAPIProvider for BatchEmbeddingClient {
 mod tests {
     use super::LLMClient;
     use crate::clients::gemini::GeminiClient;
+    use crate::clients::ollama::OllamaClient;
+    use crate::clients::openai::OpenAIClient;
     use crate::clients::test::TestClient;
-    use crate::config::GeminiConfig;
+    use crate::config::{GeminiConfig, OllamaConfig, OpenAIConfig};
     use crate::llm::base::{ChatRequest, ContentType};
 
     #[test]
-    fn gemini_reasoning_effort_is_returned() {
+    fn reasoning_config_follows_client_config() {
         let client = LLMClient::Gemini(GeminiClient::with_config(GeminiConfig {
             reasoning_effort: Some("high".into()),
             ..GeminiConfig::default()
@@ -278,6 +287,32 @@ mod tests {
         assert_eq!(reasoning.max_tokens, None);
         assert_eq!(reasoning.effort.as_deref(), Some("high"));
         assert_eq!(reasoning.summary, None);
+
+        // Configs that do not set reasoning parameters must not enable reasoning.
+        let clients = [
+            LLMClient::Ollama(OllamaClient::with_config(OllamaConfig::default())),
+            LLMClient::OpenAI(OpenAIClient::with_config(OpenAIConfig::default())),
+        ];
+        for client in clients {
+            assert!(client.get_reasoning_config().is_none());
+        }
+
+        // Configured reasoning parameters are passed through.
+        let ollama = LLMClient::Ollama(OllamaClient::with_config(OllamaConfig {
+            reasoning_budget: Some(2048),
+            ..OllamaConfig::default()
+        }));
+        let reasoning = ollama.get_reasoning_config().unwrap();
+        assert_eq!(reasoning.max_tokens, Some(2048));
+        assert_eq!(reasoning.effort, None);
+
+        let openai = LLMClient::OpenAI(OpenAIClient::with_config(OpenAIConfig {
+            reasoning_effort: Some("low".into()),
+            ..OpenAIConfig::default()
+        }));
+        let reasoning = openai.get_reasoning_config().unwrap();
+        assert_eq!(reasoning.max_tokens, None);
+        assert_eq!(reasoning.effort.as_deref(), Some("low"));
     }
 
     #[tokio::test]
