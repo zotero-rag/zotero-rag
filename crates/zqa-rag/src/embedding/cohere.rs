@@ -259,7 +259,9 @@ mod tests {
 
     use super::{CohereClient, DEFAULT_COHERE_EMBEDDING_DIM};
     use crate::config::CohereConfig;
-    use crate::http_client::{RecordingSequentialMockHttpClient, ReqwestClient};
+    use crate::http_client::{
+        ConcurrencyTrackingMockHttpClient, RecordingSequentialMockHttpClient, ReqwestClient,
+    };
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
     async fn test_configured_embeddings() {
@@ -309,6 +311,28 @@ mod tests {
                 test_eq!(request["input_type"], input_type);
             }
         }
+
+        // Batches are requested concurrently, up to the configured limit.
+        let batch_response = json!({"embeddings": {"float": vec![vec![0.5_f32; 256]; 30]}});
+        let http_client =
+            ConcurrencyTrackingMockHttpClient::new(std::iter::repeat_n(batch_response, 4));
+        let client = CohereClient {
+            client: http_client.clone(),
+            config: Some(CohereConfig {
+                api_key: "test-key".into(),
+                embedding_model: "embed-v4.0".into(),
+                embedding_dims: 256,
+                reranker: String::new(),
+                max_concurrent_requests: 2,
+            }),
+        };
+        let input = Arc::new(arrow_array::StringArray::from(vec![
+            "configured input";
+            120
+        ]));
+        let embeddings = client.compute_source_embeddings(input).unwrap();
+        test_eq!(embeddings.len(), 120);
+        test_eq!(http_client.peak_in_flight(), 2);
 
         let http_client = RecordingSequentialMockHttpClient::new::<serde_json::Value>([]);
         let client = CohereClient {
