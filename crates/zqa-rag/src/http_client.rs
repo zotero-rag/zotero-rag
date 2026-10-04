@@ -427,3 +427,77 @@ impl<T: serde::Serialize + Send + Sync + Clone> HttpClient for MockHttpClient<T>
         self.post_json(url, headers, &None::<usize>)
     }
 }
+
+/// A sequential mock HTTP client that records the peak number of requests in flight at once.
+/// Each request stays in flight for a short delay so that concurrent requests overlap.
+#[cfg(test)]
+#[derive(Debug, Clone)]
+pub(crate) struct ConcurrencyTrackingMockHttpClient {
+    client: SequentialMockHttpClient,
+    in_flight: Arc<std::sync::atomic::AtomicUsize>,
+    peak_in_flight: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+#[cfg(test)]
+impl ConcurrencyTrackingMockHttpClient {
+    /// Create a concurrency-tracking mock with responses returned in order.
+    pub(crate) fn new<T: serde::Serialize>(responses: impl IntoIterator<Item = T>) -> Self {
+        Self {
+            client: SequentialMockHttpClient::new(responses),
+            in_flight: Arc::default(),
+            peak_in_flight: Arc::default(),
+        }
+    }
+
+    /// Return the largest number of requests that were in flight at the same time.
+    pub(crate) fn peak_in_flight(&self) -> usize {
+        self.peak_in_flight
+            .load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+#[cfg(test)]
+impl HttpClient for ConcurrencyTrackingMockHttpClient {
+    fn post_json<'a, T: serde::Serialize + Send + Sync>(
+        &'a self,
+        url: &'a str,
+        headers: HeaderMap,
+        body: &'a T,
+    ) -> Pin<Box<dyn Future<Output = Result<reqwest::Response, reqwest::Error>> + Send + 'a>> {
+        use std::sync::atomic::Ordering;
+
+        Box::pin(async move {
+            let in_flight = self.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+            self.peak_in_flight.fetch_max(in_flight, Ordering::SeqCst);
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            let response = self.client.post_json(url, headers, body).await;
+            self.in_flight.fetch_sub(1, Ordering::SeqCst);
+            response
+        })
+    }
+
+    fn post_form<'a>(
+        &'a self,
+        url: &'a str,
+        headers: HeaderMap,
+        _form_data: Form,
+    ) -> Pin<Box<dyn Future<Output = Result<reqwest::Response, reqwest::Error>> + Send + '_>> {
+        self.post_json(url, headers, &None::<usize>)
+    }
+
+    fn get_json<'a>(
+        &'a self,
+        url: &'a str,
+        headers: HeaderMap,
+    ) -> Pin<Box<dyn Future<Output = Result<reqwest::Response, reqwest::Error>> + Send + 'a>> {
+        self.post_json(url, headers, &None::<usize>)
+    }
+
+    fn post_empty<'a>(
+        &'a self,
+        url: &'a str,
+        headers: HeaderMap,
+    ) -> Pin<Box<dyn Future<Output = Result<reqwest::Response, reqwest::Error>> + Send + 'a>> {
+        self.post_json(url, headers, &None::<usize>)
+    }
+}
