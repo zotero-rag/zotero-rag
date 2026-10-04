@@ -4,10 +4,10 @@ use dotenv::dotenv;
 use log::LevelFilter;
 use zqa::cli::prompts::{get_extraction_prompt, get_extraction_system_prompt};
 use zqa::common::setup_logger;
-use zqa::config::{AnthropicConfig, GeminiConfig, OpenAIConfig};
+use zqa::config::{AnthropicConfig, Config, GeminiConfig, OpenAIConfig};
 use zqa::utils::library::ZoteroItemMetadata;
 use zqa_rag::config::LLMClientConfig;
-use zqa_rag::constants::DEFAULT_MAX_RETRIES;
+
 use zqa_rag::llm::base::{ChatRequest, ContentType};
 use zqa_rag::llm::factory::get_client_with_config;
 
@@ -114,7 +114,7 @@ async fn test_extraction_prompt_openai() {
     };
 
     let client = get_client_with_config(&LLMClientConfig::OpenAI(
-        config.into_rag_config(DEFAULT_MAX_RETRIES),
+        config.into_rag_config(&Config::default()),
     ))
     .expect("Failed to create OpenAI client");
 
@@ -146,7 +146,7 @@ async fn test_extraction_prompt_anthropic() {
     };
 
     let client = get_client_with_config(&LLMClientConfig::Anthropic(
-        config.into_rag_config(DEFAULT_MAX_RETRIES),
+        config.into_rag_config(&Config::default()),
     ))
     .expect("Failed to create Anthropic client");
 
@@ -180,7 +180,7 @@ async fn test_extraction_prompt_gemini() {
     };
 
     let client = get_client_with_config(&LLMClientConfig::Gemini(
-        config.into_rag_config(DEFAULT_MAX_RETRIES),
+        config.into_rag_config(&Config::default()),
     ))
     .expect("Failed to create Gemini client");
 

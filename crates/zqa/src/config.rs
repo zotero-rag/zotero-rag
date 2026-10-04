@@ -298,20 +298,23 @@ impl Config {
             EmbeddingProvider::Cohere => self
                 .cohere
                 .as_ref()
-                .map(|c| EmbeddingProviderConfig::Cohere(c.clone().into())),
-            EmbeddingProvider::OpenAI => self.openai.as_ref().map(|c| {
-                EmbeddingProviderConfig::OpenAI(c.clone().into_rag_config(self.max_retries))
-            }),
+                .map(|c| EmbeddingProviderConfig::Cohere(c.clone().into_rag_config(self))),
+            EmbeddingProvider::OpenAI => self
+                .openai
+                .as_ref()
+                .map(|c| EmbeddingProviderConfig::OpenAI(c.clone().into_rag_config(self))),
             EmbeddingProvider::VoyageAI => self
                 .voyageai
                 .as_ref()
-                .map(|c| EmbeddingProviderConfig::VoyageAI(c.clone().into())),
-            EmbeddingProvider::Gemini => self.gemini.as_ref().map(|c| {
-                EmbeddingProviderConfig::Gemini(c.clone().into_rag_config(self.max_retries))
-            }),
-            EmbeddingProvider::Ollama => self.ollama.as_ref().map(|c| {
-                EmbeddingProviderConfig::Ollama(c.clone().into_rag_config(self.max_retries))
-            }),
+                .map(|c| EmbeddingProviderConfig::VoyageAI(c.clone().into_rag_config(self))),
+            EmbeddingProvider::Gemini => self
+                .gemini
+                .as_ref()
+                .map(|c| EmbeddingProviderConfig::Gemini(c.clone().into_rag_config(self))),
+            EmbeddingProvider::Ollama => self
+                .ollama
+                .as_ref()
+                .map(|c| EmbeddingProviderConfig::Ollama(c.clone().into_rag_config(self))),
             _ => None,
         }
     }
@@ -381,11 +384,11 @@ impl Config {
             Some(RerankerProvider::VoyageAI) => self
                 .voyageai
                 .as_ref()
-                .map(|cfg| RerankProviderConfig::VoyageAI(cfg.clone().into())),
+                .map(|cfg| RerankProviderConfig::VoyageAI(cfg.clone().into_rag_config(self))),
             Some(RerankerProvider::Cohere) => self
                 .cohere
                 .as_ref()
-                .map(|cfg| RerankProviderConfig::Cohere(cfg.clone().into())),
+                .map(|cfg| RerankProviderConfig::Cohere(cfg.clone().into_rag_config(self))),
             _ => None,
         }
     }
@@ -485,24 +488,26 @@ impl Config {
     #[must_use]
     pub fn get_generation_config(&self) -> Option<LLMClientConfig> {
         match self.model_provider {
-            ModelProvider::Anthropic => self.anthropic.as_ref().map(|cfg| {
-                LLMClientConfig::Anthropic(cfg.clone().into_rag_config(self.max_retries))
-            }),
+            ModelProvider::Anthropic => self
+                .anthropic
+                .as_ref()
+                .map(|cfg| LLMClientConfig::Anthropic(cfg.clone().into_rag_config(self))),
             ModelProvider::Ollama => self
                 .ollama
                 .as_ref()
-                .map(|cfg| LLMClientConfig::Ollama(cfg.clone().into_rag_config(self.max_retries))),
+                .map(|cfg| LLMClientConfig::Ollama(cfg.clone().into_rag_config(self))),
             ModelProvider::OpenAI => self
                 .openai
                 .as_ref()
-                .map(|cfg| LLMClientConfig::OpenAI(cfg.clone().into_rag_config(self.max_retries))),
+                .map(|cfg| LLMClientConfig::OpenAI(cfg.clone().into_rag_config(self))),
             ModelProvider::Gemini => self
                 .gemini
                 .as_ref()
-                .map(|cfg| LLMClientConfig::Gemini(cfg.clone().into_rag_config(self.max_retries))),
-            ModelProvider::OpenRouter => self.openrouter.as_ref().map(|cfg| {
-                LLMClientConfig::OpenRouter(cfg.clone().into_rag_config(self.max_retries))
-            }),
+                .map(|cfg| LLMClientConfig::Gemini(cfg.clone().into_rag_config(self))),
+            ModelProvider::OpenRouter => self
+                .openrouter
+                .as_ref()
+                .map(|cfg| LLMClientConfig::OpenRouter(cfg.clone().into_rag_config(self))),
             #[cfg(test)]
             ModelProvider::Mock => self
                 .mock
@@ -876,7 +881,7 @@ impl AnthropicConfig {
     ///
     /// # Arguments
     ///
-    /// * `max_retries` - The maximum number of retries for retryable request failures.
+    /// * `app_config` - The application config, which holds settings shared by all providers.
     ///
     /// # Returns
     ///
@@ -886,7 +891,7 @@ impl AnthropicConfig {
     ///
     /// If no API key is configured.
     #[must_use]
-    pub fn into_rag_config(self, max_retries: usize) -> zqa_rag::config::AnthropicConfig {
+    pub fn into_rag_config(self, app_config: &Config) -> zqa_rag::config::AnthropicConfig {
         zqa_rag::config::AnthropicConfig {
             api_key: self
                 .api_key
@@ -895,7 +900,7 @@ impl AnthropicConfig {
             max_tokens: self.max_tokens,
             reasoning_budget: self.reasoning_budget,
             reasoning_effort: self.reasoning_effort.map(|r| r.to_string()),
-            max_retries,
+            max_retries: app_config.max_retries,
         }
     }
 }
@@ -905,13 +910,13 @@ impl OllamaConfig {
     ///
     /// # Arguments
     ///
-    /// * `max_retries` - The maximum number of retries for retryable request failures.
+    /// * `app_config` - The application config, which holds settings shared by all providers.
     ///
     /// # Returns
     ///
     /// The `zqa-rag` configuration for `ollama` clients.
     #[must_use]
-    pub fn into_rag_config(self, max_retries: usize) -> zqa_rag::config::OllamaConfig {
+    pub fn into_rag_config(self, app_config: &Config) -> zqa_rag::config::OllamaConfig {
         zqa_rag::config::OllamaConfig {
             model: self.model.unwrap_or(DEFAULT_OLLAMA_MODEL.into()),
             max_tokens: self.max_tokens.unwrap_or(DEFAULT_OLLAMA_MAX_TOKENS),
@@ -921,7 +926,8 @@ impl OllamaConfig {
             embedding_dims: self.embedding_dims.unwrap_or(DEFAULT_OLLAMA_EMBEDDING_DIM),
             base_url: self.base_url.unwrap_or(DEFAULT_OLLAMA_BASE_URL.into()),
             reasoning_budget: self.reasoning_budget,
-            max_retries,
+            max_retries: app_config.max_retries,
+            max_concurrent_requests: app_config.max_concurrent_requests,
         }
     }
 }
@@ -931,7 +937,7 @@ impl OpenAIConfig {
     ///
     /// # Arguments
     ///
-    /// * `max_retries` - The maximum number of retries for retryable request failures.
+    /// * `app_config` - The application config, which holds settings shared by all providers.
     ///
     /// # Returns
     ///
@@ -941,7 +947,7 @@ impl OpenAIConfig {
     ///
     /// If no API key is configured.
     #[must_use]
-    pub fn into_rag_config(self, max_retries: usize) -> zqa_rag::config::OpenAIConfig {
+    pub fn into_rag_config(self, app_config: &Config) -> zqa_rag::config::OpenAIConfig {
         zqa_rag::config::OpenAIConfig {
             api_key: self
                 .api_key
@@ -958,7 +964,8 @@ impl OpenAIConfig {
                 .embedding_dims
                 .unwrap_or(DEFAULT_OPENAI_EMBEDDING_DIM as usize),
             reasoning_effort: self.reasoning_effort,
-            max_retries,
+            max_retries: app_config.max_retries,
+            max_concurrent_requests: app_config.max_concurrent_requests,
         }
     }
 }
@@ -968,7 +975,7 @@ impl GeminiConfig {
     ///
     /// # Arguments
     ///
-    /// * `max_retries` - The maximum number of retries for retryable request failures.
+    /// * `app_config` - The application config, which holds settings shared by all providers.
     ///
     /// # Returns
     ///
@@ -978,7 +985,7 @@ impl GeminiConfig {
     ///
     /// If no API key is configured.
     #[must_use]
-    pub fn into_rag_config(self, max_retries: usize) -> zqa_rag::config::GeminiConfig {
+    pub fn into_rag_config(self, app_config: &Config) -> zqa_rag::config::GeminiConfig {
         use zqa_rag::constants::{DEFAULT_GEMINI_EMBEDDING_DIM, DEFAULT_GEMINI_EMBEDDING_MODEL};
 
         zqa_rag::config::GeminiConfig {
@@ -994,7 +1001,8 @@ impl GeminiConfig {
                 .unwrap_or(DEFAULT_GEMINI_EMBEDDING_DIM as usize),
             reasoning_budget: self.reasoning_budget,
             reasoning_effort: self.reasoning_effort.map(|effort| effort.to_string()),
-            max_retries,
+            max_retries: app_config.max_retries,
+            max_concurrent_requests: app_config.max_concurrent_requests,
         }
     }
 }
@@ -1008,54 +1016,84 @@ impl From<MockConfig> for zqa_rag::config::MockConfig {
     }
 }
 
-impl From<VoyageAIConfig> for zqa_rag::config::VoyageAIConfig {
-    fn from(config: VoyageAIConfig) -> Self {
+impl VoyageAIConfig {
+    /// Convert this configuration into the `zqa-rag` Voyage AI configuration.
+    ///
+    /// # Arguments
+    ///
+    /// * `app_config` - The application config, which holds settings shared by all providers.
+    ///
+    /// # Returns
+    ///
+    /// The `zqa-rag` configuration for Voyage AI clients.
+    ///
+    /// # Panics
+    ///
+    /// If no API key is configured.
+    #[must_use]
+    pub fn into_rag_config(self, app_config: &Config) -> zqa_rag::config::VoyageAIConfig {
         use zqa_rag::constants::{
             DEFAULT_VOYAGE_EMBEDDING_DIM, DEFAULT_VOYAGE_EMBEDDING_MODEL,
             DEFAULT_VOYAGE_RERANK_MODEL,
         };
 
-        Self {
-            api_key: config
+        zqa_rag::config::VoyageAIConfig {
+            api_key: self
                 .api_key
                 .or_else(|| env::var("VOYAGE_AI_API_KEY").ok())
                 .expect("Voyage API key not found. Please set it in your config file or as VOYAGE_AI_API_KEY."),
-            embedding_model: config
+            embedding_model: self
                 .embedding_model
                 .unwrap_or_else(|| DEFAULT_VOYAGE_EMBEDDING_MODEL.to_string()),
-            embedding_dims: config
+            embedding_dims: self
                 .embedding_dims
                 .unwrap_or(DEFAULT_VOYAGE_EMBEDDING_DIM as usize),
-            reranker: config
+            reranker: self
                 .reranker
                 .unwrap_or_else(|| DEFAULT_VOYAGE_RERANK_MODEL.to_string()),
+            max_concurrent_requests: app_config.max_concurrent_requests,
         }
     }
 }
 
-impl From<CohereConfig> for zqa_rag::config::CohereConfig {
-    fn from(config: CohereConfig) -> Self {
+impl CohereConfig {
+    /// Convert this configuration into the `zqa-rag` Cohere configuration.
+    ///
+    /// # Arguments
+    ///
+    /// * `app_config` - The application config, which holds settings shared by all providers.
+    ///
+    /// # Returns
+    ///
+    /// The `zqa-rag` configuration for Cohere clients.
+    ///
+    /// # Panics
+    ///
+    /// If no API key is configured.
+    #[must_use]
+    pub fn into_rag_config(self, app_config: &Config) -> zqa_rag::config::CohereConfig {
         use zqa_rag::constants::{
             DEFAULT_COHERE_EMBEDDING_DIM, DEFAULT_COHERE_EMBEDDING_MODEL,
             DEFAULT_COHERE_RERANK_MODEL,
         };
 
-        Self {
-            api_key: config
+        zqa_rag::config::CohereConfig {
+            api_key: self
                 .api_key
                 .or_else(|| env::var("COHERE_API_KEY").ok())
                 .expect(
                 "Cohere API key not found. Please set it in your config file or as COHERE_API_KEY.",
             ),
-            embedding_model: config
+            embedding_model: self
                 .embedding_model
                 .unwrap_or_else(|| DEFAULT_COHERE_EMBEDDING_MODEL.to_string()),
-            embedding_dims: config
+            embedding_dims: self
                 .embedding_dims
                 .unwrap_or(DEFAULT_COHERE_EMBEDDING_DIM as usize),
-            reranker: config
+            reranker: self
                 .reranker
                 .unwrap_or_else(|| DEFAULT_COHERE_RERANK_MODEL.to_string()),
+            max_concurrent_requests: app_config.max_concurrent_requests,
         }
     }
 }
@@ -1065,7 +1103,7 @@ impl OpenRouterConfig {
     ///
     /// # Arguments
     ///
-    /// * `max_retries` - The maximum number of retries for retryable request failures.
+    /// * `app_config` - The application config, which holds settings shared by all providers.
     ///
     /// # Returns
     ///
@@ -1075,7 +1113,7 @@ impl OpenRouterConfig {
     ///
     /// If no API key is configured.
     #[must_use]
-    pub fn into_rag_config(self, max_retries: usize) -> zqa_rag::config::OpenRouterConfig {
+    pub fn into_rag_config(self, app_config: &Config) -> zqa_rag::config::OpenRouterConfig {
         zqa_rag::config::OpenRouterConfig {
             api_key: self
                 .api_key
@@ -1085,7 +1123,7 @@ impl OpenRouterConfig {
             max_tokens: self.max_tokens.unwrap_or(DEFAULT_OPENROUTER_MAX_TOKENS),
             reasoning_effort: self.reasoning_effort,
             reasoning_budget: self.reasoning_budget,
-            max_retries,
+            max_retries: app_config.max_retries,
         }
     }
 }
@@ -1140,6 +1178,12 @@ mod tests {
             panic!("Expected an OpenAI embedding config");
         };
         test_eq!(embedding.max_retries, 7);
+        test_eq!(embedding.max_concurrent_requests, 5);
+        let Some(EmbeddingProviderConfig::VoyageAI(embedding)) = config.get_embedding_config()
+        else {
+            panic!("Expected a Voyage AI embedding config");
+        };
+        test_eq!(embedding.max_concurrent_requests, 5);
 
         let anthropic = config.anthropic.unwrap();
         test_eq!(anthropic.model, Some("claude-sonnet-4-5".into()));
@@ -1180,7 +1224,7 @@ mod tests {
         test_eq!(reasoning.max_tokens, None);
         test_eq!(reasoning.effort.as_deref(), Some("high"));
 
-        let rag_config = gemini.into_rag_config(DEFAULT_MAX_RETRIES);
+        let rag_config = gemini.into_rag_config(&Config::default());
         test_eq!(rag_config.reasoning_effort.as_deref(), Some("high"));
     }
 

@@ -6,11 +6,11 @@
 
 use crate::constants::{
     DEFAULT_ANTHROPIC_MAX_TOKENS, DEFAULT_ANTHROPIC_MODEL, DEFAULT_GEMINI_EMBEDDING_DIM,
-    DEFAULT_GEMINI_EMBEDDING_MODEL, DEFAULT_GEMINI_MODEL, DEFAULT_MAX_RETRIES,
-    DEFAULT_OLLAMA_BASE_URL, DEFAULT_OLLAMA_EMBEDDING_DIM, DEFAULT_OLLAMA_EMBEDDING_MODEL,
-    DEFAULT_OLLAMA_MAX_TOKENS, DEFAULT_OLLAMA_MODEL, DEFAULT_OPENAI_EMBEDDING_DIM,
-    DEFAULT_OPENAI_EMBEDDING_MODEL, DEFAULT_OPENAI_MAX_TOKENS, DEFAULT_OPENAI_MODEL,
-    DEFAULT_OPENROUTER_MAX_TOKENS, DEFAULT_OPENROUTER_MODEL,
+    DEFAULT_GEMINI_EMBEDDING_MODEL, DEFAULT_GEMINI_MODEL, DEFAULT_MAX_CONCURRENT_REQUESTS,
+    DEFAULT_MAX_RETRIES, DEFAULT_OLLAMA_BASE_URL, DEFAULT_OLLAMA_EMBEDDING_DIM,
+    DEFAULT_OLLAMA_EMBEDDING_MODEL, DEFAULT_OLLAMA_MAX_TOKENS, DEFAULT_OLLAMA_MODEL,
+    DEFAULT_OPENAI_EMBEDDING_DIM, DEFAULT_OPENAI_EMBEDDING_MODEL, DEFAULT_OPENAI_MAX_TOKENS,
+    DEFAULT_OPENAI_MODEL, DEFAULT_OPENROUTER_MAX_TOKENS, DEFAULT_OPENROUTER_MODEL,
 };
 use crate::providers::ProviderId;
 
@@ -63,6 +63,8 @@ pub struct OpenAIConfig {
     pub reasoning_effort: Option<String>,
     /// Maximum number of retries for a request that fails in a retryable way
     pub max_retries: usize,
+    /// Maximum number of concurrent embedding requests
+    pub max_concurrent_requests: usize,
 }
 
 impl Default for OpenAIConfig {
@@ -75,6 +77,7 @@ impl Default for OpenAIConfig {
             embedding_dims: DEFAULT_OPENAI_EMBEDDING_DIM as usize,
             reasoning_effort: None,
             max_retries: DEFAULT_MAX_RETRIES,
+            max_concurrent_requests: DEFAULT_MAX_CONCURRENT_REQUESTS,
         }
     }
 }
@@ -96,6 +99,8 @@ pub struct OllamaConfig {
     pub reasoning_budget: Option<u32>,
     /// Maximum number of retries for a request that fails in a retryable way
     pub max_retries: usize,
+    /// Maximum number of concurrent embedding requests
+    pub max_concurrent_requests: usize,
 }
 
 impl Default for OllamaConfig {
@@ -108,6 +113,7 @@ impl Default for OllamaConfig {
             base_url: DEFAULT_OLLAMA_BASE_URL.into(),
             reasoning_budget: None,
             max_retries: DEFAULT_MAX_RETRIES,
+            max_concurrent_requests: DEFAULT_MAX_CONCURRENT_REQUESTS,
         }
     }
 }
@@ -129,6 +135,8 @@ pub struct GeminiConfig {
     pub reasoning_effort: Option<String>,
     /// Maximum number of retries for a request that fails in a retryable way
     pub max_retries: usize,
+    /// Maximum number of concurrent embedding requests
+    pub max_concurrent_requests: usize,
 }
 
 impl Default for GeminiConfig {
@@ -141,6 +149,7 @@ impl Default for GeminiConfig {
             reasoning_budget: None,
             reasoning_effort: None,
             max_retries: DEFAULT_MAX_RETRIES,
+            max_concurrent_requests: DEFAULT_MAX_CONCURRENT_REQUESTS,
         }
     }
 }
@@ -156,6 +165,8 @@ pub struct VoyageAIConfig {
     pub embedding_dims: usize,
     /// Reranker model name
     pub reranker: String,
+    /// Maximum number of concurrent embedding requests
+    pub max_concurrent_requests: usize,
 }
 
 /// Configuration for Cohere embedding and reranking provider
@@ -169,6 +180,8 @@ pub struct CohereConfig {
     pub embedding_dims: usize,
     /// Reranker model name
     pub reranker: String,
+    /// Maximum number of concurrent embedding requests
+    pub max_concurrent_requests: usize,
 }
 
 /// Configuration for OpenRouter provider

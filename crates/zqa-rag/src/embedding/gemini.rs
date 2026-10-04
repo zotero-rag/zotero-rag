@@ -61,9 +61,19 @@ where
             .filter_map(|s| Some(s?.to_owned()))
             .collect();
         let config = self.config.as_ref();
-        let (embedding_dim, max_retries) = config.map_or(
-            (DEFAULT_GEMINI_EMBEDDING_DIM as usize, DEFAULT_MAX_RETRIES),
-            |config| (config.embedding_dims, config.max_retries),
+        let (embedding_dim, max_retries, max_concurrent) = config.map_or(
+            (
+                DEFAULT_GEMINI_EMBEDDING_DIM as usize,
+                DEFAULT_MAX_RETRIES,
+                DEFAULT_MAX_CONCURRENT_REQUESTS,
+            ),
+            |config| {
+                (
+                    config.embedding_dims,
+                    config.max_retries,
+                    config.max_concurrent_requests,
+                )
+            },
         );
 
         let embeddings: Vec<Vec<f32>> = if texts.is_empty() {
@@ -85,12 +95,6 @@ where
             headers.insert("content-type", "application/json".parse()?);
             headers.insert("x-goog-api-key", api_key.parse()?);
 
-            let max_concurrent = env::var("MAX_CONCURRENT_REQUESTS")
-                .ok()
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(DEFAULT_MAX_CONCURRENT_REQUESTS)
-                .max(1);
-
             let futures = texts.into_iter().map(|text| {
                 let request_body =
                     GeminiEmbeddingRequest::from_text(text, model.clone(), embedding_dim);
@@ -99,7 +103,7 @@ where
 
             // Preserve input order so vectors remain associated with their source rows.
             let results = stream::iter(futures)
-                .buffered(max_concurrent)
+                .buffered(max_concurrent.max(1))
                 .collect::<Vec<_>>()
                 .await;
 

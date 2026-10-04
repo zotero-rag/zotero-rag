@@ -955,12 +955,14 @@ mod tests {
                 embedding_dims: DEFAULT_OPENAI_EMBEDDING_DIM as usize,
                 reasoning_effort: None,
                 max_retries: DEFAULT_MAX_RETRIES,
+                max_concurrent_requests: zqa_rag::constants::DEFAULT_MAX_CONCURRENT_REQUESTS,
             }),
             reranker_config: Some(RerankProviderConfig::VoyageAI(VoyageAIConfig {
                 api_key: voyage_api_key,
                 embedding_model: DEFAULT_VOYAGE_EMBEDDING_MODEL.to_string(),
                 embedding_dims: DEFAULT_VOYAGE_EMBEDDING_DIM as usize,
                 reranker: DEFAULT_VOYAGE_RERANK_MODEL.to_string(),
+                max_concurrent_requests: zqa_rag::constants::DEFAULT_MAX_CONCURRENT_REQUESTS,
             })),
             client: None,
         });
@@ -981,6 +983,7 @@ mod tests {
             embedding_model: DEFAULT_VOYAGE_EMBEDDING_MODEL.to_string(),
             embedding_dims: DEFAULT_VOYAGE_EMBEDDING_DIM as usize,
             reranker: DEFAULT_VOYAGE_RERANK_MODEL.to_string(),
+            max_concurrent_requests: zqa_rag::constants::DEFAULT_MAX_CONCURRENT_REQUESTS,
         };
 
         let ctx = Arc::new(DocumentsToolContext {
@@ -1009,6 +1012,7 @@ mod tests {
             embedding_model: DEFAULT_COHERE_EMBEDDING_MODEL.to_string(),
             embedding_dims: DEFAULT_COHERE_EMBEDDING_DIM as usize,
             reranker: DEFAULT_COHERE_RERANK_MODEL.to_string(),
+            max_concurrent_requests: zqa_rag::constants::DEFAULT_MAX_CONCURRENT_REQUESTS,
         };
 
         let ctx = Arc::new(DocumentsToolContext {
@@ -1048,12 +1052,14 @@ mod tests {
                 reasoning_budget: None,
                 reasoning_effort: None,
                 max_retries: DEFAULT_MAX_RETRIES,
+                max_concurrent_requests: zqa_rag::constants::DEFAULT_MAX_CONCURRENT_REQUESTS,
             }),
             reranker_config: Some(RerankProviderConfig::VoyageAI(VoyageAIConfig {
                 api_key: voyage_api_key,
                 embedding_model: DEFAULT_VOYAGE_EMBEDDING_MODEL.to_string(),
                 embedding_dims: DEFAULT_VOYAGE_EMBEDDING_DIM as usize,
                 reranker: DEFAULT_VOYAGE_RERANK_MODEL.to_string(),
+                max_concurrent_requests: zqa_rag::constants::DEFAULT_MAX_CONCURRENT_REQUESTS,
             })),
             client: None,
         });
@@ -1080,6 +1086,7 @@ mod tests {
                 embedding_dims: DEFAULT_OPENAI_EMBEDDING_DIM as usize,
                 reasoning_effort: None,
                 max_retries: DEFAULT_MAX_RETRIES,
+                max_concurrent_requests: zqa_rag::constants::DEFAULT_MAX_CONCURRENT_REQUESTS,
             }))
             .expect("Failed to create OpenAI client");
 
@@ -1097,12 +1104,14 @@ mod tests {
                 embedding_dims: DEFAULT_OPENAI_EMBEDDING_DIM as usize,
                 reasoning_effort: None,
                 max_retries: DEFAULT_MAX_RETRIES,
+                max_concurrent_requests: zqa_rag::constants::DEFAULT_MAX_CONCURRENT_REQUESTS,
             }),
             reranker_config: Some(RerankProviderConfig::VoyageAI(VoyageAIConfig {
                 api_key: voyage_api_key,
                 embedding_model: DEFAULT_VOYAGE_EMBEDDING_MODEL.to_string(),
                 embedding_dims: DEFAULT_VOYAGE_EMBEDDING_DIM as usize,
                 reranker: DEFAULT_VOYAGE_RERANK_MODEL.to_string(),
+                max_concurrent_requests: zqa_rag::constants::DEFAULT_MAX_CONCURRENT_REQUESTS,
             })),
             client: Some(client),
         });

@@ -176,12 +176,13 @@ pub(crate) async fn compute_openai_embeddings_async(
         .filter_map(|s| Some(s?.to_owned()))
         .collect();
 
-    let (api_key, model, dims, max_retries) = if let Some(config) = config {
+    let (api_key, model, dims, max_retries, max_concurrent) = if let Some(config) = config {
         (
             config.api_key.clone(),
             config.embedding_model.clone(),
             config.embedding_dims,
             config.max_retries,
+            config.max_concurrent_requests,
         )
     } else {
         (
@@ -193,6 +194,7 @@ pub(crate) async fn compute_openai_embeddings_async(
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(DEFAULT_OPENAI_EMBEDDING_DIM as usize),
             DEFAULT_MAX_RETRIES,
+            DEFAULT_MAX_CONCURRENT_REQUESTS,
         )
     };
 
@@ -210,15 +212,9 @@ pub(crate) async fn compute_openai_embeddings_async(
         )
     });
 
-    // Convert to a stream and process with buffered to limit concurrency but preserve order
-    let max_concurrent = env::var("MAX_CONCURRENT_REQUESTS")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(DEFAULT_MAX_CONCURRENT_REQUESTS);
-
-    // Process futures with limited concurrency
+    // Process futures with limited concurrency, preserving order
     let results = stream::iter(futures)
-        .buffered(max_concurrent)
+        .buffered(max_concurrent.max(1))
         .collect::<Vec<_>>()
         .await;
 

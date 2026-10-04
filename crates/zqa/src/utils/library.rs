@@ -752,6 +752,7 @@ mod tests {
             embedding_dims: DEFAULT_VOYAGE_EMBEDDING_DIM as usize,
             api_key: env::var("VOYAGE_AI_API_KEY").expect("VOYAGE_AI_API_KEY not set"),
             reranker: DEFAULT_VOYAGE_RERANK_MODEL.into(),
+            max_concurrent_requests: zqa_rag::constants::DEFAULT_MAX_CONCURRENT_REQUESTS,
         });
         let schema = Arc::new(arrow_schema::Schema::new(vec![
             arrow_schema::Field::new("library_key", arrow_schema::DataType::Utf8, false),

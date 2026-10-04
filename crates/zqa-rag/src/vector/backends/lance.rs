@@ -1224,6 +1224,7 @@ mod tests {
             embedding_dims: DEFAULT_OPENAI_EMBEDDING_DIM as usize,
             reasoning_effort: None,
             max_retries: DEFAULT_MAX_RETRIES,
+            max_concurrent_requests: crate::constants::DEFAULT_MAX_CONCURRENT_REQUESTS,
         })
     }
 
@@ -1262,6 +1263,7 @@ mod tests {
             embedding_dims: DEFAULT_VOYAGE_EMBEDDING_DIM as usize,
             api_key: env::var("VOYAGE_AI_API_KEY").unwrap_or_default(),
             reranker: DEFAULT_VOYAGE_RERANK_MODEL.into(),
+            max_concurrent_requests: crate::constants::DEFAULT_MAX_CONCURRENT_REQUESTS,
         })
     }
 
@@ -1292,6 +1294,7 @@ mod tests {
                     embedding_model: "embed-v4.0".into(),
                     embedding_dims: 256,
                     reranker: String::new(),
+                    max_concurrent_requests: crate::constants::DEFAULT_MAX_CONCURRENT_REQUESTS,
                 }),
                 256,
             ),
@@ -1380,6 +1383,7 @@ mod tests {
                 embedding_dims: DEFAULT_VOYAGE_EMBEDDING_DIM as usize,
                 api_key: env::var("VOYAGE_AI_API_KEY").unwrap(),
                 reranker: DEFAULT_VOYAGE_RERANK_MODEL.into(),
+                max_concurrent_requests: crate::constants::DEFAULT_MAX_CONCURRENT_REQUESTS,
             }),
             &uri,
         );

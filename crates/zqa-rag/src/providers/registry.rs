@@ -241,6 +241,7 @@ mod tests {
             embedding_dims: 1536,
             reasoning_effort: None,
             max_retries: DEFAULT_MAX_RETRIES,
+            max_concurrent_requests: crate::constants::DEFAULT_MAX_CONCURRENT_REQUESTS,
         })
     }
 
@@ -264,6 +265,7 @@ mod tests {
             reasoning_budget: None,
             reasoning_effort: None,
             max_retries: DEFAULT_MAX_RETRIES,
+            max_concurrent_requests: crate::constants::DEFAULT_MAX_CONCURRENT_REQUESTS,
         })
     }
 
@@ -276,6 +278,7 @@ mod tests {
             base_url: "http://127.0.0.1:11434".into(),
             reasoning_budget: None,
             max_retries: DEFAULT_MAX_RETRIES,
+            max_concurrent_requests: crate::constants::DEFAULT_MAX_CONCURRENT_REQUESTS,
         })
     }
 
@@ -299,6 +302,7 @@ mod tests {
             embedding_dims: 1536,
             reasoning_effort: None,
             max_retries: DEFAULT_MAX_RETRIES,
+            max_concurrent_requests: crate::constants::DEFAULT_MAX_CONCURRENT_REQUESTS,
         })
     }
 
@@ -311,6 +315,7 @@ mod tests {
             reasoning_budget: None,
             reasoning_effort: None,
             max_retries: DEFAULT_MAX_RETRIES,
+            max_concurrent_requests: crate::constants::DEFAULT_MAX_CONCURRENT_REQUESTS,
         })
     }
 
@@ -323,6 +328,7 @@ mod tests {
             base_url: "http://127.0.0.1:11434".into(),
             reasoning_budget: None,
             max_retries: DEFAULT_MAX_RETRIES,
+            max_concurrent_requests: crate::constants::DEFAULT_MAX_CONCURRENT_REQUESTS,
         })
     }
 
@@ -332,6 +338,7 @@ mod tests {
             embedding_model: "voyage-test".into(),
             embedding_dims: 1024,
             reranker: "rerank-test".into(),
+            max_concurrent_requests: crate::constants::DEFAULT_MAX_CONCURRENT_REQUESTS,
         })
     }
 
@@ -341,6 +348,7 @@ mod tests {
             embedding_model: "embed-test".into(),
             embedding_dims: 1024,
             reranker: "rerank-test".into(),
+            max_concurrent_requests: crate::constants::DEFAULT_MAX_CONCURRENT_REQUESTS,
         })
     }
 
@@ -350,6 +358,7 @@ mod tests {
             embedding_model: "voyage-test".into(),
             embedding_dims: 1024,
             reranker: "rerank-test".into(),
+            max_concurrent_requests: crate::constants::DEFAULT_MAX_CONCURRENT_REQUESTS,
         })
     }
 
@@ -359,6 +368,7 @@ mod tests {
             embedding_model: "embed-test".into(),
             embedding_dims: 1024,
             reranker: "rerank-test".into(),
+            max_concurrent_requests: crate::constants::DEFAULT_MAX_CONCURRENT_REQUESTS,
         })
     }
 
