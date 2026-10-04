@@ -2,7 +2,6 @@
 //! includes support for both text generation and embedding, and tool calling is supported.
 
 use std::env;
-use std::time::Duration;
 
 use reqwest::header::HeaderMap;
 use serde::{Deserialize, Serialize};
@@ -20,6 +19,7 @@ use crate::llm::base::{
 };
 use crate::llm::tools::{GEMINI_SCHEMA_KEY, SerializedTool};
 use crate::pricing::ModelUsage;
+use crate::requests::exponential_backoff_delay;
 
 /// A function (tool) call request from the model.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -475,7 +475,7 @@ impl<T: HttpClient> AgenticClient for GeminiClient<T> {
             {
                 log::warn!("Gemini returned {finish_reason}; retrying generation");
                 // Retry this turn before executing tools or modifying the conversation history.
-                tokio::time::sleep(Duration::from_secs(1 << attempt)).await;
+                tokio::time::sleep(exponential_backoff_delay(attempt)).await;
                 attempt += 1;
                 continue;
             }
