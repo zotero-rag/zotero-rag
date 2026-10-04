@@ -1157,9 +1157,24 @@ mod tests {
             embedding_dims = 1536
 
             [voyageai]
+            api_key = "voyage-test"
             reranker = "rerank-2.5"
             embedding_model = "voyage-3-large"
             embedding_dims = 2048
+
+            [cohere]
+            api_key = "cohere-test"
+            embedding_model = "embed-v4.0"
+            embedding_dims = 256
+
+            [gemini]
+            api_key = "gemini-test"
+            embedding_model = "gemini-embedding-001"
+            embedding_dims = 768
+
+            [ollama]
+            embedding_model = "nomic-embed-text"
+            embedding_dims = 768
         "#;
 
         let config: Config = toml::from_str(toml_str).unwrap();
@@ -1184,6 +1199,21 @@ mod tests {
             panic!("Expected a Voyage AI embedding config");
         };
         test_eq!(embedding.max_concurrent_requests, 5);
+        for provider in [ProviderId::Cohere, ProviderId::Gemini, ProviderId::Ollama] {
+            let max_concurrent_requests = match config.get_embedding_provider_config(provider) {
+                Some(EmbeddingProviderConfig::Cohere(embedding)) => {
+                    embedding.max_concurrent_requests
+                }
+                Some(EmbeddingProviderConfig::Gemini(embedding)) => {
+                    embedding.max_concurrent_requests
+                }
+                Some(EmbeddingProviderConfig::Ollama(embedding)) => {
+                    embedding.max_concurrent_requests
+                }
+                _ => panic!("Expected a {provider:?} embedding config"),
+            };
+            test_eq!(max_concurrent_requests, 5);
+        }
 
         let anthropic = config.anthropic.unwrap();
         test_eq!(anthropic.model, Some("claude-sonnet-4-5".into()));
