@@ -963,6 +963,7 @@ mod tests {
                 embedding_dims: DEFAULT_VOYAGE_EMBEDDING_DIM as usize,
                 reranker: DEFAULT_VOYAGE_RERANK_MODEL.to_string(),
                 max_concurrent_requests: zqa_rag::constants::DEFAULT_MAX_CONCURRENT_REQUESTS,
+                max_retries: zqa_rag::constants::DEFAULT_MAX_RETRIES,
             })),
             client: None,
         });
@@ -984,6 +985,7 @@ mod tests {
             embedding_dims: DEFAULT_VOYAGE_EMBEDDING_DIM as usize,
             reranker: DEFAULT_VOYAGE_RERANK_MODEL.to_string(),
             max_concurrent_requests: zqa_rag::constants::DEFAULT_MAX_CONCURRENT_REQUESTS,
+            max_retries: zqa_rag::constants::DEFAULT_MAX_RETRIES,
         };
 
         let ctx = Arc::new(DocumentsToolContext {
@@ -1013,6 +1015,7 @@ mod tests {
             embedding_dims: DEFAULT_COHERE_EMBEDDING_DIM as usize,
             reranker: DEFAULT_COHERE_RERANK_MODEL.to_string(),
             max_concurrent_requests: zqa_rag::constants::DEFAULT_MAX_CONCURRENT_REQUESTS,
+            max_retries: zqa_rag::constants::DEFAULT_MAX_RETRIES,
         };
 
         let ctx = Arc::new(DocumentsToolContext {
@@ -1060,6 +1063,7 @@ mod tests {
                 embedding_dims: DEFAULT_VOYAGE_EMBEDDING_DIM as usize,
                 reranker: DEFAULT_VOYAGE_RERANK_MODEL.to_string(),
                 max_concurrent_requests: zqa_rag::constants::DEFAULT_MAX_CONCURRENT_REQUESTS,
+                max_retries: zqa_rag::constants::DEFAULT_MAX_RETRIES,
             })),
             client: None,
         });
@@ -1112,6 +1116,7 @@ mod tests {
                 embedding_dims: DEFAULT_VOYAGE_EMBEDDING_DIM as usize,
                 reranker: DEFAULT_VOYAGE_RERANK_MODEL.to_string(),
                 max_concurrent_requests: zqa_rag::constants::DEFAULT_MAX_CONCURRENT_REQUESTS,
+                max_retries: zqa_rag::constants::DEFAULT_MAX_RETRIES,
             })),
             client: Some(client),
         });

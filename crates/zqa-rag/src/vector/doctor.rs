@@ -199,6 +199,7 @@ mod tests {
                 api_key: env::var("VOYAGE_AI_API_KEY").unwrap_or_default(),
                 reranker: DEFAULT_VOYAGE_RERANK_MODEL.into(),
                 max_concurrent_requests: crate::constants::DEFAULT_MAX_CONCURRENT_REQUESTS,
+                max_retries: crate::constants::DEFAULT_MAX_RETRIES,
             }),
             Arc::clone(&schema),
             "pdf_text".into(),

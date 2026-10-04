@@ -10,9 +10,9 @@ use crate::http_client::HttpClient;
 use crate::llm::errors::LLMError;
 use crate::logging::preview;
 
-/// Calculate the backoff delay given an attempt number and a response. It assumes the response is
-/// a 429 Too Many Requests response with a "Retry-After" header. If the header is not present or
-/// cannot be parsed, it uses a default base backoff delay of 1000 milliseconds.
+/// Calculate the backoff delay given an attempt number and a retryable response. If the response
+/// has a "Retry-After" header in seconds, that is used. Otherwise, it uses exponential backoff with
+/// a base delay of 1000 milliseconds.
 fn calculate_backoff_delay(attempt: usize, response: &Response) -> Duration {
     if let Some(retry_after) = response.headers().get("retry-after") {
         if let Ok(wait_time_str) = retry_after.to_str() {
@@ -58,10 +58,11 @@ pub(crate) fn exponential_backoff_delay(attempt: usize) -> Duration {
 }
 
 /// Perform a request with exponential backoff. This allows for retries without overwhelming the
-/// server with too many requests. It retries up to `max_retries` times, with a delay of
-/// `2^attempt * base_delay` milliseconds (the exponent is capped at `MAX_BACKOFF_EXPONENT`), where
-/// `base_delay` is 1000 milliseconds by default. If the API returns a 429 Too Many Requests with a
-/// "Retry-After" header, that is respected instead.
+/// server with too many requests. Rate-limited (429) responses and server errors (5xx, e.g., a 502
+/// from a gateway or Anthropic's 529 "overloaded") are retried up to `max_retries` times, with a
+/// delay of `2^attempt * base_delay` milliseconds (the exponent is capped at
+/// `MAX_BACKOFF_EXPONENT`), where `base_delay` is 1000 milliseconds by default. If the response has
+/// a "Retry-After" header, that is respected instead.
 ///
 /// # Errors
 ///
@@ -96,10 +97,11 @@ pub(crate) async fn request_with_backoff<T: HttpClient>(
             return Ok(response);
         }
 
-        if response.status() == StatusCode::TOO_MANY_REQUESTS && attempt < max_retries {
+        let is_retryable = status == StatusCode::TOO_MANY_REQUESTS || status.is_server_error();
+        if is_retryable && attempt < max_retries {
             let delay = calculate_backoff_delay(attempt, &response);
             log::debug!(
-                "Rate limited on attempt {}; retrying after {delay:.2?}",
+                "Got {status} on attempt {}; retrying after {delay:.2?}",
                 attempt + 1
             );
             let _ = tokio::time::sleep(delay).await;
@@ -111,7 +113,7 @@ pub(crate) async fn request_with_backoff<T: HttpClient>(
         log::debug!(
             "Provider request failed: status={status}, attempts={}, retries_exhausted={}, body={}",
             attempt + 1,
-            status == StatusCode::TOO_MANY_REQUESTS && attempt == max_retries,
+            is_retryable && attempt == max_retries,
             preview(&body)
         );
 
@@ -137,6 +139,7 @@ mod tests {
     struct MockRateLimitClient {
         call_count: Arc<Mutex<usize>>,
         max_failures: usize,
+        failure_status: u16,
     }
 
     impl MockRateLimitClient {
@@ -144,7 +147,13 @@ mod tests {
             Self {
                 call_count: Arc::new(Mutex::new(0)),
                 max_failures,
+                failure_status: 429,
             }
+        }
+
+        fn with_failure_status(mut self, failure_status: u16) -> Self {
+            self.failure_status = failure_status;
+            self
         }
     }
 
@@ -166,7 +175,7 @@ mod tests {
                     let bytes = bytes::Bytes::from(json.to_string());
 
                     let http_response = http::Response::builder()
-                        .status(429)
+                        .status(self.failure_status)
                         .header("content-type", "application/json")
                         .header("retry-after", "2")
                         .body(bytes)
@@ -220,19 +229,24 @@ mod tests {
 
     #[tokio::test]
     async fn test_request_with_backoff_handles_429() {
-        let client = MockRateLimitClient::new(2); // Fail twice, then succeed
         let headers = HeaderMap::new();
         let request = json!({"test": "data"});
 
-        let result = request_with_backoff(&client, "http://test.com", &headers, &request, 3).await;
+        // Rate limits and server errors (e.g., a 502 from a gateway) are both retried.
+        for status in [429, 502] {
+            let client = MockRateLimitClient::new(2).with_failure_status(status); // Fail twice, then succeed
 
-        test_ok!(result);
-        let response = result.unwrap();
-        assert!(response.status().is_success());
+            let result =
+                request_with_backoff(&client, "http://test.com", &headers, &request, 3).await;
 
-        // Verify we made 3 calls (2 failures + 1 success)
-        let call_count = *client.call_count.lock().unwrap();
-        test_eq!(call_count, 3);
+            test_ok!(result);
+            let response = result.unwrap();
+            assert!(response.status().is_success());
+
+            // Verify we made 3 calls (2 failures + 1 success)
+            let call_count = *client.call_count.lock().unwrap();
+            test_eq!(call_count, 3);
+        }
     }
 
     #[tokio::test]

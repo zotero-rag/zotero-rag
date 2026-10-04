@@ -9,8 +9,8 @@ use serde::{Deserialize, Serialize};
 use crate::capabilities::EmbeddingProvider;
 use crate::clients::ollama::OllamaClient;
 use crate::constants::{
-    DEFAULT_MAX_CONCURRENT_REQUESTS, DEFAULT_OLLAMA_BASE_URL, DEFAULT_OLLAMA_EMBEDDING_DIM,
-    DEFAULT_OLLAMA_EMBEDDING_MODEL,
+    DEFAULT_MAX_CONCURRENT_REQUESTS, DEFAULT_MAX_RETRIES, DEFAULT_OLLAMA_BASE_URL,
+    DEFAULT_OLLAMA_EMBEDDING_DIM, DEFAULT_OLLAMA_EMBEDDING_MODEL,
 };
 use crate::embedding::common::{EmbeddingApiResponse, compute_embeddings_async};
 use crate::http_client::HttpClient;
@@ -101,6 +101,10 @@ impl<T: HttpClient + Debug + Default + Clone> OllamaClient<T> {
             .map_or(DEFAULT_MAX_CONCURRENT_REQUESTS, |c| {
                 c.max_concurrent_requests
             });
+        let max_retries = self
+            .config
+            .as_ref()
+            .map_or(DEFAULT_MAX_RETRIES, |c| c.max_retries);
 
         let url = format!("{base_url}/api/embed");
 
@@ -124,6 +128,7 @@ impl<T: HttpClient + Debug + Default + Clone> OllamaClient<T> {
                 self.get_embedding_dims()
                     .unwrap_or(DEFAULT_OLLAMA_EMBEDDING_DIM),
                 max_concurrent,
+                max_retries,
             ))
         })
     }
