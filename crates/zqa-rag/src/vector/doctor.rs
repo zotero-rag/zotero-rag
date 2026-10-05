@@ -3,7 +3,7 @@
 
 use std::io::Write;
 
-use crate::vector::checkhealth::{HealthCheckError, HealthCheckable, RowCount};
+use crate::vector::checkhealth::{HealthCheckError, HealthCheckable};
 
 const HELP: &str = "\x1b[32;1m";
 const SYMPTOM: &str = "\x1b[33;1m";
@@ -45,7 +45,7 @@ fn symptom(out: &mut impl Write, msg: &str) -> Result<(), HealthCheckError> {
 /// errors they may have gotten from a health check. Note that this does not actually run those
 /// fixes--this is so the user of this function has autonomy over that (e.g., the user may want to
 /// first print some message or ask for confirmation before proceeding). There are a few
-/// assumptions made here, mainly that the end-user understands what "/embed" and "/index" mean.
+/// assumptions made here, mainly that the end-user understands what "/index" means.
 /// These parts of the messages may later change, but for now, when this crate is somewhat tailored
 /// to `zqa`, this is a very low priority.
 ///
@@ -68,10 +68,7 @@ fn symptom(out: &mut impl Write, msg: &str) -> Result<(), HealthCheckError> {
 pub async fn doctor<T: HealthCheckable>(
     backend: &T,
     stdout: &mut impl Write,
-) -> Result<(), HealthCheckError>
-where
-    T::Record: RowCount,
-{
+) -> Result<(), HealthCheckError> {
     let healthcheck_results = backend.health_check().await;
 
     if !healthcheck_results.storage_exists {
@@ -114,17 +111,6 @@ where
             stdout,
             "this is usually transient; if this persists, your database may be corrupted.",
         )?;
-
-        writeln!(stdout)?;
-    }
-
-    // `None` means the backend doesn't support it or the check has not run
-    if let Some(zero_embedding_items) = healthcheck_results.zero_embedding_items
-        && let Ok(zero_records) = zero_embedding_items
-        && !zero_records.is_empty()
-    {
-        symptom(stdout, "some items have zero embedding vectors.")?;
-        help(stdout, "run `/embed fix` to fix this.")?;
 
         writeln!(stdout)?;
     }

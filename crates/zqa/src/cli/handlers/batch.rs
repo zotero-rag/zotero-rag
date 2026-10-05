@@ -83,6 +83,7 @@ use crate::cli::commands::BatchCommand;
 use crate::cli::errors::CLIError;
 use crate::common::Context;
 use crate::state::get_state_dir;
+use crate::store::common::ZoteroStore;
 use crate::utils::arrow::library_to_arrow_with_embeddings;
 use crate::utils::library::{ZoteroItem, parse_library};
 use crate::utils::terminal::{read_char, read_number};
@@ -319,6 +320,7 @@ fn update_hash_cache(
 ///     * writing to the state directory failed. This is typically caused by permission issues.
 ///     * writing out the serialized data failed
 /// * `CLIError::SerializationError` if JSON serialization failed.
+#[allow(clippy::too_many_lines)]
 async fn handle_successful_batch_results<O, E>(
     ctx: &mut Context<O, E>,
     batch: &BatchEmbeddingMetadata,
@@ -350,6 +352,19 @@ where
     .collect();
     let matched_count = items_to_embeddings.len();
 
+    // Stored rows that are up to date win over these results, which may be older. Rows that
+    // `/process` would parse again (see `existing_item_metadata`) are replaced by the merge.
+    let current_keys: HashSet<String> = if ctx.store.exists().await {
+        ctx.store
+            .existing_item_metadata()
+            .await?
+            .into_iter()
+            .map(|metadata| metadata.library_key)
+            .collect()
+    } else {
+        HashSet::new()
+    };
+
     let batch_dir = get_state_dir()?.join("batches");
 
     let mut buf = Vec::<u8>::new(); // allocate before obtaining lock
@@ -372,8 +387,13 @@ where
 
     // Filter the items in `batch` using `items_to_embeddings`: if the cache doesn't contain it,
     // it's new so we keep it; otherwise, look for a mismatch
+    let num_up_to_date = items_to_embeddings
+        .iter()
+        .filter(|(item, _)| current_keys.contains(&item.library_key))
+        .count();
     let to_insert = items_to_embeddings
         .into_iter()
+        .filter(|(item, _)| !current_keys.contains(&item.library_key))
         .filter(|(item, _)| {
             cache.get(&item.hash).is_none_or(|entry| {
                 entry.provider_id != batch.provider || entry.model != batch.model
@@ -395,7 +415,7 @@ where
         // The user likely doesn't really care about the WAL semantics.
         writeln!(
             &mut ctx.out,
-            "All items in the batch were duplicates; no action taken.",
+            "All items in the batch were duplicates or already up to date; no action taken.",
         )?;
 
         return Ok(());
@@ -403,9 +423,9 @@ where
 
     writeln!(
         &mut ctx.out,
-        "{} items to insert, {} items dropped as duplicates.",
+        "{} items to insert, {num_up_to_date} items already up to date, {} items dropped as duplicates.",
         to_insert.len(),
-        batch.items.len() - to_insert.len()
+        batch.items.len() - num_up_to_date - to_insert.len()
     )?;
 
     // Build batch to insert into the LanceDB store

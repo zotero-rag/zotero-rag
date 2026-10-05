@@ -178,15 +178,11 @@ where
     )?;
     writeln!(
         &mut ctx.out,
-        "/embed\t\t\tRepair failed DB creation by re-adding embeddings."
-    )?;
-    writeln!(
-        &mut ctx.out,
         "/checkhealth\t\tRun health checks on your LanceDB."
     )?;
     writeln!(
         &mut ctx.out,
-        "/doctor\t\t\tAttempt to fix issues spotted by /checkhealth."
+        "/doctor\t\t\tExplain issues spotted by /checkhealth and how to fix them."
     )?;
     writeln!(&mut ctx.out, "/stats\t\t\tShow table statistics.")?;
     writeln!(&mut ctx.out, "/dedup\t\t\tRemove duplicate items.")?;
@@ -215,7 +211,6 @@ mod tests {
         test_contains!(output, "/help");
         test_contains!(output, "/checkhealth");
         test_contains!(output, "/doctor");
-        test_contains!(output, "/embed");
         test_contains!(output, "/process");
         test_contains!(output, "/index");
         test_contains!(output, "/stats");

@@ -114,7 +114,7 @@ that make sense for it. Checks that do not apply to a backend (for example,
 storage size for a remote store) are reported as absent rather than assumed,
 and the same `Option`/`Result` fields distinguish \"not run\", \"succeeded\",
 and \"failed\". `LanceBackend`'s implementation reports table access, size,
-row counts, zero-vector rows, index state, and version drift; the `doctor`
+row counts, index state, and version drift; the `doctor`
 module provides deeper diagnostics. [The CLI](/cli.md) surfaces these
 operations through `/checkhealth` and `/doctor`.
 

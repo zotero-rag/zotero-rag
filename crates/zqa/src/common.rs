@@ -60,22 +60,11 @@ pub(crate) struct State {
 /// In production these use their defaults; tests override them to point at isolated, per-test
 /// locations. Keeping these off of process-global state lets the tests that touch the store
 /// and library run in parallel without `#[serial]`.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub(crate) struct PathOptions {
     /// Override for the Zotero library directory. When `None`, the path is resolved from the
     /// environment (the CI toy library, or the default Zotero location in the user's home directory).
     pub(crate) library_path: Option<PathBuf>,
-    /// Path to the file used to persist parsed PDFs between `/process` and `/embed`.
-    pub(crate) batch_iter_path: PathBuf,
-}
-
-impl Default for PathOptions {
-    fn default() -> Self {
-        Self {
-            library_path: None,
-            batch_iter_path: PathBuf::from(crate::cli::app::BATCH_ITER_FILE),
-        }
-    }
 }
 
 /// A structure that holds the application context, including CLI arguments and writers
@@ -222,14 +211,12 @@ pub(crate) mod test_support {
             let library_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                 .join("assets")
                 .join("Zotero");
-            let batch_iter_path = dir.path().join("batch_iter.bin");
 
             Self {
                 _dir: dir,
                 db_uri,
                 path_options: PathOptions {
                     library_path: Some(library_path),
-                    batch_iter_path,
                 },
             }
         }

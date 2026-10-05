@@ -24,8 +24,9 @@ pub trait ZoteroStore: Send + Sync {
     async fn exists(&self) -> bool;
     /// Returns the metadata associated with the store.
     async fn get_metadata(&self) -> Result<Self::Metadata, Self::StoreError>;
-    /// Returns the metadata for all existing items in the store. This is useful for operations
-    /// such as set differences (e.g., finding newly-added items).
+    /// Returns the metadata for existing items in the store. This is useful for operations
+    /// such as set differences (e.g., finding newly-added items). Implementations may leave out
+    /// stored items that should be parsed again.
     async fn existing_item_metadata(&self) -> Result<Vec<ZoteroItemMetadata>, Self::StoreError>;
     /// Performs a vector search on the store, returning the top `limit` results.
     async fn vector_search(

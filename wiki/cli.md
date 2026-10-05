@@ -22,7 +22,6 @@ application context; interrupting the REPL saves the current conversation.
 | Command | Purpose |
 | --- | --- |
 | `/process` | Read new Zotero items, parse their PDFs, and add embeddings to the local store. |
-| `/embed` and `/embed fix` | Resume a saved embedding batch or repair zero-vector rows. |
 | `/search <query>` | Run vector retrieval and print paper titles without generation. |
 | Natural-language input | Run a full RAG query; inputs shorter than ten characters are rejected as accidental prompts. |
 | `/index`, `/dedup`, `/stats` | Maintain and inspect the local vector store. |
@@ -35,10 +34,8 @@ application context; interrupting the REPL saves the current conversation.
 # Library processing
 
 `/process` reads Zotero metadata, converts parsed PDFs to Arrow record batches,
-and asks `LanceZoteroStore` to embed and upsert them. Before the upsert, it
-writes the batch to `batch_iter.bin`. If embedding fails, that recovery file is
-kept so `/embed` can replay the parsed records rather than parsing the library
-again.
+embeds them, and asks `LanceZoteroStore` to upsert them. Items that fail to
+embed are left out of the store, so the next `/process` picks them up again.
 
 The store is the application-specific layer over [zqa-rag](/rag.md)'s
 `LanceBackend`. Its records include Zotero library keys, titles, PDF paths, and
