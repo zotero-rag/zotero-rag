@@ -1,25 +1,15 @@
 //! Command handlers for library-related tasks
 
-use std::collections::HashSet;
-use std::fs::File;
 use std::io::Write;
-use std::path::Path;
 
-use arrow_array::RecordBatch;
-use arrow_array::cast::AsArray;
-use arrow_ipc::reader::FileReader;
-use arrow_ipc::writer::FileWriter;
-use zqa_rag::embedding::common::EmbeddingProviderConfig;
 use zqa_rag::vector::doctor::doctor as rag_doctor;
 
 use crate::cli::errors::CLIError;
 use crate::common::Context;
 use crate::store::common::ZoteroStore;
-use crate::utils::arrow::{ArrowError, DbFields, library_to_arrow, unembedded_items_to_arrow};
-use crate::utils::library::{
-    ZoteroItem, ZoteroItemSet, get_new_library_items, parse_library, parse_library_metadata,
-};
-use crate::utils::terminal::{DIM_TEXT, RESET, read_line};
+use crate::utils::arrow::{ArrowError, library_to_arrow};
+use crate::utils::library::{get_new_library_items, parse_library, parse_library_metadata};
+use crate::utils::terminal::read_line;
 
 /// Print table statistics for the current LanceDB database.
 ///
@@ -50,9 +40,9 @@ where
 
 /// Process the user's Zotero library into the LanceDB-backed retrieval store.
 ///
-/// This parses the library, extracts text from each file, stores the records in LanceDB,
-/// and generates embeddings. If the embedding step fails, parsed records are kept in
-/// [`BATCH_ITER_FILE`](crate::cli::app::BATCH_ITER_FILE) so embedding can be retried later.
+/// This parses the library, extracts text from each file, generates embeddings, and stores the
+/// records in LanceDB. Items that could not be embedded are not stored, so the next `/process`
+/// picks them up again.
 ///
 /// # Arguments
 ///
@@ -110,257 +100,25 @@ where
         .await
         .map_err(ArrowError::from)?;
     log::info!("Finished parsing library items.");
-    let embedding_config = ctx.store.get_embedding_config();
 
-    // Save the parsed PDFs before embedding them, so that a failed embedding or write can be
-    // retried with `/embed` without parsing the library again.
-    let batch_iter_path = &ctx.path_options.batch_iter_path;
-    write_recovery_file(batch_iter_path, &items, &embedding_config)?;
-
-    let result = match embed_items(&items, &embedding_config) {
-        Ok((batch, failed)) => ctx.store.upsert_batches(vec![batch]).await.map(|()| failed),
+    let result = match library_to_arrow(&items, &ctx.store.get_embedding_config()) {
+        Ok(batch) => {
+            let num_failed = items.len() - batch.num_rows();
+            ctx.store
+                .upsert_batches(vec![batch])
+                .await
+                .map(|()| num_failed)
+        }
         Err(e) => Err(e.into()),
     };
 
     match result {
-        Ok(failed) if failed.is_empty() => {
-            writeln!(&mut ctx.out, "Successfully parsed library!")?;
-            std::fs::remove_file(batch_iter_path)?;
-            log::debug!(
-                "Removed Arrow recovery file after successful write: {}",
-                batch_iter_path.display()
-            );
-        }
-        Ok(failed) => {
-            write_recovery_file(batch_iter_path, &failed, &embedding_config)?;
-            report_unembedded(&mut ctx.err, failed.len(), batch_iter_path)?;
-        }
-        Err(e) => {
-            log::debug!(
-                "Database write failed; retaining Arrow recovery file {}: {}",
-                batch_iter_path.display(),
-                zqa_rag::logging::preview(&e)
-            );
-            writeln!(&mut ctx.err, "Parsing library failed: {e}")?;
-            writeln!(
-                &mut ctx.err,
-                "The parsed PDFs have been saved in '{}'. Run '/embed' to retry embedding.",
-                batch_iter_path.display()
-            )?;
-        }
-    }
-
-    Ok(())
-}
-
-/// Embeds `items`, leaving out the ones the embedding provider could not embed.
-///
-/// # Arguments
-///
-/// * `items` - The items to embed.
-/// * `embedding_config` - Configuration for the embedding provider.
-///
-/// # Errors
-///
-/// Returns an [`ArrowError`] if the embedding provider fails outright or the batch cannot be built.
-///
-/// # Returns
-///
-/// The batch of embedded items, and the items that could not be embedded.
-fn embed_items(
-    items: &[ZoteroItem],
-    embedding_config: &EmbeddingProviderConfig,
-) -> Result<(RecordBatch, Vec<ZoteroItem>), ArrowError> {
-    let batch = library_to_arrow(items, embedding_config)?;
-    let embedded_keys: HashSet<&str> = batch
-        .column_by_name(DbFields::LibraryKey.as_ref())
-        .map(|keys| keys.as_string::<i32>().iter().flatten().collect())
-        .unwrap_or_default();
-    let failed = items
-        .iter()
-        .filter(|item| !embedded_keys.contains(item.metadata.library_key.as_str()))
-        .cloned()
-        .collect();
-
-    Ok((batch, failed))
-}
-
-/// Saves `items`, without embeddings, as the Arrow recovery file that `/embed` replays.
-///
-/// # Arguments
-///
-/// * `path` - Where to write the recovery file.
-/// * `items` - The items to save.
-/// * `embedding_config` - The embedding config, which determines the schema.
-///
-/// # Errors
-///
-/// Returns a [`CLIError`] if the batch cannot be built or the file cannot be written.
-fn write_recovery_file(
-    path: &Path,
-    items: &[ZoteroItem],
-    embedding_config: &EmbeddingProviderConfig,
-) -> Result<(), CLIError> {
-    let record_batch = unembedded_items_to_arrow(items, embedding_config)?;
-
-    // Write to a temporary file and rename it, so that a failed write never replaces an existing
-    // recovery file with a partial one.
-    let tmp_path = path.with_extension("tmp");
-    let mut writer = FileWriter::try_new(File::create(&tmp_path)?, &record_batch.schema())?;
-    writer.write(&record_batch)?;
-    writer.finish()?;
-    std::fs::rename(&tmp_path, path)?;
-
-    log::debug!(
-        "Saved Arrow recovery file: path={}, rows={}",
-        path.display(),
-        record_batch.num_rows()
-    );
-
-    Ok(())
-}
-
-/// Tells the user that some items were not embedded and where they were saved for `/embed`.
-///
-/// # Arguments
-///
-/// * `err` - Where to write the message.
-/// * `num_failed` - How many items could not be embedded.
-/// * `path` - The recovery file that holds those items.
-///
-/// # Errors
-///
-/// Returns a [`CLIError`] if writing the message fails.
-fn report_unembedded(err: &mut impl Write, num_failed: usize, path: &Path) -> Result<(), CLIError> {
-    writeln!(
-        err,
-        "{num_failed} items could not be embedded and were not saved to the database. They have been saved in '{}'; run '/embed' to retry them.",
-        path.display()
-    )?;
-    Ok(())
-}
-
-/// Retry embedding from saved batch data or repair zero-vector rows.
-///
-/// When `fix` is `false`, this reads [`BATCH_ITER_FILE`](crate::cli::app::BATCH_ITER_FILE), embeds
-/// the saved batches that have no embeddings, and inserts them into LanceDB. Items that fail to
-/// embed are written back to the file for another retry; otherwise the file is deleted. When `fix`
-/// is `true`, it repairs rows whose stored embeddings are all zero.
-///
-/// # Arguments
-///
-/// * `fix` - Whether to repair zero-vector rows instead of replaying saved batch data.
-/// * `ctx` - A `Context` object that contains CLI state and objects that implement
-///   [`std::io::Write`] for `stdout` and `stderr`.
-///
-/// # Returns
-///
-/// `Ok(())` if the command completed successfully.
-///
-/// # Errors
-///
-/// Returns a [`CLIError`] if reading batch data, accessing configuration,
-/// database operations, or writing output fails.
-pub(crate) async fn handle_embed_cmd<O, E>(
-    fix: bool,
-    ctx: &mut Context<O, E>,
-) -> Result<(), CLIError>
-where
-    O: Write,
-    E: Write,
-{
-    if fix {
-        return fix_zero_embeddings(ctx).await;
-    }
-
-    let batch_iter_path = &ctx.path_options.batch_iter_path;
-    let batch_iter_display = batch_iter_path.display();
-    log::debug!("Replaying Arrow recovery file: {batch_iter_display}");
-
-    let file = File::open(batch_iter_path)?;
-    let reader = FileReader::try_new(file, None)?;
-
-    let mut batches = Vec::<RecordBatch>::new();
-    for batch in reader {
-        batches.push(batch?);
-    }
-
-    if batches.is_empty() {
-        writeln!(
+        Ok(0) => writeln!(&mut ctx.out, "Successfully parsed library!")?,
+        Ok(num_failed) => writeln!(
             &mut ctx.err,
-            "(/embed) It seems {batch_iter_display} contains no batches. Exiting early."
-        )?;
-        return Ok(());
-    }
-
-    let n_batches = batches.len();
-    log::debug!(
-        "Loaded Arrow recovery data: batches={n_batches}, rows={}",
-        batches.iter().map(RecordBatch::num_rows).sum::<usize>()
-    );
-
-    write!(ctx.out, "Successfully loaded {n_batches} batch")?;
-
-    if n_batches > 1 {
-        write!(&mut ctx.out, "es")?;
-    }
-    writeln!(ctx.out, ".")?;
-
-    // `/process` saves the parsed PDFs without embeddings, so embed them before writing.
-    let embedding_config = ctx.store.get_embedding_config();
-
-    let mut failed = Vec::new();
-    let mut embedded = Vec::with_capacity(batches.len());
-    let mut embed_result = Ok(());
-
-    for batch in batches {
-        let schema = batch.schema();
-        if schema.index_of(DbFields::Embeddings.as_ref()).is_ok()
-            || schema.index_of(DbFields::LibraryKey.as_ref()).is_err()
-        {
-            embedded.push(batch);
-            continue;
-        }
-
-        let items: Vec<ZoteroItem> = ZoteroItemSet::from(vec![batch]).into();
-
-        match embed_items(&items, &embedding_config) {
-            Ok((batch, batch_failed)) => {
-                embedded.push(batch);
-                failed.extend(batch_failed);
-            }
-            Err(e) => {
-                embed_result = Err(CLIError::from(e));
-                break;
-            }
-        }
-    }
-
-    let db = match embed_result {
-        Ok(()) => ctx.store.upsert_batches(embedded).await,
-        Err(e) => Err(e),
-    };
-
-    if db.is_ok() && !failed.is_empty() {
-        write_recovery_file(batch_iter_path, &failed, &embedding_config)?;
-        report_unembedded(&mut ctx.err, failed.len(), batch_iter_path)?;
-        return Ok(());
-    }
-
-    if db.is_ok() {
-        writeln!(ctx.out, "Successfully parsed library!")?;
-        std::fs::remove_file(batch_iter_path)?;
-        log::debug!("Removed Arrow recovery file after successful replay: {batch_iter_display}");
-    } else if let Err(e) = db {
-        log::debug!(
-            "Replay failed; retaining Arrow recovery file {batch_iter_display}: {}",
-            zqa_rag::logging::preview(&e)
-        );
-        writeln!(ctx.err, "Parsing library failed: {e}")?;
-        writeln!(
-            ctx.err,
-            "Your {batch_iter_display} file has been left untouched."
-        )?;
+            "{num_failed} items could not be embedded and were not saved. Run '/process' again to retry them."
+        )?,
+        Err(e) => writeln!(&mut ctx.err, "Parsing library failed: {e}")?,
     }
 
     Ok(())
@@ -461,10 +219,7 @@ pub(crate) async fn handle_checkhealth_cmd<O: Write, E: Write>(
     Ok(())
 }
 
-/// Run database diagnostics and attempt automatic repairs where supported.
-///
-/// Currently, only zero-vector embeddings are automatically repaired; other failures are
-/// reported to the user.
+/// Run database diagnostics and explain how to fix any issues found.
 ///
 /// # Arguments
 ///
@@ -473,11 +228,11 @@ pub(crate) async fn handle_checkhealth_cmd<O: Write, E: Write>(
 ///
 /// # Returns
 ///
-/// `Ok(())` if diagnostics and any attempted repair completed successfully.
+/// `Ok(())` if diagnostics completed successfully.
 ///
 /// # Errors
 ///
-/// Returns a [`CLIError`] if diagnostics, repair, or writing output fails.
+/// * [`CLIError`] if writing output fails.
 pub(crate) async fn handle_doctor_cmd<O, E>(ctx: &mut Context<O, E>) -> Result<(), CLIError>
 where
     O: Write,
@@ -487,165 +242,16 @@ where
         writeln!(ctx.err, "{e}")?;
     }
 
-    // Currently, we can really only fix the zero-embeddings issue
-    fix_zero_embeddings(ctx).await
-}
-
-/// Repair rows in LanceDB whose stored embedding vectors are all zeros.
-///
-/// Some zero vectors indicate failed embedding generation, while others correspond to rows with
-/// empty extracted text. Empty-text rows are deleted; non-empty rows are re-embedded.
-///
-/// # Arguments
-///
-/// * `ctx` - A `Context` object that contains CLI state and objects that implement
-///   [`std::io::Write`] for `stdout` and `stderr`.
-///
-/// # Returns
-///
-/// `Ok(())` if zero-vector handling completed successfully.
-///
-/// # Errors
-///
-/// Returns a [`CLIError`] if configuration is invalid, database operations fail,
-/// embedding regeneration fails, or writing output fails.
-async fn fix_zero_embeddings<O: Write, E: Write>(ctx: &mut Context<O, E>) -> Result<(), CLIError> {
-    let healthcheck = ctx.store.health_check().await;
-
-    let zero_batches = match healthcheck.zero_embedding_items {
-        Some(Ok(zero_items)) => {
-            let num_zeros: usize = zero_items
-                .iter()
-                .map(arrow_array::RecordBatch::num_rows)
-                .sum();
-
-            if num_zeros > 0 {
-                writeln!(
-                    ctx.out,
-                    "{DIM_TEXT}Fixing {num_zeros} zero-embedding items.{RESET}"
-                )?;
-            }
-
-            zero_items
-        }
-        Some(Err(e)) => return Err(e.into()),
-        None => Vec::new(),
-    };
-
-    let embedding_config = ctx
-        .config
-        .get_embedding_config()
-        .ok_or(CLIError::ConfigError(
-            "Could not get embedding config".into(),
-        ))?;
-
-    if zero_batches.is_empty() {
-        writeln!(ctx.out, "{DIM_TEXT}Done!{RESET}")?;
-        return Ok(());
-    }
-
-    let zero_subset: Vec<ZoteroItem> = ZoteroItemSet::from(zero_batches).into();
-    let nonempty_zero_subset = zero_subset
-        .iter()
-        .filter(|&item| !item.text.is_empty())
-        .cloned()
-        .collect::<Vec<_>>();
-
-    let num_empty_texts = zero_subset.len() - nonempty_zero_subset.len();
-
-    // Compute the replacements before deleting anything: items that fail to embed again are left
-    // in place, so a later `/embed fix` can retry them.
-    let (replacements, failed) = embed_items(&nonempty_zero_subset, &embedding_config)?;
-    let failed_keys: HashSet<&str> = failed
-        .iter()
-        .map(|item| item.metadata.library_key.as_str())
-        .collect();
-    let replaced_keys: Vec<String> = nonempty_zero_subset
-        .iter()
-        .map(|item| &item.metadata.library_key)
-        .filter(|key| !failed_keys.contains(key.as_str()))
-        .cloned()
-        .collect();
-    let num_failed = failed.len();
-
-    let keys_to_delete: Vec<String> = zero_subset
-        .iter()
-        .filter(|item| item.text.is_empty())
-        .map(|item| item.metadata.library_key.clone())
-        .chain(replaced_keys.iter().cloned())
-        .collect();
-    ctx.store.delete_by_library_keys(&keys_to_delete).await?;
-
-    writeln!(
-        ctx.out,
-        "{num_empty_texts} items had empty texts, and will be deleted.\n"
-    )?;
-
-    if !replaced_keys.is_empty() {
-        ctx.store.upsert_batches(vec![replacements]).await?;
-    }
-
-    if num_failed > 0 {
-        writeln!(
-            ctx.err,
-            "{num_failed} items could not be re-embedded. Run '/embed fix' again to retry them.\n"
-        )?;
-    } else {
-        writeln!(ctx.out, "Successfully fixed zero embeddings!\n")?;
-    }
-
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use std::fs::File;
-    use std::sync::Arc;
-
-    use arrow_array::{
-        FixedSizeListArray, Float32Array, RecordBatch, RecordBatchIterator, StringArray,
-    };
-    use arrow_ipc::writer::FileWriter;
-    use lancedb::connect;
     use zqa_macros::{test_contains, test_ok};
     use zqa_macros_proc::retry;
-    use zqa_rag::constants::DEFAULT_VOYAGE_EMBEDDING_DIM;
 
-    use super::{handle_checkhealth_cmd, handle_embed_cmd, handle_process_cmd, handle_stats_cmd};
+    use super::{handle_checkhealth_cmd, handle_process_cmd, handle_stats_cmd};
     use crate::common::test_support::TestPaths;
-
-    #[retry(3)]
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_embed() {
-        dotenv::dotenv().ok();
-
-        let paths = TestPaths::new();
-        let mut ctx = paths.context(vec![]);
-
-        let schema = arrow_schema::Schema::new(vec![arrow_schema::Field::new(
-            "pdf_text",
-            arrow_schema::DataType::Utf8,
-            false,
-        )]);
-        let data = StringArray::from(vec!["Hello", "World"]);
-        let record_batch =
-            RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(data)]).unwrap();
-
-        let file = File::create(&ctx.path_options.batch_iter_path).unwrap();
-        let mut writer = FileWriter::try_new(file, &schema).unwrap();
-        writer.write(&record_batch).unwrap();
-        writer.finish().unwrap();
-
-        let result = handle_embed_cmd(false, &mut ctx).await;
-        test_ok!(result);
-        assert!(result.is_ok());
-
-        let output = String::from_utf8(ctx.out.into_inner()).unwrap();
-        assert!(output.contains("Successfully parsed library!"));
-
-        let err = String::from_utf8(ctx.err.into_inner()).unwrap();
-        assert_eq!(err, "");
-    }
 
     #[retry(3)]
     #[tokio::test(flavor = "multi_thread")]
@@ -699,108 +305,5 @@ mod tests {
         test_contains!(output, "storage exists");
         test_contains!(output, "Table is accessible");
         test_contains!(output, "Table has");
-    }
-
-    async fn insert_zero_embedding_row(db_uri: &str) {
-        let dims = DEFAULT_VOYAGE_EMBEDDING_DIM as i32;
-        let schema = Arc::new(arrow_schema::Schema::new(vec![
-            arrow_schema::Field::new("library_key", arrow_schema::DataType::Utf8, false),
-            arrow_schema::Field::new("title", arrow_schema::DataType::Utf8, false),
-            arrow_schema::Field::new("file_path", arrow_schema::DataType::Utf8, false),
-            arrow_schema::Field::new("pdf_text", arrow_schema::DataType::Utf8, false),
-            arrow_schema::Field::new(
-                "embeddings",
-                arrow_schema::DataType::FixedSizeList(
-                    Arc::new(arrow_schema::Field::new(
-                        "item",
-                        arrow_schema::DataType::Float32,
-                        true,
-                    )),
-                    dims,
-                ),
-                false,
-            ),
-        ]));
-
-        #[allow(clippy::cast_sign_loss)]
-        let zeros = Float32Array::from(vec![0.0f32; dims as usize]);
-        let embedding_col = FixedSizeListArray::try_new(
-            Arc::new(arrow_schema::Field::new(
-                "item",
-                arrow_schema::DataType::Float32,
-                true,
-            )),
-            dims,
-            Arc::new(zeros),
-            None,
-        )
-        .unwrap();
-
-        let batch = RecordBatch::try_new(
-            schema.clone(),
-            vec![
-                Arc::new(StringArray::from(vec!["ZEROTEST001"])),
-                Arc::new(StringArray::from(vec!["Zero Test Item"])),
-                Arc::new(StringArray::from(vec!["/dev/null"])),
-                Arc::new(StringArray::from(vec![""])),
-                Arc::new(embedding_col),
-            ],
-        )
-        .unwrap();
-
-        let db = connect(db_uri).execute().await.unwrap();
-        let tbl = db.open_table("data").execute().await.unwrap();
-        let reader = RecordBatchIterator::new(vec![Ok(batch)].into_iter(), schema);
-        tbl.merge_insert(&["library_key"])
-            .when_not_matched_insert_all()
-            .clone()
-            .execute(Box::new(reader))
-            .await
-            .unwrap();
-    }
-
-    #[retry(3)]
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_fix_zero_embeddings_no_zeros() {
-        dotenv::dotenv().ok();
-
-        let paths = TestPaths::new();
-        let mut setup_ctx = paths.context(vec![]);
-        let setup_result = handle_process_cmd(&mut setup_ctx).await;
-        test_ok!(setup_result);
-
-        let mut first_ctx = paths.context(vec![]);
-        let first_result = handle_embed_cmd(true, &mut first_ctx).await;
-        test_ok!(first_result);
-        assert!(first_result.is_ok());
-
-        let mut ctx = paths.context(vec![]);
-        let result = handle_embed_cmd(true, &mut ctx).await;
-        test_ok!(result);
-        assert!(result.is_ok());
-
-        let output = String::from_utf8(ctx.out.into_inner()).unwrap();
-        test_contains!(output, "Done!");
-    }
-
-    #[retry(3)]
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_fix_zero_embeddings_with_zero_rows() {
-        dotenv::dotenv().ok();
-
-        let paths = TestPaths::new();
-        let mut setup_ctx = paths.context(vec![]);
-        let setup_result = handle_process_cmd(&mut setup_ctx).await;
-        test_ok!(setup_result);
-
-        insert_zero_embedding_row(&paths.db_uri).await;
-
-        let mut ctx = paths.context(vec![]);
-        let result = handle_embed_cmd(true, &mut ctx).await;
-        test_ok!(result);
-        assert!(result.is_ok());
-
-        let output = String::from_utf8(ctx.out.into_inner()).unwrap();
-        test_contains!(output, "items had empty texts, and will be deleted.");
     }
 }

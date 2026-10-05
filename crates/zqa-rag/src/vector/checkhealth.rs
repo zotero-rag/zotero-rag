@@ -27,24 +27,15 @@ pub enum HealthCheckError {
     InvalidState(String),
 }
 
-/// A record type that can report how many rows it contains. Backends implement this for their
-/// record type so that health-check reporting can count zero-embedding rows without knowing
-/// anything about the record's shape.
-pub trait RowCount {
-    /// The number of rows in this record.
-    fn row_count(&self) -> usize;
-}
-
 /// Backend-agnostic health check result. Not every check applies to every backend: file-based
 /// stores can report storage size, while remote stores cannot, so checks are reported as
 /// `Option`s where `None` means "not run" or "not applicable" and `Some(Err(_))` means the check
 /// ran and failed.
 ///
-/// The type is generic over the backend's record type `R` (used for the zero-embedding items,
-/// which callers may want to inspect or repair) and the backend's error type `E`.
+/// The type is generic over the backend's error type `E`.
 #[derive(Debug)]
 #[must_use = "You should probably use this; functions exposing this generally do not have side effects."]
-pub struct HealthCheckResult<R, E> {
+pub struct HealthCheckResult<E> {
     /// The store's storage exists and is reachable. For file-based backends this is directory
     /// existence; remote backends report whether the store endpoint/collection could be found.
     pub storage_exists: bool,
@@ -58,9 +49,6 @@ pub struct HealthCheckResult<R, E> {
     /// Number of rows in the store. `None` when the check hasn't run, `Some(Ok(count))` on
     /// success, and `Some(Err(...))` on failure.
     pub num_rows: Option<Result<usize, E>>,
-    /// Records with all-zero embeddings. `None` when the check hasn't run, `Some(Ok(records))`
-    /// with the complete records containing zero embeddings, and `Some(Err(...))` on failure.
-    pub zero_embedding_items: Option<Result<Vec<R>, E>>,
     /// Index information: (index_name, index_type). `None` when the check hasn't run or is not
     /// applicable, `Some(Ok(index_info))` on success, and `Some(Err(...))` on failure.
     pub index_info: Option<Result<Vec<(String, String)>, E>>,
@@ -75,10 +63,7 @@ pub struct HealthCheckResult<R, E> {
 /// check that is meaningful for them, capture per-check failures in the corresponding
 /// [`HealthCheckResult`] field, and always produce a result object.
 #[async_trait]
-pub trait HealthCheckable: VectorBackend
-where
-    Self::Record: RowCount,
-{
+pub trait HealthCheckable: VectorBackend {
     /// Run health checks on the store and return the collected results. Per-check failures are
     /// captured in the corresponding [`HealthCheckResult`] field rather than returned, so this
     /// is infallible by contract: implementations should always produce a result object.
@@ -86,7 +71,7 @@ where
     /// # Returns
     ///
     /// A [`HealthCheckResult`] describing each check that ran.
-    async fn health_check(&self) -> HealthCheckResult<Self::Record, Self::Error>;
+    async fn health_check(&self) -> HealthCheckResult<Self::Error>;
 }
 
 /// Format file size in a human-readable format
@@ -115,7 +100,7 @@ fn format_file_size(bytes: u64) -> String {
     }
 }
 
-impl<R: RowCount, E: fmt::Display> fmt::Display for HealthCheckResult<R, E> {
+impl<E: fmt::Display> fmt::Display for HealthCheckResult<E> {
     #[allow(clippy::too_many_lines)]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, "Vector Store Health Check Results")?;
@@ -175,29 +160,7 @@ impl<R: RowCount, E: fmt::Display> fmt::Display for HealthCheckResult<R, E> {
         }
         writeln!(f)?;
 
-        // Check 4: Zero embeddings
-        match &self.zero_embedding_items {
-            Some(Ok(zero_records)) => {
-                let total_zero_rows: usize = zero_records.iter().map(RowCount::row_count).sum();
-                if total_zero_rows == 0 {
-                    writeln!(f, "{GREEN}✓ No zero embeddings found{RESET}")?;
-                } else {
-                    writeln!(
-                        f,
-                        "{YELLOW}⚠ Found {total_zero_rows} rows with zero embeddings{RESET}. Run `/embed fix` to fix."
-                    )?;
-                }
-            }
-            Some(Err(e)) => {
-                writeln!(f, "{RED}✗ Failed to check zero embeddings: {e}{RESET}")?;
-            }
-            None => {
-                writeln!(f, "{YELLOW}⚠ Zero embeddings check was skipped{RESET}")?;
-            }
-        }
-        writeln!(f)?;
-
-        // Check 5: Index information
+        // Check 4: Index information
         match &self.index_info {
             Some(Ok(indices)) => {
                 if indices.is_empty() {
@@ -230,7 +193,7 @@ impl<R: RowCount, E: fmt::Display> fmt::Display for HealthCheckResult<R, E> {
         }
         writeln!(f)?;
 
-        // Check 7: Metadata version sync
+        // Check 5: Metadata version sync
         match &self.version_drift {
             Some(Ok((stored, live))) => {
                 if stored == live {

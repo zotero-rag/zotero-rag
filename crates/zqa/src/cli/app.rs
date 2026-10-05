@@ -14,20 +14,14 @@ use crate::cli::handlers::cli::{
 use crate::cli::handlers::conversation::{handle_resume_cmd, save_current_conversation};
 use crate::cli::handlers::documents::handle_docs_cmd;
 use crate::cli::handlers::library::{
-    handle_checkhealth_cmd, handle_dedup_cmd, handle_doctor_cmd, handle_embed_cmd,
-    handle_index_cmd, handle_process_cmd, handle_stats_cmd,
+    handle_checkhealth_cmd, handle_dedup_cmd, handle_doctor_cmd, handle_index_cmd,
+    handle_process_cmd, handle_stats_cmd,
 };
 use crate::cli::handlers::query::{handle_query_cmd, handle_search_cmd};
 use crate::cli::placeholder::PlaceholderText;
 use crate::cli::readline::get_readline_config;
 use crate::common::Context;
 use crate::state::get_state_dir;
-
-/// A file that contains parsed PDF texts from the user's Zotero library. In case the
-/// embedding generation fails, the user does not need to rerun the full PDF parsing,
-/// and can simply retry the embedding. Note that this is *not* supposed to be user-facing
-/// and all interaction with it is meant for use by the CLI.
-pub(crate) const BATCH_ITER_FILE: &str = "batch_iter.bin";
 
 /// Handle a single command or query from the user.
 ///
@@ -57,7 +51,6 @@ pub(crate) async fn dispatch_command<O: Write, E: Write>(
         Command::DoNothing => {
             return Ok(true);
         }
-        Command::Embed { fix } => handle_embed_cmd(fix, ctx).await,
         Command::Help => handle_help_cmd(ctx),
         Command::Index => handle_index_cmd(ctx).await,
         Command::NewConversation => handle_new_conversation_cmd(ctx),

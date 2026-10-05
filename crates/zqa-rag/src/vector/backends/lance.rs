@@ -11,7 +11,7 @@ use std::{fs, io};
 use arrow_array::cast::AsArray;
 use arrow_array::types::{Float32Type, Int64Type};
 use arrow_array::{Array, RecordBatch, RecordBatchIterator, StringArray, record_batch};
-use arrow_schema::{ArrowError, DataType, Schema};
+use arrow_schema::{ArrowError, Schema};
 use async_trait::async_trait;
 use futures::TryStreamExt;
 use lancedb::database::CreateTableMode;
@@ -25,7 +25,7 @@ use crate::embedding::common::EmbeddingProviderConfig;
 use crate::providers::ProviderId;
 use crate::providers::registry::provider_registry;
 use crate::vector::backends::backend::VectorBackend;
-use crate::vector::checkhealth::{HealthCheckResult, HealthCheckable, RowCount};
+use crate::vector::checkhealth::{HealthCheckResult, HealthCheckable};
 
 // NOTE: Maintainers: ensure that `LANCEDB_URI` begins with `LANCE_DATA_TABLE_NAME`
 
@@ -938,7 +938,7 @@ impl VectorBackend for LanceBackend {
             && let Some(merge_on) = merge_on
             && let Some(first_batch) = items.first()
         {
-            // Add rows if they don't already exist
+            // Add new rows, and replace existing rows that have the same key
             log::debug!("LanceDB write: merging into existing table");
             let tbl = db
                 .open_table(LANCE_DATA_TABLE_NAME)
@@ -953,6 +953,7 @@ impl VectorBackend for LanceBackend {
                 schema.clone(),
             );
             tbl.merge_insert(merge_on)
+                .when_matched_update_all(None)
                 .when_not_matched_insert_all()
                 .clone()
                 .execute(Box::new(reader))
@@ -980,8 +981,8 @@ impl VectorBackend for LanceBackend {
             // Create a new table and add rows. Callers that computed embeddings themselves (so they
             // could leave out rows that failed to embed) pass them in the batches; otherwise
             // LanceDB computes them with the registered embedding function, and rows that fail to
-            // embed are stored with null embeddings. Those rows never match a vector search and
-            // `get_zero_vectors` does not find them, so callers that care should embed first.
+            // embed are stored with null embeddings. Those rows never match a vector search, so
+            // callers that care should embed first.
             let has_embeddings = items
                 .first()
                 .is_some_and(|batch| batch.schema().column_with_name("embeddings").is_some());
@@ -1000,12 +1001,6 @@ impl VectorBackend for LanceBackend {
         }
         log::debug!("LanceDB write completed in {:.2?}", start.elapsed());
         Ok(())
-    }
-}
-
-impl RowCount for RecordBatch {
-    fn row_count(&self) -> usize {
-        self.num_rows()
     }
 }
 
@@ -1032,53 +1027,6 @@ fn calculate_directory_size(path: &std::path::Path) -> Result<u64, io::Error> {
         }
     }
     Ok(size)
-}
-
-/// Given a table and a limit for the number of rows to query in the table, check if any rows have
-/// zero embeddings, which is a sign that something went wrong.
-///
-/// # Arguments
-///
-/// * `tbl` - The LanceDB table to query
-/// * `query_limit` - Limit on the number of rows in the table to query
-///
-/// # Returns
-///
-/// * A list of complete RecordBatches for rows that have zero embeddings, if nothing went wrong
-/// * Otherwise, a `LanceError` detailing what went wrong and why:
-///     * A `QueryError` if some query failed
-///     * An `InvalidStateError` if the table is in some invalid state
-async fn get_zero_vectors(
-    tbl: &lancedb::table::Table,
-    query_limit: usize,
-) -> Result<Vec<RecordBatch>, LanceError> {
-    let schema = tbl.schema().await?;
-
-    let DataType::FixedSizeList(_, embedding_dims) =
-        schema.field_with_name("embeddings")?.data_type()
-    else {
-        return Err(LanceError::InvalidStateError(
-            "The embeddings column must be a fixed-size list".into(),
-        ));
-    };
-    let embedding_dims = usize::try_from(*embedding_dims).map_err(|_| {
-        LanceError::InvalidStateError("The embeddings column has negative dimensions".into())
-    })?;
-
-    let stream = tbl
-        .query()
-        .nearest_to(vec![0.0; embedding_dims])?
-        .column("embeddings")
-        .distance_range(Some(0.0), Some(1e-8))
-        .limit(query_limit)
-        .execute()
-        .await
-        .map_err(|e| LanceError::QueryError(e.to_string()))?;
-
-    stream
-        .try_collect::<Vec<_>>()
-        .await
-        .map_err(|e| LanceError::QueryError(e.to_string()))
 }
 
 /// Given a LanceDB table, get basic index information. Note that LanceDB's Rust API does not
@@ -1117,7 +1065,6 @@ impl HealthCheckable for LanceBackend {
     /// - Directory existence and reports size
     /// - Table accessibility
     /// - Row count (warns if zero rows)
-    /// - All-zero embeddings
     /// - Index information (warns if missing or incomplete)
     /// - Metadata version drift between the metadata and data tables
     ///
@@ -1125,8 +1072,8 @@ impl HealthCheckable for LanceBackend {
     ///
     /// # Returns
     ///
-    /// A `HealthCheckResult<RecordBatch, LanceError>` describing each check that ran.
-    async fn health_check(&self) -> HealthCheckResult<RecordBatch, LanceError> {
+    /// A `HealthCheckResult<LanceError>` describing each check that ran.
+    async fn health_check(&self) -> HealthCheckResult<LanceError> {
         let db_uri = self.get_db_path();
 
         let mut result = HealthCheckResult {
@@ -1134,7 +1081,6 @@ impl HealthCheckable for LanceBackend {
             storage_size: None,
             table_accessible: None,
             num_rows: None,
-            zero_embedding_items: None,
             index_info: None,
             version_drift: None,
         };
@@ -1187,16 +1133,7 @@ impl HealthCheckable for LanceBackend {
         // Check 5: Check indexes
         result.index_info = Some(check_indexes(&tbl).await);
 
-        // Check 6: All-zero embeddings
-        // We can't have `result.num_rows` be `None` at this point.
-        if let Some(query_limit) = &result.num_rows {
-            result.zero_embedding_items = match query_limit {
-                Ok(count) => Some(get_zero_vectors(&tbl, *count).await),
-                Err(e) => Some(Err(LanceError::QueryError(e.to_string()))),
-            }
-        }
-
-        // Check 7: Metadata version drift (stored vs live data table version)
+        // Check 6: Metadata version drift (stored vs live data table version)
         result.version_drift = Some(match read_stored_data_table_version(&db).await {
             Ok(stored) => match tbl.version().await {
                 Ok(live) => Ok((stored, live)),
@@ -1359,19 +1296,6 @@ mod tests {
             assert!(health_result.storage_size.unwrap().is_ok_and(|x| x > 0));
             assert!(health_result.table_accessible.unwrap().is_ok());
             assert!(health_result.num_rows.unwrap().is_ok_and(|x| x == 2));
-
-            let zero_embeddings = health_result.zero_embedding_items.unwrap().unwrap();
-            test_eq!(
-                zero_embeddings
-                    .iter()
-                    .map(RecordBatch::num_rows)
-                    .sum::<usize>(),
-                1
-            );
-            test_eq!(
-                as_string_array(zero_embeddings[0].column_by_name("pdf_text").unwrap()).value(0),
-                "Hello world"
-            );
         }
     }
 

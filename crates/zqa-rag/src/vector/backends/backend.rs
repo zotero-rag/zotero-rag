@@ -24,8 +24,7 @@ pub trait VectorBackendRegistrar<T: VectorBackend>: Send + Sync {
 /// A vector database backend.
 #[async_trait]
 pub trait VectorBackend: Send + Sync {
-    /// The record type for the backend. Implementers of the trait should implement the
-    /// [`crate::vector::checkhealth::RowCount`] trait to get health checks implemented.
+    /// The record type for the backend.
     type Record: Send;
     /// The error type for the backend.
     type Error: std::error::Error + Send;
@@ -153,7 +152,8 @@ pub trait VectorBackend: Send + Sync {
     ///
     /// * `items` - The items to insert.
     /// * `merge_on` - `None` if you want to create or overwrite the current database; otherwise, a
-    ///   reference to an array of keys to merge on.
+    ///   reference to an array of keys to merge on. Items whose keys match an existing row replace
+    ///   that row.
     ///
     /// # Returns
     ///

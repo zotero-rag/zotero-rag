@@ -1,12 +1,19 @@
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use arrow_array::RecordBatch;
+use arrow_array::cast::AsArray;
 use arrow_schema::Schema;
 use async_trait::async_trait;
+use futures::TryStreamExt;
+use lancedb::DistanceType;
+use lancedb::query::{ExecutableQuery, QueryBase, Select};
 use zqa_rag::embedding::common::EmbeddingProviderConfig;
 use zqa_rag::reranking::common::{RerankProviderConfig, get_reranking_provider_with_config};
 use zqa_rag::vector::backends::backend::VectorBackend;
-use zqa_rag::vector::backends::lance::{LanceBackend, LanceError, LanceMetadata};
+use zqa_rag::vector::backends::lance::{
+    LANCE_DATA_TABLE_NAME, LanceBackend, LanceError, LanceMetadata,
+};
 use zqa_rag::vector::checkhealth::{HealthCheckResult, HealthCheckable};
 
 use crate::cli::errors::CLIError;
@@ -56,7 +63,7 @@ impl LanceZoteroStore {
     }
 
     /// Run health checks on the underlying LanceDB database.
-    pub async fn health_check(&self) -> HealthCheckResult<RecordBatch, LanceError> {
+    pub async fn health_check(&self) -> HealthCheckResult<LanceError> {
         self.backend.health_check().await
     }
 
@@ -83,7 +90,7 @@ impl LanceZoteroStore {
     /// Create a Lance-backed Zotero store from an embedding configuration.
     #[must_use]
     pub fn from_embedding_config(embedding_config: EmbeddingProviderConfig) -> Self {
-        let schema = Arc::new(get_schema(&embedding_config, true));
+        let schema = Arc::new(get_schema(&embedding_config));
         Self::from_schema(embedding_config, schema)
     }
 
@@ -220,7 +227,10 @@ impl ZoteroStore for LanceZoteroStore {
         ))
     }
 
-    /// Return metadata for Zotero items that already exist in the store.
+    /// Return metadata for Zotero items that already exist in the store. Items with blank text or
+    /// an all-zero embedding are left out, so that `/process` parses them again: blank texts may
+    /// come from a PDF that has changed since, and older versions stored failed embeddings as zero
+    /// vectors.
     ///
     /// # Errors
     ///
@@ -237,6 +247,55 @@ impl ZoteroStore for LanceZoteroStore {
             ])
             .await?;
 
+        let tbl = self
+            .backend
+            .connect()
+            .await?
+            .open_table(LANCE_DATA_TABLE_NAME)
+            .execute()
+            .await?;
+        let num_rows = tbl.count_rows(None).await?;
+        if num_rows == 0 {
+            return Ok(Vec::new());
+        }
+
+        // Find the zero vectors with an exact L2 search, since an approximate index could miss some
+        // and cosine distance is undefined for them.
+        let zero_vector_rows = tbl
+            .query()
+            .nearest_to(vec![0.0; self.embedding_config.dims()])?
+            .column(DbFields::Embeddings.as_ref())
+            .distance_type(DistanceType::L2)
+            .bypass_vector_index()
+            .distance_range(Some(0.0), Some(1e-8))
+            .select(Select::columns(&[DbFields::LibraryKey.as_ref()]))
+            .limit(num_rows)
+            .execute()
+            .await?
+            .try_collect::<Vec<_>>()
+            .await?;
+
+        // Not every provider embeds blank texts as zero vectors, so look for those separately.
+        let blank_text_rows = tbl
+            .query()
+            .only_if(format!(
+                r"regexp_match({}, '^\s*$')",
+                DbFields::PdfText.as_ref()
+            ))
+            .select(Select::columns(&[DbFields::LibraryKey.as_ref()]))
+            .limit(num_rows)
+            .execute()
+            .await?
+            .try_collect::<Vec<_>>()
+            .await?;
+
+        let recheck_keys: HashSet<String> = zero_vector_rows
+            .iter()
+            .chain(&blank_text_rows)
+            .filter_map(|batch| batch.column_by_name(DbFields::LibraryKey.as_ref()))
+            .flat_map(|keys| keys.as_string::<i32>().iter().flatten().map(str::to_owned))
+            .collect();
+
         Ok(db_items
             .iter()
             .flat_map(|batch| {
@@ -245,6 +304,7 @@ impl ZoteroStore for LanceZoteroStore {
                 let file_paths = crate::utils::library::get_column_from_batch(batch, 2);
 
                 crate::izip!(library_keys, titles, file_paths)
+                    .filter(|(key, _, _)| !recheck_keys.contains(key))
                     .map(
                         |(key, title, path)| crate::utils::library::ZoteroItemMetadata {
                             library_key: key,

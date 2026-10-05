@@ -14,7 +14,6 @@ pub(crate) enum Command {
     Docs(DocsCommand),
     Doctor,
     DoNothing,
-    Embed { fix: bool },
     Help,
     Index,
     NewConversation,
@@ -45,7 +44,6 @@ pub(crate) fn parse_command(command: &str) -> Result<Command, CommandParseError>
         "/config" => Ok(Command::Config),
         "/dedup" => Ok(Command::Dedup),
         "/doctor" => Ok(Command::Doctor),
-        "/embed" => Ok(Command::Embed { fix: false }),
         "/help" | "help" | "?" => Ok(Command::Help),
         "/index" => Ok(Command::Index),
         "/new" => Ok(Command::NewConversation),
@@ -66,17 +64,6 @@ pub(crate) fn parse_command(command: &str) -> Result<Command, CommandParseError>
                 return Ok(Command::Search {
                     query: search_term.to_string(),
                 });
-            }
-
-            if let Some(subcmd) = query.strip_prefix("/embed") {
-                let subcmd = subcmd.trim();
-                if subcmd != "fix" {
-                    return Err(CommandParseError::InvalidCommand(format!(
-                        "Invalid subcommand to /embed: {subcmd}"
-                    )));
-                }
-
-                return Ok(Command::Embed { fix: true });
             }
 
             if let Some(subcmd) = query.strip_prefix("/batch") {

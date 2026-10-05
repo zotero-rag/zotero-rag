@@ -62,8 +62,6 @@ const SLASH_COMMANDS: &[&str] = &[
     "/docs remove",
     "/dedup",
     "/doctor",
-    "/embed fix",
-    "/embed",
     "/exit",
     "/help",
     "/index",
