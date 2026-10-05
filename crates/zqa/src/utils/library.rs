@@ -1,18 +1,20 @@
 use std::collections::HashSet;
 use std::fmt::Write;
+use std::fs::File;
 use std::hash::Hash;
+use std::io::Read;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicUsize;
 use std::sync::{Arc, atomic};
-use std::time::Instant;
+use std::time::{Duration, Instant, SystemTime};
 use std::{env, thread};
 
 use arrow_array::RecordBatch;
 use arrow_array::cast::AsArray;
 use directories::UserDirs;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
-use rusqlite::Connection;
+use rusqlite::{Connection, ErrorCode, OpenFlags};
 use serde::Serialize;
 use thiserror::Error;
 use zqa_pdftools::parse::extract_text;
@@ -53,6 +55,167 @@ fn get_lib_path() -> Option<PathBuf> {
 /// process-global `CI` env var, which is what lets them avoid `#[serial]`.
 fn resolve_lib_path(override_path: Option<&Path>) -> Option<PathBuf> {
     override_path.map(Path::to_path_buf).or_else(get_lib_path)
+}
+
+/// The magic number at the start of an active SQLite rollback journal. See
+/// <https://sqlite.org/fileformat.html#the_rollback_journal>.
+const JOURNAL_MAGIC: [u8; 8] = [0xd9, 0xd5, 0x05, 0xf9, 0x20, 0xa1, 0x63, 0xd7];
+
+/// How many times to attempt copying a database that Zotero keeps writing to. The attempts span
+/// 4.5 s, well past [`MTIME_RESOLUTION`], so a single write just before the first attempt does not
+/// exhaust them.
+const UNLOCKED_READ_ATTEMPTS: u32 = 10;
+
+/// How long to wait between copy attempts.
+const UNLOCKED_READ_RETRY_DELAY: Duration = Duration::from_millis(500);
+
+/// The coarsest modification-time resolution we expect. HFS+ records mtimes to 1 s, and FAT and
+/// exFAT to 2 s.
+const MTIME_RESOLUTION: Duration = Duration::from_secs(2);
+
+// The retries must outlast the recent-write guard in `db_file_state`.
+const _: () = assert!(
+    UNLOCKED_READ_RETRY_DELAY.as_millis() * (UNLOCKED_READ_ATTEMPTS as u128 - 1)
+        > MTIME_RESOLUTION.as_millis()
+);
+
+/// Runs `read` against `zotero.sqlite` in the Zotero library directory `lib_path`.
+///
+/// A running Zotero holds an exclusive lock on its database, so reads through a normal connection
+/// fail with `SQLITE_BUSY`. In that case, this copies the database, and its write-ahead log if
+/// there is one, to a temporary directory and runs `read` again on the copy. Zotero 10 keeps
+/// recent commits in the write-ahead log until it checkpoints, so reading the main file alone
+/// would miss them.
+///
+/// The copy is taken without locks, so it only counts if no rollback-journal write was in
+/// progress and the main file did not change while it was copied (see [`db_file_state`]).
+/// Otherwise it is retried a few times. A write-ahead log copied mid-append is fine: SQLite only
+/// replays frames up to the last complete commit.
+///
+/// # Arguments
+///
+/// * `lib_path` - The Zotero library directory, containing `zotero.sqlite`.
+/// * `read` - The read to run. It may run twice, so it must be safe to repeat. It must return lock
+///   errors (see [`is_lock_error`]) rather than skipping them.
+///
+/// # Returns
+///
+/// The result of `read`.
+///
+/// # Errors
+///
+/// * `LibraryParsingError::SqlError` if the database cannot be opened or copied, `read` fails for
+///   a reason other than the lock, or Zotero kept writing to the database through every attempt.
+fn with_zotero_db<T>(
+    lib_path: &Path,
+    mut read: impl FnMut(&Connection) -> Result<T, rusqlite::Error>,
+) -> Result<T, LibraryParsingError> {
+    let db_path = lib_path.join("zotero.sqlite");
+    // Not `SQLITE_OPEN_READ_ONLY`: if Zotero crashed mid-write, SQLite needs write access to roll
+    // back the leftover journal before anything can read the database.
+    let conn = Connection::open_with_flags(&db_path, OpenFlags::SQLITE_OPEN_READ_WRITE)?;
+
+    // Zotero never releases its lock while running, so waiting on it only delays the fallback.
+    conn.busy_timeout(Duration::ZERO)?;
+    match read(&conn) {
+        Err(e) if is_lock_error(&e) => {}
+        result => return Ok(result?),
+    }
+
+    log::debug!(
+        "{} is locked, likely by a running Zotero; reading a copy",
+        db_path.display()
+    );
+    let mut wal_path = db_path.as_os_str().to_owned();
+    wal_path.push("-wal");
+    let copy_dir = tempfile::tempdir()?;
+    let copy_path = copy_dir.path().join("zotero.sqlite");
+    let copy_wal_path = copy_dir.path().join("zotero.sqlite-wal");
+    for attempt in 1..=UNLOCKED_READ_ATTEMPTS {
+        if let Some(before) = db_file_state(&db_path)? {
+            std::fs::copy(&db_path, &copy_path)?;
+            match std::fs::copy(&wal_path, &copy_wal_path) {
+                Ok(_) => {}
+                // Don't let a log copied by an earlier attempt replay over this copy.
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    match std::fs::remove_file(&copy_wal_path) {
+                        Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                            return Err(e.into());
+                        }
+                        _ => {}
+                    }
+                }
+                Err(e) => return Err(e.into()),
+            }
+            if db_file_state(&db_path)? == Some(before) {
+                return Ok(read(&Connection::open(&copy_path)?)?);
+            }
+        }
+        if attempt < UNLOCKED_READ_ATTEMPTS {
+            thread::sleep(UNLOCKED_READ_RETRY_DELAY);
+        }
+    }
+
+    Err(LibraryParsingError::SqlError(
+        "Zotero is busy writing to its database. Try again in a moment.".into(),
+    ))
+}
+
+/// Describes the database file at `db_path`, so that callers can tell whether it changed.
+///
+/// # Arguments
+///
+/// * `db_path` - Path to the SQLite database file.
+///
+/// # Returns
+///
+/// `None` if a write transaction is in progress, judged by whether the rollback journal starts
+/// with [`JOURNAL_MAGIC`], or if the file was modified within [`MTIME_RESOLUTION`]. Otherwise, the
+/// file's modification time and length.
+///
+/// The second condition makes sure that a later write changes the modification time even on a
+/// filesystem with coarse mtimes. SQLite's file change counter can't replace it: in exclusive
+/// locking mode, which Zotero uses, the counter is not incremented on each transaction.
+///
+/// # Errors
+///
+/// * `std::io::Error` if the journal exists but cannot be read, or the database file's metadata
+///   cannot be read.
+fn db_file_state(db_path: &Path) -> Result<Option<(SystemTime, u64)>, std::io::Error> {
+    let mut journal_path = db_path.as_os_str().to_owned();
+    journal_path.push("-journal");
+
+    // An idle journal is missing, empty, or has a zeroed header, depending on the journal mode.
+    let mut header = [0; JOURNAL_MAGIC.len()];
+    match File::open(&journal_path) {
+        Ok(mut journal) => {
+            if journal.read_exact(&mut header).is_ok() && header == JOURNAL_MAGIC {
+                return Ok(None);
+            }
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e),
+    }
+
+    let metadata = std::fs::metadata(db_path)?;
+    let modified = metadata.modified()?;
+    // An mtime in the future (clock skew) also counts as recent.
+    if modified
+        .elapsed()
+        .map_or(true, |age| age < MTIME_RESOLUTION)
+    {
+        return Ok(None);
+    }
+    Ok(Some((modified, metadata.len())))
+}
+
+/// Whether `e` means another connection, such as a running Zotero, holds a lock on the database.
+fn is_lock_error(e: &rusqlite::Error) -> bool {
+    matches!(
+        e,
+        rusqlite::Error::SqliteFailure(e, _)
+            if matches!(e.code, ErrorCode::DatabaseBusy | ErrorCode::DatabaseLocked)
+    )
 }
 
 /// Metadata for items in the Zotero library.
@@ -145,12 +308,18 @@ impl From<Vec<RecordBatch>> for ZoteroItemSet {
 #[derive(Clone, Debug, Error)]
 #[non_exhaustive]
 pub enum LibraryParsingError {
-    #[error("SQLite error: {0}. Try closing Zotero, which can sometimes hold a lock.")]
+    #[error("SQLite error: {0}")]
     SqlError(String),
     #[error("LanceDB error when parsing library: {0}")]
     LanceDBError(String),
     #[error("PDF parsing error: {0}")]
     PdfParsingError(String),
+}
+
+impl From<std::io::Error> for LibraryParsingError {
+    fn from(e: std::io::Error) -> Self {
+        LibraryParsingError::SqlError(e.to_string())
+    }
 }
 
 impl From<rusqlite::Error> for LibraryParsingError {
@@ -243,8 +412,6 @@ pub fn parse_library_metadata(
             "Reading Zotero metadata: path={}, offset={start_from:?}, limit={limit:?}",
             path.display()
         );
-        let conn = Connection::open(path.join("zotero.sqlite"))?;
-
         let mut query = "SELECT DISTINCT
                 idv.value AS title,
                 ia.path AS filePath,
@@ -270,10 +437,9 @@ pub fn parse_library_metadata(
             let _ = write!(query, " OFFSET {offset}");
         }
 
-        let mut stmt = conn.prepare(&query)?;
-
-        let item_iter: Vec<ZoteroItemMetadata> = stmt
-            .query_map([], |row| {
+        let item_iter = with_zotero_db(&path, |conn| {
+            let mut stmt = conn.prepare(&query)?;
+            let rows = stmt.query_map([], |row| {
                 let res_path: String = row.get(1)?;
                 let split_idx = res_path.find(':').unwrap_or(0);
                 let filename = res_path.split_at(split_idx + 1).1;
@@ -285,14 +451,18 @@ pub fn parse_library_metadata(
                     file_path: path.join("storage").join(lib_key).join(filename),
                     authors: None,
                 })
-            })?
-            .filter_map(|row| {
-                row.inspect_err(|error| {
-                    log::debug!("Skipping invalid Zotero metadata row: {error}");
-                })
-                .ok()
-            })
-            .collect();
+            })?;
+
+            let mut items = Vec::new();
+            for row in rows {
+                match row {
+                    Ok(item) => items.push(item),
+                    Err(e) if is_lock_error(&e) => return Err(e),
+                    Err(e) => log::debug!("Skipping invalid Zotero metadata row: {e}"),
+                }
+            }
+            Ok(items)
+        })?;
         log::debug!("Read {} Zotero metadata items", item_iter.len());
         Ok(item_iter)
     } else {
@@ -318,8 +488,6 @@ pub fn get_authors(
     library_path: Option<&Path>,
 ) -> Result<(), LibraryParsingError> {
     if let Some(path) = resolve_lib_path(library_path) {
-        let conn = Connection::open(path.join("zotero.sqlite"))?;
-
         // For some reason, the `key` field in the `items` table (what we call `library_key`) seems
         // to not completely be a key. Specifically, there are separate keys per item depending on
         // whether you want the file path or the authors; the item metadata is stored with the file
@@ -366,18 +534,33 @@ pub fn get_authors(
             ORDER BY MIN(ic.orderIndex);"
             .to_string();
 
-        let mut stmt = conn.prepare(&query)?;
-        for item in items {
-            let library_key = &item.metadata.library_key;
-            if let Some(row) = stmt.query(rusqlite::params![library_key])?.next()? {
-                let authors: String = row.get(0)?;
-                let split_authors: Vec<_> = authors
-                    .split(';')
-                    .map(str::trim)
-                    .map(String::from)
-                    .collect();
+        // Collect first and assign after: `with_zotero_db` may discard an attempt.
+        let all_authors = with_zotero_db(&path, |conn| {
+            let mut stmt = conn.prepare(&query)?;
+            let mut all_authors = Vec::with_capacity(items.len());
+            for item in items.iter() {
+                let library_key = &item.metadata.library_key;
+                let authors = match stmt.query(rusqlite::params![library_key])?.next()? {
+                    Some(row) => {
+                        let authors: String = row.get(0)?;
+                        Some(
+                            authors
+                                .split(';')
+                                .map(str::trim)
+                                .map(String::from)
+                                .collect(),
+                        )
+                    }
+                    None => None,
+                };
+                all_authors.push(authors);
+            }
+            Ok(all_authors)
+        })?;
 
-                item.metadata.authors = Some(split_authors);
+        for (item, authors) in items.iter_mut().zip(all_authors) {
+            if let Some(authors) = authors {
+                item.metadata.authors = Some(authors);
             }
         }
     } else {
@@ -675,6 +858,80 @@ mod tests {
         test_ok!(library_items);
         let items = library_items.unwrap();
         assert_ne!(items, [] as [ZoteroItemMetadata; 0]);
+    }
+
+    #[test]
+    fn test_library_fetching_works_while_locked() {
+        let assets = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("assets")
+            .join("Zotero");
+        let unlocked = parse_library_metadata(Some(&assets), None, None).unwrap();
+
+        // An awkward directory name, plus invalid UTF-8 on Unix.
+        let dir = tempfile::tempdir().unwrap();
+        let mut dir_name = std::ffi::OsString::from("Zotero #1 %20");
+        #[cfg(unix)]
+        dir_name.push(<std::ffi::OsStr as std::os::unix::ffi::OsStrExt>::from_bytes(b"\xff"));
+        let library_path = dir.path().join(dir_name);
+        std::fs::create_dir(&library_path).unwrap();
+        std::fs::copy(
+            assets.join("zotero.sqlite"),
+            library_path.join("zotero.sqlite"),
+        )
+        .unwrap();
+
+        // Recent writes also block unlocked reads, so age the file to test each guard on its own.
+        let age_file = || {
+            File::options()
+                .write(true)
+                .open(library_path.join("zotero.sqlite"))
+                .unwrap()
+                .set_modified(SystemTime::now() - Duration::from_mins(1))
+                .unwrap();
+        };
+
+        // Hold the lock the way a running Zotero does, with a write in progress. The small cache
+        // makes SQLite spill uncommitted pages into the database file.
+        let zotero = Connection::open(library_path.join("zotero.sqlite")).unwrap();
+        zotero
+            .execute_batch(
+                "PRAGMA locking_mode = EXCLUSIVE; PRAGMA cache_size = 1; BEGIN EXCLUSIVE;
+                 UPDATE itemDataValues SET value = value || ' (uncommitted)';",
+            )
+            .unwrap();
+        age_file();
+        assert!(parse_library_metadata(Some(&library_path), None, None).is_err());
+
+        zotero.execute_batch("ROLLBACK; BEGIN EXCLUSIVE;").unwrap();
+        age_file();
+
+        let start = Instant::now();
+        let locked = parse_library_metadata(Some(&library_path), None, None).unwrap();
+        assert!(start.elapsed() < Duration::from_secs(1));
+        test_eq!(locked, unlocked);
+
+        let mut items: Vec<ZoteroItem> = locked
+            .into_iter()
+            .map(|metadata| ZoteroItem {
+                metadata,
+                text: String::new(),
+            })
+            .collect();
+        test_ok!(get_authors(&mut items, Some(&library_path)));
+        assert!(items.iter().any(|item| item.metadata.authors.is_some()));
+
+        // Zotero 10 uses WAL mode, where committed changes stay in the `-wal` file until a
+        // checkpoint. The read must include them. Switching modes just wrote the main file, so the
+        // read also has to wait out the recent-write guard rather than give up.
+        zotero
+            .execute_batch(
+                "COMMIT; PRAGMA journal_mode = WAL; PRAGMA wal_autocheckpoint = 0;
+                 UPDATE itemDataValues SET value = value || ' (in WAL)';",
+            )
+            .unwrap();
+        let in_wal = parse_library_metadata(Some(&library_path), None, None).unwrap();
+        test_eq!(in_wal.len(), unlocked.len());
+        assert!(in_wal.iter().all(|item| item.title.ends_with(" (in WAL)")));
     }
 
     /// Test that on CI, the toy library is loaded instead of searching for a non-existent "real"

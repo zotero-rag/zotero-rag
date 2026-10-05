@@ -109,7 +109,7 @@ where
         Box::pin(async move {
             let input: RetrievalToolInput =
                 serde_json::from_value(args).map_err(|e| format!("Invalid arguments: {e}"))?;
-            let (mut results, stats) = store
+            let (results, stats) = store
                 .vector_search(input.query, 10, reranker_config.as_ref())
                 .await
                 .map_err(|e| format!("Search failed: {e}"))?;
@@ -117,7 +117,14 @@ where
             rerank_tokens.fetch_add(stats.rerank_tokens as u64, Ordering::Relaxed);
 
             let author_lookup_start = Instant::now();
-            let author_result = get_authors(&mut results, library_path.as_deref());
+            // While Zotero is open, this copies its database and may wait between attempts.
+            let (results, author_result) = tokio::task::spawn_blocking(move || {
+                let mut results = results;
+                let author_result = get_authors(&mut results, library_path.as_deref());
+                (results, author_result)
+            })
+            .await
+            .map_err(|e| format!("Author lookup failed: {e}"))?;
             log::debug!(
                 "Zotero author lookup took {:.2?}",
                 author_lookup_start.elapsed()
