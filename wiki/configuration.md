@@ -46,10 +46,12 @@ Reasoning is off by default for all providers. Each generation provider's
 section can set `reasoning_budget` (a token budget) or `reasoning_effort`
 (`none`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`); effort is
 the more widely supported form. When only one of the two is given, the other
-is derived from a fixed mapping. Anthropic validates the configured effort at
-config load and routes it through the output-level `effort` parameter of its
-adaptive-thinking models rather than a token budget. Invalid effort values
-are rejected with an error listing the accepted levels.
+is derived from a fixed mapping. Gemini accepts only `reasoning_effort`,
+since its Interactions API has no token budget. Anthropic validates the
+configured effort at config load and routes it through the output-level
+`effort` parameter of its adaptive-thinking models rather than a token
+budget. Invalid effort values are rejected with an error listing the
+accepted levels.
 
 # Operational settings
 

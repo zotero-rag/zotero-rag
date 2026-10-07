@@ -20,7 +20,7 @@ use crate::llm::base::{
 /// The key for the input schema for tools passed to Anthropic.
 pub(crate) const ANTHROPIC_SCHEMA_KEY: &str = "input_schema";
 /// The key for the input schema for tools passed to Gemini.
-pub(crate) const GEMINI_SCHEMA_KEY: &str = "parametersJsonSchema";
+pub(crate) const GEMINI_SCHEMA_KEY: &str = "parameters";
 /// The key for the input schema for tools passed to OpenAI.
 pub(crate) const OPENAI_SCHEMA_KEY: &str = "parameters";
 /// The key for the input schema for tools passed to OpenRouter.

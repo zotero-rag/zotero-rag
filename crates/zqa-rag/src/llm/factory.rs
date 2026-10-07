@@ -96,12 +96,9 @@ impl LLMClient {
                 })
             })?,
             LLMClient::Gemini(client) => client.config.as_ref().and_then(|c| {
-                if c.reasoning_budget.is_none() && c.reasoning_effort.is_none() {
-                    return None;
-                }
-                Some(ReasoningConfig {
-                    max_tokens: c.reasoning_budget,
-                    effort: c.reasoning_effort.clone(),
+                c.reasoning_effort.as_ref().map(|effort| ReasoningConfig {
+                    max_tokens: None,
+                    effort: Some(effort.clone()),
                     summary: None,
                 })
             }),

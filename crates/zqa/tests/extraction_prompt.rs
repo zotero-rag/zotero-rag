@@ -174,7 +174,6 @@ async fn test_extraction_prompt_gemini() {
         api_key: Some(api_key),
         embedding_model: None,
         embedding_dims: None,
-        reasoning_budget: None,
         reasoning_effort: None,
     };
 

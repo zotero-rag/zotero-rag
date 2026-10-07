@@ -93,9 +93,6 @@ pub const DEFAULT_VOYAGE_EMBEDDING_DIM: u32 = 2048;
 /// Default reasoning token budget for Anthropic
 pub const DEFAULT_ANTHROPIC_REASONING_BUDGET: u32 = 2048;
 
-/// Default reasoning token budget for Gemini
-pub const DEFAULT_GEMINI_REASONING_BUDGET: u32 = 2048;
-
 /// Default reasoning effort for OpenAI
 pub const DEFAULT_OPENAI_REASONING_EFFORT: &str = "high";
 

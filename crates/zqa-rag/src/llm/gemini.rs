@@ -1,5 +1,7 @@
 //! Functions, structs, and trait implementations for interacting with the Gemini API. This module
-//! includes support for both text generation and embedding, and tool calling is supported.
+//! includes support for both text generation and embedding, and tool calling is supported. Text
+//! generation uses the stateless mode of the Interactions API: see
+//! <https://ai.google.dev/gemini-api/docs/interactions>.
 
 use std::env;
 
@@ -9,409 +11,282 @@ use serde::{Deserialize, Serialize};
 use super::base::ChatRequest;
 use super::errors::LLMError;
 use crate::clients::gemini::{GeminiClient, get_gemini_api_key};
-use crate::constants::{
-    DEFAULT_GEMINI_MODEL, DEFAULT_GEMINI_REASONING_BUDGET, DEFAULT_MAX_RETRIES,
-};
+use crate::constants::{DEFAULT_GEMINI_MODEL, DEFAULT_MAX_RETRIES};
 use crate::http_client::HttpClient;
 use crate::llm::base::{
-    AgenticClient, ChatHistoryContent, ChatHistoryItem, EFFORT_TO_TOKENS, MessageRole,
-    ProviderTurn, ReasoningConfig, ReasoningEffort, ToolCallRequest, send_generation_request,
+    AgenticClient, ChatHistoryContent, ChatHistoryItem, MessageRole, ProviderTurn, ReasoningConfig,
+    ToolCallRequest, send_generation_request,
 };
 use crate::llm::tools::{GEMINI_SCHEMA_KEY, SerializedTool};
 use crate::pricing::ModelUsage;
 use crate::requests::exponential_backoff_delay;
 
-/// A function (tool) call request from the model.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct GeminiFunctionCall {
-    /// A unique ID for the function call (optional in responses)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    id: Option<String>,
-    /// The name of the tool (function) to call
-    name: String,
-    /// The function parameters
-    args: serde_json::Value,
-}
-
-/// A result of a tool call, to be sent to the API.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct GeminiFunctionResult {
-    /// The ID of the corresponding function call
-    id: String,
-    /// The name of the function
-    name: String,
-    /// The function response in JSON format
-    response: serde_json::Value,
-}
-
-/// A content part in a request to the Gemini API
-#[derive(Serialize, Deserialize, Clone)]
-#[serde(untagged)]
-pub(crate) enum GeminiPart {
+/// A content item inside a step. Only text is requested from or sent to the API.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub(crate) enum GeminiContentItem {
     Text {
         text: String,
-        /// Whether this part is a thought summary rather than regular response text.
+    },
+    /// Content types we do not request, such as images. These are dropped.
+    #[serde(other)]
+    Unsupported,
+}
+
+/// One step of an interaction. The conversation history is sent as a list of steps, and the
+/// response returns the steps the model generated, which must be replayed unchanged (including
+/// `thought` signatures) on later turns.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub(crate) enum GeminiStep {
+    UserInput {
+        content: Vec<GeminiContentItem>,
+    },
+    ModelOutput {
+        #[serde(default)]
+        content: Vec<GeminiContentItem>,
+    },
+    Thought {
+        /// Opaque representation of the model's reasoning state.
         #[serde(skip_serializing_if = "Option::is_none")]
-        thought: Option<bool>,
-        #[serde(rename = "thoughtSignature", skip_serializing_if = "Option::is_none")]
-        thought_signature: Option<String>,
+        signature: Option<String>,
+        /// Thought summaries, present when `thinking_summaries` is enabled.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        summary: Vec<GeminiContentItem>,
     },
     FunctionCall {
-        #[serde(rename = "functionCall")]
-        function_call: GeminiFunctionCall,
-        #[serde(rename = "thoughtSignature", skip_serializing_if = "Option::is_none")]
-        thought_signature: Option<String>,
+        /// A unique ID for the function call
+        id: String,
+        /// The name of the tool (function) to call
+        name: String,
+        /// The function parameters
+        arguments: serde_json::Value,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        signature: Option<String>,
     },
     FunctionResult {
-        #[serde(rename = "functionResponse")]
-        function_response: GeminiFunctionResult,
-        #[serde(rename = "thoughtSignature", skip_serializing_if = "Option::is_none")]
-        thought_signature: Option<String>,
+        /// The ID of the corresponding function call
+        call_id: String,
+        /// The name of the function
+        name: String,
+        /// The function response in JSON format
+        result: serde_json::Value,
     },
+    /// Step types we do not request, such as built-in tool calls. These are dropped.
+    #[serde(other)]
+    Unsupported,
 }
 
-/// Gemini uses "model", not "assistant", so we need our own enum.
-#[derive(Copy, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-enum GeminiMessageRole {
-    /// The model response.
-    Model,
-    /// The user message or response.
-    User,
-}
-
-/// Content for requests to the Gemini API
-#[derive(Serialize, Deserialize, Clone)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct GeminiContent {
-    role: GeminiMessageRole,
-    parts: Vec<GeminiPart>,
-}
-
-/// Instructions that guide Gemini for the entire request.
-#[derive(Serialize, Clone)]
-struct GeminiSystemInstruction {
-    parts: Vec<GeminiPart>,
-}
-
-impl From<ChatHistoryItem> for Vec<GeminiContent> {
+impl From<ChatHistoryItem> for Vec<GeminiStep> {
     fn from(value: ChatHistoryItem) -> Self {
-        vec![value.into()]
+        value
+            .content
+            .into_iter()
+            .filter_map(|c| match c {
+                ChatHistoryContent::Text(text) => {
+                    let content = vec![GeminiContentItem::Text { text }];
+                    Some(match value.role {
+                        MessageRole::User | MessageRole::Tool => GeminiStep::UserInput { content },
+                        MessageRole::Assistant => GeminiStep::ModelOutput { content },
+                    })
+                }
+                ChatHistoryContent::Reasoning(_) => None,
+                ChatHistoryContent::ToolCallRequest(tool_call) => Some(GeminiStep::FunctionCall {
+                    id: tool_call.id,
+                    name: tool_call.tool_name,
+                    arguments: tool_call.args,
+                    signature: None,
+                }),
+                ChatHistoryContent::ToolCallResponse(tool_res) => {
+                    // Wrap the result in an object with a "result" field if it's not already an object
+                    let result = if tool_res.result.is_object() {
+                        tool_res.result
+                    } else {
+                        serde_json::json!({ "result": tool_res.result })
+                    };
+
+                    Some(GeminiStep::FunctionResult {
+                        call_id: tool_res.id,
+                        name: tool_res.tool_name,
+                        result,
+                    })
+                }
+            })
+            .collect()
     }
 }
 
-impl From<ChatHistoryItem> for GeminiContent {
-    fn from(value: ChatHistoryItem) -> Self {
-        Self {
-            role: match value.role {
-                MessageRole::User | MessageRole::Tool => GeminiMessageRole::User,
-                MessageRole::Assistant => GeminiMessageRole::Model,
-            },
-            parts: value
-                .content
-                .into_iter()
-                .filter_map(|c| match c {
-                    ChatHistoryContent::Text(text) => Some(GeminiPart::Text {
-                        text,
-                        thought: None,
-                        thought_signature: None,
-                    }),
-                    ChatHistoryContent::Reasoning(_) => None,
-                    ChatHistoryContent::ToolCallRequest(tool_call) => {
-                        Some(GeminiPart::FunctionCall {
-                            function_call: GeminiFunctionCall {
-                                id: Some(tool_call.id),
-                                name: tool_call.tool_name,
-                                args: tool_call.args,
-                            },
-                            thought_signature: None,
-                        })
-                    }
-                    ChatHistoryContent::ToolCallResponse(tool_res) => {
-                        // Wrap the result in an object with a "result" field if it's not already an object
-                        let response = if tool_res.result.is_object() {
-                            tool_res.result
-                        } else {
-                            serde_json::json!({ "result": tool_res.result })
-                        };
-
-                        Some(GeminiPart::FunctionResult {
-                            function_response: GeminiFunctionResult {
-                                id: tool_res.id,
-                                name: tool_res.tool_name,
-                                response,
-                            },
-                            thought_signature: None,
-                        })
-                    }
-                })
-                .collect::<Vec<_>>(),
-        }
-    }
-}
-
-/// Thinking config in case reasoning models are used
-#[derive(Serialize, Deserialize, Clone)]
-#[serde(rename_all = "camelCase")]
-struct GeminiThinkingConfig {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    include_thoughts: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    thinking_budget: Option<u32>,
-    /// Thinking level (`"minimal"`, `"low"`, `"medium"`, `"high"`) for Gemini 3+ models,
-    /// which use this instead of a token budget. See
-    /// <https://ai.google.dev/gemini-api/docs/thinking>.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    thinking_level: Option<String>,
-}
-
-/// Whether the given Gemini model generation uses the `thinkingLevel` API (Gemini 3 and
-/// later) rather than the older `thinkingBudget` API (Gemini 2.5). A model name of the form
-/// `gemini-{major}...` is parsed for its major version; unrecognized names are assumed to
-/// use `thinkingBudget`.
-fn uses_thinking_level(model: &str) -> bool {
-    model
-        .to_lowercase()
-        .strip_prefix("gemini-")
-        .and_then(|version| version.split(['-', '.']).next())
-        .and_then(|major| major.parse::<u32>().ok())
-        .is_some_and(|major| major >= 3)
-}
-
-/// Map a reasoning effort to a Gemini `thinkingLevel` (`minimal`, `low`, `medium`, or
-/// `high`). `xhigh` and `max` are mapped down to `high`, since Google's highest documented
-/// level is `high`; `none` and unrecognized efforts map to `None`.
-fn effort_to_thinking_level(effort: &str) -> Option<String> {
-    match effort {
-        "minimal" | "low" | "medium" | "high" => Some(effort.to_string()),
-        "xhigh" | "max" => Some("high".to_string()),
-        _ => None,
-    }
-}
-
-/// Build the thinking config for a request. Gemini 3+ models use `thinkingLevel`; Gemini 2.5
-/// models use `thinkingBudget`. When no level is specified for Gemini 3+, the provider chooses
-/// its default level.
-fn gemini_thinking_config(
-    model: &str,
-    reasoning: Option<&ReasoningConfig>,
-) -> Option<GeminiThinkingConfig> {
-    let reasoning = reasoning?;
-    let (effort, uses_low_fallback) = match reasoning.effort.as_deref() {
+/// Map a reasoning effort to a Gemini `thinking_level` (`low`, `medium`, or `high`). `xhigh` and
+/// `max` are mapped down to `high`, since Google's highest documented level is `high`, and
+/// `minimal` is mapped up to `low`, since only some Flash models support it. The Interactions API
+/// has no token budget, so a missing or unrecognized effort maps to `None`, which uses the model's
+/// default level.
+///
+/// # Arguments
+///
+/// * `reasoning` - The provider-neutral reasoning config.
+///
+/// # Returns
+///
+/// The Gemini thinking level, or `None` to use the model's default.
+fn gemini_thinking_level(reasoning: &ReasoningConfig) -> Option<&'static str> {
+    match reasoning.effort.as_deref() {
         Some("none") => {
             log::warn!(
                 "Gemini does not consistently support disabled thinking; using low effort instead."
             );
-            (Some(ReasoningEffort::Low.to_string()), true)
+            Some("low")
         }
-        effort => (effort.map(str::to_owned), false),
-    };
-    let uses_level = uses_thinking_level(model);
-    let level = uses_level
-        .then(|| effort.as_deref().and_then(effort_to_thinking_level))
-        .flatten();
-    let budget = (!uses_level).then(|| {
-        if uses_low_fallback {
-            *EFFORT_TO_TOKENS.get(&ReasoningEffort::Low).unwrap()
-        } else {
-            reasoning
-                .max_tokens
-                .unwrap_or(DEFAULT_GEMINI_REASONING_BUDGET)
-        }
-    });
-
-    Some(GeminiThinkingConfig {
-        include_thoughts: Some(true),
-        thinking_budget: budget,
-        thinking_level: level,
-    })
+        Some("minimal" | "low") => Some("low"),
+        Some("medium") => Some("medium"),
+        Some("high" | "xhigh" | "max") => Some("high"),
+        _ => None,
+    }
 }
 
 /// Optional text generation configuration
-#[derive(Serialize, Deserialize, Clone)]
-#[serde(rename_all = "camelCase")]
+#[derive(Serialize, Clone)]
 struct GeminiGenerationConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     max_output_tokens: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    top_p: Option<f32>,
+    thinking_level: Option<&'static str>,
+    /// `"auto"` to return thought summaries, which are only requested when reasoning is configured.
     #[serde(skip_serializing_if = "Option::is_none")]
-    top_k: Option<u32>,
+    thinking_summaries: Option<&'static str>,
+    /// `"none"` on the last turn of a tool loop, so the tools stay in the request (keeping the
+    /// prompt cache) but cannot be called.
     #[serde(skip_serializing_if = "Option::is_none")]
-    temperature: Option<f32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    thinking_config: Option<GeminiThinkingConfig>,
+    tool_choice: Option<&'static str>,
 }
 
+/// A function declaration in the format the Interactions API expects.
 #[derive(Serialize, Clone)]
-#[serde(rename_all = "camelCase")]
-struct GeminiToolDeclaration<'a> {
-    function_declarations: Vec<SerializedTool<'a>>,
+struct GeminiTool<'a> {
+    r#type: &'static str,
+    #[serde(flatten)]
+    tool: SerializedTool<'a>,
 }
 
 /// The request body for text generation
 #[derive(Serialize, Clone)]
-#[serde(rename_all = "camelCase")]
 struct GeminiRequestBody<'a> {
-    contents: &'a [GeminiContent],
+    model: &'a str,
+    input: &'a [GeminiStep],
     #[serde(skip_serializing_if = "Option::is_none")]
-    system_instruction: Option<GeminiSystemInstruction>,
+    system_instruction: Option<&'a str>,
+    generation_config: GeminiGenerationConfig,
     #[serde(skip_serializing_if = "Option::is_none")]
-    generation_config: Option<GeminiGenerationConfig>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    tools: Option<&'a GeminiToolDeclaration<'a>>,
+    tools: Option<Vec<GeminiTool<'a>>>,
+    /// The full history is sent on every turn, so the interaction is not stored server-side.
+    store: bool,
 }
 
-/// Helper to build contents, config, and tools from a ChatRequest.
-/// Returns owned data that can then be borrowed by GeminiRequestBody.
-fn build_gemini_request_data<'a>(
-    model: &str,
-    max_tokens: Option<u32>,
-    tools: Option<&'a [SerializedTool<'_>]>,
-    reasoning: Option<&ReasoningConfig>,
-) -> (
-    Option<GeminiGenerationConfig>,
-    Option<GeminiToolDeclaration<'a>>,
-) {
-    let model_max = max_tokens.or_else(|| {
-        env::var("GEMINI_MAX_TOKENS")
-            .ok()
-            .and_then(|s| s.parse().ok())
-    });
-
-    let generation_config = Some(GeminiGenerationConfig {
-        max_output_tokens: model_max,
-        temperature: Some(1.0),
-        top_k: Some(1),
-        top_p: Some(1.0),
-        thinking_config: gemini_thinking_config(model, reasoning),
-    });
-
-    let tools = tools.map(|tools| GeminiToolDeclaration {
-        function_declarations: tools.to_vec(),
-    });
-
-    (generation_config, tools)
+/// Usage received from the Gemini Interactions API.
+#[derive(Default, Serialize, Deserialize, Clone)]
+#[serde(default)]
+struct GeminiUsage {
+    #[serde(rename = "total_input_tokens")]
+    input: u32,
+    #[serde(rename = "total_cached_tokens")]
+    cached: u32,
+    #[serde(rename = "total_output_tokens")]
+    output: u32,
+    #[serde(rename = "total_thought_tokens")]
+    thought: u32,
 }
 
-/// Token details by modality in usage metadata
-#[derive(Serialize, Deserialize, Clone)]
-#[serde(rename_all = "camelCase")]
-struct GeminiTokenDetails {
-    modality: String,
-    token_count: u32,
-}
-
-/// Usage metadata received from the Gemini text generation response.
-#[derive(Serialize, Deserialize, Clone)]
-#[serde(rename_all = "camelCase")]
-struct GeminiUsageMetadata {
-    prompt_token_count: u32,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    cached_content_token_count: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    tool_use_prompt_token_count: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    thoughts_token_count: Option<u32>,
-    #[serde(default)]
-    candidates_token_count: u32,
-    total_token_count: u32,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    prompt_tokens_details: Option<Vec<GeminiTokenDetails>>,
-}
-
-impl From<GeminiUsageMetadata> for ModelUsage {
-    fn from(val: GeminiUsageMetadata) -> Self {
+impl From<GeminiUsage> for ModelUsage {
+    fn from(val: GeminiUsage) -> Self {
         ModelUsage {
-            input_tokens: val.prompt_token_count,
-            input_cache_read: val.cached_content_token_count.unwrap_or_default(),
-            // The Gemini API doesn't seem to distinguish between cache reads/writes, and only gives
-            // us one number. The `prompt_tokens_details` number is a split by modality.
-            // See: https://ai.google.dev/api/generate-content#UsageMetadata
+            input_tokens: val.input,
+            input_cache_read: val.cached,
+            // The Gemini API doesn't distinguish between cache reads and writes, and only gives
+            // us one number.
             input_cache_written: 0,
-            output_tokens: val.candidates_token_count,
-            reasoning_tokens: val.thoughts_token_count.unwrap_or_default(),
+            output_tokens: val.output,
+            reasoning_tokens: val.thought,
         }
     }
 }
 
-/// Response content can be empty or absent when generation fails.
-#[derive(Default, Serialize, Deserialize, Clone)]
-struct GeminiResponseContent {
-    #[serde(default)]
-    parts: Vec<GeminiPart>,
-}
-
-/// One of several response candidates.
+/// Interaction response from the Gemini API.
 #[derive(Serialize, Deserialize, Clone)]
-#[serde(rename_all = "camelCase")]
-struct GeminiResponseCandidate {
-    #[serde(default)]
-    content: GeminiResponseContent,
-    finish_reason: String,
-}
-
-/// Text generation response from the Gemini API.
-#[derive(Serialize, Deserialize, Clone)]
-#[serde(rename_all = "camelCase")]
 struct GeminiResponseBody {
-    candidates: Vec<GeminiResponseCandidate>,
-    usage_metadata: GeminiUsageMetadata,
+    status: String,
+    #[serde(default)]
+    steps: Vec<GeminiStep>,
+    #[serde(default)]
+    usage: GeminiUsage,
 }
 
-/// Convert Gemini response content into provider-agnostic `ChatHistoryContent` items.
+/// Convert Gemini response steps into provider-agnostic `ChatHistoryContent` items.
 ///
-/// Tool results should never appear in API responses; if encountered, they are ignored
-/// with a warning.
-fn map_response_to_chat_contents(contents: &[GeminiPart]) -> Vec<ChatHistoryContent> {
-    contents.iter().enumerate().filter_map(|(idx, c)| {
-        match c {
-            GeminiPart::Text{text, thought, ..} => {
-                if *thought == Some(true) {
-                    (!text.is_empty()).then(|| ChatHistoryContent::Reasoning(text.clone()))
-                } else {
-                    Some(ChatHistoryContent::Text(text.clone()))
-                }
-            },
-            GeminiPart::FunctionCall{function_call: fc, ..} => Some(ChatHistoryContent::ToolCallRequest(ToolCallRequest {
-                    // Generate an ID if not provided by the API
-                    id: fc.id.clone().unwrap_or_else(|| format!("{}_{}", fc.name, idx)),
-                    tool_name: fc.name.clone(),
-                    args: fc.args.clone()
-                })),
-            GeminiPart::FunctionResult {..} => {
+/// Tool results and user input should never appear in API responses; if encountered, they are
+/// ignored with a warning.
+fn map_response_to_chat_contents(steps: &[GeminiStep]) -> Vec<ChatHistoryContent> {
+    fn texts(content: &[GeminiContentItem]) -> impl Iterator<Item = String> + '_ {
+        content.iter().filter_map(|item| match item {
+            GeminiContentItem::Text { text } => Some(text.clone()),
+            GeminiContentItem::Unsupported => None,
+        })
+    }
+
+    steps
+        .iter()
+        .flat_map(|step| match step {
+            GeminiStep::ModelOutput { content } => {
+                texts(content).map(ChatHistoryContent::Text).collect()
+            }
+            GeminiStep::Thought { summary, .. } => texts(summary)
+                .filter(|text| !text.is_empty())
+                .map(ChatHistoryContent::Reasoning)
+                .collect(),
+            GeminiStep::FunctionCall {
+                id,
+                name,
+                arguments,
+                ..
+            } => vec![ChatHistoryContent::ToolCallRequest(ToolCallRequest {
+                id: id.clone(),
+                tool_name: name.clone(),
+                args: arguments.clone(),
+            })],
+            GeminiStep::UserInput { .. } | GeminiStep::FunctionResult { .. } => {
                 log::warn!(
-                    "Got a tool result from the API response. This is not expected, and will be ignored."
+                    "Got a user input or tool result step from the API response. This is not expected, and will be ignored."
                 );
 
-                None
+                Vec::new()
             }
-        }
-    }).collect::<Vec<_>>()
+            GeminiStep::Unsupported => {
+                log::warn!("Got an unsupported step type from the API response; ignoring it.");
+
+                Vec::new()
+            }
+        })
+        .collect()
 }
 
 impl<T: HttpClient> AgenticClient for GeminiClient<T> {
-    type HistoryItem = GeminiContent;
+    type HistoryItem = GeminiStep;
     const SCHEMA_KEY: &'static str = GEMINI_SCHEMA_KEY;
 
     fn build_initial_history(&self, request: &ChatRequest<'_>) -> Vec<Self::HistoryItem> {
-        let mut contents: Vec<GeminiContent> = request
+        let mut steps: Vec<GeminiStep> = request
             .chat_history
             .iter()
             .cloned()
-            .map(Into::into)
+            .flat_map(Vec::<GeminiStep>::from)
             .collect();
 
-        contents.push(GeminiContent {
-            role: GeminiMessageRole::User,
-            parts: vec![GeminiPart::Text {
+        steps.push(GeminiStep::UserInput {
+            content: vec![GeminiContentItem::Text {
                 text: request.message.clone(),
-                thought: None,
-                thought_signature: None,
             }],
         });
 
-        contents
+        steps
     }
 
     async fn send_once(
@@ -436,68 +311,78 @@ impl<T: HttpClient> AgenticClient for GeminiClient<T> {
         headers.insert("content-type", "application/json".parse()?);
         headers.insert("x-goog-api-key", key.parse()?);
 
-        // Build the initial contents, config, and tools (owned)
-        let (generation_config, tools) = build_gemini_request_data(
-            &model,
-            max_tokens,
-            tools.filter(|_| allow_tool_calls),
-            reasoning,
-        );
-
-        // Create the initial request borrowing
         let request = GeminiRequestBody {
-            contents: history,
-            system_instruction: system_prompt.map(|text| GeminiSystemInstruction {
-                parts: vec![GeminiPart::Text {
-                    text: text.to_owned(),
-                    thought: None,
-                    thought_signature: None,
-                }],
+            model: &model,
+            input: history,
+            system_instruction: system_prompt,
+            generation_config: GeminiGenerationConfig {
+                max_output_tokens: max_tokens.or_else(|| {
+                    env::var("GEMINI_MAX_TOKENS")
+                        .ok()
+                        .and_then(|s| s.parse().ok())
+                }),
+                thinking_level: reasoning.and_then(gemini_thinking_level),
+                thinking_summaries: reasoning.map(|_| "auto"),
+                tool_choice: (tools.is_some() && !allow_tool_calls).then_some("none"),
+            },
+            tools: tools.map(|tools| {
+                tools
+                    .iter()
+                    .map(|tool| GeminiTool {
+                        r#type: "function",
+                        tool: tool.clone(),
+                    })
+                    .collect()
             }),
-            generation_config: generation_config.clone(),
-            tools: tools.as_ref(),
+            store: false,
         };
 
-        let url = format!(
-            "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
-        );
+        let url = "https://generativelanguage.googleapis.com/v1beta/interactions";
         let mut usage = ModelUsage::default();
         let mut attempt = 0;
         loop {
             let response: GeminiResponseBody =
-                send_generation_request(&self.client, &request, &headers, &url, max_retries)
-                    .await?;
-            usage += response.usage_metadata.into();
+                send_generation_request(&self.client, &request, &headers, url, max_retries).await?;
+            usage += response.usage.into();
 
-            let first_candidate = response.candidates.into_iter().next().ok_or_else(|| {
-                LLMError::GenericLLMError("No candidates in Gemini response".into())
-            })?;
-            let finish_reason = first_candidate.finish_reason;
-            if matches!(
-                finish_reason.as_str(),
-                "MALFORMED_RESPONSE" | "MALFORMED_FUNCTION_CALL"
-            ) && attempt < max_retries
-            {
-                log::warn!("Gemini returned {finish_reason}; retrying generation");
+            let status = response.status;
+            if status == "failed" && attempt < max_retries {
+                log::warn!("Gemini interaction failed; retrying generation");
                 // Retry this turn before executing tools or modifying the conversation history.
                 tokio::time::sleep(exponential_backoff_delay(attempt)).await;
                 attempt += 1;
                 continue;
             }
-            let parts = first_candidate.content.parts;
-            if !matches!(finish_reason.as_str(), "STOP" | "MAX_TOKENS") || parts.is_empty() {
+
+            // Drop unsupported steps and content so they are not replayed.
+            let mut steps = response.steps;
+            steps.retain(|step| *step != GeminiStep::Unsupported);
+            for step in &mut steps {
+                if let GeminiStep::ModelOutput { content }
+                | GeminiStep::Thought {
+                    summary: content, ..
+                } = step
+                {
+                    content.retain(|item| *item != GeminiContentItem::Unsupported);
+                }
+            }
+
+            // `incomplete` means the output was cut off, e.g. by `max_output_tokens`.
+            let contents = map_response_to_chat_contents(&steps);
+            if !matches!(
+                status.as_str(),
+                "completed" | "requires_action" | "incomplete"
+            ) || contents.is_empty()
+            {
                 return Err(LLMError::GenerationError {
                     provider: "Gemini",
-                    finish_reason,
+                    finish_reason: status,
                 });
             }
 
             return Ok(ProviderTurn {
-                contents: map_response_to_chat_contents(&parts),
-                native_items: vec![GeminiContent {
-                    role: GeminiMessageRole::Model,
-                    parts,
-                }],
+                contents,
+                native_items: steps,
                 usage,
             });
         }
@@ -524,21 +409,27 @@ mod tests {
     /// Empty thoughts produce no display block, while other text retains its content and order.
     #[test]
     fn empty_thoughts_are_omitted_from_display() {
-        let parts: Vec<GeminiPart> = serde_json::from_value(serde_json::json!([
-            {"text": "", "thought": true, "thoughtSignature": "opaque"},
-            {"text": "Check the sources.\nThey agree.", "thought": true},
-            {"text": "The answer.", "thought": false},
-            {"text": "More detail."},
-            {"text": ""}
+        let steps: Vec<GeminiStep> = serde_json::from_value(serde_json::json!([
+            {"type": "thought", "signature": "opaque"},
+            {"type": "thought", "summary": [{"type": "text", "text": "Check the sources.\nThey agree."}]},
+            {"type": "model_output", "content": [
+                {"type": "text", "text": "The answer."},
+                {"type": "text", "text": "More detail."}
+            ]},
+            {"type": "model_output", "content": [
+                {"type": "text", "text": ""},
+                {"type": "image", "data": "opaque", "mime_type": "image/png"}
+            ]},
+            {"type": "google_search_call", "arguments": {}}
         ]))
         .unwrap();
 
         assert_eq!(
-            map_response_to_chat_contents(&parts[..1]),
+            map_response_to_chat_contents(&steps[..1]),
             [] as [ChatHistoryContent; 0]
         );
         assert_eq!(
-            map_response_to_chat_contents(&parts),
+            map_response_to_chat_contents(&steps),
             [
                 ChatHistoryContent::Reasoning("Check the sources.\nThey agree.".into()),
                 ChatHistoryContent::Text("The answer.".into()),
@@ -546,124 +437,44 @@ mod tests {
                 ChatHistoryContent::Text(String::new()),
             ]
         );
+        test_eq!(steps[4], GeminiStep::Unsupported);
     }
 
     #[test]
-    fn test_uses_thinking_level() {
-        test_eq!(uses_thinking_level("gemini-3-pro-preview"), true);
-        test_eq!(uses_thinking_level("gemini-3.7-flash"), true);
-        test_eq!(uses_thinking_level("Gemini-3-flash-preview"), true);
-        test_eq!(uses_thinking_level("gemini-2.5-pro"), false);
-        test_eq!(uses_thinking_level("gemini-2.5-flash-lite"), false);
-        // Unrecognized names conservatively use the budget API.
-        test_eq!(uses_thinking_level("gemma-3-27b"), false);
-        test_eq!(uses_thinking_level("gemini"), false);
-    }
-
-    #[test]
-    fn test_effort_to_thinking_level() {
-        test_eq!(
-            effort_to_thinking_level("minimal"),
-            Some("minimal".to_string())
-        );
-        test_eq!(effort_to_thinking_level("high"), Some("high".to_string()));
-        // `xhigh` and `max` are mapped down, since Google caps at `high`.
-        test_eq!(effort_to_thinking_level("xhigh"), Some("high".to_string()));
-        test_eq!(effort_to_thinking_level("max"), Some("high".to_string()));
-        test_eq!(effort_to_thinking_level("none"), None);
-        test_eq!(effort_to_thinking_level("bogus"), None);
-    }
-
-    #[test]
-    fn test_gemini_thinking_config() {
-        // Gemini 3: an effort maps to a thinking level, with no budget by default.
-        let reasoning = ReasoningConfig {
-            max_tokens: None,
-            effort: Some("high".into()),
-            summary: None,
-        };
-        let config = gemini_thinking_config("gemini-3-pro-preview", Some(&reasoning)).unwrap();
-        test_eq!(config.thinking_level, Some("high".to_string()));
-        test_eq!(config.thinking_budget, None);
-        test_eq!(config.include_thoughts, Some(true));
-
-        // Gemini 3 does not send the legacy budget, even when one was requested.
-        let reasoning = ReasoningConfig {
-            max_tokens: Some(4096),
-            effort: Some("low".into()),
-            summary: None,
-        };
-        let config = gemini_thinking_config("gemini-3.7-flash", Some(&reasoning)).unwrap();
-        test_eq!(config.thinking_level, Some("low".to_string()));
-        test_eq!(config.thinking_budget, None);
-
-        // Gemini 2.5: the budget API is used, regardless of effort.
-        let reasoning = ReasoningConfig {
-            max_tokens: Some(8192),
-            effort: Some("high".into()),
-            summary: None,
-        };
-        let config = gemini_thinking_config("gemini-2.5-pro", Some(&reasoning)).unwrap();
-        test_eq!(config.thinking_level, None);
-        test_eq!(config.thinking_budget, Some(8192));
-
-        // Gemini does not consistently support disabled thinking, so use low effort instead.
-        let reasoning = ReasoningConfig {
-            max_tokens: None,
-            effort: Some("none".into()),
-            summary: None,
-        };
-        let config = gemini_thinking_config("gemini-3-pro-preview", Some(&reasoning)).unwrap();
-        test_eq!(config.thinking_level, Some("low".to_string()));
-        test_eq!(config.thinking_budget, None);
-        let config = gemini_thinking_config("gemini-2.5-flash", Some(&reasoning)).unwrap();
-        test_eq!(config.thinking_level, None);
-        test_eq!(config.thinking_budget, Some(4096));
-
-        // No effort and no budget: fall back to the default budget.
-        let reasoning = ReasoningConfig {
-            max_tokens: None,
-            effort: None,
-            summary: None,
-        };
-        let config = gemini_thinking_config("gemini-2.5-flash", Some(&reasoning)).unwrap();
-        test_eq!(
-            config.thinking_budget,
-            Some(DEFAULT_GEMINI_REASONING_BUDGET)
-        );
-
-        // No reasoning at all: no thinking config is sent.
-        test_eq!(
-            gemini_thinking_config("gemini-3-pro-preview", None).is_none(),
-            true
-        );
+    fn test_gemini_thinking_level() {
+        for (effort, budget, expected) in [
+            // `minimal` is unsupported on Gemini 2.5 and 3.1 Pro (the default model).
+            (Some("minimal"), None, Some("low")),
+            (Some("high"), Some(4096), Some("high")),
+            // `xhigh` and `max` are mapped down, since Google caps at `high`.
+            (Some("xhigh"), None, Some("high")),
+            (Some("max"), None, Some("high")),
+            // Gemini does not consistently support disabled thinking, so use low effort instead.
+            (Some("none"), None, Some("low")),
+            (Some("bogus"), None, None),
+            // A budget alone uses the model's default level.
+            (None, Some(4096), None),
+            (None, None, None),
+        ] {
+            let reasoning = ReasoningConfig {
+                max_tokens: budget,
+                effort: effort.map(str::to_owned),
+                summary: None,
+            };
+            test_eq!(gemini_thinking_level(&reasoning), expected);
+        }
     }
 
     #[tokio::test]
     async fn test_send_message_with_mock() {
         dotenv().ok();
 
-        let mock_response = GeminiResponseBody {
-            candidates: vec![GeminiResponseCandidate {
-                content: GeminiResponseContent {
-                    parts: vec![GeminiPart::Text {
-                        text: "Hello from Gemini!".into(),
-                        thought: None,
-                        thought_signature: None,
-                    }],
-                },
-                finish_reason: "STOP".into(),
-            }],
-            usage_metadata: GeminiUsageMetadata {
-                prompt_token_count: 7,
-                candidates_token_count: 11,
-                total_token_count: 18,
-                thoughts_token_count: Some(0),
-                prompt_tokens_details: None,
-                cached_content_token_count: None,
-                tool_use_prompt_token_count: None,
-            },
-        };
+        let mock_response: GeminiResponseBody = serde_json::from_value(serde_json::json!({
+            "status": "completed",
+            "steps": [{"type": "model_output", "content": [{"type": "text", "text": "Hello from Gemini!"}]}],
+            "usage": {"total_input_tokens": 7, "total_output_tokens": 11, "total_tokens": 18}
+        }))
+        .unwrap();
 
         let mock_http = MockHttpClient::new(mock_response);
         let client = GeminiClient {
@@ -869,30 +680,26 @@ mod tests {
         test_ok!(res);
     }
 
-    const MALFORMED_RESPONSE: &str = r#"{
-        "candidates": [{
-            "content": {},
-            "finishReason": "MALFORMED_RESPONSE",
-            "index": 0
-        }],
-        "usageMetadata": {
-            "promptTokenCount": 121,
-            "totalTokenCount": 224,
-            "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 121}],
-            "thoughtsTokenCount": 103,
-            "serviceTier": "standard"
-        },
-        "modelVersion": "gemini-3.1-pro-preview",
-        "responseId": "_c6haqHRAvSc6dkPiuLhuQ4"
+    const FAILED_RESPONSE: &str = r#"{
+        "id": "v1_failed",
+        "model": "gemini-3.1-pro-preview",
+        "object": "interaction",
+        "status": "failed",
+        "steps": [],
+        "usage": {
+            "input_tokens_by_modality": [{"modality": "text", "tokens": 121}],
+            "total_input_tokens": 121,
+            "total_thought_tokens": 103,
+            "total_tokens": 224
+        }
     }"#;
 
     #[tokio::test(start_paused = true)]
     async fn test_generation_retry_exhaustion() {
         dotenv().ok();
 
-        for finish_reason in ["MALFORMED_RESPONSE", "MALFORMED_FUNCTION_CALL"] {
-            let mut response: serde_json::Value = serde_json::from_str(MALFORMED_RESPONSE).unwrap();
-            response["candidates"][0]["finishReason"] = finish_reason.into();
+        {
+            let response: serde_json::Value = serde_json::from_str(FAILED_RESPONSE).unwrap();
             let max_retries = 1;
             let http_client = RecordingSequentialMockHttpClient::new(std::iter::repeat_n(
                 response,
@@ -911,7 +718,7 @@ mod tests {
             assert!(matches!(
                 result,
                 Err(LLMError::GenerationError { provider: "Gemini", finish_reason: reason })
-                    if reason == finish_reason
+                    if reason == "failed"
             ));
             let requests = http_client.requests();
             test_eq!(requests.len(), max_retries + 1);
@@ -941,13 +748,21 @@ mod tests {
     async fn test_empty_generation_is_not_success_or_retried() {
         dotenv().ok();
 
-        for finish_reason in ["SAFETY", "STOP", "MAX_TOKENS"] {
-            let mut response: serde_json::Value = serde_json::from_str(MALFORMED_RESPONSE).unwrap();
-            response["candidates"][0]["finishReason"] = finish_reason.into();
-            response["candidates"][0]
-                .as_object_mut()
-                .unwrap()
-                .remove("content");
+        for (finish_reason, steps) in [
+            ("cancelled", None),
+            ("completed", None),
+            ("incomplete", None),
+            (
+                "completed",
+                Some(serde_json::json!([{"type": "model_output", "content": []}])),
+            ),
+        ] {
+            let mut response: serde_json::Value = serde_json::from_str(FAILED_RESPONSE).unwrap();
+            response["status"] = finish_reason.into();
+            match steps {
+                Some(steps) => response["steps"] = steps,
+                None => _ = response.as_object_mut().unwrap().remove("steps"),
+            }
             let http_client = RecordingSequentialMockHttpClient::new([response]);
             let client = GeminiClient {
                 client: http_client.clone(),
@@ -970,27 +785,17 @@ mod tests {
         dotenv().ok();
 
         let tool_call_response = serde_json::json!({
-            "candidates": [{
-                "content": {"role": "model", "parts": [{
-                    "functionCall": {
-                        "id": "call-1", "name": "mock_tool", "args": {"name": "Alice"}
-                    },
-                    "thoughtSignature": "test-signature"
-                }]},
-                "finishReason": "STOP"
-            }],
-            "usageMetadata": {
-                "promptTokenCount": 10, "candidatesTokenCount": 5, "totalTokenCount": 15
-            }
+            "status": "requires_action",
+            "steps": [
+                {"type": "thought", "signature": "test-signature"},
+                {"type": "function_call", "id": "call_1", "name": "mock_tool", "arguments": {"name": "Alice"}}
+            ],
+            "usage": {"total_input_tokens": 10, "total_output_tokens": 5, "total_tokens": 15}
         });
         let text_response = serde_json::json!({
-            "candidates": [{
-                "content": {"role": "model", "parts": [{"text": "Done!"}]},
-                "finishReason": "STOP"
-            }],
-            "usageMetadata": {
-                "promptTokenCount": 20, "candidatesTokenCount": 8, "totalTokenCount": 28
-            }
+            "status": "completed",
+            "steps": [{"type": "model_output", "content": [{"type": "text", "text": "Done!"}]}],
+            "usage": {"total_input_tokens": 20, "total_output_tokens": 8, "total_tokens": 28}
         });
 
         let call_count = Arc::new(Mutex::new(0_usize));
@@ -1017,15 +822,15 @@ mod tests {
                 text_segments_cb.lock().unwrap().push(s.to_string());
             })),
             on_reasoning: None,
-            tool_iteration_limit: None,
+            // The second turn is the last, which forbids tool calls.
+            tool_iteration_limit: Some(2),
         };
 
-        let malformed_response: serde_json::Value =
-            serde_json::from_str(MALFORMED_RESPONSE).unwrap();
+        let failed_response: serde_json::Value = serde_json::from_str(FAILED_RESPONSE).unwrap();
         let http_client = RecordingSequentialMockHttpClient::new([
-            malformed_response.clone(),
+            failed_response.clone(),
             tool_call_response,
-            malformed_response,
+            failed_response,
             text_response,
         ]);
         let mock_client = GeminiClient {
@@ -1044,9 +849,26 @@ mod tests {
         test_eq!(requests.len(), 4);
         test_eq!(&requests[0], &requests[1]);
         test_eq!(&requests[2], &requests[3]);
+        assert!(
+            requests[0]["generation_config"]
+                .get("tool_choice")
+                .is_none()
+        );
+        test_eq!(requests[2]["generation_config"]["tool_choice"], "none");
         test_eq!(
-            &requests[2]["contents"][1]["parts"][0]["thoughtSignature"],
-            "test-signature"
+            &requests[2]["input"],
+            &serde_json::json!([
+                {"type": "user_input", "content": [{"type": "text", "text": "Test"}]},
+                {"type": "thought", "signature": "test-signature"},
+                {
+                    "type": "function_call",
+                    "id": "call_1", "name": "mock_tool", "arguments": {"name": "Alice"}
+                },
+                {
+                    "type": "function_result",
+                    "call_id": "call_1", "name": "mock_tool", "result": {"result": "Hello, Alice!"}
+                }
+            ])
         );
 
         test_eq!(*tool_call_count.lock().unwrap(), 1_usize);
@@ -1055,9 +877,13 @@ mod tests {
         test_eq!(texts[0].as_str(), "Done!");
         for request in http_client.requests() {
             test_eq!(
-                request["systemInstruction"]["parts"][0]["text"],
+                request["system_instruction"],
                 "Follow the system instructions."
             );
+            test_eq!(request["store"], false);
+            test_eq!(request["tools"][0]["type"], "function");
+            test_eq!(request["tools"][0]["name"], "mock_tool");
+            test_eq!(request["tools"][0]["parameters"]["type"], "object");
         }
     }
 

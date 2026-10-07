@@ -129,9 +129,7 @@ pub struct GeminiConfig {
     pub embedding_model: String,
     /// Embedding dimensions
     pub embedding_dims: usize,
-    /// Token budget for Gemini 2.5 thinking. `None` disables configured thinking.
-    pub reasoning_budget: Option<u32>,
-    /// Reasoning effort for Gemini 3 thinking levels. `None` uses the model default.
+    /// Reasoning effort, mapped to a Gemini thinking level. `None` uses the model default.
     pub reasoning_effort: Option<String>,
     /// Maximum number of retries for a request that fails in a retryable way
     pub max_retries: usize,
@@ -146,7 +144,6 @@ impl Default for GeminiConfig {
             model: DEFAULT_GEMINI_MODEL.into(),
             embedding_model: DEFAULT_GEMINI_EMBEDDING_MODEL.into(),
             embedding_dims: DEFAULT_GEMINI_EMBEDDING_DIM as usize,
-            reasoning_budget: None,
             reasoning_effort: None,
             max_retries: DEFAULT_MAX_RETRIES,
             max_concurrent_requests: DEFAULT_MAX_CONCURRENT_REQUESTS,
