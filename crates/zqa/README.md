@@ -51,6 +51,7 @@ reranker_provider = "voyageai"  # Omit this to disable reranking
 max_concurrent_requests = 5  # Max concurrent embedding requests
 max_retries = 3  # Max retries when network requests fail
 tool_iteration_limit = 15  # Max tool call-processing iterations per user message
+currency = "USD"  # ISO 4217 code used to display cost estimates
 
 # `log_level` is a CLI-only arg so it isn't applied inadvertently.
 

@@ -57,7 +57,10 @@ are rejected with an error listing the accepted levels.
 `max_retries` controls retries after network failures.
 `tool_iteration_limit` bounds how many tool-call round trips a single user
 message may trigger before the model is forced to answer without tools
-(default 15). `LANCEDB_URI` overrides
+(default 15). `currency` sets the ISO 4217 code that session cost estimates
+are shown in (default `USD`); costs are converted with the latest European
+Central Bank reference rate and fall back to USD for currencies the ECB does
+not publish or when the rate cannot be fetched. `LANCEDB_URI` overrides
 the database location. When it is unset, the CLI places the database under its
 state directory before initializing the vector store.
 

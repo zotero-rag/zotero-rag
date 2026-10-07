@@ -29,6 +29,7 @@ async fn test_integration_works() {
         max_concurrent_requests: DEFAULT_MAX_CONCURRENT_REQUESTS,
         max_retries: DEFAULT_MAX_RETRIES,
         tool_iteration_limit: DEFAULT_MAX_TOOL_ITERATIONS,
+        currency: "USD".into(),
         gemini: None,
         ollama: None,
         openai: None,

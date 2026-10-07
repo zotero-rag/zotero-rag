@@ -32,6 +32,7 @@ use zqa_rag::reranking::common::RerankProviderConfig;
 /// max_concurrent_requests = 5  # Max concurrent embedding requests
 /// max_retries = 3  # Max retries when network requests fail
 /// tool_iteration_limit = 15  # Max tool call-processing iterations per user message
+/// currency = "USD"  # ISO 4217 code used to display cost estimates
 ///
 /// # `log_level` is a CLI-only arg so it isn't applied inadvertently.
 ///
@@ -114,6 +115,11 @@ pub struct Config {
     /// Maximum number of tool call-processing iterations per user message
     #[serde(default = "default_max_tool_iterations")]
     pub tool_iteration_limit: usize,
+
+    /// ISO 4217 code of the currency that cost estimates are shown in. Costs are converted from
+    /// USD with the latest ECB reference rate, falling back to USD if no rate is available.
+    #[serde(default = "default_currency")]
+    pub currency: String,
 
     /// Anthropic-specific configuration
     #[serde(default)]
@@ -750,6 +756,10 @@ fn default_max_tool_iterations() -> usize {
     DEFAULT_MAX_TOOL_ITERATIONS
 }
 
+fn default_currency() -> String {
+    String::from("USD")
+}
+
 fn default_max_retries() -> usize {
     DEFAULT_MAX_RETRIES
 }
@@ -809,6 +819,7 @@ impl Default for Config {
             max_concurrent_requests: default_max_concurrent_requests(),
             max_retries: default_max_retries(),
             tool_iteration_limit: default_max_tool_iterations(),
+            currency: default_currency(),
             anthropic: Some(AnthropicConfig::default()),
             ollama: Some(OllamaConfig::default()),
             openai: Some(OpenAIConfig::default()),
