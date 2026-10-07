@@ -51,6 +51,9 @@ pub(crate) struct State {
     pub(crate) title: Arc<Mutex<Option<String>>>,
     /// The current conversation's usage
     pub(crate) usage: UsageMetadata,
+    /// USD exchange rate for `Config::currency`, fetched on first use. `None` if no rate was
+    /// available, in which case costs are shown in USD.
+    pub(crate) exchange_rate: tokio::sync::OnceCell<Option<f64>>,
     /// Extracted content for imported documents
     pub(crate) imports: Arc<RwLock<HashMap<String, Arc<UserDocument>>>>,
 }

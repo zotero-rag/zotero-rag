@@ -17,12 +17,19 @@ use std::ops::{Add, AddAssign};
 use std::path::PathBuf;
 use std::time::Duration;
 
+use reqwest::header::HeaderMap;
 use serde::{Deserialize, Serialize};
 use tempfile::NamedTempFile;
 use tokio::sync::OnceCell;
 
+use crate::http_client::{HttpClient, ReqwestClient};
+
 const LITELLM_PRICING_URL: &str =
     "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json";
+const FRANKFURTER_URL: &str = "https://api.frankfurter.dev/v1/latest";
+
+/// How long [`get_usd_exchange_rate`] waits for the Frankfurter API before giving up.
+const EXCHANGE_RATE_TIMEOUT: Duration = Duration::from_secs(5);
 
 static PRICING_CACHE: OnceCell<serde_json::Value> = OnceCell::const_new();
 
@@ -282,6 +289,82 @@ pub async fn get_model_pricing(
     })
 }
 
+/// Look up how many units of `currency` one U.S. dollar buys, so that USD costs from
+/// [`ModelPricing::estimate_cost`] can be shown in a local currency. Rates are the daily reference
+/// rates published by the European Central Bank, served by the [Frankfurter
+/// API](https://frankfurter.dev), so only the currencies the ECB tracks are supported. The lookup
+/// gives up after five seconds, since it only affects how costs are displayed.
+///
+/// # Arguments
+///
+/// * `currency` - An ISO 4217 currency code, such as `"EUR"` or `"INR"`. Case-insensitive.
+///
+/// # Returns
+///
+/// `Some(1.0)` for `"USD"` without a network request, `Some(rate)` for other supported
+/// currencies, or `None` if the currency is unsupported or the rate could not be fetched.
+pub async fn get_usd_exchange_rate(currency: &str) -> Option<f64> {
+    fetch_usd_exchange_rate(&ReqwestClient::default(), currency).await
+}
+
+/// Implementation of [`get_usd_exchange_rate`] over any [`HttpClient`], so tests can mock the
+/// Frankfurter response.
+///
+/// # Arguments
+///
+/// * `client` - The HTTP client used to call the Frankfurter API.
+/// * `currency` - An ISO 4217 currency code. Case-insensitive.
+///
+/// # Returns
+///
+/// The same value as [`get_usd_exchange_rate`].
+pub(crate) async fn fetch_usd_exchange_rate<C: HttpClient>(
+    client: &C,
+    currency: &str,
+) -> Option<f64> {
+    let currency = currency.to_ascii_uppercase();
+    if currency == "USD" {
+        return Some(1.0);
+    }
+
+    // Currency codes are three letters, so this also keeps the code safe to put in the URL.
+    if currency.len() != 3 || !currency.bytes().all(|b| b.is_ascii_uppercase()) {
+        log::warn!("{currency} is not a valid ISO 4217 currency code; showing costs in USD");
+        return None;
+    }
+
+    let url = format!("{FRANKFURTER_URL}?base=USD&symbols={currency}");
+    let request = async {
+        client
+            .get_json(&url, HeaderMap::new())
+            .await?
+            .error_for_status()?
+            .json::<serde_json::Value>()
+            .await
+    };
+    let json = match tokio::time::timeout(EXCHANGE_RATE_TIMEOUT, request).await {
+        Ok(Ok(json)) => json,
+        Ok(Err(e)) => {
+            log::warn!("Failed to fetch the USD to {currency} exchange rate: {e}");
+            return None;
+        }
+        Err(_) => {
+            log::warn!("Timed out fetching the USD to {currency} exchange rate");
+            return None;
+        }
+    };
+
+    let rate = json
+        .get("rates")
+        .and_then(|rates| rates.get(&currency))
+        .and_then(serde_json::Value::as_f64);
+    if rate.is_none() {
+        log::warn!("No USD to {currency} exchange rate is available; showing costs in USD");
+    }
+
+    rate
+}
+
 #[cfg(test)]
 mod tests {
     use std::io::Write;
@@ -289,6 +372,7 @@ mod tests {
     use tempfile::NamedTempFile;
 
     use super::*;
+    use crate::http_client::SequentialMockHttpClient;
 
     #[test]
     fn test_estimate_cost_basic() {
@@ -524,6 +608,22 @@ mod tests {
         let result = get_model_pricing("openai", "foobar", Some(opts)).await;
 
         assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_fetch_usd_exchange_rate() {
+        let client = SequentialMockHttpClient::from_status_bodies([
+            (200, r#"{"base":"USD","rates":{"EUR":0.9}}"#.to_string()),
+            (200, r#"{"base":"USD","rates":{}}"#.to_string()),
+            (404, r#"{"message":"not found"}"#.to_string()),
+        ]);
+
+        // USD and invalid codes never reach the client, so they don't consume mock responses.
+        assert_eq!(get_usd_exchange_rate("usd").await, Some(1.0));
+        assert_eq!(fetch_usd_exchange_rate(&client, "EUR&x=1").await, None);
+        assert_eq!(fetch_usd_exchange_rate(&client, "eur").await, Some(0.9));
+        assert_eq!(fetch_usd_exchange_rate(&client, "XYZ").await, None);
+        assert_eq!(fetch_usd_exchange_rate(&client, "XYZ").await, None);
     }
 
     #[tokio::test]

@@ -10,7 +10,7 @@ use tokio::sync::mpsc;
 use zqa_rag::llm::base::{ChatHistoryContent, ChatHistoryItem, ChatRequest, MessageRole};
 use zqa_rag::llm::factory::get_client_with_config;
 use zqa_rag::llm::tools::{CallbackFn, Tool};
-use zqa_rag::pricing::{ModelUsage, get_model_pricing};
+use zqa_rag::pricing::{ModelUsage, get_model_pricing, get_usd_exchange_rate};
 use zqa_rag::providers::registry::provider_registry;
 
 use crate::cli::errors::CLIError;
@@ -450,9 +450,19 @@ where
 
     let cost = f64::from(ctx.state.usage.estimated_cost) / 100.0;
     if cost > 0.0 {
+        let rate = *ctx
+            .state
+            .exchange_rate
+            .get_or_init(|| get_usd_exchange_rate(&ctx.config.currency))
+            .await;
+        let (cost, currency) = match rate {
+            Some(rate) => (cost * rate, ctx.config.currency.to_ascii_uppercase()),
+            None => (cost, String::from("USD")),
+        };
+
         writeln!(
             &mut ctx.out,
-            "\t{DIM_TEXT}Session cost: ${cost:.4} ({}){RESET}",
+            "\t{DIM_TEXT}Session cost: {cost:.4} {currency} ({}){RESET}",
             ctx.config.get_generation_model_name().unwrap_or_default()
         )?;
     }
