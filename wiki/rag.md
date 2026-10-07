@@ -45,12 +45,14 @@ mapping, so providers can consume either representation. Providers adapt
 that neutral form to their native API: Anthropic maps effort onto the
 output-level `effort` parameter of its adaptive-thinking models (Claude Opus
 4.6+ and Claude 5), OpenAI always requests a reasoning summary (defaulting
-to `auto`), and Gemini preserves model `thought` content when replaying
-history. Reasoning text returned by providers surfaces as a dedicated
-`ContentType::Reasoning` response variant, distinct from regular text, so
-consumers can render or ignore it separately: Anthropic reports non-empty
-thinking-block text (redacted thinking is dropped), and OpenRouter reports
-the `reasoning` field of each choice. OpenRouter also captures the opaque
+to `auto`), and Gemini maps effort onto the Interactions API's
+`thinking_level` (it has no token budget) and replays `thought` steps, with
+their signatures, when replaying history. Reasoning text returned by
+providers surfaces as a dedicated `ContentType::Reasoning` response
+variant, distinct from regular text, so consumers can render or ignore it
+separately: Anthropic reports non-empty thinking-block text (redacted
+thinking is dropped), and OpenRouter reports the `reasoning` field of each
+choice. OpenRouter also captures the opaque
 `reasoning_details` attached to a response and replays them unchanged on the
 next request, so reasoning models that require reasoning continuity (for
 example, Anthropic models routed through OpenRouter) can keep thinking

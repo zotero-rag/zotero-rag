@@ -140,7 +140,7 @@ model_small = "gemini-3-flash-preview"
 api_key = "AI..."
 embedding_model = "gemini-embedding-001"
 embedding_dims = 3072
-reasoning_budget = 2048
+reasoning_effort = "high"
 
 [voyageai]
 reranker = "rerank-2.5"

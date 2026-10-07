@@ -1055,7 +1055,6 @@ mod tests {
                 model: String::new(),
                 embedding_model: DEFAULT_GEMINI_EMBEDDING_MODEL.to_string(),
                 embedding_dims: DEFAULT_GEMINI_EMBEDDING_DIM as usize,
-                reasoning_budget: None,
                 reasoning_effort: None,
                 max_retries: DEFAULT_MAX_RETRIES,
                 max_concurrent_requests: zqa_rag::constants::DEFAULT_MAX_CONCURRENT_REQUESTS,

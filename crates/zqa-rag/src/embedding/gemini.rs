@@ -15,7 +15,6 @@ use crate::constants::{
 };
 use crate::http_client::HttpClient;
 use crate::llm::errors::LLMError;
-use crate::llm::gemini::GeminiPart;
 use crate::requests::request_with_backoff;
 
 impl<T> GeminiClient<T>
@@ -187,11 +186,17 @@ async fn call_gemini_embedding_api(
     Ok(values)
 }
 
+/// A text part of an embedding API request
+#[derive(Serialize, Deserialize)]
+struct GeminiEmbeddingRequestPart {
+    text: String,
+}
+
 /// Content for an embedding API request
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct GeminiEmbeddingRequestContent {
-    parts: Vec<GeminiPart>,
+    parts: Vec<GeminiEmbeddingRequestPart>,
 }
 
 /// A request to embed texts using the Gemini API
@@ -226,11 +231,7 @@ impl GeminiEmbeddingRequest {
         Self {
             model,
             content: GeminiEmbeddingRequestContent {
-                parts: vec![GeminiPart::Text {
-                    text,
-                    thought: None,
-                    thought_signature: None,
-                }],
+                parts: vec![GeminiEmbeddingRequestPart { text }],
             },
             dimensions,
         }

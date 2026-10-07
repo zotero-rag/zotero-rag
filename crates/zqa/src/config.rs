@@ -613,10 +613,7 @@ pub struct GeminiConfig {
     /// Embedding dimensions
     pub embedding_dims: Option<usize>,
 
-    /// Token budget for Gemini 2.5 thinking. Omit to disable configured thinking.
-    pub reasoning_budget: Option<u32>,
-
-    /// Reasoning effort for Gemini 3 thinking levels. Omit to use the model default.
+    /// Reasoning effort, mapped to a Gemini thinking level. Omit to use the model default.
     pub reasoning_effort: Option<ReasoningEffort>,
 }
 
@@ -628,7 +625,6 @@ impl Default for GeminiConfig {
             embedding_model: Some(DEFAULT_GEMINI_EMBEDDING_MODEL.into()),
             embedding_dims: Some(DEFAULT_GEMINI_EMBEDDING_DIM as usize),
             api_key: None,
-            reasoning_budget: None,
             reasoning_effort: None,
         }
     }
@@ -957,7 +953,6 @@ impl GeminiConfig {
             embedding_dims: self
                 .embedding_dims
                 .unwrap_or(DEFAULT_GEMINI_EMBEDDING_DIM as usize),
-            reasoning_budget: self.reasoning_budget,
             reasoning_effort: self.reasoning_effort.map(|effort| effort.to_string()),
             max_retries: app_config.max_retries,
             max_concurrent_requests: app_config.max_concurrent_requests,
