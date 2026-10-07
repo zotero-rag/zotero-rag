@@ -13,6 +13,7 @@ use super::errors::LLMError;
 use crate::clients::openrouter::OpenRouterClient;
 use crate::constants::{DEFAULT_MAX_RETRIES, DEFAULT_OPENROUTER_MAX_TOKENS};
 use crate::http_client::HttpClient;
+use crate::llm::anthropic::AnthropicCacheControl;
 use crate::llm::base::{
     AgenticClient, ChatHistoryContent, MessageRole, ProviderTurn, ReasoningConfig, ToolCallRequest,
     send_generation_request,
@@ -109,6 +110,10 @@ struct OpenRouterRequest<'a> {
     tools: Option<Vec<OpenRouterTool<'a>>>,
     /// Maximum output tokens
     max_tokens: u32,
+    /// Automatic prompt caching, sent only for Anthropic models. Most other providers cache
+    /// automatically without it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cache_control: Option<AnthropicCacheControl>,
 }
 
 /// Convert ChatHistoryItem to OpenRouterMessage
@@ -425,6 +430,10 @@ impl<T: HttpClient> AgenticClient for OpenRouterClient<T> {
             reasoning: reasoning.map(Into::into),
             tools: wrapped_tools,
             max_tokens: max_tokens.unwrap_or(config_max_tokens),
+            // NOTE: Maintainers should keep this condition in sync with `AnthropicClient::send_once`.
+            cache_control: (model.starts_with("anthropic/")
+                && (tools.is_some() || history.len() > 1))
+                .then_some(AnthropicCacheControl::Ephemeral),
         };
 
         let mut headers = HeaderMap::new();
@@ -924,6 +933,7 @@ mod tests {
 
         let requests = http_client.requests();
         test_eq!(requests.len(), 2);
+        assert!(requests[0].get("cache_control").is_none());
         let messages = requests[1]["messages"].as_array().unwrap();
         let assistant = messages
             .iter()
@@ -960,5 +970,68 @@ mod tests {
 
         let response = client.send_message(&second_message).await;
         test_ok!(response);
+    }
+
+    #[tokio::test]
+    async fn test_prompt_caching_works_for_anthropic_models() {
+        dotenv().ok();
+
+        // The prefix must exceed the model's minimum cacheable length (up to 4096 tokens).
+        let system_prompt = (0..1000)
+            .map(|i| format!("Fact {i}: the number {i} squared is {}.", i * i))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let client = OpenRouterClient {
+            client: ReqwestClient::default(),
+            config: Some(crate::config::OpenRouterConfig {
+                api_key: std::env::var("OPENROUTER_API_KEY").unwrap(),
+                model: "anthropic/claude-haiku-4.5".into(),
+                ..Default::default()
+            }),
+        };
+        // Requests without tools or history are not cached, so start mid-conversation.
+        let opening_history = vec![
+            ChatHistoryItem {
+                role: MessageRole::User,
+                content: vec![ChatHistoryContent::Text("What is 11 squared?".into())],
+            },
+            ChatHistoryItem {
+                role: MessageRole::Assistant,
+                content: vec![ChatHistoryContent::Text("121".into())],
+            },
+        ];
+        let first_message = ChatRequest {
+            chat_history: opening_history.clone(),
+            message: "What is 12 squared? Answer with only the number.".into(),
+            system_prompt: Some(system_prompt.clone()),
+            max_tokens: Some(1024),
+            ..ChatRequest::default()
+        };
+
+        let response = client.send_message(&first_message).await;
+        test_ok!(response);
+
+        // A rerun within the TTL reads the entry instead of writing it.
+        let response = response.unwrap();
+        assert!(response.usage.input_cache_written + response.usage.input_cache_read > 0);
+
+        let mut chat_history = opening_history;
+        chat_history.push(ChatHistoryItem {
+            role: MessageRole::User,
+            content: vec![ChatHistoryContent::Text(first_message.message.clone())],
+        });
+        chat_history.extend(response.history_additions);
+
+        let second_message = ChatRequest {
+            chat_history,
+            message: "What is 13 squared? Answer with only the number.".into(),
+            system_prompt: Some(system_prompt),
+            max_tokens: Some(1024),
+            ..ChatRequest::default()
+        };
+
+        let response = client.send_message(&second_message).await;
+        test_ok!(response);
+        assert!(response.unwrap().usage.input_cache_read > 0);
     }
 }
