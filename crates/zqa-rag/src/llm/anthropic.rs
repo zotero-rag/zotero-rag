@@ -202,6 +202,16 @@ pub(crate) fn make_thinking_config(
     }
 }
 
+/// Prompt caching configuration. Sent at the top level of a request, this enables automatic
+/// caching: the API places the cache breakpoint on the last cacheable block, so each turn of a
+/// conversation reads the prefix cached by the previous one.
+#[derive(Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub(crate) enum AnthropicCacheControl {
+    /// A cache entry with the default 5-minute TTL.
+    Ephemeral,
+}
+
 /// Represents a request to the Anthropic API
 #[derive(Serialize)]
 pub(crate) struct AnthropicRequest<'a> {
@@ -223,6 +233,9 @@ pub(crate) struct AnthropicRequest<'a> {
     /// The tools passed in
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) tools: Option<&'a [SerializedTool<'a>]>,
+    /// Automatic prompt caching configuration
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) cache_control: Option<AnthropicCacheControl>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -483,6 +496,11 @@ impl<T: HttpClient> AgenticClient for AnthropicClient<T> {
             thinking,
             output_config,
             tools,
+            // Only a tool loop or an ongoing conversation sends this prefix again; caching a
+            // one-shot request (e.g., summarization) would bill a cache write that is never read.
+            // NOTE: Maintainers should keep this condition in sync with `OpenRouterClient::send_once`.
+            cache_control: (tools.is_some() || history.len() > 1)
+                .then_some(AnthropicCacheControl::Ephemeral),
         };
 
         let mut headers = HeaderMap::new();
@@ -525,7 +543,7 @@ mod tests {
     };
     use crate::config::AnthropicConfig;
     use crate::constants::DEFAULT_MAX_RETRIES;
-    use crate::http_client::{MockHttpClient, RecordingSequentialMockHttpClient, ReqwestClient};
+    use crate::http_client::{RecordingSequentialMockHttpClient, ReqwestClient};
     use crate::llm::anthropic::{
         AnthropicOutputTokensDetails, AnthropicTextResponseContent, DEFAULT_CLAUDE_MODEL,
     };
@@ -760,9 +778,9 @@ mod tests {
             )],
         };
 
-        let mock_http_client = MockHttpClient::new(mock_response);
+        let mock_http_client = RecordingSequentialMockHttpClient::new([mock_response]);
         let mock_client = AnthropicClient {
-            client: mock_http_client,
+            client: mock_http_client.clone(),
             config: None,
         };
 
@@ -786,6 +804,13 @@ mod tests {
         let res = res.unwrap();
         test_eq!(res.usage.input_tokens, 9);
         test_eq!(res.usage.output_tokens, 13);
+
+        // A one-shot request is never resent, so it is not cached.
+        assert!(
+            mock_http_client.requests()[0]
+                .get("cache_control")
+                .is_none()
+        );
 
         let content = &res.content[0];
         if let ContentType::Text(text) = content {
@@ -916,6 +941,7 @@ mod tests {
         test_eq!(texts[0].as_str(), "Done!");
         for request in http_client.requests() {
             test_eq!(request["system"], "Follow the system instructions.");
+            test_eq!(request["cache_control"]["type"], "ephemeral");
         }
     }
 
@@ -1086,5 +1112,61 @@ mod tests {
 
         let response = client.send_message(&second_message).await;
         test_ok!(response);
+    }
+
+    #[tokio::test]
+    async fn test_prompt_caching_works() {
+        dotenv().ok();
+
+        // The prefix must exceed the model's minimum cacheable length (up to 4096 tokens).
+        let system_prompt = (0..1000)
+            .map(|i| format!("Fact {i}: the number {i} squared is {}.", i * i))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let client = AnthropicClient::<ReqwestClient>::default();
+        // Requests without tools or history are not cached, so start mid-conversation.
+        let opening_history = vec![
+            ChatHistoryItem {
+                role: MessageRole::User,
+                content: vec![ChatHistoryContent::Text("What is 11 squared?".into())],
+            },
+            ChatHistoryItem {
+                role: MessageRole::Assistant,
+                content: vec![ChatHistoryContent::Text("121".into())],
+            },
+        ];
+        let first_message = ChatRequest {
+            chat_history: opening_history.clone(),
+            message: "What is 12 squared? Answer with only the number.".into(),
+            system_prompt: Some(system_prompt.clone()),
+            max_tokens: Some(1024),
+            ..ChatRequest::default()
+        };
+
+        let response = client.send_message(&first_message).await;
+        test_ok!(response);
+
+        // A rerun within the TTL reads the entry instead of writing it.
+        let response = response.unwrap();
+        assert!(response.usage.input_cache_written + response.usage.input_cache_read > 0);
+
+        let mut chat_history = opening_history;
+        chat_history.push(ChatHistoryItem {
+            role: MessageRole::User,
+            content: vec![ChatHistoryContent::Text(first_message.message.clone())],
+        });
+        chat_history.extend(response.history_additions);
+
+        let second_message = ChatRequest {
+            chat_history,
+            message: "What is 13 squared? Answer with only the number.".into(),
+            system_prompt: Some(system_prompt),
+            max_tokens: Some(1024),
+            ..ChatRequest::default()
+        };
+
+        let response = client.send_message(&second_message).await;
+        test_ok!(response);
+        assert!(response.unwrap().usage.input_cache_read > 0);
     }
 }

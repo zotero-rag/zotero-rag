@@ -86,6 +86,7 @@ impl<T: HttpClient> AgenticClient for OllamaClient<T> {
             }),
             output_config: None,
             tools,
+            cache_control: None,
         };
 
         let mut headers = HeaderMap::new();
