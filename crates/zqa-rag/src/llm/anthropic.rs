@@ -212,6 +212,16 @@ pub(crate) enum AnthropicCacheControl {
     Ephemeral,
 }
 
+/// How the model may use the tools in a request.
+#[derive(Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub(crate) enum AnthropicToolChoice {
+    /// The model may not call any tools. Unlike omitting `tools`, this keeps earlier thinking
+    /// blocks valid and preserves the tools and system prompt cache (cached messages are still
+    /// rewritten).
+    None,
+}
+
 /// Represents a request to the Anthropic API
 #[derive(Serialize)]
 pub(crate) struct AnthropicRequest<'a> {
@@ -233,6 +243,9 @@ pub(crate) struct AnthropicRequest<'a> {
     /// The tools passed in
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) tools: Option<&'a [SerializedTool<'a>]>,
+    /// Restricts tool use; `None` lets the model decide
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) tool_choice: Option<AnthropicToolChoice>,
     /// Automatic prompt caching configuration
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) cache_control: Option<AnthropicCacheControl>,
@@ -466,6 +479,7 @@ impl<T: HttpClient> AgenticClient for AnthropicClient<T> {
         history: &[Self::HistoryItem],
         system_prompt: Option<&str>,
         tools: Option<&[SerializedTool<'_>]>,
+        allow_tool_calls: bool,
         reasoning: Option<&ReasoningConfig>,
         max_tokens: Option<u32>,
     ) -> Result<super::base::ProviderTurn<Self::HistoryItem>, LLMError> {
@@ -496,6 +510,8 @@ impl<T: HttpClient> AgenticClient for AnthropicClient<T> {
             thinking,
             output_config,
             tools,
+            tool_choice: (tools.is_some() && !allow_tool_calls)
+                .then_some(AnthropicToolChoice::None),
             // Only a tool loop or an ongoing conversation sends this prefix again; caching a
             // one-shot request (e.g., summarization) would bill a cache write that is never read.
             // NOTE: Maintainers should keep this condition in sync with `OpenRouterClient::send_once`.
@@ -1037,7 +1053,8 @@ mod tests {
             on_tool_call: None,
             on_text: None,
             on_reasoning: None,
-            tool_iteration_limit: None,
+            // The second request is the last turn, which forbids tool calls.
+            tool_iteration_limit: Some(2),
         };
 
         let response = client.send_message(&request).await;
@@ -1048,6 +1065,12 @@ mod tests {
         assert_eq!(requests.len(), 2);
         assert_thinking_config(&requests[0]);
         assert_thinking_continuation(&requests[1]);
+
+        // Removing `tools` would invalidate the replayed thinking blocks, so the last turn keeps
+        // them and forbids calls through `tool_choice` instead.
+        assert!(requests[0].get("tool_choice").is_none());
+        test_eq!(requests[1]["tools"], requests[0]["tools"]);
+        test_eq!(requests[1]["tool_choice"]["type"], "none");
     }
 
     #[test]
