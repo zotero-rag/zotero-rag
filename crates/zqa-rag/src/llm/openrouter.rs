@@ -108,6 +108,9 @@ struct OpenRouterRequest<'a> {
     /// The tools passed in
     #[serde(skip_serializing_if = "Option::is_none")]
     tools: Option<Vec<OpenRouterTool<'a>>>,
+    /// Set to "none" to forbid tool calls while still sending the tools
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_choice: Option<&'static str>,
     /// Maximum output tokens
     max_tokens: u32,
     /// Automatic prompt caching, sent only for Anthropic models. Most other providers cache
@@ -377,6 +380,7 @@ impl<T: HttpClient> AgenticClient for OpenRouterClient<T> {
         history: &[Self::HistoryItem],
         system_prompt: Option<&str>,
         tools: Option<&[SerializedTool<'_>]>,
+        allow_tool_calls: bool,
         reasoning: Option<&ReasoningConfig>,
         max_tokens: Option<u32>,
     ) -> Result<ProviderTurn<Self::HistoryItem>, LLMError> {
@@ -429,6 +433,7 @@ impl<T: HttpClient> AgenticClient for OpenRouterClient<T> {
             messages: messages.as_ref(),
             reasoning: reasoning.map(Into::into),
             tools: wrapped_tools,
+            tool_choice: (tools.is_some() && !allow_tool_calls).then_some("none"),
             max_tokens: max_tokens.unwrap_or(config_max_tokens),
             // NOTE: Maintainers should keep this condition in sync with `AnthropicClient::send_once`.
             cache_control: (model.starts_with("anthropic/")
@@ -834,6 +839,7 @@ mod tests {
     }
 
     /// Details-only reasoning reaches the callback and is replayed unchanged after tool calls.
+    #[allow(clippy::too_many_lines)]
     #[tokio::test]
     async fn reasoning_details_are_surfaced_and_replayed() {
         let reasoning_details = serde_json::json!([
@@ -906,6 +912,8 @@ mod tests {
             on_reasoning: Some(Arc::new(move |text| {
                 segments.lock().unwrap().push(text.to_string());
             })),
+            // The second request is the last turn, which forbids tool calls.
+            tool_iteration_limit: Some(2),
             ..ChatRequest::default()
         };
 
@@ -934,6 +942,10 @@ mod tests {
         let requests = http_client.requests();
         test_eq!(requests.len(), 2);
         assert!(requests[0].get("cache_control").is_none());
+        assert!(requests[0].get("tool_choice").is_none());
+        test_eq!(requests[1]["tools"], requests[0]["tools"]);
+        test_eq!(requests[1]["tool_choice"], "none");
+
         let messages = requests[1]["messages"].as_array().unwrap();
         let assistant = messages
             .iter()

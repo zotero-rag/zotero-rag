@@ -305,11 +305,18 @@ where
 
     /// Perform one provider request-response round trip and convert the response into native and
     /// provider-agnostic history items.
+    ///
+    /// `tools` is the same on every turn of a tool loop; `allow_tool_calls` is `false` on the last
+    /// turn. Providers that can forbid tool calls (e.g. a `tool_choice` of "none") should keep
+    /// sending `tools` then, since changing them mid-loop invalidates the prompt cache and, on
+    /// Claude, any preserved thinking blocks after the change. Other providers drop the tools.
+    /// When the first turn is also the last (an iteration limit of 1), `tools` is `None`.
     async fn send_once(
         &self,
         history: &[Self::HistoryItem],
         system_prompt: Option<&str>,
         tools: Option<&[SerializedTool<'_>]>,
+        allow_tool_calls: bool,
         reasoning: Option<&ReasoningConfig>,
         max_tokens: Option<u32>,
     ) -> Result<ProviderTurn<Self::HistoryItem>, LLMError>;
@@ -346,26 +353,28 @@ where
             .tool_iteration_limit
             .unwrap_or(DEFAULT_MAX_TOOL_ITERATIONS);
         while round_trips < iteration_limit {
+            // On the last trip, disallow tool calls
             let is_last_turn = round_trips == iteration_limit.saturating_sub(1);
-            let tools_passed = if is_last_turn {
-                // On the last trip, disallow tool calls
-                None
-            } else {
-                tools.as_deref()
-            };
+
+            // Keep sending the tools after an earlier tool round so the request prefix (and any
+            // replayed thinking) stays unchanged; a single turn that cannot call tools omits them.
+            let tools_passed = tools
+                .as_deref()
+                .filter(|_| !is_last_turn || round_trips > 0);
 
             let turn_start = std::time::Instant::now();
             log::debug!(
                 "Generation turn {} of {iteration_limit}: history_items={}, tools_allowed={}",
                 round_trips + 1,
                 provider_history.len(),
-                tools_passed.is_some()
+                tools_passed.is_some() && !is_last_turn
             );
             let turn = self
                 .send_once(
                     &provider_history,
                     request.system_prompt.as_deref(),
                     tools_passed,
+                    !is_last_turn,
                     request.reasoning.as_ref(),
                     request.max_tokens,
                 )
@@ -500,10 +509,13 @@ mod tests {
         }
     }
 
+    /// The number of tools sent on a turn, and whether tool calls were allowed.
+    type ToolsSeen = (Option<usize>, bool);
+
     struct TestClient {
         turns: Mutex<VecDeque<ProviderTurn<TestHistoryItem>>>,
         system_prompts_seen: Arc<Mutex<Vec<Option<String>>>>,
-        tools_seen: Arc<Mutex<Vec<Option<usize>>>>,
+        tools_seen: Arc<Mutex<Vec<ToolsSeen>>>,
     }
 
     impl AgenticClient for TestClient {
@@ -519,6 +531,7 @@ mod tests {
             _: &[Self::HistoryItem],
             system_prompt: Option<&str>,
             tools: Option<&[SerializedTool<'_>]>,
+            allow_tool_calls: bool,
             _: Option<&ReasoningConfig>,
             _: Option<u32>,
         ) -> impl Future<Output = Result<ProviderTurn<Self::HistoryItem>, LLMError>> {
@@ -526,7 +539,10 @@ mod tests {
                 .lock()
                 .unwrap()
                 .push(system_prompt.map(ToOwned::to_owned));
-            self.tools_seen.lock().unwrap().push(tools.map(<[_]>::len));
+            self.tools_seen
+                .lock()
+                .unwrap()
+                .push((tools.map(<[_]>::len), allow_tool_calls));
             ready(Ok(self.turns.lock().unwrap().pop_front().unwrap()))
         }
     }
@@ -658,7 +674,10 @@ mod tests {
 
         let response = client.send_message(&request).await.unwrap();
 
-        assert_eq!(*tools_seen.lock().unwrap(), vec![Some(1), Some(1), None]);
+        assert_eq!(
+            *tools_seen.lock().unwrap(),
+            vec![(Some(1), true), (Some(1), true), (Some(1), false)]
+        );
         assert_eq!(
             *client.system_prompts_seen.lock().unwrap(),
             vec![
@@ -816,7 +835,7 @@ mod tests {
 
         let response = client.send_message(&request).await.unwrap();
 
-        assert_eq!(*tools_seen.lock().unwrap(), vec![None]);
+        assert_eq!(*tools_seen.lock().unwrap(), vec![(None, false)]);
         assert_eq!(response.content.len(), 1);
     }
 

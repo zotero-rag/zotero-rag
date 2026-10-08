@@ -419,6 +419,7 @@ impl<T: HttpClient> AgenticClient for GeminiClient<T> {
         history: &[Self::HistoryItem],
         system_prompt: Option<&str>,
         tools: Option<&[SerializedTool<'_>]>,
+        allow_tool_calls: bool,
         reasoning: Option<&ReasoningConfig>,
         max_tokens: Option<u32>,
     ) -> Result<super::base::ProviderTurn<Self::HistoryItem>, LLMError> {
@@ -436,8 +437,12 @@ impl<T: HttpClient> AgenticClient for GeminiClient<T> {
         headers.insert("x-goog-api-key", key.parse()?);
 
         // Build the initial contents, config, and tools (owned)
-        let (generation_config, tools) =
-            build_gemini_request_data(&model, max_tokens, tools, reasoning);
+        let (generation_config, tools) = build_gemini_request_data(
+            &model,
+            max_tokens,
+            tools.filter(|_| allow_tool_calls),
+            reasoning,
+        );
 
         // Create the initial request borrowing
         let request = GeminiRequestBody {

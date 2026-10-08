@@ -51,6 +51,7 @@ impl<T: HttpClient> AgenticClient for OllamaClient<T> {
         history: &[Self::HistoryItem],
         system_prompt: Option<&str>,
         tools: Option<&[SerializedTool<'_>]>,
+        allow_tool_calls: bool,
         reasoning: Option<&ReasoningConfig>,
         max_tokens: Option<u32>,
     ) -> Result<ProviderTurn<Self::HistoryItem>, LLMError> {
@@ -85,7 +86,9 @@ impl<T: HttpClient> AgenticClient for OllamaClient<T> {
                     .unwrap_or(DEFAULT_ANTHROPIC_REASONING_BUDGET),
             }),
             output_config: None,
-            tools,
+            // Ollama's Anthropic-compatible API may not support `tool_choice`, so drop the tools.
+            tools: tools.filter(|_| allow_tool_calls),
+            tool_choice: None,
             cache_control: None,
         };
 

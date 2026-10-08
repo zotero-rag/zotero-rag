@@ -227,6 +227,10 @@ pub(crate) struct OpenAIRequest<'a> {
     /// The tools passed in
     #[serde(skip_serializing_if = "Option::is_none")]
     tools: Option<&'a [OpenAITool<'a>]>,
+
+    /// Set to "none" to forbid tool calls while still sending the tools
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_choice: Option<&'static str>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Copy)]
@@ -458,6 +462,7 @@ impl<T: HttpClient> AgenticClient for OpenAIClient<T> {
         history: &[Self::HistoryItem],
         system_prompt: Option<&str>,
         tools: Option<&[SerializedTool<'_>]>,
+        allow_tool_calls: bool,
         reasoning: Option<&ReasoningConfig>,
         max_tokens: Option<u32>,
     ) -> Result<ProviderTurn<Self::HistoryItem>, LLMError> {
@@ -487,6 +492,7 @@ impl<T: HttpClient> AgenticClient for OpenAIClient<T> {
             reasoning: reasoning.map(Into::into),
             max_output_tokens: max_tokens.unwrap_or(config_max_tokens),
             tools: wrapped_tools.as_deref(),
+            tool_choice: (tools.is_some() && !allow_tool_calls).then_some("none"),
         };
 
         let mut headers = HeaderMap::new();
@@ -801,6 +807,7 @@ mod tests {
             reasoning: None,
             max_output_tokens: DEFAULT_OPENAI_MAX_TOKENS,
             tools: None,
+            tool_choice: None,
         };
 
         let serialized = serde_json::to_value(request).unwrap();
@@ -896,6 +903,8 @@ mod tests {
                 let text_segments = Arc::clone(&text_segments);
                 move |text| text_segments.lock().unwrap().push(text.to_string())
             })),
+            // The second request is the last turn, which forbids tool calls.
+            tool_iteration_limit: Some(2),
             ..ChatRequest::default()
         };
         let http_client =
@@ -927,6 +936,10 @@ mod tests {
         let requests = http_client.requests();
         test_eq!(requests.len(), 2);
         requests.iter().for_each(assert_request_configuration);
+        assert!(requests[0].get("tool_choice").is_none());
+        test_eq!(requests[1]["tools"], requests[0]["tools"]);
+        test_eq!(requests[1]["tool_choice"], "none");
+
         let second_input = requests[1]["input"].as_array().unwrap();
         let reasoning = input_item(second_input, "reasoning");
         assert_eq!(reasoning["id"].as_str(), Some("rs-1"));
