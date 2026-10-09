@@ -277,8 +277,22 @@ pub struct CompletionApiResponse {
     /// history and user message supplied in [`ChatRequest`].
     #[serde(default)]
     pub history_additions: Vec<ChatHistoryItem>,
-    /// Token usage statistics for the request.
-    pub usage: ModelUsage,
+    /// Token usage of each provider request made while handling this request, in order. Keep these
+    /// separate when estimating costs, since prompt-size pricing tiers apply per provider request;
+    /// see [`crate::pricing::ModelPricing::estimate_cost`]. Use [`Self::total_usage`] for totals.
+    pub usage: Vec<ModelUsage>,
+}
+
+impl CompletionApiResponse {
+    /// Sum the token usage of every provider request made for this response.
+    ///
+    /// # Returns
+    ///
+    /// The total token usage.
+    #[must_use]
+    pub fn total_usage(&self) -> ModelUsage {
+        self.usage.iter().sum()
+    }
 }
 
 /// An abstraction over one model turn.
@@ -287,8 +301,9 @@ pub(crate) struct ProviderTurn<H> {
     pub(crate) native_items: Vec<H>,
     /// Provider-agnostic view of the same output, for tool dispatch and final-text extraction.
     pub(crate) contents: Vec<ChatHistoryContent>,
-    /// Token usage
-    pub(crate) usage: ModelUsage,
+    /// Token usage of each provider request in this turn. Usually one, but retried requests add
+    /// more.
+    pub(crate) usage: Vec<ModelUsage>,
 }
 
 /// Internal contract for provider-specific generation adapters.
@@ -344,7 +359,7 @@ where
     {
         let mut provider_history = self.build_initial_history(request);
         let tools = get_owned_tools(request.tools, Self::SCHEMA_KEY);
-        let mut usage = ModelUsage::default();
+        let mut usage = Vec::new();
         let mut contents = Vec::<ContentType>::new();
         let mut history_additions = Vec::new();
 
@@ -394,7 +409,7 @@ where
                 turn.contents.len(),
                 turn.usage
             );
-            usage += turn.usage;
+            usage.extend(turn.usage);
             provider_history.extend(turn.native_items);
 
             let tool_call_results = process_tool_calls(
@@ -554,7 +569,7 @@ mod tests {
                 .iter()
                 .map(|&(id, name)| tool_call_request(id, name))
                 .collect(),
-            usage,
+            usage: vec![usage],
         }
     }
 
@@ -634,13 +649,13 @@ mod tests {
                 tool_call_request("call-1", "Alice"),
                 tool_call_request("call-2", "Bob"),
             ],
-            usage: ModelUsage {
+            usage: vec![ModelUsage {
                 input_tokens: 10,
                 input_cache_written: 1,
                 input_cache_read: 2,
                 output_tokens: 3,
                 reasoning_tokens: 4,
-            },
+            }],
         };
         let client = TestClient {
             turns: Mutex::new(VecDeque::from([
@@ -649,13 +664,13 @@ mod tests {
                 ProviderTurn {
                     native_items: Vec::new(),
                     contents: vec![ChatHistoryContent::Text("done".into())],
-                    usage: ModelUsage {
+                    usage: vec![ModelUsage {
                         input_tokens: 20,
                         input_cache_written: 5,
                         input_cache_read: 6,
                         output_tokens: 7,
                         reasoning_tokens: 8,
-                    },
+                    }],
                 },
             ])),
             system_prompts_seen: Arc::new(Mutex::new(Vec::new())),
@@ -687,11 +702,13 @@ mod tests {
             ]
         );
         assert_eq!(*call_count.lock().unwrap(), 3);
-        assert_eq!(response.usage.input_tokens, 30);
-        assert_eq!(response.usage.input_cache_written, 6);
-        assert_eq!(response.usage.input_cache_read, 8);
-        assert_eq!(response.usage.output_tokens, 10);
-        assert_eq!(response.usage.reasoning_tokens, 12);
+        assert_eq!(response.usage.len(), 3);
+        let usage = response.total_usage();
+        assert_eq!(usage.input_tokens, 30);
+        assert_eq!(usage.input_cache_written, 6);
+        assert_eq!(usage.input_cache_read, 8);
+        assert_eq!(usage.output_tokens, 10);
+        assert_eq!(usage.reasoning_tokens, 12);
         assert!(matches!(
             response.content.as_slice(),
             [
@@ -720,7 +737,7 @@ mod tests {
                         ChatHistoryContent::Text("Looking it up.".into()),
                         tool_call_request("call-1", "Alice"),
                     ],
-                    usage: ModelUsage::default(),
+                    usage: vec![ModelUsage::default()],
                 },
                 ProviderTurn {
                     native_items: Vec::new(),
@@ -728,7 +745,7 @@ mod tests {
                         ChatHistoryContent::Reasoning("The source agrees.".into()),
                         ChatHistoryContent::Text("Done.".into()),
                     ],
-                    usage: ModelUsage::default(),
+                    usage: vec![ModelUsage::default()],
                 },
             ])),
             system_prompts_seen: Arc::default(),
@@ -778,7 +795,7 @@ mod tests {
             turns: Mutex::new(VecDeque::from([ProviderTurn {
                 native_items: Vec::new(),
                 contents: vec![ChatHistoryContent::Text("done".into())],
-                usage: ModelUsage::default(),
+                usage: vec![ModelUsage::default()],
             }])),
             system_prompts_seen: Arc::default(),
             tools_seen: Arc::default(),
@@ -819,7 +836,7 @@ mod tests {
             turns: Mutex::new(VecDeque::from([ProviderTurn {
                 native_items: Vec::new(),
                 contents: vec![ChatHistoryContent::Text("done".into())],
-                usage: ModelUsage::default(),
+                usage: vec![ModelUsage::default()],
             }])),
             system_prompts_seen: Arc::new(Mutex::new(Vec::new())),
             tools_seen: Arc::clone(&tools_seen),

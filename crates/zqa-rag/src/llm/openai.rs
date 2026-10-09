@@ -511,7 +511,7 @@ impl<T: HttpClient> AgenticClient for OpenAIClient<T> {
         Ok(ProviderTurn {
             native_items: map_response_to_chat_history(&response),
             contents: map_response_to_chat_contents(&response),
-            usage: response.usage.into(),
+            usage: vec![response.usage.into()],
         })
     }
 }
@@ -683,8 +683,8 @@ mod tests {
         } else {
             panic!("Expected Text content type");
         }
-        test_eq!(res.usage.input_tokens, 5);
-        test_eq!(res.usage.output_tokens, 10);
+        test_eq!(res.total_usage().input_tokens, 5);
+        test_eq!(res.total_usage().output_tokens, 10);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
@@ -922,8 +922,8 @@ mod tests {
         let res = mock_client.send_message(&request).await;
         test_ok!(res);
         let res = res.unwrap();
-        test_eq!(res.usage.input_tokens, 30);
-        test_eq!(res.usage.output_tokens, 13);
+        test_eq!(res.total_usage().input_tokens, 30);
+        test_eq!(res.total_usage().output_tokens, 13);
         test_eq!(*call_count.lock().unwrap(), 1_usize);
         test_eq!(*tool_call_count.lock().unwrap(), 1_usize);
         assert_eq!(*text_segments.lock().unwrap(), ["Done!"]);

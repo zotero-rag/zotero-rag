@@ -26,8 +26,8 @@ pub(crate) struct SummarizationTool<T: ZoteroStore> {
     pub(crate) llm_client: LLMClient,
     /// Backend for searching stored Zotero papers.
     pub(crate) store: Arc<T>,
-    /// The tool's token usage
-    pub(crate) usage: Arc<Mutex<ModelUsage>>,
+    /// The token usage of each request the tool made
+    pub(crate) usage: Arc<Mutex<Vec<ModelUsage>>>,
 }
 
 impl<T> SummarizationTool<T>
@@ -35,7 +35,7 @@ where
     T: ZoteroStore,
 {
     /// Create a new [`SummarizationTool`] instance, given an LLM client and a backend.
-    pub fn new(llm_client: LLMClient, store: Arc<T>, usage: Arc<Mutex<ModelUsage>>) -> Self {
+    pub fn new(llm_client: LLMClient, store: Arc<T>, usage: Arc<Mutex<Vec<ModelUsage>>>) -> Self {
         Self {
             llm_client,
             store,
@@ -144,7 +144,7 @@ where
                         summaries.push(summary);
 
                         if let Ok(mut usage) = self.usage.lock() {
-                            *usage += response.usage;
+                            usage.extend(response.usage);
                         }
                     }
                     Err(e) => {
@@ -210,11 +210,7 @@ mod tests {
         if let Some(uri) = db_uri {
             store = store.with_uri(uri);
         }
-        SummarizationTool::new(
-            client,
-            Arc::new(store),
-            Arc::new(Mutex::new(ModelUsage::default())),
-        )
+        SummarizationTool::new(client, Arc::new(store), Arc::new(Mutex::new(Vec::new())))
     }
 
     #[test]

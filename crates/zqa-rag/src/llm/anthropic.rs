@@ -539,7 +539,7 @@ impl<T: HttpClient> AgenticClient for AnthropicClient<T> {
                 role: MessageRole::Assistant,
                 content: response.content,
             }],
-            usage: response.usage.into(),
+            usage: vec![response.usage.into()],
         })
     }
 }
@@ -818,8 +818,8 @@ mod tests {
         test_ok!(res);
 
         let res = res.unwrap();
-        test_eq!(res.usage.input_tokens, 9);
-        test_eq!(res.usage.output_tokens, 13);
+        test_eq!(res.total_usage().input_tokens, 9);
+        test_eq!(res.total_usage().output_tokens, 13);
 
         // A one-shot request is never resent, so it is not cached.
         assert!(
@@ -1171,7 +1171,10 @@ mod tests {
 
         // A rerun within the TTL reads the entry instead of writing it.
         let response = response.unwrap();
-        assert!(response.usage.input_cache_written + response.usage.input_cache_read > 0);
+        assert!(
+            response.total_usage().input_cache_written + response.total_usage().input_cache_read
+                > 0
+        );
 
         let mut chat_history = opening_history;
         chat_history.push(ChatHistoryItem {
@@ -1190,6 +1193,6 @@ mod tests {
 
         let response = client.send_message(&second_message).await;
         test_ok!(response);
-        assert!(response.unwrap().usage.input_cache_read > 0);
+        assert!(response.unwrap().total_usage().input_cache_read > 0);
     }
 }

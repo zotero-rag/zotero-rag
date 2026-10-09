@@ -125,7 +125,7 @@ impl AddAssign<UsageMetadata> for UsageMetadata {
 
 impl UsageMetadata {
     pub(crate) async fn from_rag_usage(
-        value: ModelUsage,
+        usage: &[ModelUsage],
         provider: ModelProvider,
         model: &str,
     ) -> Self {
@@ -144,14 +144,20 @@ impl UsageMetadata {
             _ => None,
         };
 
+        // Prompt-size pricing tiers apply per request, so each request is priced on its own.
+        let estimated_cost = model_pricing.map_or(0.0, |p| {
+            usage.iter().map(|&request| p.estimate_cost(request)).sum()
+        });
+        let total: ModelUsage = usage.iter().sum();
+
         Self {
-            input_tokens: value.input_tokens,
-            input_cache_read: value.input_cache_read,
-            input_cache_written: value.input_cache_written,
-            output_tokens: value.output_tokens,
-            reasoning_tokens: value.reasoning_tokens,
+            input_tokens: total.input_tokens,
+            input_cache_read: total.input_cache_read,
+            input_cache_written: total.input_cache_written,
+            output_tokens: total.output_tokens,
+            reasoning_tokens: total.reasoning_tokens,
             #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-            estimated_cost: model_pricing.map_or(0, |p| (p.estimate_cost(value) * 100.0) as u32),
+            estimated_cost: (estimated_cost * 100.0) as u32,
         }
     }
 }

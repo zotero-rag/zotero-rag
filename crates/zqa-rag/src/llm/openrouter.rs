@@ -454,7 +454,7 @@ impl<T: HttpClient> AgenticClient for OpenRouterClient<T> {
             max_retries,
         )
         .await?;
-        let usage = response.usage.into();
+        let usage = vec![response.usage.into()];
         let choice = response.choices.into_iter().next().ok_or_else(|| {
             LLMError::DeserializationError("OpenRouter response contained no choices".to_string())
         })?;
@@ -587,8 +587,8 @@ mod tests {
         test_ok!(res);
 
         let res = res.unwrap();
-        test_eq!(res.usage.input_tokens, 14);
-        test_eq!(res.usage.output_tokens, 163);
+        test_eq!(res.total_usage().input_tokens, 14);
+        test_eq!(res.total_usage().output_tokens, 163);
         test_eq!(res.content.len(), 1);
         if let ContentType::Text(text) = &res.content[0] {
             test_eq!(text, "Hi there! How can I help you today?");
@@ -754,8 +754,8 @@ mod tests {
         test_ok!(res);
         let res = res.unwrap();
 
-        test_eq!(res.usage.input_tokens, 30);
-        test_eq!(res.usage.output_tokens, 13);
+        test_eq!(res.total_usage().input_tokens, 30);
+        test_eq!(res.total_usage().output_tokens, 13);
         test_eq!(*tool_call_count.lock().unwrap(), 1_usize);
         let texts = text_segments.lock().unwrap();
         test_eq!(texts.len(), 1);
@@ -1025,7 +1025,10 @@ mod tests {
 
         // A rerun within the TTL reads the entry instead of writing it.
         let response = response.unwrap();
-        assert!(response.usage.input_cache_written + response.usage.input_cache_read > 0);
+        assert!(
+            response.total_usage().input_cache_written + response.total_usage().input_cache_read
+                > 0
+        );
 
         let mut chat_history = opening_history;
         chat_history.push(ChatHistoryItem {
@@ -1044,6 +1047,6 @@ mod tests {
 
         let response = client.send_message(&second_message).await;
         test_ok!(response);
-        assert!(response.unwrap().usage.input_cache_read > 0);
+        assert!(response.unwrap().total_usage().input_cache_read > 0);
     }
 }

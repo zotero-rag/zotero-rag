@@ -108,7 +108,7 @@ impl<T: HttpClient> AgenticClient for OllamaClient<T> {
                 role: MessageRole::Assistant,
                 content: response.content,
             }],
-            usage: response.usage.into(),
+            usage: vec![response.usage.into()],
         })
     }
 }
@@ -340,8 +340,8 @@ mod tests {
         test_ok!(res);
         let res = res.unwrap();
 
-        test_eq!(res.usage.input_tokens, 30);
-        test_eq!(res.usage.output_tokens, 13);
+        test_eq!(res.total_usage().input_tokens, 30);
+        test_eq!(res.total_usage().output_tokens, 13);
         test_eq!(*tool_call_count.lock().unwrap(), 1_usize);
         let texts = text_segments.lock().unwrap();
         test_eq!(texts.len(), 1);

@@ -44,13 +44,7 @@ impl TestClient {
                 role: MessageRole::Assistant,
                 content: vec![ChatHistoryContent::Text(text)],
             }],
-            usage: ModelUsage {
-                input_tokens: 0,
-                input_cache_written: 0,
-                input_cache_read: 0,
-                output_tokens: 0,
-                reasoning_tokens: 0,
-            },
+            usage: vec![ModelUsage::default()],
         })
     }
 }
