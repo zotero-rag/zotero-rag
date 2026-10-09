@@ -13,6 +13,7 @@
 //! only time pricing matters is if the user already has an Internet connection, so we can also
 //! grab this file.
 
+use std::iter::Sum;
 use std::ops::{Add, AddAssign};
 use std::path::PathBuf;
 use std::time::Duration;
@@ -77,13 +78,21 @@ impl AddAssign<ModelUsage> for ModelUsage {
     }
 }
 
-/// Per-token pricing for an AI model, in USD per token.
-///
-/// Pricing values sourced from official provider pages; see
-/// <https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json>
-/// for a regularly updated cross-provider reference.
-#[derive(Debug, Copy, Clone)]
-pub struct ModelPricing {
+impl Sum<ModelUsage> for ModelUsage {
+    fn sum<I: Iterator<Item = ModelUsage>>(iter: I) -> Self {
+        iter.fold(ModelUsage::default(), Add::add)
+    }
+}
+
+impl<'a> Sum<&'a ModelUsage> for ModelUsage {
+    fn sum<I: Iterator<Item = &'a ModelUsage>>(iter: I) -> Self {
+        iter.copied().sum()
+    }
+}
+
+/// Per-token rates for one pricing tier of an AI model, in USD per token.
+#[derive(Debug, Default, Copy, Clone, PartialEq)]
+pub struct TokenRates {
     /// Cost per one input (prompt) token, in USD.
     pub input_cost_per_token: f64,
     /// Cost per one input (prompt) token written to a cache with a 5m ttl.
@@ -94,30 +103,62 @@ pub struct ModelPricing {
     pub output_cost_per_token: f64,
 }
 
+/// Rates that some models charge for a whole request once its prompt is long enough, such as the
+/// long-context rates of Claude Haiku 5.5 (above 100K input tokens), Gemini Pro models (above
+/// 200K), and GPT-5.4 and later (above 272K).
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub struct PricingTier {
+    /// The tier applies to requests with strictly more input tokens than this, counting cache reads
+    /// and writes.
+    pub above_input_tokens: u32,
+    /// The rates for every token of such a request.
+    pub rates: TokenRates,
+}
+
+/// Pricing for an AI model, in USD per token.
+///
+/// Pricing values sourced from official provider pages; see
+/// <https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json>
+/// for a regularly updated cross-provider reference.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ModelPricing {
+    /// Rates for requests that are in none of the [`Self::tiers`].
+    pub rates: TokenRates,
+    /// Prompt-size tiers, in increasing order of [`PricingTier::above_input_tokens`]. Empty for
+    /// models with flat pricing.
+    pub tiers: Vec<PricingTier>,
+}
+
 impl ModelPricing {
-    /// Estimate the total USD cost for a given token usage.
+    /// Estimate the total USD cost of one request. Providers pick a prompt-size tier per request,
+    /// so `usage` must not be the sum of several requests; sum the estimates instead.
     ///
     /// # Arguments
     ///
-    /// * `input_tokens`  - Number of input (prompt) tokens consumed.
-    /// * `output_tokens` - Number of output (completion) tokens produced.
+    /// * `usage` - The token usage of a single request.
     ///
     /// # Returns
     ///
     /// Estimated cost in USD.
     #[must_use]
     pub fn estimate_cost(&self, usage: ModelUsage) -> f64 {
+        let rates = self
+            .tiers
+            .iter()
+            .rfind(|tier| usage.input_tokens > tier.above_input_tokens)
+            .map_or(&self.rates, |tier| &tier.rates);
+
         [
             (
                 usage
                     .input_tokens
                     .saturating_sub(usage.input_cache_written)
                     .saturating_sub(usage.input_cache_read),
-                self.input_cost_per_token,
+                rates.input_cost_per_token,
             ),
-            (usage.input_cache_written, self.cache_write_cost_per_token),
-            (usage.input_cache_read, self.cached_input_cost_per_token),
-            (usage.output_tokens, self.output_cost_per_token),
+            (usage.input_cache_written, rates.cache_write_cost_per_token),
+            (usage.input_cache_read, rates.cached_input_cost_per_token),
+            (usage.output_tokens, rates.output_cost_per_token),
         ]
         .map(|(n, c)| f64::from(n) * c)
         .iter()
@@ -208,7 +249,7 @@ impl PricingCacheOptions {
 /// # Returns
 ///
 /// * `None` when pricing is unknown (unknown future model, etc.).
-/// * `Some` with both prices set to `0.0` for local/free providers (Ollama).
+/// * `Some` with all rates set to `0.0` for local/free providers (Ollama).
 pub async fn get_model_pricing(
     provider: &str,
     model: &str,
@@ -248,10 +289,8 @@ pub async fn get_model_pricing(
 
     if provider == "ollama" {
         return Some(ModelPricing {
-            input_cost_per_token: 0.0,
-            cache_write_cost_per_token: 0.0,
-            cached_input_cost_per_token: 0.0,
-            output_cost_per_token: 0.0,
+            rates: TokenRates::default(),
+            tiers: Vec::new(),
         });
     }
 
@@ -270,23 +309,64 @@ pub async fn get_model_pricing(
     let fallback_key = format!("{provider}/{model}");
     let entry = json.get(model).or_else(|| json.get(&fallback_key))?;
 
-    let input_cost = entry.get("input_cost_per_token")?.as_f64()?;
-    let input_cache_read_cost = entry
-        .get("cache_read_input_token_cost")
-        .and_then(serde_json::Value::as_f64)
-        .unwrap_or(0.0);
-    let input_cache_write_cost = entry
-        .get("cache_creation_input_token_cost")
-        .and_then(serde_json::Value::as_f64)
-        .unwrap_or(0.0);
-    let output_cost = entry.get("output_cost_per_token")?.as_f64()?;
+    let rate = |key: &str, fallback: f64| {
+        entry
+            .get(key)
+            .and_then(serde_json::Value::as_f64)
+            .unwrap_or(fallback)
+    };
+    let rates = TokenRates {
+        input_cost_per_token: entry.get("input_cost_per_token")?.as_f64()?,
+        cache_write_cost_per_token: rate("cache_creation_input_token_cost", 0.0),
+        cached_input_cost_per_token: rate("cache_read_input_token_cost", 0.0),
+        output_cost_per_token: entry.get("output_cost_per_token")?.as_f64()?,
+    };
 
-    Some(ModelPricing {
-        input_cost_per_token: input_cost,
-        cached_input_cost_per_token: input_cache_read_cost,
-        cache_write_cost_per_token: input_cache_write_cost,
-        output_cost_per_token: output_cost,
-    })
+    // LiteLLM lists a tier's rates under `<base key>_above_<N>k_tokens`, and every tier has an
+    // input rate. Keys with further suffixes (`_priority`, `_batches`, ...) are for service tiers
+    // we don't use.
+    let mut thresholds: Vec<u32> = entry
+        .as_object()?
+        .keys()
+        .filter_map(|key| {
+            key.strip_prefix("input_cost_per_token_above_")?
+                .strip_suffix("k_tokens")?
+                .parse::<u32>()
+                .ok()?
+                .checked_mul(1000)
+        })
+        .collect();
+    thresholds.sort_unstable();
+
+    // A tier that omits a rate keeps the one from the tier below it.
+    let mut tiers: Vec<PricingTier> = Vec::with_capacity(thresholds.len());
+    for above_input_tokens in thresholds {
+        let below = tiers.last().map_or(rates, |tier| tier.rates);
+        let suffix = format!("_above_{}k_tokens", above_input_tokens / 1000);
+        let tier_rate =
+            |base_key: &str, fallback: f64| rate(&format!("{base_key}{suffix}"), fallback);
+
+        tiers.push(PricingTier {
+            above_input_tokens,
+            rates: TokenRates {
+                input_cost_per_token: tier_rate("input_cost_per_token", below.input_cost_per_token),
+                cache_write_cost_per_token: tier_rate(
+                    "cache_creation_input_token_cost",
+                    below.cache_write_cost_per_token,
+                ),
+                cached_input_cost_per_token: tier_rate(
+                    "cache_read_input_token_cost",
+                    below.cached_input_cost_per_token,
+                ),
+                output_cost_per_token: tier_rate(
+                    "output_cost_per_token",
+                    below.output_cost_per_token,
+                ),
+            },
+        });
+    }
+
+    Some(ModelPricing { rates, tiers })
 }
 
 /// Look up how many units of `currency` one U.S. dollar buys, so that USD costs from
@@ -384,10 +464,13 @@ mod tests {
             reasoning_tokens: 0,
         };
         let pricing = ModelPricing {
-            input_cost_per_token: 0.000_003,
-            output_cost_per_token: 0.000_015,
-            cached_input_cost_per_token: 0.000_003_75,
-            cache_write_cost_per_token: 0.000_000_3,
+            rates: TokenRates {
+                input_cost_per_token: 0.000_003,
+                output_cost_per_token: 0.000_015,
+                cached_input_cost_per_token: 0.000_003_75,
+                cache_write_cost_per_token: 0.000_000_3,
+            },
+            tiers: Vec::new(),
         };
         let cost = pricing.estimate_cost(usage);
         let expected = 0.0105;
@@ -399,10 +482,13 @@ mod tests {
     #[test]
     fn test_estimate_cost_zero_tokens() {
         let pricing = ModelPricing {
-            input_cost_per_token: 0.000_003,
-            output_cost_per_token: 0.000_015,
-            cached_input_cost_per_token: 0.000_003_75,
-            cache_write_cost_per_token: 0.000_000_3,
+            rates: TokenRates {
+                input_cost_per_token: 0.000_003,
+                output_cost_per_token: 0.000_015,
+                cached_input_cost_per_token: 0.000_003_75,
+                cache_write_cost_per_token: 0.000_000_3,
+            },
+            tiers: Vec::new(),
         };
 
         assert!(pricing.estimate_cost(ModelUsage::default()) < f64::EPSILON);
@@ -411,10 +497,13 @@ mod tests {
     #[test]
     fn test_estimate_cost_output_only() {
         let pricing = ModelPricing {
-            input_cost_per_token: 0.000_001,
-            output_cost_per_token: 0.000_002,
-            cached_input_cost_per_token: 0.000_003_75,
-            cache_write_cost_per_token: 0.000_000_3,
+            rates: TokenRates {
+                input_cost_per_token: 0.000_001,
+                output_cost_per_token: 0.000_002,
+                cached_input_cost_per_token: 0.000_003_75,
+                cache_write_cost_per_token: 0.000_000_3,
+            },
+            tiers: Vec::new(),
         };
         let usage = ModelUsage {
             input_tokens: 0,
@@ -433,10 +522,13 @@ mod tests {
     #[test]
     fn test_estimate_cost_all_fields() {
         let pricing = ModelPricing {
-            input_cost_per_token: 0.000_003,
-            output_cost_per_token: 0.000_015,
-            cached_input_cost_per_token: 0.000_003_75,
-            cache_write_cost_per_token: 0.000_000_3,
+            rates: TokenRates {
+                input_cost_per_token: 0.000_003,
+                output_cost_per_token: 0.000_015,
+                cached_input_cost_per_token: 0.000_003_75,
+                cache_write_cost_per_token: 0.000_000_3,
+            },
+            tiers: Vec::new(),
         };
         let usage = ModelUsage {
             input_tokens: 2000,
@@ -455,10 +547,13 @@ mod tests {
     #[test]
     fn test_estimate_cost_with_mostly_cached_tokens() {
         let pricing = ModelPricing {
-            input_cost_per_token: 0.000_003,
-            output_cost_per_token: 0.000_015,
-            cached_input_cost_per_token: 0.000_003_75,
-            cache_write_cost_per_token: 0.000_000_3,
+            rates: TokenRates {
+                input_cost_per_token: 0.000_003,
+                output_cost_per_token: 0.000_015,
+                cached_input_cost_per_token: 0.000_003_75,
+                cache_write_cost_per_token: 0.000_000_3,
+            },
+            tiers: Vec::new(),
         };
         let usage = ModelUsage {
             input_tokens: 2000,
@@ -531,7 +626,19 @@ mod tests {
     const SAMPLE_JSON: &str = r#"{
         "gpt-5.4": {
             "input_cost_per_token": 0.0000025,
-            "output_cost_per_token": 0.00001
+            "output_cost_per_token": 0.00001,
+            "input_cost_per_token_above_272k_tokens": 0.000005,
+            "output_cost_per_token_above_272k_tokens": 0.000015,
+            "input_cost_per_token_above_272k_tokens_priority": 0.00001
+        },
+        "openrouter/qwen3-max": {
+            "input_cost_per_token": 0.000001,
+            "output_cost_per_token": 0.000004,
+            "cache_read_input_token_cost": 0.0000002,
+            "input_cost_per_token_above_128k_tokens": 0.000003,
+            "input_cost_per_token_above_32k_tokens": 0.000002,
+            "output_cost_per_token_above_32k_tokens": 0.000008,
+            "cache_read_input_token_cost_above_128k_tokens": 0.0000006
         },
         "openrouter/mistral-7b": {
             "input_cost_per_token": 0.0000001,
@@ -559,8 +666,8 @@ mod tests {
             .await
             .unwrap();
 
-        assert!(p.input_cost_per_token < f64::EPSILON);
-        assert!(p.output_cost_per_token < f64::EPSILON);
+        assert!(p.rates.input_cost_per_token < f64::EPSILON);
+        assert!(p.rates.output_cost_per_token < f64::EPSILON);
     }
 
     #[tokio::test]
@@ -574,12 +681,53 @@ mod tests {
         let expected_output_cost = 0.00001;
 
         assert!(
-            (p.input_cost_per_token - expected_input_cost).abs()
+            (p.rates.input_cost_per_token - expected_input_cost).abs()
                 < expected_input_cost * f64::EPSILON * 10.0
         );
         assert!(
-            (p.output_cost_per_token - expected_output_cost).abs()
+            (p.rates.output_cost_per_token - expected_output_cost).abs()
                 < expected_output_cost * f64::EPSILON * 10.0
+        );
+        assert_eq!(
+            p.tiers,
+            [PricingTier {
+                above_input_tokens: 272_000,
+                rates: TokenRates {
+                    input_cost_per_token: 0.000_005,
+                    output_cost_per_token: 0.000_015,
+                    ..TokenRates::default()
+                },
+            }]
+        );
+
+        // Tiers are sorted, and a rate missing from a tier is inherited from the tier below.
+        let (_f, opts) = make_cache(SAMPLE_JSON);
+        let p = get_model_pricing("openrouter", "qwen3-max", Some(opts))
+            .await
+            .unwrap();
+        let first_tier = TokenRates {
+            input_cost_per_token: 0.000_002,
+            cache_write_cost_per_token: 0.0,
+            cached_input_cost_per_token: 0.000_000_2,
+            output_cost_per_token: 0.000_008,
+        };
+
+        assert_eq!(
+            p.tiers,
+            [
+                PricingTier {
+                    above_input_tokens: 32_000,
+                    rates: first_tier,
+                },
+                PricingTier {
+                    above_input_tokens: 128_000,
+                    rates: TokenRates {
+                        input_cost_per_token: 0.000_003,
+                        cached_input_cost_per_token: 0.000_000_6,
+                        ..first_tier
+                    },
+                },
+            ]
         );
     }
 
@@ -593,11 +741,11 @@ mod tests {
         let expected_output_cost = 0.000_000_2;
 
         assert!(
-            (p.input_cost_per_token - expected_input_cost).abs()
+            (p.rates.input_cost_per_token - expected_input_cost).abs()
                 < expected_input_cost * f64::EPSILON * 10.0
         );
         assert!(
-            (p.output_cost_per_token - expected_output_cost).abs()
+            (p.rates.output_cost_per_token - expected_output_cost).abs()
                 < expected_output_cost * f64::EPSILON * 10.0
         );
     }
@@ -644,5 +792,21 @@ mod tests {
         let expected = 100.0 * 0.000_002_5 + 50.0 * 0.00001;
 
         assert!((cost - expected).abs() < expected * f64::EPSILON * 10.0);
+
+        // A prompt at the threshold keeps the base rates; one above it pays the tier's rates for
+        // every token.
+        let at_threshold = p.estimate_cost(ModelUsage {
+            input_tokens: 272_000,
+            ..usage
+        });
+        let above_threshold = p.estimate_cost(ModelUsage {
+            input_tokens: 272_001,
+            ..usage
+        });
+        let expected_at = 272_000.0 * 0.000_002_5 + 50.0 * 0.00001;
+        let expected_above = 272_001.0 * 0.000_005 + 50.0 * 0.000_015;
+
+        assert!((at_threshold - expected_at).abs() < expected_at * f64::EPSILON * 10.0);
+        assert!((above_threshold - expected_above).abs() < expected_above * f64::EPSILON * 10.0);
     }
 }

@@ -338,12 +338,12 @@ impl<T: HttpClient> AgenticClient for GeminiClient<T> {
         };
 
         let url = "https://generativelanguage.googleapis.com/v1beta/interactions";
-        let mut usage = ModelUsage::default();
+        let mut usage = Vec::new();
         let mut attempt = 0;
         loop {
             let response: GeminiResponseBody =
                 send_generation_request(&self.client, &request, &headers, url, max_retries).await?;
-            usage += response.usage.into();
+            usage.push(response.usage.into());
 
             let status = response.status;
             if status == "failed" && attempt < max_retries {
@@ -506,8 +506,8 @@ mod tests {
         } else {
             panic!("Expected Text content type");
         }
-        test_eq!(res.usage.input_tokens, 7);
-        test_eq!(res.usage.output_tokens, 11);
+        test_eq!(res.total_usage().input_tokens, 7);
+        test_eq!(res.total_usage().output_tokens, 11);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
@@ -840,7 +840,12 @@ mod tests {
         let res = mock_client.send_message(&request).await;
         test_ok!(res);
 
-        let usage = res.unwrap().usage;
+        // Retried requests keep their own usage entries, since each one is priced on its own.
+        let response = res.unwrap();
+        let input_tokens: Vec<u32> = response.usage.iter().map(|u| u.input_tokens).collect();
+        test_eq!(input_tokens, vec![121, 10, 121, 20]);
+
+        let usage = response.total_usage();
         test_eq!(usage.input_tokens, 10 + 20 + 2 * 121);
         test_eq!(usage.output_tokens, 5 + 8);
         test_eq!(usage.reasoning_tokens, 2 * 103);

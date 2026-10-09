@@ -241,7 +241,7 @@ where
                 }
 
                 let usage = UsageMetadata::from_rag_usage(
-                    response.usage,
+                    &response.usage,
                     config_clone.model_provider,
                     &title_model_name,
                 )
@@ -280,7 +280,7 @@ where
     // Since `Box::new` moves the tool but we still need the modified usage after the tool runs, we
     // pass in an `Arc` that we create here. We use the `zqa-rag` struct `ModelUsage` since that
     // doesn't require a `Config` object.
-    let summarization_usage = Arc::new(Mutex::new(ModelUsage::default()));
+    let summarization_usage = Arc::new(Mutex::new(Vec::new()));
     let summarization_tool = SummarizationTool::new(
         llm_client.clone(),
         store_arc,
@@ -353,17 +353,22 @@ where
         Ok(response) => {
             log::debug!(
                 "Query completed in {final_draft_duration:.2?}: usage={:?}",
-                response.usage
+                response.total_usage()
             );
             writeln!(
                 &mut ctx.err,
                 "{DIM_TEXT}Final draft completed in {final_draft_duration:.2?}{RESET}"
             )?;
 
-            // Accumulate token usage counts, then compute pricing using `UsageMetadata::from_rag_usage`
-            let total_usage = response.usage + summarization_usage.lock().map(|u| *u)?;
+            // Collect the usage of every request; `UsageMetadata::from_rag_usage` prices each one
+            let mut request_usage = response.usage;
+            request_usage.extend(
+                summarization_usage
+                    .lock()
+                    .map(|mut u| std::mem::take(&mut *u))?,
+            );
             let usage = UsageMetadata::from_rag_usage(
-                total_usage,
+                &request_usage,
                 ctx.config.model_provider,
                 &ctx.config.get_generation_model_name().unwrap_or_default(),
             )
