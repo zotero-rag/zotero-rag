@@ -1,13 +1,10 @@
 //! The runtime bridge between GPUI (which owns the main thread and its own executor)
 //! and the tokio-based zqa pipeline.
 //!
-//! [`spawn_engine`] dedicates one OS thread that owns a tokio runtime and the
-//! [`Session`]: it receives commands over a `tokio::sync::mpsc`
-//! channel and runs each one on that runtime. Each dispatch is raced against a separate
-//! cancel channel with `tokio::select!`, so a user can stop an in-flight command: the
-//! cancel branch drops the dispatch future, which aborts the request in progress
-//! (async Rust is cancel-on-drop). Output produced by the handlers is streamed back to
-//! the GPUI side as [`UiEvent`]s through a `futures::mpsc` channel.
+//! [`spawn_engine`] owns a tokio runtime and [`Session`] on a dedicated thread. It drives
+//! commands while translating engine events into the GUI's text streams. Cancellation drops
+//! the in-flight dispatch future. Interactive requests fail without reading terminal input
+//! or submitting a default answer.
 
 use std::sync::Arc;
 use std::thread;
@@ -41,6 +38,48 @@ pub enum UiEvent {
     ConversationResumed(Result<Arc<SavedChatHistory>, String>),
     /// The in-flight command was cancelled by the user before it finished.
     Cancelled,
+}
+
+/// Forward displayable events without terminal formatting.
+///
+/// Input requests are rejected and their reply senders dropped without answering. The caller
+/// must stop the operation on error so a handler cannot continue after a rejected request.
+/// A disconnected GUI also returns an error; ignored usage and low-severity events produce no output.
+fn forward_event(event: EngineEvent, tx: &UnboundedSender<UiEvent>) -> Result<(), String> {
+    let (message, is_error) = match event {
+        EngineEvent::Text { message } | EngineEvent::Reasoning { message } => (message, false),
+        EngineEvent::StatusUpdate { message }
+        | EngineEvent::Warning { message }
+        | EngineEvent::Error { message } => (message, true),
+        EngineEvent::ToolCall { .. } | EngineEvent::ToolResponse { .. } => {
+            (format!("{event}\n"), true)
+        }
+        EngineEvent::RecoverableWarning { .. } | EngineEvent::TokenUsage { .. } => return Ok(()),
+        EngineEvent::Confirm { .. }
+        | EngineEvent::Choose { .. }
+        | EngineEvent::Line { .. }
+        | EngineEvent::Secret { .. } => {
+            return Err(
+                "Interactive prompts are not supported in this GUI. Run this command in the CLI."
+                    .into(),
+            );
+        }
+        _ => return Err("The GUI cannot handle this engine event.".into()),
+    };
+
+    let message = strip_ansi(&message);
+
+    if message.is_empty() {
+        return Ok(());
+    }
+
+    let event = if is_error {
+        UiEvent::Stderr(message)
+    } else {
+        UiEvent::Stdout(message)
+    };
+
+    tx.unbounded_send(event).map_err(|error| error.to_string())
 }
 
 /// Remove ANSI SGR escape sequences (`ESC [ ... m` and friends) from `input`.
@@ -134,24 +173,36 @@ pub fn spawn_engine(
                             // `handle_query_cmd`) are not cancelled and run to completion. Fully
                             // cancelling them needs the core loop's cancellation support tracked
                             // in ZOT-219.
-                            let result: Option<Result<bool, String>> = tokio::select! {
-                                result = session.dispatch(&command) => {
-                                    Some(result.map_err(|e| e.to_string()))
-                                }
-                                Some(evt) = engine_rx.recv() => {
-                                    let text = strip_ansi(&evt.to_string());
-                                    let event = match evt {
-                                        EngineEvent::StatusUpdate { .. }
-                                        | EngineEvent::Warning { .. }
-                                        | EngineEvent::Error { .. } => UiEvent::Stderr(text),
-                                        _ => UiEvent::Stdout(text),
-                                    };
+                            let mut result = {
+                                let dispatch = session.dispatch(&command);
+                                tokio::pin!(dispatch);
 
-                                    Some(event_tx.unbounded_send(event)
-                                        .map_or_else(|e| Err(e.to_string()), |_| Ok(true)))
+                                loop {
+                                    tokio::select! {
+                                        biased;
+                                        Some(()) = cancel_rx.recv() => break None,
+                                        result = &mut dispatch => break Some(result.map_err(|e| e.to_string())),
+                                        event = engine_rx.recv() => {
+                                            let result = event
+                                                .ok_or_else(|| "The engine event channel closed".to_string())
+                                                .and_then(|event| forward_event(event, &event_tx));
+
+                                            if let Err(error) = result {
+                                                break Some(Err(error));
+                                            }
+                                        }
+                                    }
                                 }
-                                _ = cancel_rx.recv() => None,
                             };
+
+                            // Dispatch is dropped before draining, so rejected prompts cannot resume it.
+                            while let Ok(event) = engine_rx.try_recv() {
+                                if let Err(error) = forward_event(event, &event_tx)
+                                    && matches!(result, Some(Ok(_)))
+                                {
+                                    result = Some(Err(error));
+                                }
+                            }
 
                             match result {
                                 Some(result) => {
@@ -171,11 +222,35 @@ pub fn spawn_engine(
                             }
                         }
                         EngineCommand::ResumeConversation(conversation) => {
-                            let result = session
-                                .resume_conversation(&conversation)
-                                .await
-                                .map(|()| conversation)
-                                .map_err(|error| error.to_string());
+                            let mut result = {
+                                let resume = session.resume_conversation(&conversation);
+                                tokio::pin!(resume);
+
+                                loop {
+                                    tokio::select! {
+                                        result = &mut resume => break result.map_err(|error| error.to_string()),
+                                        event = engine_rx.recv() => {
+                                            let result = event
+                                                .ok_or_else(|| "The engine event channel closed".to_string())
+                                                .and_then(|event| forward_event(event, &event_tx));
+
+                                            if let Err(error) = result {
+                                                break Err(error);
+                                            }
+                                        }
+                                    }
+                                }
+                            };
+
+                            while let Ok(event) = engine_rx.try_recv() {
+                                if let Err(error) = forward_event(event, &event_tx)
+                                    && result.is_ok()
+                                {
+                                    result = Err(error);
+                                }
+                            }
+
+                            let result = result.map(|()| conversation);
                             let _ = event_tx.unbounded_send(UiEvent::ConversationResumed(result));
                         }
                     }
@@ -187,7 +262,109 @@ pub fn spawn_engine(
 
 #[cfg(test)]
 mod tests {
-    use super::strip_ansi;
+    use tokio::sync::oneshot;
+    use zqa::io::EngineEvent;
+
+    use super::{UiEvent, forward_event, strip_ansi};
+
+    #[test]
+    fn forwards_plain_text_and_status_in_order() {
+        let (tx, mut rx) = futures::channel::mpsc::unbounded();
+
+        for event in [
+            EngineEvent::Text {
+                message: "\x1b[1manswer\x1b[0m".into(),
+            },
+            EngineEvent::Reasoning {
+                message: "reasoning".into(),
+            },
+            EngineEvent::StatusUpdate {
+                message: "\x1b[2mworking\x1b[0m".into(),
+            },
+            EngineEvent::Warning {
+                message: "warning".into(),
+            },
+            EngineEvent::Error {
+                message: "failure".into(),
+            },
+            EngineEvent::TokenUsage {
+                usage: Default::default(),
+            },
+            EngineEvent::RecoverableWarning {
+                message: "hidden".into(),
+            },
+        ] {
+            forward_event(event, &tx).unwrap();
+        }
+
+        assert!(matches!(rx.try_recv().unwrap(), UiEvent::Stdout(message) if message == "answer"));
+        assert!(
+            matches!(rx.try_recv().unwrap(), UiEvent::Stdout(message) if message == "reasoning")
+        );
+
+        for expected in ["working", "warning", "failure"] {
+            assert!(
+                matches!(rx.try_recv().unwrap(), UiEvent::Stderr(message) if message == expected)
+            );
+        }
+
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn rejects_prompts_without_answering_or_forwarding_them() {
+        let (tx, mut rx) = futures::channel::mpsc::unbounded();
+        let (confirm, mut confirmation) = oneshot::channel();
+        let (choose, mut choice) = oneshot::channel();
+        let (line, mut text) = oneshot::channel();
+        let (secret, mut password) = oneshot::channel();
+
+        for event in [
+            EngineEvent::Confirm {
+                message: "Continue?".into(),
+                default: true,
+                reply: confirm,
+            },
+            EngineEvent::Choose {
+                message: "Choose".into(),
+                options: vec!["First".into()],
+                default: 0,
+                reply: choose,
+            },
+            EngineEvent::Line {
+                message: None,
+                reply: line,
+            },
+            EngineEvent::Secret {
+                message: "Secret".into(),
+                reply: secret,
+            },
+        ] {
+            assert!(
+                forward_event(event, &tx)
+                    .unwrap_err()
+                    .contains("Run this command in the CLI")
+            );
+        }
+
+        assert!(matches!(
+            confirmation.try_recv(),
+            Err(oneshot::error::TryRecvError::Closed)
+        ));
+        assert!(matches!(
+            choice.try_recv(),
+            Err(oneshot::error::TryRecvError::Closed)
+        ));
+        assert!(matches!(
+            text.try_recv(),
+            Err(oneshot::error::TryRecvError::Closed)
+        ));
+        assert!(matches!(
+            password.try_recv(),
+            Err(oneshot::error::TryRecvError::Closed)
+        ));
+        assert!(rx.try_recv().is_err());
+    }
 
     #[test]
     fn leaves_plain_text_untouched() {
