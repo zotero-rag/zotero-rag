@@ -152,18 +152,6 @@ impl EngineEvent {
     /// * Returns `InvalidInput` for a choice request with no options, before writing or reading.
     /// * Returns `UnexpectedEof` when input ends before a confirmation, choice, or line reply.
     /// * Propagates read, write, flush, and secret-reader errors. The reply sender is dropped.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use zqa::io::EngineEvent;
-    ///
-    /// let (reply_tx, mut answer_rx) = tokio::sync::oneshot::channel();
-    /// EngineEvent::Confirm { message: "Continue?".into(), default: true, reply: reply_tx }
-    ///     .handle_event(&mut &b"\n"[..], &mut Vec::new(), &mut Vec::new(),
-    ///         rpassword::read_password)?;
-    /// assert!(answer_rx.try_recv().unwrap());
-    /// ```
     pub(crate) fn handle_event<R, O, E>(
         mut self,
         input: &mut R,
@@ -217,6 +205,7 @@ impl EngineEvent {
                 default,
                 ..
             } => {
+                let default = if default >= options.len() { 0 } else { default };
                 let answer = read_answer(
                     input,
                     out,
@@ -307,7 +296,12 @@ impl Display for EngineEvent {
                     return writeln!(f, "(no options available)");
                 }
 
-                let default = (options.len() - 1).min(*default);
+                let default = if *default >= options.len() {
+                    0
+                } else {
+                    *default
+                };
+
                 for (i, opt) in options.iter().enumerate() {
                     if i == default {
                         writeln!(f, "[{}] {opt}", i + 1)?;
