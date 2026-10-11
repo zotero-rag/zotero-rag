@@ -1,12 +1,31 @@
 //! I/O primitives for working with the agent in `zqa`.
 
+use std::collections::HashMap;
 use std::fmt::Display;
 use std::io::{self, BufRead, Write};
+use std::time::Duration;
 
+use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use tokio::sync::oneshot;
 
 use crate::state::UsageMetadata;
 use crate::utils::terminal::{BLUE, DIM_TEXT, ITALICS, RED, RESET, YELLOW};
+
+/// A manager for [`indicatif`] progress bars used by the CLI renderer and used by
+/// [`EngineEvent::handle_event`] to update progress bars on events.
+pub(crate) struct TerminalProgress {
+    pub(crate) mbar: MultiProgress,
+    pub(crate) pbar_map: HashMap<String, ProgressBar>,
+}
+
+impl TerminalProgress {
+    pub(crate) fn new() -> Self {
+        Self {
+            mbar: MultiProgress::new(),
+            pbar_map: HashMap::new(),
+        }
+    }
+}
 
 /// An enum of events that can be emitted by handlers called by [`crate::cli::app::dispatch_command`].
 /// The contract here is that *every* event, including status updates and error messages will be passed
@@ -51,6 +70,8 @@ use crate::utils::terminal::{BLUE, DIM_TEXT, ITALICS, RED, RESET, YELLOW};
 /// * [`EngineEvent::StatusUpdate`] is printed in light blue.
 /// * [`EngineEvent::Warning`] and [`EngineEvent::Error`] are printed in yellow and red
 ///   respectively.
+/// * [`EngineEvent::ProgressStart`], [`EngineEvent::ProgressUpdate`], and
+///   [`EngineEvent::ProgressComplete`] do not display anything.
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum EngineEvent {
@@ -124,6 +145,27 @@ pub enum EngineEvent {
     /// An update on token usage. This is not an aggregate and consumers are responsible for
     /// accumulating these. Ignored by the `Display` implementation.
     TokenUsage { usage: UsageMetadata },
+    /// A notification that some task, possibly long-running, has started. Consumers should use this
+    /// to display a progress bar or spinner.
+    ProgressStart {
+        /// A unique ID for this task.
+        id: String,
+        /// A label to display in UIs.
+        label: String,
+        /// A "total" for progress bars. `None` means the amount of work is indeterminate, so a
+        /// spinner or similar may be preferable here.
+        total: Option<u64>,
+    },
+    /// An update on the progress of a task.
+    ProgressUpdate {
+        /// The ID for which this progress update is supplied.
+        id: String,
+        /// The cumulative work completed. Senders of this event guarantee that the progress will
+        /// never go "backwards".
+        completed: u64,
+    },
+    /// A completion signal for a task. May be used to display completion or remove a UI progress element.
+    ProgressComplete { id: String },
 }
 
 impl EngineEvent {
@@ -158,6 +200,7 @@ impl EngineEvent {
         out: &mut O,
         err: &mut E,
         read_secret: impl FnOnce() -> io::Result<String>,
+        pbar_manager: &mut TerminalProgress,
     ) -> io::Result<()>
     where
         R: BufRead + ?Sized,
@@ -173,63 +216,114 @@ impl EngineEvent {
             ));
         }
 
-        // Use `Display` impl
+        // Handle progress events and early-exit
         match self {
-            Self::RecoverableWarning { .. } | Self::TokenUsage { .. } => return Ok(()),
-            Self::Warning { .. } | Self::Error { .. } => {
-                write!(err, "{self}")?;
-                err.flush()?;
-            }
-            _ => {
-                write!(out, "{self}")?;
-                out.flush()?;
-            }
-        }
+            Self::ProgressStart { id, label, total } => {
+                let pbar = if let Some(total) = total {
+                    // NOTE: Maintainers should keep this in sync with `pbar_template_is_valid` below.
+                    pbar_manager.mbar.add(ProgressBar::new(total).with_style(
+                        ProgressStyle::with_template("{bar} {msg} ({percent})").unwrap(),
+                    ))
+                } else {
+                    pbar_manager.mbar.add(ProgressBar::new_spinner())
+                };
+                pbar.set_message(label);
+                pbar.enable_steady_tick(Duration::from_millis(100));
 
-        // Handle input variants
-        match self {
-            Self::Confirm { default, reply, .. } => {
-                let answer = read_answer(input, out, "Enter y or n.\n> ", |line| {
-                    match line.chars().next().map(|c| c.to_ascii_lowercase()) {
-                        None => Some(default),
-                        Some('y') => Some(true),
-                        Some('n') => Some(false),
-                        _ => None,
-                    }
-                })?;
-                let _ = reply.send(answer);
+                pbar_manager.pbar_map.insert(id, pbar);
+
+                return Ok(());
             }
-            Self::Choose {
-                options,
-                reply,
-                default,
-                ..
-            } => {
-                let default = if default >= options.len() { 0 } else { default };
-                let answer = read_answer(
-                    input,
-                    out,
-                    "Enter one of the numbered options.\n> ",
-                    |line| {
-                        if line.is_empty() {
-                            return Some(default);
-                        }
-                        line.parse::<usize>()
-                            .ok()
-                            .filter(|choice| (1..=options.len()).contains(choice))
-                            .map(|choice| choice - 1)
-                    },
-                )?;
-                let _ = reply.send(answer);
+            Self::ProgressUpdate { id, completed } => {
+                if let Some(pbar) = pbar_manager.pbar_map.get(&id) {
+                    pbar.set_position(completed);
+                }
+
+                return Ok(());
             }
-            Self::Line { reply, .. } => {
-                let _ = reply.send(read_input_line(input)?);
-            }
-            Self::Secret { reply, .. } => {
-                let _ = reply.send(read_secret()?);
+            Self::ProgressComplete { id } => {
+                if let Some(pbar) = pbar_manager.pbar_map.remove(&id) {
+                    pbar.finish_and_clear();
+                    pbar_manager.mbar.remove(&pbar);
+                }
+
+                return Ok(());
             }
             _ => {}
         }
+
+        // Events ignored by the CLI
+        if matches!(
+            self,
+            Self::RecoverableWarning { .. } | Self::TokenUsage { .. }
+        ) {
+            return Ok(());
+        }
+
+        // Handle events, suspending the progress bars during handling
+        pbar_manager.mbar.suspend(|| -> io::Result<()> {
+            // Use the `Display` impl
+            if matches!(self, Self::Warning { .. } | Self::Error { .. }) {
+                write!(err, "{self}")?;
+                err.flush()?;
+            } else {
+                write!(out, "{self}")?;
+                out.flush()?;
+            }
+
+            // Handle input variants
+            match self {
+                Self::Confirm { default, reply, .. } => {
+                    let answer = read_answer(input, out, "Enter y or n.\n> ", |line| {
+                        match line.chars().next().map(|c| c.to_ascii_lowercase()) {
+                            None => Some(default),
+                            Some('y') => Some(true),
+                            Some('n') => Some(false),
+                            _ => None,
+                        }
+                    })?;
+                    let _ = reply.send(answer);
+
+                    Ok(())
+                }
+                Self::Choose {
+                    options,
+                    reply,
+                    default,
+                    ..
+                } => {
+                    let default = if default >= options.len() { 0 } else { default };
+                    let answer = read_answer(
+                        input,
+                        out,
+                        "Enter one of the numbered options.\n> ",
+                        |line| {
+                            if line.is_empty() {
+                                return Some(default);
+                            }
+                            line.parse::<usize>()
+                                .ok()
+                                .filter(|choice| (1..=options.len()).contains(choice))
+                                .map(|choice| choice - 1)
+                        },
+                    )?;
+                    let _ = reply.send(answer);
+
+                    Ok(())
+                }
+                Self::Line { reply, .. } => {
+                    let _ = reply.send(read_input_line(input)?);
+
+                    Ok(())
+                }
+                Self::Secret { reply, .. } => {
+                    let _ = reply.send(read_secret()?);
+
+                    Ok(())
+                }
+                _ => Ok(()),
+            }
+        })?;
         Ok(())
     }
 }
@@ -312,7 +406,6 @@ impl Display for EngineEvent {
 
                 write!(f, "\n(1 - {}, default: {}) > ", options.len(), default + 1)
             }
-            EngineEvent::RecoverableWarning { .. } | EngineEvent::TokenUsage { .. } => Ok(()),
             EngineEvent::Line {
                 message: Some(message),
                 ..
@@ -326,6 +419,11 @@ impl Display for EngineEvent {
             }
             EngineEvent::Warning { message } => write!(f, "{YELLOW}{message}{RESET}"),
             EngineEvent::Error { message } => write!(f, "{RED}{message}{RESET}"),
+            EngineEvent::ProgressStart { .. }
+            | EngineEvent::ProgressUpdate { .. }
+            | EngineEvent::RecoverableWarning { .. }
+            | EngineEvent::TokenUsage { .. }
+            | EngineEvent::ProgressComplete { .. } => Ok(()),
         }
     }
 }
@@ -445,7 +543,13 @@ mod tests {
             test_eq!(event.to_string(), expected);
             let (mut out, mut err) = (Vec::new(), Vec::new());
             event
-                .handle_event(&mut io::empty(), &mut out, &mut err, no_secret)
+                .handle_event(
+                    &mut io::empty(),
+                    &mut out,
+                    &mut err,
+                    no_secret,
+                    &mut TerminalProgress::new(),
+                )
                 .unwrap();
             let (actual, unused) = if is_error { (err, out) } else { (out, err) };
             test_eq!(actual, expected.as_bytes());
@@ -473,7 +577,13 @@ mod tests {
             let prompt = format!("Continue? ({}): ", if default { "[y]/n" } else { "y/[n]" });
             test_eq!(event.to_string(), prompt);
             event
-                .handle_event(&mut input, &mut out, &mut Vec::new(), no_secret)
+                .handle_event(
+                    &mut input,
+                    &mut out,
+                    &mut Vec::new(),
+                    no_secret,
+                    &mut TerminalProgress::new(),
+                )
                 .unwrap();
             test_eq!(answer.try_recv().unwrap(), expected);
             test_eq!(
@@ -502,7 +612,13 @@ mod tests {
             test_eq!(event.to_string(), prompt);
             let mut out = Vec::new();
             event
-                .handle_event(&mut &b"\n"[..], &mut out, &mut Vec::new(), no_secret)
+                .handle_event(
+                    &mut &b"\n"[..],
+                    &mut out,
+                    &mut Vec::new(),
+                    no_secret,
+                    &mut TerminalProgress::new(),
+                )
                 .unwrap();
             test_eq!(answer.try_recv().unwrap(), expected);
             test_eq!(out, prompt.as_bytes());
@@ -530,6 +646,7 @@ mod tests {
                 &mut out,
                 &mut Vec::new(),
                 no_secret,
+                &mut TerminalProgress::new(),
             )
             .unwrap();
         test_eq!(answer.try_recv().unwrap(), 1);
@@ -554,7 +671,13 @@ mod tests {
         let mut input = &b"1\n"[..];
         let (mut out, mut err) = (Vec::new(), Vec::new());
         let error = event
-            .handle_event(&mut input, &mut out, &mut err, no_secret)
+            .handle_event(
+                &mut input,
+                &mut out,
+                &mut err,
+                no_secret,
+                &mut TerminalProgress::new(),
+            )
             .unwrap_err();
         test_eq!(error.kind(), io::ErrorKind::InvalidInput);
         test_eq!(input, b"1\n");
@@ -577,6 +700,7 @@ mod tests {
                     &mut out,
                     &mut Vec::new(),
                     no_secret,
+                    &mut TerminalProgress::new(),
                 )
                 .unwrap();
             test_eq!(answer.try_recv().unwrap(), " answer \r\n");
@@ -598,10 +722,16 @@ mod tests {
         };
         test_eq!(event.to_string(), "API key\n\n> ");
         event
-            .handle_event(&mut io::empty(), &mut out, &mut Vec::new(), || {
-                test_eq!(flushes.get(), 1);
-                Ok("secret".into())
-            })
+            .handle_event(
+                &mut io::empty(),
+                &mut out,
+                &mut Vec::new(),
+                || {
+                    test_eq!(flushes.get(), 1);
+                    Ok("secret".into())
+                },
+                &mut TerminalProgress::new(),
+            )
             .unwrap();
         test_eq!(answer.try_recv().unwrap(), "secret");
         test_eq!(out.bytes, b"API key\n\n> ");
@@ -615,12 +745,18 @@ mod tests {
             reply,
         };
         let error = event
-            .handle_event(&mut io::empty(), &mut Vec::new(), &mut Vec::new(), || {
-                Err(io::Error::new(
-                    io::ErrorKind::PermissionDenied,
-                    "terminal unavailable",
-                ))
-            })
+            .handle_event(
+                &mut io::empty(),
+                &mut Vec::new(),
+                &mut Vec::new(),
+                || {
+                    Err(io::Error::new(
+                        io::ErrorKind::PermissionDenied,
+                        "terminal unavailable",
+                    ))
+                },
+                &mut TerminalProgress::new(),
+            )
             .unwrap_err();
         test_eq!(error.kind(), io::ErrorKind::PermissionDenied);
         test_eq!(answer.try_recv(), Err(oneshot::error::TryRecvError::Closed));
@@ -638,7 +774,13 @@ mod tests {
                 reply,
             };
             let error = event
-                .handle_event(&mut input, &mut Vec::new(), &mut Vec::new(), no_secret)
+                .handle_event(
+                    &mut input,
+                    &mut Vec::new(),
+                    &mut Vec::new(),
+                    no_secret,
+                    &mut TerminalProgress::new(),
+                )
                 .unwrap_err();
             test_eq!(error.kind(), expected);
             test_eq!(answer.try_recv(), Err(oneshot::error::TryRecvError::Closed));
@@ -669,6 +811,7 @@ mod tests {
                     &mut Vec::new(),
                     &mut Vec::new(),
                     no_secret,
+                    &mut TerminalProgress::new(),
                 )
                 .unwrap_err();
             test_eq!(error.kind(), io::ErrorKind::UnexpectedEof);
@@ -692,7 +835,13 @@ mod tests {
         };
         let mut out = &mut [][..];
         let error = event
-            .handle_event(&mut io::empty(), &mut out, &mut Vec::new(), no_secret)
+            .handle_event(
+                &mut io::empty(),
+                &mut out,
+                &mut Vec::new(),
+                no_secret,
+                &mut TerminalProgress::new(),
+            )
             .unwrap_err();
         test_eq!(error.kind(), io::ErrorKind::WriteZero);
         test_eq!(answer.try_recv(), Err(oneshot::error::TryRecvError::Closed));
@@ -723,6 +872,7 @@ mod tests {
                 &mut FlushError,
                 &mut Vec::new(),
                 no_secret,
+                &mut TerminalProgress::new(),
             )
             .unwrap_err();
         test_eq!(error.kind(), io::ErrorKind::Other);
@@ -742,7 +892,15 @@ mod tests {
             &mut Vec::new(),
             &mut Vec::new(),
             no_secret,
+            &mut TerminalProgress::new(),
         )
         .unwrap();
+    }
+
+    #[test]
+    fn pbar_template_is_valid() {
+        // NOTE: Maintainers should keep this in sync with the template used in
+        // [`EngineEvent::handle_event`].
+        assert!(ProgressStyle::with_template("{bar} {msg} ({percent})").is_ok());
     }
 }
