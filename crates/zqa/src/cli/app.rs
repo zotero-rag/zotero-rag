@@ -23,7 +23,7 @@ use crate::cli::handlers::query::{handle_query_cmd, handle_search_cmd};
 use crate::cli::placeholder::PlaceholderText;
 use crate::cli::readline::get_readline_config;
 use crate::common::Context;
-use crate::io::EngineEvent;
+use crate::io::{EngineEvent, TerminalProgress};
 use crate::state::get_state_dir;
 
 /// Handle a single command or query from the user.
@@ -79,6 +79,7 @@ pub(crate) async fn dispatch_command(command: &str, ctx: &mut Context) -> Result
 /// * `input` - Input for event-prompt replies.
 /// * `output` - Output for model text, status updates, and prompts.
 /// * `err` - Output for warnings and errors.
+/// * `pbar_manager` - The progress bars that progress events update.
 ///
 /// # Returns
 ///
@@ -95,6 +96,7 @@ async fn run_command<R: BufRead, O: Write, E: Write>(
     input: &mut R,
     output: &mut O,
     err: &mut E,
+    pbar_manager: &mut TerminalProgress,
 ) -> Result<bool, CLIError> {
     let result = {
         let dispatch = dispatch_command(command, ctx);
@@ -104,14 +106,14 @@ async fn run_command<R: BufRead, O: Write, E: Write>(
             tokio::select! {
                 result = &mut dispatch => break result,
                 Some(event) = rx.recv() => {
-                    event.handle_event(input, output, err, read_password)?;
+                    event.handle_event(input, output, err, read_password, pbar_manager)?;
                 }
             }
         }
     };
 
     while let Ok(event) = rx.try_recv() {
-        event.handle_event(input, output, err, read_password)?;
+        event.handle_event(input, output, err, read_password, pbar_manager)?;
     }
 
     match result {
@@ -200,6 +202,8 @@ pub(crate) async fn cli<R: BufRead, O: Write, E: Write>(
         Arc::clone(&ctx.state.imports),
     )));
 
+    let mut pbar_manager = TerminalProgress::new();
+
     loop {
         let readline = rl.readline(">>> ");
 
@@ -218,6 +222,7 @@ pub(crate) async fn cli<R: BufRead, O: Write, E: Write>(
                     &mut input,
                     &mut output,
                     &mut err,
+                    &mut pbar_manager,
                 )
                 .await?
                 {
@@ -233,7 +238,13 @@ pub(crate) async fn cli<R: BufRead, O: Write, E: Write>(
                 save_current_conversation(&mut ctx).await?;
 
                 while let Ok(event) = rx.try_recv() {
-                    event.handle_event(&mut input, &mut output, &mut err, read_password)?;
+                    event.handle_event(
+                        &mut input,
+                        &mut output,
+                        &mut err,
+                        read_password,
+                        &mut pbar_manager,
+                    )?;
                 }
 
                 break;
@@ -270,7 +281,7 @@ mod tests {
 
     use super::{dispatch_command, run_command};
     use crate::common::test_support::{TestPaths, capture_events, create_test_context};
-    use crate::io::EngineEvent;
+    use crate::io::{EngineEvent, TerminalProgress};
     use crate::state::UsageMetadata;
     use crate::store::lance::LanceZoteroStore;
     use crate::tools::retrieval::RetrievalTool;
@@ -389,6 +400,7 @@ mod tests {
                 &mut io::empty(),
                 &mut output,
                 &mut err,
+                &mut TerminalProgress::new(),
             )
             .await;
             test_ok!(keep_running);
@@ -406,6 +418,7 @@ mod tests {
                 &mut "1\n".as_bytes(),
                 &mut output,
                 &mut err,
+                &mut TerminalProgress::new(),
             )
             .await;
             test_ok!(keep_running);
