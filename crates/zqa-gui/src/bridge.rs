@@ -1,22 +1,20 @@
 //! The runtime bridge between GPUI (which owns the main thread and its own executor)
 //! and the tokio-based zqa pipeline.
 //!
-//! [`Session`](zqa::session::Session) is not `Send`, so it cannot be moved into GPUI's
-//! executor or a tokio task. Instead [`spawn_engine`] dedicates one OS thread that owns
-//! a tokio runtime and the session: it receives commands over a `tokio::sync::mpsc`
+//! [`spawn_engine`] dedicates one OS thread that owns a tokio runtime and the
+//! [`Session`]: it receives commands over a `tokio::sync::mpsc`
 //! channel and runs each one on that runtime. Each dispatch is raced against a separate
 //! cancel channel with `tokio::select!`, so a user can stop an in-flight command: the
 //! cancel branch drops the dispatch future, which aborts the request in progress
 //! (async Rust is cancel-on-drop). Output produced by the handlers is streamed back to
-//! the GPUI side as [`UiEvent`]s through a `futures::mpsc` channel, whose sender is
-//! wrapped in a [`ChannelWriter`] that plays the role of the session's stdout/stderr.
+//! the GPUI side as [`UiEvent`]s through a `futures::mpsc` channel.
 
-use std::io::{self, Write};
 use std::sync::Arc;
 use std::thread;
 
 use futures::channel::mpsc::UnboundedSender;
 use tokio::sync::mpsc::{self, UnboundedReceiver};
+use zqa::io::EngineEvent;
 use zqa::session::Session;
 use zqa::state::SavedChatHistory;
 
@@ -43,37 +41,6 @@ pub enum UiEvent {
     ConversationResumed(Result<Arc<SavedChatHistory>, String>),
     /// The in-flight command was cancelled by the user before it finished.
     Cancelled,
-}
-
-/// A [`Write`] implementation that forwards written bytes to the UI as [`UiEvent`]s,
-/// stripping ANSI SGR escape sequences (the handlers colorize output for a terminal).
-struct ChannelWriter {
-    tx: UnboundedSender<UiEvent>,
-    is_err: bool,
-}
-
-impl Write for ChannelWriter {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        // The handlers write each colored fragment as its own `&str`, so a given `write`
-        // call holds either a complete escape sequence or plain text, never a split one.
-        // UTF-8 boundaries can in principle be split across writes; lossy decoding is
-        // acceptable here since this is display-only output.
-        let text = strip_ansi(&String::from_utf8_lossy(buf));
-        if !text.is_empty() {
-            let event = if self.is_err {
-                UiEvent::Stderr(text)
-            } else {
-                UiEvent::Stdout(text)
-            };
-            // A closed receiver means the UI is gone; drop the output rather than error.
-            let _ = self.tx.unbounded_send(event);
-        }
-        Ok(buf.len())
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
 }
 
 /// Remove ANSI SGR escape sequences (`ESC [ ... m` and friends) from `input`.
@@ -141,8 +108,8 @@ pub fn spawn_engine(
                 }
             };
 
-            let (engine_tx, engine_rx) = mpsc::channel(256);
-            let mut session = match Session::new(config, Some(engine_tx), engine_rx) {
+            let (engine_tx, mut engine_rx) = mpsc::channel(256);
+            let mut session = match Session::new(config, Some(engine_tx)) {
                 Ok(session) => session,
                 Err(e) => {
                     let _ =
@@ -171,8 +138,16 @@ pub fn spawn_engine(
                                 result = session.dispatch(&command) => {
                                     Some(result.map_err(|e| e.to_string()))
                                 }
-                                evt = engine_rx.recv() => {
-                                    Some(event_tx.unbounded_send(evt)
+                                Some(evt) = engine_rx.recv() => {
+                                    let text = strip_ansi(&evt.to_string());
+                                    let event = match evt {
+                                        EngineEvent::StatusUpdate { .. }
+                                        | EngineEvent::Warning { .. }
+                                        | EngineEvent::Error { .. } => UiEvent::Stderr(text),
+                                        _ => UiEvent::Stdout(text),
+                                    };
+
+                                    Some(event_tx.unbounded_send(event)
                                         .map_or_else(|e| Err(e.to_string()), |_| Ok(true)))
                                 }
                                 _ = cancel_rx.recv() => None,
