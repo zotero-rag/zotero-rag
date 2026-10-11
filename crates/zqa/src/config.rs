@@ -27,12 +27,12 @@ use zqa_rag::reranking::common::RerankProviderConfig;
 ///
 /// ```toml
 /// model_provider = "anthropic"  # Generation model provider
-/// embedding_provider = "voyageai"  # Embedding/reranker model provider
+/// embedding_provider = "voyageai"  # Embedding model provider
 /// reranker_provider = "voyageai"  # Omit this to skip reranking
 /// max_concurrent_requests = 5  # Max concurrent embedding requests
 /// max_retries = 3  # Max retries when network requests fail
 /// tool_iteration_limit = 15  # Max tool call-processing iterations per user message
-/// currency = "USD"  # ISO 4217 code used to display cost estimates
+/// currency = "USD"  # ISO 4217 code for cost estimates; falls back to USD if no rate is available
 ///
 /// # `log_level` is a CLI-only arg so it isn't applied inadvertently.
 ///
@@ -43,7 +43,8 @@ use zqa_rag::reranking::common::RerankProviderConfig;
 /// model_small = "claude-haiku-4-5"
 /// api_key = "sk-ant-..."
 /// max_tokens = 64000
-/// reasoning_budget = 2048
+/// reasoning_budget = 2048  # For Opus 4.5 and earlier
+/// reasoning_effort = "high"  # For newer models
 ///
 /// [ollama]
 /// model = "qwen3.5:latest"  # Defaults to the 9B version
