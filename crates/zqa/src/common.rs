@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex, RwLock};
 
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use log::LevelFilter;
 use zqa_pdftools::parse::ExtractedContent;
 use zqa_rag::llm::base::ChatHistoryItem;
@@ -18,14 +18,29 @@ use crate::store::lance::LanceZoteroStore;
 #[command(version, about, long_about = None)]
 pub struct Args {
     /// Log level. Options: debug, info, warn, error, off (default)
-    #[arg(long, default_value = "off")]
+    #[arg(long, global = true, default_value = "off")]
     pub log_level: log::LevelFilter,
 
     /// Whether to also print out the extracted snippets of the retrieved papers. Note that these
     /// are printed out at the INFO log level, so if the log level is unset or lower than INFO, this
     /// effectively does nothing.
-    #[arg(short, long, default_value_t = false)]
+    #[arg(short, long, global = true, default_value_t = false)]
     pub print_summaries: bool,
+
+    /// Run a single command non-interactively instead of starting the interactive prompt.
+    #[command(subcommand)]
+    pub command: Option<CliCommand>,
+}
+
+/// Commands that run once and exit, without starting the interactive prompt.
+#[derive(Subcommand, Clone, Debug)]
+pub enum CliCommand {
+    /// Search for papers in your library without summarizing them, printing one title per line.
+    Search {
+        /// The search query. Multiple words are joined with spaces, so quoting is optional.
+        #[arg(required = true)]
+        query: Vec<String>,
+    },
 }
 
 /// A user-imported document that is not from their Zotero library.
@@ -92,7 +107,7 @@ pub(crate) struct Context<OutStream: Write, ErrStream: Write> {
     pub(crate) err: ErrStream,
 }
 
-/// Initialize the `fern` logger.
+/// Initialize the `fern` logger, writing to `stderr` so logs never mix with command output.
 ///
 /// # Arguments
 ///
@@ -116,7 +131,7 @@ pub fn setup_logger(log_level: LevelFilter) -> Result<(), log::SetLoggerError> {
         })
         .level(log_level)
         .level_for("rustyline", log::LevelFilter::Off)
-        .chain(std::io::stdout())
+        .chain(std::io::stderr())
         .apply()
 }
 
@@ -236,5 +251,23 @@ pub(crate) mod test_support {
             ctx.path_options = self.path_options.clone();
             ctx
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::Parser;
+
+    use super::{Args, CliCommand};
+
+    #[test]
+    fn test_parse_search_subcommand() {
+        let args = Args::parse_from(["zqa", "search", "attention", "is", "all"]);
+        assert!(
+            matches!(args.command, Some(CliCommand::Search { query }) if query == ["attention", "is", "all"])
+        );
+
+        assert!(Args::parse_from(["zqa"]).command.is_none());
+        assert!(Args::try_parse_from(["zqa", "search"]).is_err());
     }
 }
