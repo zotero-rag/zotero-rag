@@ -1,6 +1,5 @@
 //! Command handlers for query operations.
 
-use std::iter;
 use std::path::Path;
 use std::pin::pin;
 use std::sync::{Arc, atomic};
@@ -29,7 +28,62 @@ use crate::tools::mixins::ToolExt;
 use crate::tools::retrieval::RetrievalTool;
 use crate::tools::summarization::SummarizationTool;
 
-/// Perform a vector search and emit matching titles as text events.
+/// Perform a vector search and return the titles of the matching items.
+///
+/// The search timing is emitted as a secondary-text event. The titles are returned rather than
+/// emitted, so the caller decides where they go: the REPL emits them as text events, and the
+/// `search` subcommand writes them to `stdout`.
+///
+/// # Arguments
+///
+/// * `search_term` - The search string to run against the vector database. Surrounding whitespace
+///   is ignored.
+/// * `ctx` - The application context, including the store, configuration, and event sender.
+///
+/// # Returns
+///
+/// The titles of the matching items, best match first.
+///
+/// # Errors
+///
+/// * Returns a [`CLIError`] if the search term is blank, provider configuration is invalid, vector
+///   search fails, or the event receiver is closed.
+pub(crate) async fn search_titles(
+    search_term: &str,
+    ctx: &mut Context,
+) -> Result<Vec<String>, CLIError> {
+    let search_term = search_term.trim();
+    if search_term.is_empty() {
+        return Err(CLIError::CommandError(
+            "Please provide a search term.".to_string(),
+        ));
+    }
+
+    let vector_search_start = Instant::now();
+    let (search_results, _) = ctx
+        .store
+        .vector_search(
+            search_term.to_string(),
+            10,
+            ctx.config.get_reranker_config().as_ref(),
+        )
+        .await?;
+    let vector_search_duration = vector_search_start.elapsed();
+    ctx.emit(EngineEvent::StyledText {
+        spans: vec![StyledSpan {
+            text: format!("Vector search completed in {vector_search_duration:.2?}\n\n"),
+            style: TextStyle::Secondary,
+        }],
+    })
+    .await?;
+
+    Ok(search_results
+        .into_iter()
+        .map(|item| item.metadata.title)
+        .collect())
+}
+
+/// Perform a vector search and emit matching titles as text events, one per line.
 ///
 /// # Arguments
 ///
@@ -42,44 +96,16 @@ use crate::tools::summarization::SummarizationTool;
 ///
 /// # Errors
 ///
-/// * Returns a [`CLIError`] if provider configuration is invalid, vector search fails, or the event
-///   receiver is closed.
+/// * Returns a [`CLIError`] if the search term is blank, provider configuration is invalid, vector
+///   search fails, or the event receiver is closed.
 pub(crate) async fn handle_search_cmd(
     search_term: String,
     ctx: &mut Context,
 ) -> Result<(), CLIError> {
-    if search_term.is_empty() {
-        ctx.emit(EngineEvent::Warning {
-            message: "Please provide a search term after /search.\n".into(),
-        })
-        .await?;
-        return Ok(());
-    }
-
-    let vector_search_start = Instant::now();
-    let (search_results, _) = ctx
-        .store
-        .vector_search(
-            search_term.clone(),
-            10,
-            ctx.config.get_reranker_config().as_ref(),
-        )
-        .await?;
-    let vector_search_duration = vector_search_start.elapsed();
-    ctx.emit_multiple(
-        iter::once(EngineEvent::StyledText {
-            spans: vec![StyledSpan {
-                text: format!("Vector search completed in {vector_search_duration:.2?}\n\n"),
-                style: TextStyle::Secondary,
-            }],
-        })
-        .chain(search_results.iter().map(|item| EngineEvent::Text {
-            message: format!("{}\n", item.metadata.title),
-        }))
-        .chain(iter::once(EngineEvent::Text {
-            message: "\n".into(),
-        })),
-    )
+    let titles = search_titles(&search_term, ctx).await?;
+    ctx.emit_multiple(titles.into_iter().map(|title| EngineEvent::Text {
+        message: format!("{title}\n"),
+    }))
     .await?;
 
     Ok(())
