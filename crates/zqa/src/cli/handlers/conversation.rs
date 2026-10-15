@@ -12,9 +12,9 @@ use crate::state::{SavedChatHistory, get_conversation_history, save_conversation
 
 /// Resume a previous conversation selected by the user.
 ///
-/// Emits a numbered list of saved conversations, prompts for a selection from standard input,
-/// and loads the chosen conversation into the current session. If the current session is dirty,
-/// it is saved first.
+/// Sends the saved conversations as an [`EngineEvent::Choose`] prompt and loads the chosen
+/// conversation into the current session. If the current session is dirty, it is saved first. An
+/// invalid or missing reply is reported as an error event.
 ///
 /// # Arguments
 ///
@@ -26,7 +26,7 @@ use crate::state::{SavedChatHistory, get_conversation_history, save_conversation
 ///
 /// # Errors
 ///
-/// * `CLIError::IOError` - If reading user input fails.
+/// * `CLIError::CommandError` - If the current conversation could not be saved.
 /// * `CLIError::ChannelError` - If the event receiver is closed.
 /// * `CLIError::LockPoisoningError` - If a lock on conversation state could not be obtained.
 pub(crate) async fn handle_resume_cmd(ctx: &mut Context) -> Result<(), CLIError> {
