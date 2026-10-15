@@ -8,17 +8,17 @@ use tokio::sync::oneshot;
 use crate::state::UsageMetadata;
 use crate::utils::terminal::{BLUE, DIM_TEXT, ITALICS, RED, RESET, YELLOW};
 
-/// An enum of events that can be emitted by handlers called by
-/// [`crate::cli::app::dispatch_command`]. The contract here is that *every* event, including status
-/// updates and error messages will be passed as an event. In general, events carry text, and
-/// variants are a semantic layer on top. Structured payloads are used for data; the current
-/// exceptions are `ToolCall`, `ToolResponse`, and `TokenUsage`.
+/// An enum of events that can be emitted by handlers called by [`crate::cli::app::dispatch_command`].
+/// The contract here is that *every* event, including status updates and error messages will be passed
+/// as an event. In general, events carry text, and variants are a semantic layer on top. Structured
+/// payloads are used for data; the current exceptions are `ToolCall`, `ToolResponse`, and `TokenUsage`.
 ///
-/// You should use events to enable interactivity in your application. Events
-/// are not guaranteed to be a reliable mechanism to detect operation failure: you should rely on
-/// functions returning a `Result` type for this.
+/// You should use events to enable interactivity in your application. Events are not guaranteed to be a
+/// reliable mechanism to detect operation failure: you should rely on functions returning a `Result` type
+/// for this.
 ///
-/// This is the intended contract; handlers and CLI/GUI consumers are not connected yet.
+/// [`crate::utils::library::parse_library`] (used by `/process`) is the one exception: it still
+/// writes its progress spinners and failure summary straight to the terminal.
 ///
 /// ## Display
 ///
