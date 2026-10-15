@@ -10,8 +10,8 @@ use crate::utils::terminal::{DIM_TEXT, RESET};
 /// wrapped tool.
 ///
 /// The wrappers in this module send their lines over a channel rather than printing, so the
-/// consumer decides where they land: the query handler forwards them to the context's error
-/// stream, which is the terminal in the CLI and the transcript in the GUI.
+/// consumer decides where they land: the query handler forwards each line as an
+/// [`EngineEvent::StatusUpdate`](crate::io::EngineEvent::StatusUpdate).
 pub struct Verbose<T: Tool> {
     inner: T,
     status_tx: UnboundedSender<String>,
