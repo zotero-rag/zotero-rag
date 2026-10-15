@@ -65,6 +65,64 @@ pub(crate) async fn dispatch_command(command: &str, ctx: &mut Context) -> Result
     .and(Ok(true))
 }
 
+/// Run one REPL command, rendering its events while it runs.
+///
+/// Events are rendered as they arrive, so a prompt is answered from `input` while the command
+/// waits on it. Events still queued when the command finishes are rendered before this returns.
+/// If the command fails, its error is written to `err` and the REPL keeps running.
+///
+/// # Arguments
+///
+/// * `command` - The command string entered by the user.
+/// * `ctx` - Application state, configuration, storage, and the event sender.
+/// * `rx` - The receiver for events sent through `ctx`.
+/// * `input` - Input for event-prompt replies.
+/// * `output` - Output for model text, status updates, and prompts.
+/// * `err` - Output for warnings and errors.
+///
+/// # Returns
+///
+/// `Ok(true)` if the REPL should keep running, `Ok(false)` if the command asked it to exit.
+///
+/// # Errors
+///
+/// * `CLIError::IOError` - If rendering an event, writing the command's error, or reading a prompt
+///   reply fails.
+async fn run_command<R: BufRead, O: Write, E: Write>(
+    command: &str,
+    ctx: &mut Context,
+    rx: &mut mpsc::Receiver<EngineEvent>,
+    input: &mut R,
+    output: &mut O,
+    err: &mut E,
+) -> Result<bool, CLIError> {
+    let result = {
+        let dispatch = dispatch_command(command, ctx);
+        tokio::pin!(dispatch);
+
+        loop {
+            tokio::select! {
+                result = &mut dispatch => break result,
+                Some(event) = rx.recv() => {
+                    event.handle_event(input, output, err, read_password)?;
+                }
+            }
+        }
+    };
+
+    while let Ok(event) = rx.try_recv() {
+        event.handle_event(input, output, err, read_password)?;
+    }
+
+    match result {
+        Ok(keep_running) => Ok(keep_running),
+        Err(e) => {
+            write!(err, "{e}")?;
+            Ok(true)
+        }
+    }
+}
+
 /// The core CLI implementation that implements a REPL for user commands.
 ///
 /// # Arguments
@@ -153,30 +211,17 @@ pub(crate) async fn cli<R: BufRead, O: Write, E: Write>(
                     log::debug!("Failed to write history entry: {e}");
                 }
 
-                let continue_loop = {
-                    let dispatch = dispatch_command(&command, &mut ctx);
-                    tokio::pin!(dispatch);
-
-                    loop {
-                        tokio::select! {
-                            result = &mut dispatch => break result,
-                            Some(event) = rx.recv() => {
-                                event.handle_event(&mut input, &mut output, &mut err, read_password)?;
-                            }
-                        }
-                    }
-                };
-
-                while let Ok(event) = rx.try_recv() {
-                    event.handle_event(&mut input, &mut output, &mut err, read_password)?;
-                }
-
-                match continue_loop {
-                    Err(ref e) => {
-                        write!(&mut err, "{e}")?;
-                    }
-                    Ok(false) => break,
-                    _ => {}
+                if !run_command(
+                    &command,
+                    &mut ctx,
+                    &mut rx,
+                    &mut input,
+                    &mut output,
+                    &mut err,
+                )
+                .await?
+                {
+                    break;
                 }
             }
             Err(ReadlineError::Signal(rustyline::error::Signal::Resize)) => {
@@ -206,12 +251,14 @@ pub(crate) async fn cli<R: BufRead, O: Write, E: Write>(
 #[cfg(test)]
 mod tests {
 
+    use std::io;
     use std::sync::{Arc, atomic};
 
     use serde_json::json;
     use serial_test::serial;
     use temp_env;
-    use zqa_macros::{test_eq, test_ok};
+    use tokio::sync::mpsc;
+    use zqa_macros::{test_contains, test_eq, test_ok};
     use zqa_macros_proc::retry;
     use zqa_rag::constants::{
         DEFAULT_VOYAGE_EMBEDDING_DIM, DEFAULT_VOYAGE_EMBEDDING_MODEL, DEFAULT_VOYAGE_RERANK_MODEL,
@@ -221,9 +268,10 @@ mod tests {
     use zqa_rag::llm::tools::Tool;
     use zqa_rag::reranking::common::RerankProviderConfig;
 
-    use super::dispatch_command;
+    use super::{dispatch_command, run_command};
     use crate::common::test_support::{TestPaths, capture_events, create_test_context};
     use crate::io::EngineEvent;
+    use crate::state::UsageMetadata;
     use crate::store::lance::LanceZoteroStore;
     use crate::tools::retrieval::RetrievalTool;
 
@@ -302,6 +350,77 @@ mod tests {
                 event,
                 EngineEvent::Text { message } if message.contains("No saved conversations found.")
             )));
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_run_command_quit_then_resume_reloads_conversation() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let state_dir = temp_dir.path().to_str().unwrap().to_string();
+
+        temp_env::async_with_vars([("ZQA_STATE_DIR", Some(state_dir.as_str()))], async {
+            let history = vec![ChatHistoryItem {
+                role: MessageRole::User,
+                content: vec![ChatHistoryContent::Text("Summarize this paper".into())],
+            }];
+            let usage = UsageMetadata {
+                input_tokens: 1000,
+                output_tokens: 500,
+                estimated_cost: 12,
+                ..UsageMetadata::default()
+            };
+            let mut output = Vec::new();
+            let mut err = Vec::new();
+
+            let mut ctx = create_test_context(vec![]);
+            let (tx, mut rx) = mpsc::channel(256);
+            ctx.event_tx = Some(tx);
+            *ctx.state.title.lock().unwrap() = Some("Existing conversation".to_string());
+            *ctx.state.chat_history.lock().unwrap() = history.clone();
+            ctx.state.usage = usage;
+            ctx.state.dirty.store(true, atomic::Ordering::Relaxed);
+
+            let keep_running = run_command(
+                "/quit",
+                &mut ctx,
+                &mut rx,
+                &mut io::empty(),
+                &mut output,
+                &mut err,
+            )
+            .await;
+            test_ok!(keep_running);
+            assert!(!keep_running.unwrap());
+
+            // A fresh context stands in for the next process: nothing is loaded until `/resume`.
+            let mut ctx = create_test_context(vec![]);
+            let (tx, mut rx) = mpsc::channel(256);
+            ctx.event_tx = Some(tx);
+
+            let keep_running = run_command(
+                "/resume",
+                &mut ctx,
+                &mut rx,
+                &mut "1\n".as_bytes(),
+                &mut output,
+                &mut err,
+            )
+            .await;
+            test_ok!(keep_running);
+            assert!(keep_running.unwrap());
+
+            let output = String::from_utf8(output).unwrap();
+            test_contains!(output, "Existing conversation (1 message)");
+            test_contains!(output, "Resumed: Existing conversation");
+            test_eq!(String::from_utf8(err).unwrap(), "");
+            test_eq!(*ctx.state.chat_history.lock().unwrap(), history);
+            test_eq!(
+                *ctx.state.title.lock().unwrap(),
+                Some("Existing conversation".to_string())
+            );
+            test_eq!(ctx.state.usage, usage);
         })
         .await;
     }
