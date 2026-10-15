@@ -1,8 +1,8 @@
 //! A minimal, embeddable driver for the zqa command handlers.
 //!
 //! [`Session`] owns a [`Context`] and forwards command strings to the same
-//! [`dispatch_command`](crate::cli::app) the REPL uses, but with caller-supplied
-//! output streams. It exists so out-of-crate front-ends (such as `zqa-gui`) can reuse
+//! [`dispatch_command`](crate::cli::app) the REPL uses, sending [`EngineEvent`]s to a
+//! caller-supplied channel. It exists so out-of-crate front-ends (such as `zqa-gui`) can reuse
 //! the full retrieval/generation pipeline without depending on the crate internals
 //! ([`Context`], [`State`], the handler functions) being `pub`.
 
@@ -27,11 +27,13 @@ pub struct Session {
 }
 
 impl Session {
-    /// Build a session from a config and a pair of output streams.
+    /// Build a session from a config and an optional event sender.
     ///
     /// # Arguments
     ///
     /// * `config` - The loaded application configuration (see [`crate::load_config`]).
+    /// * `event_tx` - Where commands send their events. `None` discards every event, and commands
+    ///   that prompt get no reply.
     ///
     /// # Errors
     ///
@@ -56,10 +58,13 @@ impl Session {
     /// Dispatch a single command string (e.g. `"/help"` or a bare query) through the
     /// same pipeline as the REPL.
     ///
+    /// Keep receiving events while the returned future runs: the command waits whenever the
+    /// event channel is full or a prompt has not been answered.
+    ///
     /// # Arguments
     ///
-    /// * `command` - The command or query to run. Output is written to the session's
-    ///   `out`/`err` streams as it is produced.
+    /// * `command` - The command or query to run. Its events are sent to the session's event
+    ///   sender as they are produced.
     ///
     /// # Returns
     ///
