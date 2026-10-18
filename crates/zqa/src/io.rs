@@ -29,15 +29,11 @@ impl TerminalProgress {
 
 /// An enum of events that can be emitted by handlers called by [`crate::cli::app::dispatch_command`].
 /// The contract here is that *every* event, including status updates and error messages will be passed
-/// as an event. In general, events carry text, and variants are a semantic layer on top. Structured
-/// payloads are used for data; the current exceptions are `ToolCall`, `ToolResponse`, and `TokenUsage`.
+/// as an event. In general, events carry text, and variants are a semantic layer on top.
 ///
 /// You should use events to enable interactivity in your application. Events are not guaranteed to be a
 /// reliable mechanism to detect operation failure: you should rely on functions returning a `Result` type
 /// for this.
-///
-/// [`crate::utils::library::parse_library`] (used by `/process`) is the one exception: it still
-/// writes its progress spinners and failure summary straight to the terminal.
 ///
 /// ## Display
 ///
@@ -66,7 +62,7 @@ impl TerminalProgress {
 /// * [`EngineEvent::Line`] renders the message if it is not `None`, then prints two newlines and
 ///   finally prints "> ". The latter actions occur regardless of the value of `message`.
 ///   [`EngineEvent::Secret`] has the same behavior.
-/// * [`EngineEvent::RecoverableWarning`] and [`EngineEvent::TokenUsage`] are ignored.
+/// * [`EngineEvent::TokenUsage`] is ignored.
 /// * [`EngineEvent::StatusUpdate`] is printed in light blue.
 /// * [`EngineEvent::Warning`] and [`EngineEvent::Error`] are printed in yellow and red
 ///   respectively.
@@ -133,11 +129,6 @@ pub enum EngineEvent {
     StatusUpdate { message: String },
     /// A general ERROR level status update.
     Error { message: String },
-    /// Distinct from `Warning`, this is a lower-severity message and indicates that something was
-    /// not quite as expected, but that it is unlikely to be an issue. For example, if we encounter
-    /// a file that is not a PDF in the user's Zotero library, we emit this. The `Display` implementation
-    /// ignores these.
-    RecoverableWarning { message: String },
     /// A WARN level update that signifies that something is not as expected and may cause future
     /// failures. It is possible for a session to proceed normally having emitted this, and is not
     /// fatal. Users should likely be shown these.
@@ -169,6 +160,24 @@ pub enum EngineEvent {
 }
 
 impl EngineEvent {
+    /// Attempt to send this event over a [`tokio::sync::mpsc`] channel, treating a failure as
+    /// acceptable. This is desirable in cases where failure of an event's transmission is not fatal
+    /// to the operation itself. As [`EngineEvent`]'s doc clarifies, events themselves hold no
+    /// guarantees for whether the underlying operation succeeded, and callers should instead rely
+    /// on `Result` types being returned to detect failure.
+    ///
+    /// If `event_tx` is `None`, the event is discarded.
+    pub(crate) async fn maybe_send(
+        self,
+        event_tx: Option<&tokio::sync::mpsc::Sender<EngineEvent>>,
+    ) {
+        let Some(event_tx) = event_tx else {
+            return;
+        };
+
+        let _ = event_tx.send(self).await;
+    }
+
     /// Handle an event in the CLI. As described in the docs for the enum, this first uses the
     /// enum's `Display` impl, and then handles input.
     ///
@@ -222,7 +231,7 @@ impl EngineEvent {
                 let pbar = if let Some(total) = total {
                     // NOTE: Maintainers should keep this in sync with `pbar_template_is_valid` below.
                     pbar_manager.mbar.add(ProgressBar::new(total).with_style(
-                        ProgressStyle::with_template("{bar} {msg} ({percent})").unwrap(),
+                        ProgressStyle::with_template("{bar} {msg} ({percent}%)").unwrap(),
                     ))
                 } else {
                     pbar_manager.mbar.add(ProgressBar::new_spinner())
@@ -253,10 +262,7 @@ impl EngineEvent {
         }
 
         // Events ignored by the CLI
-        if matches!(
-            self,
-            Self::RecoverableWarning { .. } | Self::TokenUsage { .. }
-        ) {
+        if matches!(self, Self::TokenUsage { .. }) {
             return Ok(());
         }
 
@@ -421,7 +427,6 @@ impl Display for EngineEvent {
             EngineEvent::Error { message } => write!(f, "{RED}{message}{RESET}"),
             EngineEvent::ProgressStart { .. }
             | EngineEvent::ProgressUpdate { .. }
-            | EngineEvent::RecoverableWarning { .. }
             | EngineEvent::TokenUsage { .. }
             | EngineEvent::ProgressComplete { .. } => Ok(()),
         }
@@ -522,13 +527,6 @@ mod tests {
                     message: "error".into(),
                 },
                 format!("{RED}error{RESET}"),
-                true,
-            ),
-            (
-                EngineEvent::RecoverableWarning {
-                    message: "hidden".into(),
-                },
-                String::new(),
                 true,
             ),
             (
@@ -901,6 +899,6 @@ mod tests {
     fn pbar_template_is_valid() {
         // NOTE: Maintainers should keep this in sync with the template used in
         // [`EngineEvent::handle_event`].
-        assert!(ProgressStyle::with_template("{bar} {msg} ({percent})").is_ok());
+        assert!(ProgressStyle::with_template("{bar} {msg} ({percent}%)").is_ok());
     }
 }
