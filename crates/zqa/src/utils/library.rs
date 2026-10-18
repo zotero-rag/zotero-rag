@@ -5,20 +5,21 @@ use std::hash::Hash;
 use std::io::Read;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
+use std::sync::atomic;
 use std::sync::atomic::AtomicUsize;
-use std::sync::{Arc, atomic};
 use std::time::{Duration, Instant, SystemTime};
 use std::{env, thread};
 
 use arrow_array::RecordBatch;
 use arrow_array::cast::AsArray;
 use directories::UserDirs;
-use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use rusqlite::{Connection, ErrorCode, OpenFlags};
 use serde::Serialize;
 use thiserror::Error;
+use tokio::sync::mpsc;
 use zqa_pdftools::parse::extract_text;
 
+use crate::io::EngineEvent;
 use crate::izip;
 use crate::store::common::ZoteroStore;
 use crate::utils::arrow::DbFields;
@@ -572,33 +573,19 @@ pub fn get_authors(
     Ok(())
 }
 
-/// Get the Unicode characters for each tick of the progress bar.
-///
-/// This uses the ⣿ pattern, which is part of the Unicode Braille Pattern block. Each of the 8 dots
-/// is represented by a bit, and the block itself starts at U+2800. The 8 dots are represented by
-/// an offset in a byte. The representation is as follows: the last three bits, read in reverse
-/// order, describe the first three dots of the left column; the next three bits describe the first
-/// three dots of the right column. The last two bits (which are the two most significant bits of
-/// the byte in reverse order) describe the bottom two. I'm sure there's some historical reason why
-/// the first three in each column are separate from the last two, and this is certainly a choice
-/// we've made.
-const fn compute_pbar_ticks() -> [char; 8] {
-    const FILLED_BOX: u32 = 0x28FF;
-    const DOTS: [u32; 8] = [1, 1 << 1, 1 << 2, 1 << 6, 1 << 7, 1 << 5, 1 << 4, 1 << 3];
-
-    let mut chars = ['\0'; 8];
-    let mut i = 0;
-    while i < 8 {
-        chars[i] = char::from_u32(FILLED_BOX - DOTS[i]).unwrap();
-        i += 1;
-    }
-    chars
-}
-
-#[inline]
-fn get_pbar_ticks() -> String {
-    const PBAR_TICKS: [char; 8] = compute_pbar_ticks();
-    PBAR_TICKS.iter().collect()
+/// Possible outcomes for PDF parsing, with enumerated failure conditions for more granular
+/// accounting.
+enum ParseOutcome {
+    /// PDF extraction succeeded, and the result is attached.
+    Success(ZoteroItem),
+    /// The item in Zotero is not a PDF, and was not parsed.
+    NotPdf,
+    /// The item's metadata had an invalid path.
+    InvalidPath,
+    /// The PDF extraction failed, with the attached error string from the `zqa_pdftools` crate.
+    FailedExtraction(String),
+    /// The PDF extraction thread panicked.
+    Panic,
 }
 
 /// Parses the Zotero library, also parsing PDF files if they exist on disk. If not, we currently
@@ -606,6 +593,8 @@ fn get_pbar_ticks() -> String {
 ///
 /// # Arguments
 ///
+/// * `event_tx` - An optional channel for [`EngineEvent`]s used for progress updates and sending a
+///   summary of parsing outcomes.
 /// * `store` - The vector store, used to determine which items are already present.
 /// * `library_path` - An optional override for the Zotero library directory. When `None`, the path
 ///   is resolved from the environment (see [`get_lib_path`]).
@@ -617,19 +606,17 @@ fn get_pbar_ticks() -> String {
 ///
 /// * `LibraryParsingError::LanceDBError` if fetching library metadata fails.
 /// * `LibraryParsingError::PdfParsingError` if an error reason statistics could not be updated.
-///
-/// # Panics
-///
-/// * If metadata could not be converted to a `u64`.
-/// * If a Mutex lock could not be acquired on the progress bar.
-/// * If the threads could not be joined.
 #[allow(clippy::too_many_lines)]
 pub async fn parse_library<T: ZoteroStore>(
+    event_tx: Option<&mpsc::Sender<EngineEvent>>,
     store: &T,
     library_path: Option<&Path>,
     start_from: Option<usize>,
     limit: Option<usize>,
 ) -> Result<Vec<ZoteroItem>, LibraryParsingError> {
+    // `parse_library` is `pub`, so calls can overlap. Numbering keeps each call's progress IDs unique.
+    static NEXT_PARSE_ID: AtomicUsize = AtomicUsize::new(0);
+
     let start_time = Instant::now();
 
     let store_exists = store.exists().await;
@@ -653,19 +640,9 @@ pub async fn parse_library<T: ZoteroStore>(
         .get();
     log::debug!("Using {n_threads} threads");
 
-    let chunk_size = metadata.len().div_ceil(n_threads);
-    log::debug!("Using chunk size of {chunk_size}");
-
-    // Track failure conditions
-    let not_pdf_counts = Arc::new(AtomicUsize::new(0));
-    let invalid_path_counts = Arc::new(AtomicUsize::new(0));
-    let failed_extraction_counts = Arc::new(AtomicUsize::new(0));
-    let panic_counts = Arc::new(AtomicUsize::new(0));
-
-    // Channels for sending tasks and receiving results and errors
+    // Channels for sending tasks and receiving results
     let (task_tx, task_rx) = crossbeam_channel::bounded::<ZoteroItemMetadata>(metadata.len());
-    let (res_tx, res_rx) = crossbeam_channel::bounded::<ZoteroItem>(metadata.len());
-    let (err_tx, err_rx) = crossbeam_channel::bounded::<String>(metadata.len());
+    let (outcome_tx, mut outcome_rx) = mpsc::unbounded_channel::<ParseOutcome>();
 
     let metadata_len = metadata.len();
     for item in metadata {
@@ -676,33 +653,15 @@ pub async fn parse_library<T: ZoteroStore>(
     }
     drop(task_tx);
 
-    let mbar = Arc::new(MultiProgress::new());
-
     let handles: Vec<_> = (0..n_threads)
         .map(|_| {
             let task_rx = task_rx.clone();
-            let res_tx = res_tx.clone();
-            let err_tx = err_tx.clone();
-
-            let mbar = Arc::clone(&mbar);
-            let not_pdf_counts = Arc::clone(&not_pdf_counts);
-            let invalid_path_counts = Arc::clone(&invalid_path_counts);
-            let panic_counts = Arc::clone(&panic_counts);
-            let failed_extraction_counts = Arc::clone(&failed_extraction_counts);
+            let outcome_tx = outcome_tx.clone();
 
             thread::spawn(move || {
-                let pbar = mbar.add(ProgressBar::no_length());
-                pbar.set_style(
-                    ProgressStyle::with_template("{spinner} {wide_msg}")
-                        .unwrap()
-                        .tick_chars(&get_pbar_ticks()),
-                );
-
+                // This `recv()` is instant since the items have been sent, so blocking is fine.
                 while let Ok(task) = task_rx.recv() {
-                    pbar.set_message(task.title.clone());
-                    pbar.inc(1);
-
-                    let result = catch_unwind(AssertUnwindSafe(|| {
+                    let result = catch_unwind(AssertUnwindSafe(|| -> ParseOutcome {
                         /* Handle each ZoteroItemMetadata item. This has all the info needed to
                          * actually figure out where the file is on disk and parse it--it's here
                          * that we integrate with `pdftools` to get text out of each PDF. */
@@ -714,8 +673,7 @@ pub async fn parse_library<T: ZoteroStore>(
                                 task.library_key
                             );
 
-                            invalid_path_counts.fetch_add(1, atomic::Ordering::Relaxed);
-                            return;
+                            return ParseOutcome::InvalidPath;
                         };
 
                         // TODO: Handle other formats
@@ -724,21 +682,16 @@ pub async fn parse_library<T: ZoteroStore>(
                             .is_some_and(|ext| ext.eq_ignore_ascii_case("pdf"))
                         {
                             log::warn!("Path {path_str} is not a PDF file.");
-                            not_pdf_counts.fetch_add(1, atomic::Ordering::Relaxed);
-
-                            return;
+                            return ParseOutcome::NotPdf;
                         }
+
                         log::debug!("Processing {path_str}");
 
                         match extract_text(path_str) {
-                            Ok(content) => {
-                                if let Err(e) = res_tx.send(ZoteroItem {
-                                    metadata: task,
-                                    text: content.text_content,
-                                }) {
-                                    log::error!("Failed to send result: {e:#?}");
-                                }
-                            }
+                            Ok(content) => ParseOutcome::Success(ZoteroItem {
+                                metadata: task,
+                                text: content.text_content,
+                            }),
                             Err(e) => {
                                 log::warn!(
                                     "Failed to parse PDF for item {} with path {}: {}",
@@ -746,35 +699,76 @@ pub async fn parse_library<T: ZoteroStore>(
                                     path_str,
                                     e
                                 );
-                                if let Err(send_err) = err_tx.send(e.to_string()) {
-                                    log::error!("Failed to send error: {send_err}");
-                                }
-                                failed_extraction_counts.fetch_add(1, atomic::Ordering::Relaxed);
+                                ParseOutcome::FailedExtraction(e.to_string())
                             }
                         }
-                    }));
-
-                    if result.is_err() {
+                    }))
+                    .unwrap_or_else(|_| {
                         log::error!("Thread panicked while processing item");
-                        panic_counts.fetch_add(1, atomic::Ordering::Relaxed);
+                        ParseOutcome::Panic
+                    });
+
+                    // The receiver only closes if `parse_library` was cancelled, so nobody wants the rest.
+                    if outcome_tx.send(result).is_err() {
+                        break;
                     }
                 }
-
-                pbar.finish_with_message("done");
             })
         })
         .collect();
-    drop(res_tx);
-    drop(err_tx);
+    drop(outcome_tx);
 
+    let progress_id = format!(
+        "parse-library-{}",
+        NEXT_PARSE_ID.fetch_add(1, atomic::Ordering::Relaxed)
+    );
+    EngineEvent::ProgressStart {
+        id: progress_id.clone(),
+        label: "Parsing Zotero library".into(),
+        total: Some(metadata_len as u64),
+    }
+    .maybe_send(event_tx)
+    .await;
+
+    #[allow(clippy::items_after_statements, reason = "locality of behavior")]
+    const FAILED_EXTRACTION_SAMPLE_COUNT: usize = 5;
     let mut results: Vec<ZoteroItem> = Vec::new();
-    while let Ok(item) = res_rx.recv() {
-        results.push(item);
+    let mut extraction_failure_samples = Vec::with_capacity(FAILED_EXTRACTION_SAMPLE_COUNT);
+    let mut completed = 0;
+
+    // Failure type counts
+    let mut not_pdf = 0;
+    let mut invalid_path = 0;
+    let mut panicked_thread = 0;
+    let mut failed_extraction = 0;
+
+    while let Some(item) = outcome_rx.recv().await {
+        match item {
+            ParseOutcome::Success(item) => results.push(item),
+            ParseOutcome::NotPdf => not_pdf += 1,
+            ParseOutcome::InvalidPath => invalid_path += 1,
+            ParseOutcome::Panic => panicked_thread += 1,
+            ParseOutcome::FailedExtraction(e) => {
+                if extraction_failure_samples.len() < FAILED_EXTRACTION_SAMPLE_COUNT {
+                    extraction_failure_samples.push(format!("\t\t{e}"));
+                }
+
+                failed_extraction += 1;
+            }
+        }
+
+        completed += 1;
+        EngineEvent::ProgressUpdate {
+            id: progress_id.clone(),
+            completed,
+        }
+        .maybe_send(event_tx)
+        .await;
     }
 
-    if let Err(e) = mbar.clear() {
-        log::error!("Error when clearing MultiProgress: {e:#?}");
-    }
+    EngineEvent::ProgressComplete { id: progress_id }
+        .maybe_send(event_tx)
+        .await;
 
     for handle in handles {
         if let Err(e) = handle.join() {
@@ -799,31 +793,30 @@ pub async fn parse_library<T: ZoteroStore>(
         log::info!("There were no errors during parsing.");
     } else {
         log::warn!("{fail_count} items could not be parsed.");
-        println!("{fail_count} items could not be parsed:");
 
-        let not_pdf_count = not_pdf_counts.load(atomic::Ordering::Relaxed);
-        if not_pdf_count > 0 {
-            println!("\t{not_pdf_count} failed because they were not PDFs.");
+        let mut summary = format!("{fail_count} items could not be parsed:");
+
+        for (count, reason) in [
+            (not_pdf, "were not PDFs"),
+            (invalid_path, "had invalid file paths"),
+            (panicked_thread, "had unexpected errors"),
+            (
+                failed_extraction,
+                "had PDFs whose content couldn't be extracted",
+            ),
+        ] {
+            if count > 0 {
+                let _ = write!(summary, "\n\t{count} failed because they {reason}.");
+            }
         }
 
-        let invalid_path_count = invalid_path_counts.load(atomic::Ordering::Relaxed);
-        if invalid_path_count > 0 {
-            println!("\t{invalid_path_count} failed because they had invalid file paths.");
+        if failed_extraction > 0 {
+            let _ = write!(summary, "\n{}", extraction_failure_samples.join("\n"));
         }
 
-        let failed_extraction_count = failed_extraction_counts.load(atomic::Ordering::Relaxed);
-        if failed_extraction_count > 0 {
-            println!("\t{failed_extraction_count} failed PDF text extraction:");
-        }
-
-        while let Ok(e) = err_rx.recv() {
-            println!("\t\tError: {e}");
-        }
-
-        let panic_count = panic_counts.load(atomic::Ordering::Relaxed);
-        if panic_count > 0 {
-            println!("\t{panic_count} failed because parsing failed.");
-        }
+        EngineEvent::Warning { message: summary }
+            .maybe_send(event_tx)
+            .await;
     }
 
     Ok(results)
@@ -1027,7 +1020,7 @@ mod tests {
             arrow_schema::Field::new("pdf_text", arrow_schema::DataType::Utf8, false),
         ]));
         let store = LanceZoteroStore::from_schema(embedding_config, schema).with_uri(&db_uri);
-        let items = parse_library(&store, Some(&library_path), Some(0), Some(7)).await;
+        let items = parse_library(None, &store, Some(&library_path), Some(0), Some(7)).await;
         test_ok!(items);
 
         let mut items = items.unwrap();
@@ -1063,12 +1056,5 @@ mod tests {
         }
 
         test_eq!(found_bits, 0b11111);
-    }
-
-    #[test]
-    fn test_get_pbar_ticks() {
-        let ticks = get_pbar_ticks();
-
-        assert_eq!(ticks, "⣾⣽⣻⢿⡿⣟⣯⣷");
     }
 }

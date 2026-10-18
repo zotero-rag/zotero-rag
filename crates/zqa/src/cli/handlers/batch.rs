@@ -931,6 +931,7 @@ async fn handle_batch_create_cmd(ctx: &mut Context) -> Result<(), CLIError> {
     }
 
     let lib_items = match parse_library(
+        ctx.event_tx.as_ref(),
         &ctx.store,
         ctx.path_options.library_path.as_deref(),
         None,

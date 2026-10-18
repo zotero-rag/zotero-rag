@@ -96,7 +96,7 @@ pub(crate) async fn handle_process_cmd(ctx: &mut Context) -> Result<(), CLIError
         }
     }
 
-    let items = parse_library(&ctx.store, library_path, None, None)
+    let items = parse_library(ctx.event_tx.as_ref(), &ctx.store, library_path, None, None)
         .await
         .map_err(ArrowError::from)?;
     log::info!("Finished parsing library items.");
