@@ -54,6 +54,6 @@ async fn test_integration_works() {
     let embedding_config = config.get_embedding_config().unwrap();
     let store = LanceZoteroStore::from_embedding_config(embedding_config);
 
-    let record_batch = full_library_to_arrow(&store, None, None, None).await;
+    let record_batch = full_library_to_arrow(None, &store, None, None, None).await;
     test_ok!(record_batch);
 }

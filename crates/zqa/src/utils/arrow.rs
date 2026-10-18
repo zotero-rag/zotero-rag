@@ -5,11 +5,13 @@ use arrow_array::types::Float32Type;
 use arrow_array::{Array, FixedSizeListArray, Float32Array, RecordBatch, StringArray};
 use arrow_schema;
 use thiserror::Error;
+use tokio::sync::mpsc;
 use zqa_rag::embedding::common::{EmbeddingProviderConfig, get_embedding_provider_with_config};
 use zqa_rag::llm::errors::LLMError;
 use zqa_rag::vector::backends::lance::LanceError;
 
 use super::library::{LibraryParsingError, parse_library};
+use crate::io::EngineEvent;
 use crate::store::lance::LanceZoteroStore;
 use crate::utils::library::ZoteroItem;
 
@@ -298,6 +300,7 @@ fn embedded_items_to_arrow(
 ///
 /// # Arguments
 ///
+/// * `event_tx` - Where parsing progress and the failure summary are sent. `None` discards them.
 /// * `store` - [`LanceZoteroStore`] with configuration
 /// * `library_path` - An optional override for the Zotero library directory. When `None`, the path
 ///   is resolved from the environment.
@@ -305,12 +308,13 @@ fn embedded_items_to_arrow(
 ///   multi-threading, etc.
 /// * `limit` - Optional limit, meant to be used in conjunction with `start_from`.
 pub async fn full_library_to_arrow(
+    event_tx: Option<&mpsc::Sender<EngineEvent>>,
     store: &LanceZoteroStore,
     library_path: Option<&std::path::Path>,
     start_from: Option<usize>,
     limit: Option<usize>,
 ) -> Result<RecordBatch, ArrowError> {
-    let lib_items = parse_library(store, library_path, start_from, limit).await?;
+    let lib_items = parse_library(event_tx, store, library_path, start_from, limit).await?;
     log::info!("Finished parsing library items.");
 
     library_to_arrow(&lib_items, &store.get_embedding_config())
@@ -445,9 +449,10 @@ mod tests {
         let schema = Arc::new(get_schema(&embedding_config));
         let store = LanceZoteroStore::from_schema(embedding_config, schema)
             .with_uri(db_uri.to_str().unwrap());
-        let record_batch = full_library_to_arrow(&store, Some(&library_path), Some(0), Some(5))
-            .await
-            .expect("Failed to fetch library");
+        let record_batch =
+            full_library_to_arrow(None, &store, Some(&library_path), Some(0), Some(5))
+                .await
+                .expect("Failed to fetch library");
         let schema = record_batch.schema();
         let batches = vec![Ok(record_batch)];
         let mut batch_iter = RecordBatchIterator::new(batches.into_iter(), schema);
