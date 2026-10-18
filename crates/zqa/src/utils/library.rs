@@ -867,11 +867,14 @@ mod tests {
             .join("Zotero");
         let unlocked = parse_library_metadata(Some(&assets), None, None).unwrap();
 
-        // An awkward directory name, plus invalid UTF-8 on Unix.
+        // An awkward directory name, plus invalid UTF-8 on Linux. APFS rejects file names that are
+        // not valid UTF-8, and Windows paths are not byte strings.
         let dir = tempfile::tempdir().unwrap();
-        let mut dir_name = std::ffi::OsString::from("Zotero #1 %20");
-        #[cfg(unix)]
-        dir_name.push(<std::ffi::OsStr as std::os::unix::ffi::OsStrExt>::from_bytes(b"\xff"));
+        #[cfg(target_os = "linux")]
+        let dir_name =
+            <std::ffi::OsStr as std::os::unix::ffi::OsStrExt>::from_bytes(b"Zotero #1 %20\xff");
+        #[cfg(not(target_os = "linux"))]
+        let dir_name = std::ffi::OsStr::new("Zotero #1 %20");
         let library_path = dir.path().join(dir_name);
         std::fs::create_dir(&library_path).unwrap();
         std::fs::copy(
@@ -900,6 +903,11 @@ mod tests {
             )
             .unwrap();
         age_file();
+
+        // Checked only on Linux. Apple's system SQLite doesn't spill these pages despite the small
+        // cache, so on macOS the database file holds only committed data and the guard has nothing
+        // to reject.
+        #[cfg(target_os = "linux")]
         assert!(parse_library_metadata(Some(&library_path), None, None).is_err());
 
         zotero.execute_batch("ROLLBACK; BEGIN EXCLUSIVE;").unwrap();
