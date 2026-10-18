@@ -969,6 +969,10 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "the success and failure cases share the store setup"
+    )]
     async fn test_parse_library() {
         // Check the titles/authors are in the expected order and pairs.
         // The parsing might change; we only care about keywords
@@ -1020,12 +1024,50 @@ mod tests {
             arrow_schema::Field::new("pdf_text", arrow_schema::DataType::Utf8, false),
         ]));
         let store = LanceZoteroStore::from_schema(embedding_config, schema).with_uri(&db_uri);
-        let items = parse_library(None, &store, Some(&library_path), Some(0), Some(7)).await;
+
+        // Nothing reads events until parsing returns, so the channel has to hold all of them.
+        let (event_tx, mut event_rx) = mpsc::channel(256);
+        let items = parse_library(
+            Some(&event_tx),
+            &store,
+            Some(&library_path),
+            Some(0),
+            Some(7),
+        )
+        .await;
         test_ok!(items);
 
         let mut items = items.unwrap();
         assert!(!items.is_empty());
         test_eq!(items.len(), 7);
+
+        let Ok(EngineEvent::ProgressStart {
+            id, total: Some(7), ..
+        }) = event_rx.try_recv()
+        else {
+            panic!("parsing should start a progress bar for 7 items");
+        };
+
+        for expected in 1..=7 {
+            let Ok(EngineEvent::ProgressUpdate {
+                id: update_id,
+                completed,
+            }) = event_rx.try_recv()
+            else {
+                panic!("expected progress update {expected}");
+            };
+
+            test_eq!(update_id, id);
+            test_eq!(completed, expected);
+        }
+
+        assert!(matches!(
+            event_rx.try_recv(),
+            Ok(EngineEvent::ProgressComplete { id: complete_id }) if complete_id == id
+        ));
+
+        // Every item parsed, so no failure summary follows.
+        assert!(event_rx.try_recv().is_err());
 
         // Now fetch authors from the Zotero DB
         let authors_result = get_authors(&mut items, Some(&library_path));
@@ -1056,5 +1098,41 @@ mod tests {
         }
 
         test_eq!(found_bits, 0b11111);
+
+        // Without the `storage` directory every PDF is missing, so each item fails extraction. The
+        // summary counts all 7 failures but lists only the first five errors.
+        let no_pdfs_path = tmp.path().join("Zotero");
+        std::fs::create_dir(&no_pdfs_path).unwrap();
+        std::fs::copy(
+            library_path.join("zotero.sqlite"),
+            no_pdfs_path.join("zotero.sqlite"),
+        )
+        .unwrap();
+
+        let items = parse_library(
+            Some(&event_tx),
+            &store,
+            Some(&no_pdfs_path),
+            Some(0),
+            Some(7),
+        )
+        .await;
+        test_ok!(items);
+        assert!(items.unwrap().is_empty());
+
+        let warnings: Vec<_> = std::iter::from_fn(|| event_rx.try_recv().ok())
+            .filter_map(|event| match event {
+                EngineEvent::Warning { message } => Some(message),
+                _ => None,
+            })
+            .collect();
+
+        test_eq!(warnings.len(), 1);
+        assert!(warnings[0].starts_with("7 items could not be parsed:"));
+        assert!(
+            warnings[0]
+                .contains("7 failed because they had PDFs whose content couldn't be extracted.")
+        );
+        test_eq!(warnings[0].matches("\n\t\t").count(), 5);
     }
 }
