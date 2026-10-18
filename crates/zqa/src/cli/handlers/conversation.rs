@@ -56,7 +56,7 @@ pub(crate) async fn handle_resume_cmd(ctx: &mut Context) -> Result<(), CLIError>
                 .map(|h| {
                     let msg_count = h.history.len();
                     format!(
-                        "{} ({} message{})\n",
+                        "{} ({} message{})",
                         h.title,
                         msg_count,
                         if msg_count == 1 { "" } else { "s" }
