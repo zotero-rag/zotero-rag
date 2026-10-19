@@ -102,6 +102,18 @@ pub struct UsageMetadata {
     pub estimated_cost: u32,
 }
 
+impl From<UsageMetadata> for ModelUsage {
+    fn from(val: UsageMetadata) -> Self {
+        ModelUsage {
+            input_tokens: val.input_tokens,
+            input_cache_written: val.input_cache_written,
+            input_cache_read: val.input_cache_read,
+            output_tokens: val.output_tokens,
+            reasoning_tokens: val.reasoning_tokens,
+        }
+    }
+}
+
 impl Add<UsageMetadata> for UsageMetadata {
     type Output = UsageMetadata;
 

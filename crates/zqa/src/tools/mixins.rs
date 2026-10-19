@@ -4,7 +4,10 @@ use std::time::Instant;
 use tokio::sync::mpsc::UnboundedSender;
 use zqa_rag::llm::tools::Tool;
 
-use crate::utils::terminal::{DIM_TEXT, RESET};
+use crate::{
+    io::EngineEvent,
+    utils::terminal::{DIM_TEXT, RESET},
+};
 
 /// `Tool` wrapper that reports its arguments on a status channel before delegating to the
 /// wrapped tool.
@@ -14,11 +17,11 @@ use crate::utils::terminal::{DIM_TEXT, RESET};
 /// [`EngineEvent::StatusUpdate`](crate::io::EngineEvent::StatusUpdate).
 pub struct Verbose<T: Tool> {
     inner: T,
-    status_tx: UnboundedSender<String>,
+    status_tx: UnboundedSender<EngineEvent>,
 }
 
 impl<T: Tool> Verbose<T> {
-    pub fn new(inner: T, status_tx: UnboundedSender<String>) -> Self {
+    pub fn new(inner: T, status_tx: UnboundedSender<EngineEvent>) -> Self {
         Self { inner, status_tx }
     }
 }
@@ -45,11 +48,13 @@ impl<T: Tool> Tool for Verbose<T> {
 
             // A send fails only when the consumer is gone, in which case the line has
             // nowhere useful to go anyway.
-            let _ = self.status_tx.send(format!(
-                "{DIM_TEXT}{} ({}){RESET}",
-                self.inner.name(),
-                printed_args
-            ));
+            let _ = self.status_tx.send(EngineEvent::StatusUpdate {
+                message: format!(
+                    "{DIM_TEXT}{} ({}){RESET}\n",
+                    self.inner.name(),
+                    printed_args
+                ),
+            });
             self.inner.call(args).await
         })
     }
@@ -59,11 +64,11 @@ impl<T: Tool> Tool for Verbose<T> {
 /// (see [`Verbose`] for where the lines end up).
 pub struct Timed<T: Tool> {
     inner: T,
-    status_tx: UnboundedSender<String>,
+    status_tx: UnboundedSender<EngineEvent>,
 }
 
 impl<T: Tool> Timed<T> {
-    pub fn new(inner: T, status_tx: UnboundedSender<String>) -> Self {
+    pub fn new(inner: T, status_tx: UnboundedSender<EngineEvent>) -> Self {
         Self { inner, status_tx }
     }
 }
@@ -95,12 +100,14 @@ impl<T: Tool> Tool for Timed<T> {
             } else {
                 "failed after"
             };
-            let _ = self.status_tx.send(format!(
-                "{DIM_TEXT}{}{RESET} {} {:.2}s",
-                self.inner.name(),
-                outcome,
-                elapsed.as_secs_f64()
-            ));
+            let _ = self.status_tx.send(EngineEvent::StatusUpdate {
+                message: format!(
+                    "{DIM_TEXT}{}{RESET} {} {:.2}s\n",
+                    self.inner.name(),
+                    outcome,
+                    elapsed.as_secs_f64()
+                ),
+            });
 
             result
         })
@@ -157,12 +164,12 @@ impl<T: Tool> Tool for Timed<T> {
 /// ```
 pub trait ToolExt: Tool + Sized {
     /// Report the tool's arguments on `status_tx` before each call.
-    fn verbose(self, status_tx: UnboundedSender<String>) -> Verbose<Self> {
+    fn verbose(self, status_tx: UnboundedSender<EngineEvent>) -> Verbose<Self> {
         Verbose::new(self, status_tx)
     }
 
     /// Report each call's duration and outcome on `status_tx`.
-    fn timed(self, status_tx: UnboundedSender<String>) -> Timed<Self> {
+    fn timed(self, status_tx: UnboundedSender<EngineEvent>) -> Timed<Self> {
         Timed::new(self, status_tx)
     }
 }
@@ -223,7 +230,7 @@ mod tests {
         assert_eq!(result, json!({ "ok": true }));
         assert_eq!(*seen_args.lock().unwrap(), Some(args));
 
-        let line = status_rx.try_recv().unwrap();
+        let line = status_rx.try_recv().unwrap().to_string();
         assert!(line.contains("mock_tool"));
         assert!(line.contains(r#"{"foo":"bar"}"#));
     }
@@ -243,7 +250,7 @@ mod tests {
         assert_eq!(result, json!({ "ok": true }));
         assert_eq!(*seen_args.lock().unwrap(), Some(args));
 
-        let line = status_rx.try_recv().unwrap();
+        let line = status_rx.try_recv().unwrap().to_string();
         assert!(line.contains("mock_tool"));
         assert!(line.contains("completed in"));
     }
@@ -265,8 +272,8 @@ mod tests {
         assert_eq!(*seen_args.lock().unwrap(), Some(args));
 
         // The argument announcement precedes the timing line.
-        let first = status_rx.try_recv().unwrap();
-        let second = status_rx.try_recv().unwrap();
+        let first = status_rx.try_recv().unwrap().to_string();
+        let second = status_rx.try_recv().unwrap().to_string();
         assert!(first.contains(r#"{"foo":"bar"}"#));
         assert!(second.contains("completed in"));
     }

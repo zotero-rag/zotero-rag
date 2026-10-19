@@ -27,6 +27,7 @@ use zqa_rag::logging::preview;
 use zqa_rag::reranking::common::{RerankProviderConfig, get_reranking_provider_with_config};
 
 use crate::common::UserDocument;
+use crate::io::EngineEvent;
 use crate::tools::mixins::ToolExt;
 use crate::utils::rag::ModelResponse;
 
@@ -113,7 +114,10 @@ impl DocumentsToolFactory {
     /// # Arguments
     ///
     /// * `status_tx` - The channel on which the tool wrappers report their status lines.
-    pub(crate) fn build_tools(&self, status_tx: UnboundedSender<String>) -> Vec<Box<dyn Tool>> {
+    pub(crate) fn build_tools(
+        &self,
+        status_tx: UnboundedSender<EngineEvent>,
+    ) -> Vec<Box<dyn Tool>> {
         vec![
             // `ListDocumentsTool` doesn't take very long since it's just a listing, so it doesn't
             // need to be `timed()`.

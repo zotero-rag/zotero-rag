@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use crate::capabilities::{BatchAPIProvider, BatchJobState};
+use crate::capabilities::{BatchAPIProvider, BatchJobState, ModelProvider};
 use crate::clients::anthropic::AnthropicClient;
 use crate::clients::gemini::GeminiClient;
 use crate::clients::ollama::OllamaClient;
@@ -49,6 +49,20 @@ impl LLMClient {
             LLMClient::Gemini(client) => client.config.as_ref().map(|c| c.model.clone()),
             #[cfg(any(test, feature = "mock"))]
             LLMClient::Mock(_) => Some("mock_client".into()),
+        }
+    }
+
+    /// Return the provider that this client is configured for.
+    #[must_use]
+    pub fn get_provider(&self) -> ModelProvider {
+        match self {
+            LLMClient::Anthropic(_) => ModelProvider::Anthropic,
+            LLMClient::Ollama(_) => ModelProvider::Ollama,
+            LLMClient::OpenAI(_) => ModelProvider::OpenAI,
+            LLMClient::OpenRouter(_) => ModelProvider::OpenRouter,
+            LLMClient::Gemini(_) => ModelProvider::Gemini,
+            #[cfg(any(test, feature = "mock"))]
+            LLMClient::Mock(_) => ModelProvider::Mock,
         }
     }
 
