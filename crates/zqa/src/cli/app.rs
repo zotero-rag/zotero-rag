@@ -69,7 +69,8 @@ pub(crate) async fn dispatch_command(command: &str, ctx: &mut Context) -> Result
 ///
 /// Events are rendered as they arrive, so a prompt is answered from `input` while the command
 /// waits on it. Events still queued when the command finishes are rendered before this returns.
-/// If the command fails, its error is written to `err` and the REPL keeps running.
+/// Progress bars the command left unfinished are then cleared, so they can't draw over the error
+/// that may follow. If the command fails, its error is written to `err` and the REPL keeps running.
 ///
 /// # Arguments
 ///
@@ -115,6 +116,8 @@ async fn run_command<R: BufRead, O: Write, E: Write>(
     while let Ok(event) = rx.try_recv() {
         event.handle_event(input, output, err, read_password, pbar_manager)?;
     }
+
+    pbar_manager.clear_all();
 
     match result {
         Ok(keep_running) => Ok(keep_running),
@@ -247,6 +250,7 @@ pub(crate) async fn cli<R: BufRead, O: Write, E: Write>(
                     )?;
                 }
 
+                pbar_manager.clear_all();
                 break;
             }
             _ => break,
