@@ -56,7 +56,7 @@ pub(crate) fn get_document_session_key(path: &Path) -> Result<String, CLIError> 
 /// * `LLMError::InvalidProviderError` if the provider is not supported
 pub(super) fn get_user_document_tools(
     ctx: &mut Context,
-    status_tx: UnboundedSender<String>,
+    status_tx: UnboundedSender<EngineEvent>,
 ) -> Result<Vec<Box<dyn Tool>>, CLIError> {
     let imports = ctx.state.imports.clone();
     if imports.read()?.is_empty() {
