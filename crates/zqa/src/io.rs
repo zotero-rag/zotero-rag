@@ -25,6 +25,23 @@ impl TerminalProgress {
             pbar_map: HashMap::new(),
         }
     }
+
+    /// Clear the bar tracked under `id` from the terminal and stop tracking it. Does nothing if no
+    /// bar has that ID.
+    pub(crate) fn remove(&mut self, id: &str) {
+        if let Some(pbar) = self.pbar_map.remove(id) {
+            pbar.finish_and_clear();
+            self.mbar.remove(&pbar);
+        }
+    }
+
+    /// Clear all progress bars from the terminal and stop tracking them.
+    pub(crate) fn clear_all(&mut self) {
+        for (_, pbar) in self.pbar_map.drain() {
+            pbar.finish_and_clear();
+            self.mbar.remove(&pbar);
+        }
+    }
 }
 
 /// An enum of events that can be emitted by handlers called by [`crate::cli::app::dispatch_command`].
@@ -228,6 +245,9 @@ impl EngineEvent {
         // Handle progress events and early-exit
         match self {
             Self::ProgressStart { id, label, total } => {
+                // A reused ID replaces its bar, so clear the old one before it is lost.
+                pbar_manager.remove(&id);
+
                 let pbar = if let Some(total) = total {
                     // NOTE: Maintainers should keep this in sync with `pbar_template_is_valid` below.
                     pbar_manager.mbar.add(ProgressBar::new(total).with_style(
@@ -251,11 +271,7 @@ impl EngineEvent {
                 return Ok(());
             }
             Self::ProgressComplete { id } => {
-                if let Some(pbar) = pbar_manager.pbar_map.remove(&id) {
-                    pbar.finish_and_clear();
-                    pbar_manager.mbar.remove(&pbar);
-                }
-
+                pbar_manager.remove(&id);
                 return Ok(());
             }
             _ => {}
@@ -900,5 +916,39 @@ mod tests {
         // NOTE: Maintainers should keep this in sync with the template used in
         // [`EngineEvent::handle_event`].
         assert!(ProgressStyle::with_template("{bar} {msg} ({percent}%)").is_ok());
+    }
+
+    #[test]
+    fn progress_bars_are_cleared_when_replaced_or_left_unfinished() {
+        fn start(id: &str, pbar_manager: &mut TerminalProgress) {
+            EngineEvent::ProgressStart {
+                id: id.into(),
+                label: "Parsing".into(),
+                total: Some(10),
+            }
+            .handle_event(
+                &mut &b""[..],
+                &mut Vec::new(),
+                &mut Vec::new(),
+                no_secret,
+                pbar_manager,
+            )
+            .unwrap();
+        }
+
+        let mut pbar_manager = TerminalProgress::new();
+        start("a", &mut pbar_manager);
+        let replaced = pbar_manager.pbar_map["a"].clone();
+
+        // Starting the same ID again clears the first bar instead of leaving it on screen.
+        start("a", &mut pbar_manager);
+        start("b", &mut pbar_manager);
+        assert!(replaced.is_finished());
+        test_eq!(pbar_manager.pbar_map.len(), 2);
+
+        let unfinished: Vec<_> = pbar_manager.pbar_map.values().cloned().collect();
+        pbar_manager.clear_all();
+        assert!(pbar_manager.pbar_map.is_empty());
+        assert!(unfinished.iter().all(ProgressBar::is_finished));
     }
 }
