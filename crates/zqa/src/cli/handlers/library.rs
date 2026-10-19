@@ -1,5 +1,7 @@
 //! Command handlers for library-related tasks
 
+use std::fmt::Write;
+
 use tokio::sync::oneshot;
 use zqa_rag::vector::doctor::doctor as rag_doctor;
 
@@ -101,38 +103,48 @@ pub(crate) async fn handle_process_cmd(ctx: &mut Context) -> Result<(), CLIError
         .map_err(ArrowError::from)?;
     log::info!("Finished parsing library items.");
 
-    let result = match library_to_arrow(&items, &ctx.store.get_embedding_config()) {
-        Ok(batch) => {
-            let num_failed = items.len() - batch.num_rows();
-            ctx.store
-                .upsert_batches(vec![batch])
-                .await
-                .map(|()| num_failed)
-        }
-        Err(e) => Err(e.into()),
-    };
-
-    match result {
-        Ok(0) => {
-            ctx.emit(EngineEvent::StatusUpdate {
-                message: "Successfully parsed library!\n".into(),
-            })
-            .await?;
-        }
-        Ok(num_failed) => {
-            ctx.emit(EngineEvent::Warning {
-                message: format!(
-                    "{num_failed} items could not be embedded and were not saved. Run '/process' again to retry them.\n"
-                ),
-            })
-            .await?;
-        }
+    let (batch, failed_idx) = match library_to_arrow(&items, &ctx.store.get_embedding_config()) {
+        Ok(t) => t,
         Err(e) => {
             ctx.emit(EngineEvent::Error {
                 message: format!("Parsing library failed: {e}\n"),
             })
             .await?;
+
+            return Ok(());
         }
+    };
+
+    if let Err(e) = ctx.store.upsert_batches(vec![batch]).await {
+        ctx.emit(EngineEvent::Error {
+            message: format!("Parsing library failed: {e}\n"),
+        })
+        .await?;
+
+        return Ok(());
+    }
+
+    if failed_idx.is_empty() {
+        ctx.emit(EngineEvent::StatusUpdate {
+            message: "Successfully parsed library!\n".into(),
+        })
+        .await?;
+    } else {
+        let num_failed = failed_idx.len();
+        let mut summary = format!(
+            "{num_failed} items could not be embedded and were not saved. Run '/process' again to retry them:"
+        );
+        let failed_items_sample = failed_idx
+            .iter()
+            .take(5)
+            .map(|&idx| items[idx].metadata.title.as_str());
+
+        for title in failed_items_sample {
+            let _ = write!(summary, "\n\t{title}");
+        }
+        let _ = write!(summary, "\n\n");
+
+        ctx.emit(EngineEvent::Warning { message: summary }).await?;
     }
 
     Ok(())
