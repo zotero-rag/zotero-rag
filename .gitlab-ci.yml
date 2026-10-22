@@ -274,9 +274,18 @@ coverage:
     # Add target
     - rustup target add ${TARGET}
     # Build
-    - cargo build --locked --release --target="${TARGET}"
+    # NOTE: maintainers, keep this build in sync with the Build step in .github/workflows/cd.yml.
+    - |
+      case ${TARGET} in
+        *-apple-darwin)
+          cargo rustc --locked --profile dist --target="${TARGET}" -p zqa --bin zqa -- -C 'link-arg=-Wl,-unexported_symbol,__R*'
+          ;;
+        *)
+          cargo build --locked --profile dist --target="${TARGET}" -p zqa --bin zqa
+          ;;
+      esac
     # Set binary path
-    - export BIN_PATH="target/${TARGET}/release/zqa"
+    - export BIN_PATH="target/${TARGET}/dist/zqa"
     # Run tests
     - cargo test --locked --target="${TARGET}" -p zqa
     # Create tarball

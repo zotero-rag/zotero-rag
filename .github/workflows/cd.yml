@@ -98,14 +98,22 @@ jobs:
 
     - name: Build
       shell: bash
-      run: $BUILD_CMD build --locked --release --target="${target}"
+      run: |
+        # NOTE: maintainers, keep this build in sync with `.build_release` in .gitlab-ci.yml.
+        # macOS executables export every global Rust symbol by default, and strip cannot remove
+        # exported symbols, so hide them (v0-mangled names start with `__R`) when linking zqa.
+        if [[ "${target}" == *-apple-darwin ]]; then
+          $BUILD_CMD rustc --locked --profile dist --target="${target}" -p zqa --bin zqa -- -C 'link-arg=-Wl,-unexported_symbol,__R*'
+        else
+          $BUILD_CMD build --locked --profile dist --target="${target}" -p zqa --bin zqa
+        fi
 
     - name: Set binary name & path
       id: bin
       shell: bash
       run: |
         # Setup paths
-        BIN_PATH="target/${target}/release/${name}"
+        BIN_PATH="target/${target}/dist/${name}"
 
         # Let subsequent steps know where to find the binary
         echo "BIN_PATH=${BIN_PATH}" >> $GITHUB_OUTPUT

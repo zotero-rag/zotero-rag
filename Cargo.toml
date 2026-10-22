@@ -7,3 +7,10 @@ zqa-macros = { path = "./crates/zqa-macros", version = "0.1" }
 zqa-macros-proc = { path = "./crates/zqa-macros-proc", version = "0.1" }
 zqa-rag = { path = "./crates/zqa-rag", version = "0.2" }
 zqa-pdftools = { path = "./crates/zqa-pdftools", version = "0.2" }
+
+# Used by the CD release builds. Kept separate from `release` so local release rebuilds stay fast.
+[profile.dist]
+inherits = "release"
+strip = true
+lto = "thin"
+codegen-units = 1
