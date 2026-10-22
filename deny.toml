@@ -57,7 +57,17 @@ ignore = [
     # rustybuzz: unmaintained. Pulled in by usvg in the gpui stack. No
     # actionable replacement on our side; gpui would need to move to harfrust.
     # https://rustsec.org/advisories/RUSTSEC-2026-0206
-    { id = "RUSTSEC-2026-0206", reason = "transitive via usvg/gpui; awaiting upstream migration" }
+    { id = "RUSTSEC-2026-0206", reason = "transitive via usvg/gpui; awaiting upstream migration" },
+
+    # zvariant, zvariant_derive, zbus_names: unmaintained. Pulled in by zbus
+    # (accesskit_unix, atspi, ashpd, oo7) in gpui-kit's Linux stack. No safe
+    # upgrade exists; replacing them is upstream's call.
+    # https://rustsec.org/advisories/RUSTSEC-2026-0370
+    # https://rustsec.org/advisories/RUSTSEC-2026-0371
+    # https://rustsec.org/advisories/RUSTSEC-2026-0372
+    { id = "RUSTSEC-2026-0370", reason = "zvariant; transitive via zbus in gpui-kit's Linux stack" },
+    { id = "RUSTSEC-2026-0371", reason = "zbus_names; transitive via zbus in gpui-kit's Linux stack" },
+    { id = "RUSTSEC-2026-0372", reason = "zvariant_derive; transitive via zbus in gpui-kit's Linux stack" }
 ]
 
 [licenses]
