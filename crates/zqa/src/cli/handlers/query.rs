@@ -1,5 +1,6 @@
 //! Command handlers for query operations.
 
+use std::iter;
 use std::path::Path;
 use std::pin::pin;
 use std::sync::atomic::{self, AtomicU64};
@@ -106,23 +107,19 @@ pub(crate) async fn handle_search_cmd(
         )
         .await?;
     let vector_search_duration = vector_search_start.elapsed();
-    ctx.emit(EngineEvent::StatusUpdate {
-        message: format!(
-            "{DIM_TEXT}Vector search completed in {vector_search_duration:.2?}{RESET}\n"
-        ),
-    })
-    .await?;
-
-    for item in &search_results {
-        ctx.emit(EngineEvent::Text {
-            message: format!("{}\n", item.metadata.title),
+    ctx.emit_multiple(
+        iter::once(EngineEvent::StatusUpdate {
+            message: format!(
+                "{DIM_TEXT}Vector search completed in {vector_search_duration:.2?}{RESET}\n"
+            ),
         })
-        .await?;
-    }
-
-    ctx.emit(EngineEvent::Text {
-        message: "\n".into(),
-    })
+        .chain(search_results.iter().map(|item| EngineEvent::Text {
+            message: format!("{}\n", item.metadata.title),
+        }))
+        .chain(iter::once(EngineEvent::Text {
+            message: "\n".into(),
+        })),
+    )
     .await?;
 
     Ok(())
@@ -319,6 +316,7 @@ pub(crate) async fn handle_query_cmd(query: String, ctx: &mut Context) -> Result
         })
         .await?;
     }
+
     let llm_client = ctx
         .config
         .get_generation_config()
@@ -494,41 +492,42 @@ pub(crate) async fn handle_query_cmd(query: String, ctx: &mut Context) -> Result
                 "Query failed in {final_draft_duration:.2?}: {}",
                 zqa_rag::logging::preview(&e)
             );
-            ctx.emit(EngineEvent::StatusUpdate {
-                message: format!(
-                    "{DIM_TEXT}Final draft failed in {final_draft_duration:.2?}{RESET}\n"
-                ),
-            })
-            .await?;
-
-            ctx.emit(EngineEvent::Error {
-                message: format!("Failed to call the LLM endpoint for the final response: {e}\n"),
-            })
+            ctx.emit_multiple([
+                EngineEvent::StatusUpdate {
+                    message: format!(
+                        "{DIM_TEXT}Final draft failed in {final_draft_duration:.2?}{RESET}\n"
+                    ),
+                },
+                EngineEvent::Error {
+                    message: format!(
+                        "Failed to call the LLM endpoint for the final response: {e}\n"
+                    ),
+                },
+            ])
             .await?;
         }
     }
 
-    ctx.emit(EngineEvent::Text {
-        message: "\n-----\n".into(),
-    })
-    .await?;
-    ctx.emit(EngineEvent::Text {
-        message: format!("{DIM_TEXT}Total token usage:{RESET}\n"),
-    })
-    .await?;
-    ctx.emit(EngineEvent::Text {
-        message: format!(
-            "\t{DIM_TEXT}Input tokens: {}{RESET}\n",
-            format_number(ctx.state.usage.input_tokens)
-        ),
-    })
-    .await?;
-    ctx.emit(EngineEvent::Text {
-        message: format!(
-            "\t{DIM_TEXT}Output tokens: {}{RESET}\n\n",
-            format_number(ctx.state.usage.output_tokens)
-        ),
-    })
+    ctx.emit_multiple(vec![
+        EngineEvent::Text {
+            message: "\n-----\n".into(),
+        },
+        EngineEvent::Text {
+            message: format!("{DIM_TEXT}Total token usage:{RESET}\n"),
+        },
+        EngineEvent::Text {
+            message: format!(
+                "\t{DIM_TEXT}Input tokens: {}{RESET}\n",
+                format_number(ctx.state.usage.input_tokens)
+            ),
+        },
+        EngineEvent::Text {
+            message: format!(
+                "\t{DIM_TEXT}Output tokens: {}{RESET}\n\n",
+                format_number(ctx.state.usage.output_tokens)
+            ),
+        },
+    ])
     .await?;
 
     let cost = f64::from(ctx.state.usage.estimated_cost) / 100.0;
