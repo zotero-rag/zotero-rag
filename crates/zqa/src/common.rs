@@ -106,6 +106,43 @@ impl Context {
         };
         tx.send(event).await.map_err(Box::new)
     }
+
+    /// Emit a sequence of events, stopping at the first failed send.
+    ///
+    /// Like [`Self::emit`], this drops all events if no sender is configured.
+    ///
+    /// # Arguments
+    ///
+    /// * `events` - The sequence of events to publish.
+    ///
+    /// # Returns
+    ///
+    /// `Ok(())` if all events are sent, or if no sender is configured.
+    ///
+    /// # Errors
+    ///
+    /// * `SendError<EngineEvent>` - If the receiver is closed; the error retains the event.
+    pub(crate) fn emit_multiple(
+        &self,
+        events: impl IntoIterator<Item = EngineEvent>,
+    ) -> impl Future<Output = Result<(), Box<SendError<EngineEvent>>>> + '_ {
+        // Collecting before the async block keeps the caller's iterator out of the future. A lazy
+        // iterator whose closures borrow would otherwise be held across `send().await`, and rustc
+        // can't prove such futures are `Send` (rust-lang/rust#110338).
+        let events: Vec<_> = events.into_iter().collect();
+
+        async move {
+            let Some(tx) = &self.event_tx else {
+                return Ok(());
+            };
+
+            for event in events {
+                tx.send(event).await.map_err(Box::new)?;
+            }
+
+            Ok(())
+        }
+    }
 }
 
 /// Initialize the `fern` logger.
