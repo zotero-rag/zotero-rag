@@ -66,6 +66,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::Display;
 use std::fs::{self, OpenOptions};
 use std::io::{self, Read, Seek, Write};
+use std::iter;
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
@@ -634,17 +635,17 @@ async fn prompt_and_fetch_batch_results(
         }
         (true, false) => {
             // complete failure
-            ctx.emit(EngineEvent::Error {
-                message: format!("All {} batch items failed.\n", results.failed.len()),
-            })
-            .await?;
-
-            for err in results.failed.iter().take(3) {
-                ctx.emit(EngineEvent::Error {
-                    message: format!("  {} - {}\n", err.id, err.error),
+            ctx.emit_multiple(
+                iter::once(EngineEvent::Error {
+                    message: format!("All {} batch items failed.\n", results.failed.len()),
                 })
-                .await?;
-            }
+                .chain(results.failed.iter().take(3).map(|err| {
+                    EngineEvent::Error {
+                        message: format!("  {} - {}\n", err.id, err.error),
+                    }
+                })),
+            )
+            .await?;
 
             let (tx, rx) = oneshot::channel();
             ctx.emit(EngineEvent::Confirm {
@@ -667,26 +668,26 @@ async fn prompt_and_fetch_batch_results(
         }
         (false, false) => {
             // partial success
-            ctx.emit(EngineEvent::StatusUpdate {
-                message: format!(
-                    "{} of {} items succeeded.\n",
-                    results.succeeded.len(),
-                    results.succeeded.len() + results.failed.len()
-                ),
-            })
-            .await?;
-
             // Show a few of the failures so the user can make an informed choice below.
-            ctx.emit(EngineEvent::Error {
-                message: "Below are a few of the errors sent by the API:\n".into(),
-            })
-            .await?;
-            for err in results.failed.iter().take(3) {
-                ctx.emit(EngineEvent::Error {
+            ctx.emit_multiple(
+                [
+                    EngineEvent::StatusUpdate {
+                        message: format!(
+                            "{} of {} items succeeded.\n",
+                            results.succeeded.len(),
+                            results.succeeded.len() + results.failed.len()
+                        ),
+                    },
+                    EngineEvent::Error {
+                        message: "Below are a few of the errors sent by the API:\n".into(),
+                    },
+                ]
+                .into_iter()
+                .chain(results.failed.iter().take(3).map(|err| EngineEvent::Error {
                     message: format!("  {} - {}\n", err.id, err.error),
-                })
-                .await?;
-            }
+                })),
+            )
+            .await?;
 
             let log_file = batch_dir.join(format!("batch_{}.log", batch.seq_id));
 
