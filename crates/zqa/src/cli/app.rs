@@ -6,6 +6,7 @@ use std::sync::Arc;
 use rpassword::read_password;
 use rustyline::error::ReadlineError;
 use tokio::sync::mpsc;
+use zqa_rag::pricing::get_usd_exchange_rate;
 
 use crate::cli::commands::{Command, parse_command};
 use crate::cli::errors::CLIError;
@@ -24,7 +25,8 @@ use crate::cli::placeholder::PlaceholderText;
 use crate::cli::readline::get_readline_config;
 use crate::common::Context;
 use crate::io::{EngineEvent, TerminalProgress};
-use crate::state::get_state_dir;
+use crate::state::{UsageMetadata, get_state_dir};
+use crate::utils::terminal::{DIM_TEXT, RESET};
 
 /// Handle a single command or query from the user.
 ///
@@ -65,6 +67,79 @@ pub(crate) async fn dispatch_command(command: &str, ctx: &mut Context) -> Result
     .and(Ok(true))
 }
 
+/// Given a positive number, returns a thousands separator-formatted string representation
+///
+/// # Arguments:
+///
+/// * `num` - The number to format
+///
+/// # Returns
+///
+/// The thousands-separated string
+fn format_number(num: u32) -> String {
+    num.to_string()
+        .as_bytes()
+        .rchunks(3)
+        .rev()
+        .map(std::str::from_utf8)
+        .collect::<Result<Vec<&str>, _>>()
+        .unwrap_or_default()
+        .join(",")
+}
+
+/// Write a dimmed footer of the turn's token usage and the current session's total cost so far.
+///
+/// # Arguments
+///
+/// * `output` - A `Write` destination.
+/// * `usage` - Usage statistics for the current turn.
+/// * `ctx` - The app context.
+///
+/// # Errors
+///
+/// [`CLIError::IOError`] if any writes fail.
+async fn write_usage_footer(
+    output: &mut impl Write,
+    usage: &UsageMetadata,
+    ctx: &Context,
+) -> Result<(), CLIError> {
+    write!(output, "\n{DIM_TEXT}-----\n")?;
+    writeln!(output, "Turn's token usage:")?;
+    writeln!(
+        output,
+        "\tInput tokens: {}",
+        format_number(usage.input_tokens)
+    )?;
+    write!(
+        output,
+        "\tOutput tokens: {}\n\n",
+        format_number(usage.output_tokens)
+    )?;
+
+    let cost = f64::from(ctx.state.usage.estimated_cost) / 100.0;
+    if cost > 0.0 {
+        let rate = *ctx
+            .state
+            .exchange_rate
+            .get_or_init(|| get_usd_exchange_rate(&ctx.config.currency))
+            .await;
+        let (cost, currency) = match rate {
+            Some(rate) => (cost * rate, ctx.config.currency.to_ascii_uppercase()),
+            None => (cost, String::from("USD")),
+        };
+
+        writeln!(
+            output,
+            "\tSession cost: {cost:.4} {currency} ({})",
+            ctx.config.get_generation_model_name().unwrap_or_default()
+        )?;
+    }
+
+    write!(output, "\n{RESET}")?;
+
+    Ok(())
+}
+
 /// Run one REPL command, rendering its events while it runs.
 ///
 /// Events are rendered as they arrive, so a prompt is answered from `input` while the command
@@ -100,6 +175,8 @@ async fn run_command<R: BufRead, O: Write, E: Write>(
     err: &mut E,
     pbar_manager: &mut TerminalProgress,
 ) -> Result<bool, CLIError> {
+    let mut command_usage: Option<UsageMetadata> = None;
+
     let rendered = async {
         let dispatch = dispatch_command(command, ctx);
         tokio::pin!(dispatch);
@@ -108,12 +185,20 @@ async fn run_command<R: BufRead, O: Write, E: Write>(
             tokio::select! {
                 result = &mut dispatch => break result,
                 Some(event) = rx.recv() => {
+                    if let EngineEvent::TokenUsage { usage } = &event {
+                        *command_usage.get_or_insert_default() += *usage;
+                    }
+
                     event.handle_event(input, output, err, read_password, pbar_manager)?;
                 }
             }
         };
 
         while let Ok(event) = rx.try_recv() {
+            if let EngineEvent::TokenUsage { usage } = &event {
+                *command_usage.get_or_insert_default() += *usage;
+            }
+
             event.handle_event(input, output, err, read_password, pbar_manager)?;
         }
 
@@ -122,8 +207,13 @@ async fn run_command<R: BufRead, O: Write, E: Write>(
     .await;
 
     pbar_manager.clear_all();
+    let result = rendered?;
 
-    match rendered? {
+    if let Some(usage) = command_usage {
+        write_usage_footer(output, &usage, ctx).await?;
+    }
+
+    match result {
         Ok(keep_running) => Ok(keep_running),
         Err(e) => {
             writeln!(err, "{e}")?;
@@ -294,7 +384,10 @@ mod tests {
     use crate::store::lance::LanceZoteroStore;
     use crate::tools::retrieval::RetrievalTool;
 
-    fn make_retrieval_tool(paths: &TestPaths) -> RetrievalTool<LanceZoteroStore> {
+    fn make_retrieval_tool(
+        paths: &TestPaths,
+        cost_tx: mpsc::UnboundedSender<UsageMetadata>,
+    ) -> RetrievalTool<LanceZoteroStore> {
         let api_key = std::env::var("VOYAGE_AI_API_KEY").unwrap_or_default();
         let config = zqa_rag::config::VoyageAIConfig {
             api_key,
@@ -310,15 +403,16 @@ mod tests {
             arrow_schema::Field::new("file_path", arrow_schema::DataType::Utf8, false),
             arrow_schema::Field::new("pdf_text", arrow_schema::DataType::Utf8, false),
         ]));
-        let store = LanceZoteroStore::from_schema(
-            EmbeddingProviderConfig::VoyageAI(config.clone()),
-            schema,
-        )
-        .with_uri(&paths.db_uri);
+        let embedding_config = EmbeddingProviderConfig::VoyageAI(config.clone());
+        let store =
+            LanceZoteroStore::from_schema(embedding_config.clone(), schema).with_uri(&paths.db_uri);
+
         RetrievalTool::new(
             Arc::new(store),
+            embedding_config,
             Some(RerankProviderConfig::VoyageAI(config)),
             paths.path_options.library_path.clone(),
+            cost_tx,
         )
     }
 
@@ -379,101 +473,104 @@ mod tests {
         let temp_dir = tempfile::tempdir().unwrap();
         let state_dir = temp_dir.path().to_str().unwrap().to_string();
 
-        temp_env::async_with_vars([("ZQA_STATE_DIR", Some(state_dir.as_str()))], async {
-            let history = vec![ChatHistoryItem {
-                role: MessageRole::User,
-                content: vec![ChatHistoryContent::Text("Summarize this paper".into())],
-            }];
-            let usage = UsageMetadata {
-                input_tokens: 1000,
-                output_tokens: 500,
-                estimated_cost: 12,
-                ..UsageMetadata::default()
-            };
-            let mut output = Vec::new();
-            let mut err = Vec::new();
+        Box::pin(temp_env::async_with_vars(
+            [("ZQA_STATE_DIR", Some(state_dir.as_str()))],
+            async {
+                let history = vec![ChatHistoryItem {
+                    role: MessageRole::User,
+                    content: vec![ChatHistoryContent::Text("Summarize this paper".into())],
+                }];
+                let usage = UsageMetadata {
+                    input_tokens: 1000,
+                    output_tokens: 500,
+                    estimated_cost: 12,
+                    ..UsageMetadata::default()
+                };
+                let mut output = Vec::new();
+                let mut err = Vec::new();
 
-            let mut ctx = create_test_context(vec![]);
-            let (tx, mut rx) = mpsc::channel(256);
-            ctx.event_tx = Some(tx);
-            *ctx.state.title.lock().unwrap() = Some("Existing conversation".to_string());
-            *ctx.state.chat_history.lock().unwrap() = history.clone();
-            ctx.state.usage = usage;
-            ctx.state.dirty.store(true, atomic::Ordering::Relaxed);
+                let mut ctx = create_test_context(vec![]);
+                let (tx, mut rx) = mpsc::channel(256);
+                ctx.event_tx = Some(tx);
+                *ctx.state.title.lock().unwrap() = Some("Existing conversation".to_string());
+                *ctx.state.chat_history.lock().unwrap() = history.clone();
+                ctx.state.usage = usage;
+                ctx.state.dirty.store(true, atomic::Ordering::Relaxed);
 
-            let keep_running = run_command(
-                "/quit",
-                &mut ctx,
-                &mut rx,
-                &mut io::empty(),
-                &mut output,
-                &mut err,
-                &mut TerminalProgress::new(),
-            )
-            .await;
-            test_ok!(keep_running);
-            assert!(!keep_running.unwrap());
+                let keep_running = run_command(
+                    "/quit",
+                    &mut ctx,
+                    &mut rx,
+                    &mut io::empty(),
+                    &mut output,
+                    &mut err,
+                    &mut TerminalProgress::new(),
+                )
+                .await;
+                test_ok!(keep_running);
+                assert!(!keep_running.unwrap());
 
-            // A fresh context stands in for the next process: nothing is loaded until `/resume`.
-            let mut ctx = create_test_context(vec![]);
-            let (tx, mut rx) = mpsc::channel(256);
-            ctx.event_tx = Some(tx);
+                // A fresh context stands in for the next process: nothing is loaded until `/resume`.
+                let mut ctx = create_test_context(vec![]);
+                let (tx, mut rx) = mpsc::channel(256);
+                ctx.event_tx = Some(tx);
 
-            let keep_running = run_command(
-                "/resume",
-                &mut ctx,
-                &mut rx,
-                &mut "1\n".as_bytes(),
-                &mut output,
-                &mut err,
-                &mut TerminalProgress::new(),
-            )
-            .await;
-            test_ok!(keep_running);
-            assert!(keep_running.unwrap());
+                let keep_running = run_command(
+                    "/resume",
+                    &mut ctx,
+                    &mut rx,
+                    &mut "1\n".as_bytes(),
+                    &mut output,
+                    &mut err,
+                    &mut TerminalProgress::new(),
+                )
+                .await;
+                test_ok!(keep_running);
+                assert!(keep_running.unwrap());
 
-            // A prompt that fails to read still clears the bars left on screen.
-            let mut pbar_manager = TerminalProgress::new();
-            EngineEvent::ProgressStart {
-                id: "unfinished".into(),
-                label: "Parsing".into(),
-                total: None,
-            }
-            .handle_event(
-                &mut io::empty(),
-                &mut Vec::new(),
-                &mut Vec::new(),
-                super::read_password,
-                &mut pbar_manager,
-            )
-            .unwrap();
-            let unfinished = pbar_manager.pbar_map["unfinished"].clone();
+                // A prompt that fails to read still clears the bars left on screen.
+                let mut pbar_manager = TerminalProgress::new();
+                EngineEvent::ProgressStart {
+                    id: "unfinished".into(),
+                    label: "Parsing".into(),
+                    total: None,
+                }
+                .handle_event(
+                    &mut io::empty(),
+                    &mut Vec::new(),
+                    &mut Vec::new(),
+                    super::read_password,
+                    &mut pbar_manager,
+                )
+                .unwrap();
+                let unfinished = pbar_manager.pbar_map["unfinished"].clone();
 
-            let keep_running = run_command(
-                "/resume",
-                &mut ctx,
-                &mut rx,
-                &mut io::empty(),
-                &mut Vec::new(),
-                &mut Vec::new(),
-                &mut pbar_manager,
-            )
-            .await;
-            assert!(keep_running.is_err());
-            assert!(pbar_manager.pbar_map.is_empty());
-            assert!(unfinished.is_finished());
+                let keep_running = run_command(
+                    "/resume",
+                    &mut ctx,
+                    &mut rx,
+                    &mut io::empty(),
+                    &mut Vec::new(),
+                    &mut Vec::new(),
+                    &mut pbar_manager,
+                )
+                .await;
+                assert!(keep_running.is_err());
+                assert!(pbar_manager.pbar_map.is_empty());
+                assert!(unfinished.is_finished());
 
-            let output = String::from_utf8(output).unwrap();
-            test_contains!(output, "Existing conversation (1 message)");
-            test_contains!(output, "Resumed: Existing conversation");
-            test_eq!(String::from_utf8(err).unwrap(), "");
-            test_eq!(*ctx.state.chat_history.lock().unwrap(), history);
-            test_eq!(
-                *ctx.state.title.lock().unwrap(),
-                Some("Existing conversation".to_string())
-            );
-            test_eq!(ctx.state.usage, usage);
-        })
+                let output = String::from_utf8(output).unwrap();
+                test_contains!(output, "Existing conversation (1 message)");
+                test_contains!(output, "Resumed: Existing conversation");
+                test_eq!(String::from_utf8(err).unwrap(), "");
+                test_eq!(*ctx.state.chat_history.lock().unwrap(), history);
+                test_eq!(
+                    *ctx.state.title.lock().unwrap(),
+                    Some("Existing conversation".to_string())
+                );
+                test_eq!(ctx.state.usage, usage);
+            },
+        ))
         .await;
     }
 
@@ -512,7 +609,8 @@ mod tests {
         test_ok!(setup_result);
 
         // Now test the retrieval tool
-        let tool = make_retrieval_tool(&paths);
+        let (cost_tx, mut cost_rx) = mpsc::unbounded_channel();
+        let tool = make_retrieval_tool(&paths, cost_tx);
 
         let result = tool.call(json!({"query": "machine learning"})).await;
         test_ok!(result);
@@ -521,6 +619,19 @@ mod tests {
         assert!(
             value.get("results").is_some(),
             "Expected 'results' key in output, got: {value}"
+        );
+
+        // Each search reports its embedding and reranking usage exactly once.
+        let usage = cost_rx
+            .try_recv()
+            .expect("the search should report its usage");
+        assert!(
+            usage.input_tokens > 0,
+            "Expected nonzero input tokens, got: {usage:?}"
+        );
+        assert!(
+            cost_rx.try_recv().is_err(),
+            "Expected a single usage update"
         );
     }
 }
