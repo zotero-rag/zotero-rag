@@ -11,6 +11,7 @@ use crate::cli::commands::DocsCommand;
 use crate::cli::errors::CLIError;
 use crate::common::Context;
 use crate::io::EngineEvent;
+use crate::state::UsageMetadata;
 use crate::tools::documents::{DocumentsToolFactory, parse_user_document};
 
 /// Given a path to a file, attempt to return a relative path, or return the full canonical path
@@ -46,6 +47,8 @@ pub(crate) fn get_document_session_key(path: &Path) -> Result<String, CLIError> 
 /// # Arguments
 ///
 /// * `ctx` - The application context, including imported documents and provider configuration.
+/// * `status_tx` - The channel the tool wrappers send their status events on.
+/// * `cost_tx` - The channel the tools send their priced usage on.
 ///
 /// # Returns
 ///
@@ -57,6 +60,7 @@ pub(crate) fn get_document_session_key(path: &Path) -> Result<String, CLIError> 
 pub(super) fn get_user_document_tools(
     ctx: &mut Context,
     status_tx: UnboundedSender<EngineEvent>,
+    cost_tx: UnboundedSender<UsageMetadata>,
 ) -> Result<Vec<Box<dyn Tool>>, CLIError> {
     let imports = ctx.state.imports.clone();
     if imports.read()?.is_empty() {
@@ -77,7 +81,7 @@ pub(super) fn get_user_document_tools(
         .transpose()?;
 
     Ok(
-        DocumentsToolFactory::new(&imports, embedding_config, reranker_config, client)
+        DocumentsToolFactory::new(&imports, embedding_config, reranker_config, client, cost_tx)
             .build_tools(status_tx),
     )
 }
