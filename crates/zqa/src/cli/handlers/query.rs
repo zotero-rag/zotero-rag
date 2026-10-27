@@ -189,7 +189,7 @@ fn build_query_tools(
         cost_tx.clone(),
     );
 
-    let summarization_tool = SummarizationTool::new(llm_client, store, cost_tx);
+    let summarization_tool = SummarizationTool::new(llm_client, store, cost_tx.clone());
 
     let mut tools: Vec<Box<dyn Tool>> = vec![
         Box::new(
@@ -203,7 +203,7 @@ fn build_query_tools(
                 .timed(status_tx.clone()),
         ),
     ];
-    let document_tools = get_user_document_tools(ctx, status_tx)?;
+    let document_tools = get_user_document_tools(ctx, status_tx, cost_tx)?;
     tools.extend(document_tools);
 
     Ok(tools)
@@ -262,6 +262,8 @@ pub(crate) async fn handle_query_cmd(query: String, ctx: &mut Context) -> Result
             "Failed to get LLM generation config in `run_query`".into(),
         ))?;
 
+    // `build_query_tools` needs this config too. Checking here fails the query before the title
+    // task is spawned and its tokens are spent.
     let _embedding_config = ctx
         .config
         .get_embedding_config()
@@ -519,9 +521,12 @@ mod tests {
 
         test_ok!(result);
         assert!(result.is_ok());
-        assert!(events.iter().any(|event| matches!(
-            event,
-            EngineEvent::Text { message } if message.contains("Total token usage:")
-        )));
+        test_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(event, EngineEvent::TokenUsage { .. }))
+                .count(),
+            1
+        );
     }
 }
