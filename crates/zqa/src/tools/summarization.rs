@@ -1,18 +1,19 @@
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use schemars::{JsonSchema, schema_for};
 use serde::Deserialize;
 use serde_json::json;
+use tokio::sync::mpsc::UnboundedSender;
 use tokio::task::JoinSet;
 use zqa_rag::llm::base::{ChatRequest, CompletionApiResponse};
 use zqa_rag::llm::errors::LLMError;
 use zqa_rag::llm::factory::LLMClient;
 use zqa_rag::llm::tools::Tool;
-use zqa_rag::pricing::ModelUsage;
 
 use crate::cli::prompts::{get_extraction_prompt, get_extraction_system_prompt};
+use crate::state::UsageMetadata;
 use crate::store::common::ZoteroStore;
 use crate::tools::retrieval::RETRIEVAL_TOOL_NAME;
 use crate::utils::library::ZoteroItem;
@@ -26,8 +27,8 @@ pub(crate) struct SummarizationTool<T: ZoteroStore> {
     pub(crate) llm_client: LLMClient,
     /// Backend for searching stored Zotero papers.
     pub(crate) store: Arc<T>,
-    /// The token usage of each request the tool made
-    pub(crate) usage: Arc<Mutex<Vec<ModelUsage>>>,
+    /// Channel to send priced usage stats over.
+    pub(crate) cost_tx: UnboundedSender<UsageMetadata>,
 }
 
 impl<T> SummarizationTool<T>
@@ -35,11 +36,15 @@ where
     T: ZoteroStore,
 {
     /// Create a new [`SummarizationTool`] instance, given an LLM client and a backend.
-    pub fn new(llm_client: LLMClient, store: Arc<T>, usage: Arc<Mutex<Vec<ModelUsage>>>) -> Self {
+    pub fn new(
+        llm_client: LLMClient,
+        store: Arc<T>,
+        cost_tx: UnboundedSender<UsageMetadata>,
+    ) -> Self {
         Self {
             llm_client,
             store,
-            usage,
+            cost_tx,
         }
     }
 }
@@ -143,9 +148,14 @@ where
                         let summary = ModelResponse::from(&response.content).to_string();
                         summaries.push(summary);
 
-                        if let Ok(mut usage) = self.usage.lock() {
-                            usage.extend(response.usage);
-                        }
+                        let _ = self.cost_tx.send(
+                            UsageMetadata::from_rag_usage(
+                                &response.usage,
+                                self.llm_client.get_provider(),
+                                &self.llm_client.get_model_name().unwrap_or_default(),
+                            )
+                            .await,
+                        );
                     }
                     Err(e) => {
                         log::warn!("Summarization failed: {}", zqa_rag::logging::preview(&e));
@@ -182,7 +192,9 @@ mod tests {
     use crate::store::lance::LanceZoteroStore;
 
     fn make_tool(llm_responses: Vec<String>) -> SummarizationTool<LanceZoteroStore> {
-        make_tool_with_uri(llm_responses, None)
+        // These tests don't check usage, so the receiver is dropped and sends are discarded.
+        let (cost_tx, _) = tokio::sync::mpsc::unbounded_channel();
+        make_tool_with_uri(llm_responses, None, cost_tx)
     }
 
     /// Like [`make_tool`], but optionally pins the store to an explicit database URI. Tests that
@@ -192,6 +204,7 @@ mod tests {
     fn make_tool_with_uri(
         llm_responses: Vec<String>,
         db_uri: Option<&str>,
+        cost_tx: UnboundedSender<UsageMetadata>,
     ) -> SummarizationTool<LanceZoteroStore> {
         let config = get_config(MockConfig {
             responses: llm_responses,
@@ -210,7 +223,7 @@ mod tests {
         if let Some(uri) = db_uri {
             store = store.with_uri(uri);
         }
-        SummarizationTool::new(client, Arc::new(store), Arc::new(Mutex::new(Vec::new())))
+        SummarizationTool::new(client, Arc::new(store), cost_tx)
     }
 
     #[test]
@@ -334,6 +347,7 @@ mod tests {
         let setup_result = handle_process_cmd(&mut setup_ctx).await;
         assert!(setup_result.is_ok(), "Failed to set up test database");
 
+        let (cost_tx, mut cost_rx) = tokio::sync::mpsc::unbounded_channel();
         let tool = make_tool_with_uri(
             vec![
                 r"<title>Some title</title>
@@ -344,6 +358,7 @@ mod tests {
                 .into(),
             ],
             Some(&paths.db_uri),
+            cost_tx,
         );
 
         let args = json!({
@@ -372,6 +387,14 @@ mod tests {
             "Should generate at least one summary"
         );
         assert!(errors.is_empty(), "Should have no errors for valid data");
+
+        // The mock client reports no tokens, so only the number of updates is checked.
+        let usage_updates = std::iter::from_fn(|| cost_rx.try_recv().ok()).count();
+        assert_eq!(
+            usage_updates,
+            summaries.len(),
+            "Expected one usage update per summary"
+        );
 
         // Verify summary content
         let summary = summaries[0].as_str().unwrap();

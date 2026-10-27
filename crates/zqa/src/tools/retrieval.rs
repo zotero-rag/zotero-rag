@@ -1,15 +1,17 @@
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
 use schemars::{JsonSchema, schema_for};
 use serde::Deserialize;
 use serde_json::json;
+use tokio::sync::mpsc::UnboundedSender;
+use zqa_rag::embedding::common::EmbeddingProviderConfig;
 use zqa_rag::llm::tools::Tool;
 use zqa_rag::reranking::common::RerankProviderConfig;
 
+use crate::state::{UsageMetadata, get_model_usage};
 use crate::store::common::ZoteroStore;
 use crate::tools::summarization::SUMMARIZATION_TOOL_NAME;
 use crate::utils::library::get_authors;
@@ -24,15 +26,15 @@ where
 {
     /// The vector store abstraction
     pub(crate) store: Arc<T>,
+    /// The embedding provider config to use.
+    pub(crate) embedding_config: EmbeddingProviderConfig,
     /// The reranker provider to use.
     pub(crate) reranker_config: Option<RerankProviderConfig>,
     /// Optional override for the Zotero library directory, used when enriching results with author
     /// metadata. When `None`, the path is resolved from the environment.
     pub(crate) library_path: Option<PathBuf>,
-    /// Accumulated token count of text sent to the embedding API across all calls.
-    pub(crate) embedding_tokens: Arc<AtomicU64>,
-    /// Accumulated token count of text sent to the reranker API across all calls.
-    pub(crate) rerank_tokens: Arc<AtomicU64>,
+    /// Sender for the priced usage of each search.
+    cost_tx: UnboundedSender<UsageMetadata>,
 }
 
 impl<T> RetrievalTool<T>
@@ -43,15 +45,17 @@ where
     /// optional Zotero library path override (see [`RetrievalTool::library_path`]).
     pub(crate) fn new(
         store: Arc<T>,
+        embedding_config: EmbeddingProviderConfig,
         reranker_provider: Option<RerankProviderConfig>,
         library_path: Option<PathBuf>,
+        cost_tx: UnboundedSender<UsageMetadata>,
     ) -> Self {
         Self {
             store,
+            embedding_config,
             reranker_config: reranker_provider,
             library_path,
-            embedding_tokens: Arc::new(AtomicU64::new(0)),
-            rerank_tokens: Arc::new(AtomicU64::new(0)),
+            cost_tx,
         }
     }
 }
@@ -101,8 +105,6 @@ where
         args: serde_json::Value,
     ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, String>> + Send + '_>> {
         let reranker_config = self.reranker_config.clone();
-        let embedding_tokens = Arc::clone(&self.embedding_tokens);
-        let rerank_tokens = Arc::clone(&self.rerank_tokens);
         let store = Arc::clone(&self.store);
         let library_path = self.library_path.clone();
 
@@ -113,8 +115,27 @@ where
                 .vector_search(input.query, 10, reranker_config.as_ref())
                 .await
                 .map_err(|e| format!("Search failed: {e}"))?;
-            embedding_tokens.fetch_add(stats.embedding_tokens as u64, Ordering::Relaxed);
-            rerank_tokens.fetch_add(stats.rerank_tokens as u64, Ordering::Relaxed);
+
+            // Calculate priced usage
+            let mut usage = get_model_usage(
+                self.embedding_config.provider_name(),
+                self.embedding_config.model_name(),
+                stats.embedding_tokens as u64,
+            )
+            .await;
+            if let Some(reranker) = &reranker_config
+                && stats.rerank_tokens > 0
+            {
+                usage += get_model_usage(
+                    reranker.provider_name(),
+                    reranker.model_name(),
+                    stats.rerank_tokens as u64,
+                )
+                .await;
+            }
+
+            // A send fails only when the handler is gone, and then nobody is counting.
+            let _ = self.cost_tx.send(usage);
 
             let author_lookup_start = Instant::now();
             // While Zotero is open, this copies its database and may wait between attempts.
@@ -185,14 +206,17 @@ mod tests {
             arrow_schema::Field::new("file_path", arrow_schema::DataType::Utf8, false),
             arrow_schema::Field::new("pdf_text", arrow_schema::DataType::Utf8, false),
         ]));
-        let store = LanceZoteroStore::from_schema(
-            EmbeddingProviderConfig::VoyageAI(config.clone()),
-            schema,
-        );
+        let embedding_config = EmbeddingProviderConfig::VoyageAI(config.clone());
+        let store = LanceZoteroStore::from_schema(embedding_config.clone(), schema);
+
+        // These tests don't check usage, so the receiver is dropped and sends are discarded.
+        let (cost_tx, _) = tokio::sync::mpsc::unbounded_channel();
         RetrievalTool::new(
             Arc::new(store),
+            embedding_config,
             Some(RerankProviderConfig::VoyageAI(config)),
             None,
+            cost_tx,
         )
     }
 

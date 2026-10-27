@@ -6,6 +6,7 @@ use crate::cli::errors::CLIError;
 use crate::cli::handlers::conversation::save_current_conversation;
 use crate::common::Context;
 use crate::io::EngineEvent;
+use crate::state::UsageMetadata;
 use crate::utils::terminal::{BOLD, RESET};
 
 /// Save the current conversation, if needed, and prepare to exit the CLI.
@@ -77,6 +78,7 @@ pub(crate) async fn handle_new_conversation_cmd(ctx: &mut Context) -> Result<(),
     ctx.state.dirty.store(false, atomic::Ordering::Relaxed);
     ctx.state.chat_history = Arc::new(Mutex::new(Vec::new()));
     ctx.state.title = Arc::new(Mutex::new(None));
+    ctx.state.usage = UsageMetadata::default();
 
     Ok(())
 }

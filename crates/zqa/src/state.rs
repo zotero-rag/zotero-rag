@@ -85,6 +85,39 @@ pub(crate) fn get_state_dir() -> Result<PathBuf, StateError> {
     Ok(state_dir.join("zqa"))
 }
 
+/// For embedding and reranking, where we currently only have characters, estimate the cost if
+/// possible and return the usage.
+///
+/// Cost lookup uses the LiteLLM JSON catalog of models, and uses `{provider_name}/{model}`.
+///
+/// TODO: We should probably just use the provider-sent usage directly instead of the approximation
+/// here.
+///
+/// # Arguments
+///
+/// * `provider_name` - The provider name to use in the lookup.
+/// * `model` - The model string to use in the lookup.
+/// * `chars` - The character count to use in the estimate.
+///
+/// # Returns
+///
+/// A [`UsageMetadata`] with estimated cost if the model was found.
+pub(crate) async fn get_model_usage(provider_name: &str, model: &str, chars: u64) -> UsageMetadata {
+    let mut usage = UsageMetadata {
+        #[allow(clippy::cast_possible_truncation)]
+        input_tokens: (chars / 4) as u32,
+        ..Default::default()
+    };
+
+    if let Some(ref p) = get_model_pricing(provider_name, model, None).await {
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let cost = (p.estimate_cost(usage.into()) * 100.0) as u32;
+        usage.estimated_cost += cost;
+    }
+
+    usage
+}
+
 /// Metadata in a saved conversation.
 #[derive(Copy, Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct UsageMetadata {
