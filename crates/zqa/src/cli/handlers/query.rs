@@ -3,15 +3,14 @@
 use std::iter;
 use std::path::Path;
 use std::pin::pin;
-use std::sync::atomic::{self, AtomicU64};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use std::sync::atomic;
 use std::time::Instant;
 
 use tokio::sync::mpsc::{self, UnboundedSender};
 use zqa_rag::llm::base::{ChatHistoryContent, ChatHistoryItem, ChatRequest, MessageRole};
 use zqa_rag::llm::factory::{LLMClient, get_client_with_config};
 use zqa_rag::llm::tools::{CallbackFn, Tool};
-use zqa_rag::pricing::{ModelUsage, get_model_pricing, get_usd_exchange_rate};
 use zqa_rag::providers::registry::provider_registry;
 
 use crate::cli::errors::CLIError;
@@ -48,26 +47,6 @@ impl From<ResponseSegment> for EngineEvent {
             },
         }
     }
-}
-
-/// Given a positive number, returns a thousands separator-formatted string representation
-///
-/// # Arguments:
-///
-/// * `num` - The number to format
-///
-/// # Returns
-///
-/// The thousands-separated string
-fn format_number(num: u32) -> String {
-    num.to_string()
-        .as_bytes()
-        .rchunks(3)
-        .rev()
-        .map(std::str::from_utf8)
-        .collect::<Result<Vec<&str>, _>>()
-        .unwrap_or_default()
-        .join(",")
 }
 
 /// Perform a vector search and emit matching titles as text events.
@@ -173,50 +152,6 @@ async fn generate_title(
     Some((title, usage))
 }
 
-/// For embedding and reranking, where we currently only have characters, estimate the cost if
-/// possible and return the usage.
-///
-/// Cost lookup uses the LiteLLM JSON catalog of models, and uses `{provider_name}/{model}`.
-///
-/// TODO: We should probably just use the provider-sent usage directly instead of the approximation
-/// here.
-///
-/// # Arguments
-///
-/// * `provider_name` - The provider name to use in the lookup.
-/// * `model` - The model string to use in the lookup.
-/// * `chars` - The character count to use in the estimate.
-///
-/// # Returns
-///
-/// A [`UsageMetadata`] with estimated cost if the model was found.
-async fn get_model_usage(provider_name: &str, model: &str, chars: u64) -> UsageMetadata {
-    let mut usage = UsageMetadata {
-        #[allow(clippy::cast_possible_truncation)]
-        input_tokens: (chars / 4) as u32,
-        ..Default::default()
-    };
-
-    if let Some(ref p) = get_model_pricing(provider_name, model, None).await {
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let cost = (p.estimate_cost(usage.into()) * 100.0) as u32;
-        usage.estimated_cost += cost;
-    }
-
-    usage
-}
-
-/// Usage counters that the query tools update as they run. The handler reads them once the
-/// response is complete to price the query.
-struct ToolUsage {
-    /// Characters embedded by the retrieval tool.
-    embedding_tokens: Arc<AtomicU64>,
-    /// Characters reranked by the retrieval tool.
-    rerank_tokens: Arc<AtomicU64>,
-    /// Usage of each LLM request made by the summarization tool.
-    summarization_usage: Arc<Mutex<Vec<ModelUsage>>>,
-}
-
 /// Build the tools available to the model for a query, each reporting on `status_tx`.
 ///
 /// # Arguments
@@ -224,11 +159,11 @@ struct ToolUsage {
 /// * `llm_client` - The client the summarization tool uses.
 /// * `ctx` - The application context, for the store, configuration and imported documents.
 /// * `status_tx` - The channel the tool wrappers send their status events on.
+/// * `cost_tx` - The channel to send priced usage over.
 ///
 /// # Returns
 ///
-/// The retrieval and summarization tools, plus tools for any imported documents, and the
-/// counters those tools update.
+/// The retrieval and summarization tools, plus tools for any imported documents.
 ///
 /// # Errors
 ///
@@ -237,23 +172,24 @@ fn build_query_tools(
     llm_client: LLMClient,
     ctx: &mut Context,
     status_tx: UnboundedSender<EngineEvent>,
-) -> Result<(Vec<Box<dyn Tool>>, ToolUsage), CLIError> {
+    cost_tx: UnboundedSender<UsageMetadata>,
+) -> Result<Vec<Box<dyn Tool>>, CLIError> {
+    let Some(embedding_config) = ctx.config.get_embedding_config() else {
+        return Err(CLIError::ConfigError(
+            "Embedding config is required before queries can be run.".into(),
+        ));
+    };
+
     let store = Arc::new(ctx.store.clone());
-    let reranker_config = ctx.config.get_reranker_config();
     let retrieval_tool = RetrievalTool::new(
         Arc::clone(&store),
-        reranker_config,
+        embedding_config,
+        ctx.config.get_reranker_config(),
         ctx.path_options.library_path.clone(),
+        cost_tx.clone(),
     );
 
-    let summarization_usage = Arc::new(Mutex::new(Vec::new()));
-    let summarization_tool =
-        SummarizationTool::new(llm_client, store, Arc::clone(&summarization_usage));
-    let usage = ToolUsage {
-        embedding_tokens: Arc::clone(&retrieval_tool.embedding_tokens),
-        rerank_tokens: Arc::clone(&retrieval_tool.rerank_tokens),
-        summarization_usage,
-    };
+    let summarization_tool = SummarizationTool::new(llm_client, store, cost_tx);
 
     let mut tools: Vec<Box<dyn Tool>> = vec![
         Box::new(
@@ -270,7 +206,7 @@ fn build_query_tools(
     let document_tools = get_user_document_tools(ctx, status_tx)?;
     tools.extend(document_tools);
 
-    Ok((tools, usage))
+    Ok(tools)
 }
 
 /// Answer a user query using retrieval and generation over the user's Zotero library.
@@ -326,7 +262,7 @@ pub(crate) async fn handle_query_cmd(query: String, ctx: &mut Context) -> Result
             "Failed to get LLM generation config in `run_query`".into(),
         ))?;
 
-    let embedding_config = ctx
+    let _embedding_config = ctx
         .config
         .get_embedding_config()
         .ok_or(CLIError::ConfigError(
@@ -359,15 +295,6 @@ pub(crate) async fn handle_query_cmd(query: String, ctx: &mut Context) -> Result
             }
         });
     }
-    drop(cost_tx);
-
-    let embedding_provider_name = embedding_config.provider_name().to_string();
-    let embedding_model_name = embedding_config.model_name().to_string();
-    let reranker_provider_and_model = ctx
-        .config
-        .get_reranker_config()
-        .as_ref()
-        .map(|c| (c.provider_name().to_string(), c.model_name().to_string()));
 
     let (response_tx, mut response_rx) = mpsc::unbounded_channel::<ResponseSegment>();
     let (status_tx, mut status_rx) = mpsc::unbounded_channel::<EngineEvent>();
@@ -379,43 +306,48 @@ pub(crate) async fn handle_query_cmd(query: String, ctx: &mut Context) -> Result
         let _ = response_tx.send(ResponseSegment::Reasoning(reasoning.to_string()));
     });
 
-    let (tools, tool_usage) = build_query_tools(llm_client.clone(), ctx, status_tx)?;
-
-    let chat_history = Arc::clone(&ctx.state.chat_history);
-
-    let request = {
-        let history = chat_history
-            .lock()
-            .expect("Could not obtain lock on chat history.");
-        ChatRequest {
-            chat_history: history.clone(),
-            max_tokens: None,
-            message: get_summarize_prompt(&query),
-            system_prompt: Some(get_summarize_system_prompt()),
-            reasoning: llm_client.get_reasoning_config(),
-            tools: Some(&tools),
-            on_tool_call: None,
-            on_text: Some(on_text),
-            on_reasoning: Some(on_reasoning),
-            tool_iteration_limit: Some(ctx.config.tool_iteration_limit),
-        }
-    };
-    log::debug!(
-        "Query ready: history_items={}, tools={}",
-        request.chat_history.len(),
-        tools.len()
-    );
-
     let final_draft_start = Instant::now();
-    let mut send_message = pin!(llm_client.send_message(&request));
-    let result = loop {
-        tokio::select! {
-            Some(segment) = response_rx.recv() => ctx.emit(segment.into()).await?,
-            Some(event) = status_rx.recv() => ctx.emit(event).await?,
-            Some(title_cost) = cost_rx.recv() => ctx.state.usage += title_cost,
-            result = &mut send_message => break result,
+    let chat_history = Arc::clone(&ctx.state.chat_history);
+    let mut query_usage = UsageMetadata::default();
+    let result = {
+        let tools = build_query_tools(llm_client.clone(), ctx, status_tx, cost_tx.clone())?;
+
+        let request = {
+            let history = chat_history
+                .lock()
+                .expect("Could not obtain lock on chat history.");
+            ChatRequest {
+                chat_history: history.clone(),
+                max_tokens: None,
+                message: get_summarize_prompt(&query),
+                system_prompt: Some(get_summarize_system_prompt()),
+                reasoning: llm_client.get_reasoning_config(),
+                tools: Some(&tools),
+                on_tool_call: None,
+                on_text: Some(on_text),
+                on_reasoning: Some(on_reasoning),
+                tool_iteration_limit: Some(ctx.config.tool_iteration_limit),
+            }
+        };
+        log::debug!(
+            "Query ready: history_items={}, tools={}",
+            request.chat_history.len(),
+            tools.len()
+        );
+
+        let mut send_message = pin!(llm_client.send_message(&request));
+        loop {
+            tokio::select! {
+                Some(segment) = response_rx.recv() => ctx.emit(segment.into()).await?,
+                Some(event) = status_rx.recv() => ctx.emit(event).await?,
+                Some(usage) = cost_rx.recv() => query_usage += usage,
+                result = &mut send_message => break result,
+            }
         }
     };
+    // Once the above block ends, the remaining sender left is the title generation task's.
+    drop(cost_tx);
+
     // Producers can race the response's completion; drain the leftovers.
     while let Ok(segment) = response_rx.try_recv() {
         ctx.emit(segment.into()).await?;
@@ -424,7 +356,7 @@ pub(crate) async fn handle_query_cmd(query: String, ctx: &mut Context) -> Result
         ctx.emit(event).await?;
     }
     while let Some(usage) = cost_rx.recv().await {
-        ctx.state.usage += usage;
+        query_usage += usage;
     }
 
     let final_draft_duration = final_draft_start.elapsed();
@@ -442,38 +374,12 @@ pub(crate) async fn handle_query_cmd(query: String, ctx: &mut Context) -> Result
             })
             .await?;
 
-            // Collect the usage of every request; `UsageMetadata::from_rag_usage` prices each one
-            let mut request_usage = response.usage;
-            request_usage.extend(
-                tool_usage
-                    .summarization_usage
-                    .lock()
-                    .map(|mut u| std::mem::take(&mut *u))?,
-            );
-            let usage = UsageMetadata::from_rag_usage(
-                &request_usage,
+            query_usage += UsageMetadata::from_rag_usage(
+                &response.usage,
                 ctx.config.model_provider,
                 &ctx.config.get_generation_model_name().unwrap_or_default(),
             )
             .await;
-            ctx.state.usage += usage;
-
-            // Add embedding cost to session cost
-            let emb_chars = tool_usage.embedding_tokens.load(atomic::Ordering::Relaxed);
-            if emb_chars > 0 {
-                ctx.state.usage +=
-                    get_model_usage(&embedding_provider_name, &embedding_model_name, emb_chars)
-                        .await;
-            }
-
-            // Add reranker cost to session cost
-            let rerank_chars_val = tool_usage.rerank_tokens.load(atomic::Ordering::Relaxed);
-            if rerank_chars_val > 0
-                && let Some((rerank_provider, rerank_model)) = reranker_provider_and_model
-            {
-                ctx.state.usage +=
-                    get_model_usage(&rerank_provider, &rerank_model, rerank_chars_val).await;
-            }
 
             // Update state - re-acquire lock
             let mut history = chat_history
@@ -508,53 +414,9 @@ pub(crate) async fn handle_query_cmd(query: String, ctx: &mut Context) -> Result
         }
     }
 
-    ctx.emit_multiple(vec![
-        EngineEvent::Text {
-            message: "\n-----\n".into(),
-        },
-        EngineEvent::Text {
-            message: format!("{DIM_TEXT}Total token usage:{RESET}\n"),
-        },
-        EngineEvent::Text {
-            message: format!(
-                "\t{DIM_TEXT}Input tokens: {}{RESET}\n",
-                format_number(ctx.state.usage.input_tokens)
-            ),
-        },
-        EngineEvent::Text {
-            message: format!(
-                "\t{DIM_TEXT}Output tokens: {}{RESET}\n\n",
-                format_number(ctx.state.usage.output_tokens)
-            ),
-        },
-    ])
-    .await?;
-
-    let cost = f64::from(ctx.state.usage.estimated_cost) / 100.0;
-    if cost > 0.0 {
-        let rate = *ctx
-            .state
-            .exchange_rate
-            .get_or_init(|| get_usd_exchange_rate(&ctx.config.currency))
-            .await;
-        let (cost, currency) = match rate {
-            Some(rate) => (cost * rate, ctx.config.currency.to_ascii_uppercase()),
-            None => (cost, String::from("USD")),
-        };
-
-        ctx.emit(EngineEvent::Text {
-            message: format!(
-                "\t{DIM_TEXT}Session cost: {cost:.4} {currency} ({}){RESET}\n",
-                ctx.config.get_generation_model_name().unwrap_or_default()
-            ),
-        })
+    ctx.state.usage += query_usage;
+    ctx.emit(EngineEvent::TokenUsage { usage: query_usage })
         .await?;
-    }
-
-    ctx.emit(EngineEvent::Text {
-        message: "\n".into(),
-    })
-    .await?;
 
     Ok(())
 }
