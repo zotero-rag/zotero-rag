@@ -44,10 +44,9 @@ impl TerminalProgress {
     }
 }
 
-/// A set of text identities, each to be styled differently. A [`TextStyle`] is a hint for how a
-/// [`StyledSpan`] should be styled when shown to the user.
+/// What a span of text is, so frontends can choose how to style it. A [`TextStyle`] is a hint for how
+/// a [`StyledSpan`] should be styled when shown to the user.
 #[derive(Copy, Clone, Debug)]
-#[non_exhaustive]
 pub enum TextStyle {
     /// Plain, unstyled text.
     Plain,
@@ -521,6 +520,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn formats_and_routes_output_events() {
         let cases = [
             (
@@ -531,6 +531,22 @@ mod tests {
                     }],
                 },
                 format!("{DIM_TEXT}recap{RESET}"),
+                false,
+            ),
+            (
+                EngineEvent::StyledText {
+                    spans: vec![
+                        StyledSpan {
+                            text: "Usage:\n".into(),
+                            style: TextStyle::Heading,
+                        },
+                        StyledSpan {
+                            text: "/help".into(),
+                            style: TextStyle::Plain,
+                        },
+                    ],
+                },
+                format!("{BOLD}Usage:\n{RESET}/help"),
                 false,
             ),
             (
