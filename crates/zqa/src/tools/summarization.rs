@@ -17,7 +17,6 @@ use crate::state::UsageMetadata;
 use crate::store::common::ZoteroStore;
 use crate::tools::retrieval::RETRIEVAL_TOOL_NAME;
 use crate::utils::library::ZoteroItem;
-use crate::utils::rag::ModelResponse;
 
 pub(crate) const SUMMARIZATION_TOOL_NAME: &str = "summarization_tool";
 
@@ -145,8 +144,7 @@ where
             for result in summarization_results {
                 match result {
                     Ok(response) => {
-                        let summary = ModelResponse::from(&response.content).to_string();
-                        summaries.push(summary);
+                        summaries.push(response.text());
 
                         let _ = self.cost_tx.send(
                             UsageMetadata::from_rag_usage(

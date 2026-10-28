@@ -293,6 +293,26 @@ impl CompletionApiResponse {
     pub fn total_usage(&self) -> ModelUsage {
         self.usage.iter().sum()
     }
+
+    /// Join the response's text parts with newlines, leaving out reasoning and tool calls.
+    ///
+    /// Use this when the response is data, such as a title or a sub-agent's answer that goes back
+    /// to another model, rather than something shown to a user.
+    ///
+    /// # Returns
+    ///
+    /// The text parts in order, or an empty string if the response has none.
+    #[must_use]
+    pub fn text(&self) -> String {
+        self.content
+            .iter()
+            .filter_map(|part| match part {
+                ContentType::Text(text) => Some(text.as_str()),
+                ContentType::Reasoning(_) | ContentType::ToolCall(_) => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
 }
 
 /// An abstraction over one model turn.
@@ -774,7 +794,7 @@ mod tests {
             ..ChatRequest::default()
         };
 
-        client.send_message(&request).await.unwrap();
+        let response = client.send_message(&request).await.unwrap();
 
         assert_eq!(
             *events.lock().unwrap(),
@@ -786,6 +806,7 @@ mod tests {
                 "text: Done.",
             ]
         );
+        assert_eq!(response.text(), "Looking it up.\nDone.");
     }
 
     /// Text-only responses must not invoke the reasoning callback.

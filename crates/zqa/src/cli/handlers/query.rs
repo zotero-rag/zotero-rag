@@ -26,7 +26,6 @@ use crate::store::common::ZoteroStore;
 use crate::tools::mixins::ToolExt;
 use crate::tools::retrieval::RetrievalTool;
 use crate::tools::summarization::SummarizationTool;
-use crate::utils::rag::ModelResponse;
 
 /// Reasoning and answer segments share one queue to preserve the provider's content order.
 enum ResponseSegment {
@@ -144,8 +143,7 @@ async fn generate_title(
         }
     };
 
-    let title = ModelResponse::from(&response.content).to_string();
-    let title = title.trim().to_string();
+    let title = response.text().trim().to_string();
 
     let usage = UsageMetadata::from_rag_usage(&response.usage, client.get_provider(), &model).await;
     Some((title, usage))

@@ -30,7 +30,6 @@ use crate::common::UserDocument;
 use crate::io::EngineEvent;
 use crate::state::{UsageMetadata, get_model_usage};
 use crate::tools::mixins::ToolExt;
-use crate::utils::rag::ModelResponse;
 
 // TODO: Tune this in a future story; possibly look at embedding provider
 // docs and create a constant or a function.
@@ -362,9 +361,7 @@ async fn call_subagent(
     // TODO: In a future refactor, this will be updated to actually get
     // a `Vec` of chunks. That requires implementing structured
     // outputs, which is a larger-scale change
-    let response = ModelResponse::from(&response.content).to_string();
-
-    Ok(response.trim().to_string())
+    Ok(response.text().trim().to_string())
 }
 
 /// Perform embedding-only retrieval from unchunked `contents`, based on `query`.
