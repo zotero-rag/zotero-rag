@@ -5,9 +5,8 @@ use std::sync::{Arc, Mutex, atomic};
 use crate::cli::errors::CLIError;
 use crate::cli::handlers::conversation::save_current_conversation;
 use crate::common::Context;
-use crate::io::EngineEvent;
+use crate::io::{EngineEvent, StyledSpan, TextStyle};
 use crate::state::UsageMetadata;
-use crate::utils::terminal::{BOLD, RESET};
 
 /// Save the current conversation, if needed, and prepare to exit the CLI.
 ///
@@ -97,42 +96,65 @@ pub(crate) async fn handle_new_conversation_cmd(ctx: &mut Context) -> Result<(),
 ///
 /// * `CLIError::ChannelError` - If the event receiver is closed.
 pub(crate) async fn handle_help_cmd(ctx: &mut Context) -> Result<(), CLIError> {
-    ctx.emit(EngineEvent::Text {
-        message: format!(
-            "{BOLD}Basic usage:{RESET}\n\
-             - If you haven't already done so, you should run `/process` or `/batch create` to set up an embedding database.\n\
+    ctx.emit(EngineEvent::StyledText {
+        spans: vec![StyledSpan {
+            text: "Basic usage:\n".into(),
+            style: TextStyle::Heading,
+        }, StyledSpan {
+            text: 
+            "- If you haven't already done so, you should run `/process` or `/batch create` to set up an embedding database.\n\
              - Type in a question to ask your configured model, grounded in your Zotero library.\n\
-             - Use @ to include a PDF file in your current directory in the conversation.\n\
-             \n\
-             {BOLD}Available commands:\n{RESET}\n\
-             /help\t\t\tShow this help message\n\
-             \n\
-             {BOLD}Common commands:{RESET}\n\
-             /process\t\tPre-process Zotero library. Use this to update the database.\n\
+             - Use @ to include a PDF file in your current directory in the conversation.\n\n".into(),
+            style: TextStyle::Plain
+        }, StyledSpan {
+            text: "Available commands:\n".into(),
+            style: TextStyle::Heading
+        }, StyledSpan {
+            text: "/help\t\t\tShow this help message\n\n".into(),
+            style: TextStyle::Plain
+        }, StyledSpan {
+            text: "Common commands:\n".into(),
+            style: TextStyle::Heading
+        }, StyledSpan {
+            text: 
+            "/process\t\tPre-process Zotero library. Use this to update the database.\n\
              /search\t\t\tSearch for papers without summarizing them. Usage: /search <query>\n\
              /config\t\t\tShow the currently used configuration.\n\
              /new\t\t\tSave the current conversation and switch to a new one.\n\
              /resume\t\t\tResume a previous conversation.\n\
              /index\t\t\tCreate or update indices.\n\
-             /quit\t\t\tExit the program. You can also use Ctrl+C or just type 'quit'.\n\
-             \n\
-             {BOLD}Batch API commands:{RESET}\n\
-             /batch create\t\tPre-process Zotero library, but use a batch embedding API instead.\n\
+             /quit\t\t\tExit the program. You can also use Ctrl+C or just type 'quit'.\n\n".into(),
+            style: TextStyle::Plain
+        }, StyledSpan {
+            text: "Batch API commands:\n".into(),
+            style: TextStyle::Heading
+        }, StyledSpan {
+            text: 
+            "/batch create\t\tPre-process Zotero library, but use a batch embedding API instead.\n\
              /batch check\t\tCheck on the status of a submitted batch.\n\
-             /batch cancel <id>\tCancel a pending batch.\n\
-             \n\
-             {BOLD}Session document commands:{RESET}\n\
-             /docs clear\t\tClear all documents in this session.\n\
+             /batch cancel <id>\tCancel a pending batch.\n\n".into(),
+            style: TextStyle::Plain
+        }, StyledSpan {
+            text: "Session document commands:\n".into(),
+            style: TextStyle::Heading
+        }, StyledSpan {
+            text: 
+            "/docs clear\t\tClear all documents in this session.\n\
              /docs list\t\tList all documents in this session.\n\
-             /docs remove <key>\tRemove a document with a specified key from the session.\n\
-             \n\
-             {BOLD}Repair and troubleshooting commands:{RESET}\n\
-             /checkhealth\t\tRun health checks on your LanceDB.\n\
+             /docs remove <key>\tRemove a document with a specified key from the session.\n\n".into(),
+            style: TextStyle::Plain
+        }, StyledSpan {
+            text: "Repair and troubleshooting commands:\n".into(),
+            style: TextStyle::Heading
+        }, StyledSpan {
+            text: 
+            "/checkhealth\t\tRun health checks on your LanceDB.\n\
              /doctor\t\t\tExplain issues spotted by /checkhealth and how to fix them.\n\
              /stats\t\t\tShow table statistics.\n\
-             /dedup\t\t\tRemove duplicate items.\n\
-             \n"
-        ),
+             /dedup\t\t\tRemove duplicate items.\n\n".into(),
+            style: TextStyle::Plain
+        }
+        ],
     })
     .await?;
 

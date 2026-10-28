@@ -9,7 +9,7 @@ use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use tokio::sync::oneshot;
 
 use crate::state::UsageMetadata;
-use crate::utils::terminal::{BLUE, DIM_TEXT, ITALICS, RED, RESET, YELLOW};
+use crate::utils::terminal::{BLUE, BOLD, DIM_TEXT, ITALICS, RED, RESET, YELLOW};
 
 /// A manager for [`indicatif`] progress bars used by the CLI renderer and used by
 /// [`EngineEvent::handle_event`] to update progress bars on events.
@@ -44,6 +44,32 @@ impl TerminalProgress {
     }
 }
 
+/// A set of text identities, each to be styled differently. A [`TextStyle`] is a hint for how a
+/// [`StyledSpan`] should be styled when shown to the user.
+#[derive(Copy, Clone, Debug)]
+#[non_exhaustive]
+pub enum TextStyle {
+    /// Plain, unstyled text.
+    Plain,
+    /// A heading for a paragraph. This does not necessarily need to be a large font size; a bold
+    /// face may suffice. The [`Display`] impl for [`EngineEvent`] renders this in bold.
+    Heading,
+    /// Secondary text in a visual hierarchy, recommended to display dimmed. The [`Display`] impl
+    /// for [`EngineEvent`] renders this dimmed.
+    Secondary,
+}
+
+/// A single styled span of text as part of a longer logical block of text. This is meant to be used
+/// as part of [`EngineEvent::StyledText`]. In the [`Display`] impl, spans do not supply their own
+/// newlines, so if you want them, you should add them to `text`.
+#[derive(Clone, Debug)]
+pub struct StyledSpan {
+    /// The text to render.
+    pub text: String,
+    /// The style to render the text with.
+    pub style: TextStyle,
+}
+
 /// An enum of events that can be emitted by handlers called by [`crate::cli::app::dispatch_command`].
 /// The contract here is that *every* event, including status updates and error messages will be passed
 /// as an event. In general, events carry text, and variants are a semantic layer on top.
@@ -63,7 +89,7 @@ impl TerminalProgress {
 /// The enum has a [`Self::handle_event`] function that uses the `Display` impl, handles input, and sends
 /// the user response via the channel.
 ///
-/// * [`EngineEvent::DimmedText`] is rendered as dimmed text.
+/// * [`EngineEvent::StyledText`] is rendered depending on the [`TextStyle`]s used for each span.
 /// * [`EngineEvent::Text`] is rendered as-is.
 /// * [`EngineEvent::ToolCall`] is rendered in a dimmed text with the tool name followed by
 ///   JSON args.
@@ -89,10 +115,9 @@ impl TerminalProgress {
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum EngineEvent {
-    /// A message to be displayed at a lower visual hierarchy. It is recommended to display this in
-    /// a dim or gray font.
-    DimmedText { message: String },
-    /// Text from the model.
+    /// A logical block of text with spans styled independently.
+    StyledText { spans: Vec<StyledSpan> },
+    /// Plain, unstyled text.
     Text { message: String },
     /// A tool call. This event is emitted before the tool is executed, but after it is parsed and
     /// known to be a valid tool call. Every emitted `ToolCall` is followed (but not necessarily
@@ -385,7 +410,17 @@ fn read_answer<T>(
 impl Display for EngineEvent {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            EngineEvent::DimmedText { message } => write!(f, "{DIM_TEXT}{message}{RESET}"),
+            EngineEvent::StyledText { spans } => {
+                for span in spans {
+                    match span.style {
+                        TextStyle::Plain => write!(f, "{}", span.text)?,
+                        TextStyle::Heading => write!(f, "{BOLD}{}{RESET}", span.text)?,
+                        TextStyle::Secondary => write!(f, "{DIM_TEXT}{}{RESET}", span.text)?,
+                    }
+                }
+
+                Ok(())
+            }
             EngineEvent::Text { message } => f.write_str(message),
             EngineEvent::ToolCall { name, args, .. } => write!(f, "{DIM_TEXT}{name} {args}{RESET}"),
             EngineEvent::ToolResponse { name, response, .. } => {
@@ -489,8 +524,11 @@ mod tests {
     fn formats_and_routes_output_events() {
         let cases = [
             (
-                EngineEvent::DimmedText {
-                    message: "recap".into(),
+                EngineEvent::StyledText {
+                    spans: vec![StyledSpan {
+                        text: "recap".into(),
+                        style: TextStyle::Secondary,
+                    }],
                 },
                 format!("{DIM_TEXT}recap{RESET}"),
                 false,
