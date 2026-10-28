@@ -3,8 +3,7 @@
 use std::iter;
 use std::path::Path;
 use std::pin::pin;
-use std::sync::Arc;
-use std::sync::atomic;
+use std::sync::{Arc, atomic};
 use std::time::Instant;
 
 use tokio::sync::mpsc::{self, UnboundedSender};
@@ -21,9 +20,7 @@ use crate::cli::prompts::{
     get_summarize_prompt, get_summarize_system_prompt, get_title_prompt, get_title_system_prompt,
 };
 use crate::common::Context;
-use crate::io::EngineEvent;
-use crate::io::StyledSpan;
-use crate::io::TextStyle;
+use crate::io::{EngineEvent, StyledSpan, TextStyle};
 use crate::state::UsageMetadata;
 use crate::store::common::ZoteroStore;
 use crate::tools::mixins::ToolExt;
