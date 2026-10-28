@@ -4,10 +4,8 @@ use std::time::Instant;
 use tokio::sync::mpsc::UnboundedSender;
 use zqa_rag::llm::tools::Tool;
 
-use crate::{
-    io::EngineEvent,
-    utils::terminal::{DIM_TEXT, RESET},
-};
+use crate::io::EngineEvent;
+use crate::utils::terminal::{DIM_TEXT, RESET};
 
 /// `Tool` wrapper that reports its arguments on a status channel before delegating to the
 /// wrapped tool.
