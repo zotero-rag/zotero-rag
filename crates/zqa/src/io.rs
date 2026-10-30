@@ -61,6 +61,10 @@ pub enum TextStyle {
 /// A single styled span of text as part of a longer logical block of text. This is meant to be used
 /// as part of [`EngineEvent::StyledText`]. In the [`Display`] impl, spans do not supply their own
 /// newlines, so if you want them, you should add them to `text`.
+///
+/// A tab separates columns. The CLI relies on terminal tab stops, so senders may use several tabs
+/// to line columns up there. Frontends without tab stops treat a line's first run of tabs as one
+/// column break; the GUI draws the text before it in a fixed-width first column.
 #[derive(Clone, Debug)]
 pub struct StyledSpan {
     /// The text to render.
