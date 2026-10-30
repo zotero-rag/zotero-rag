@@ -1568,6 +1568,18 @@ impl ZqaApp {
                     color: Some(cx.theme().muted_foreground),
                     ..HighlightStyle::default()
                 },
+                TextStyle::Success => HighlightStyle {
+                    color: Some(cx.theme().success),
+                    ..HighlightStyle::default()
+                },
+                TextStyle::Warning => HighlightStyle {
+                    color: Some(cx.theme().warning),
+                    ..HighlightStyle::default()
+                },
+                TextStyle::Error => HighlightStyle {
+                    color: Some(cx.theme().danger),
+                    ..HighlightStyle::default()
+                },
             };
 
             Some((start - segment.start..end - segment.start, highlight))

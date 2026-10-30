@@ -1171,6 +1171,7 @@ mod tests {
         DEFAULT_VOYAGE_RERANK_MODEL,
     };
     use crate::http_client::ReqwestClient;
+    use crate::vector::checkhealth::HealthCheckStatus;
 
     fn get_test_openai_embedding_config() -> EmbeddingProviderConfig {
         EmbeddingProviderConfig::OpenAI(OpenAIConfig {
@@ -1237,6 +1238,13 @@ mod tests {
         assert!(health_result.storage_size.is_none());
         assert!(health_result.table_accessible.is_none());
         assert!(health_result.num_rows.is_none());
+
+        let statuses: Vec<_> = health_result
+            .report()
+            .iter()
+            .map(|line| line.status)
+            .collect();
+        assert_eq!(statuses, [HealthCheckStatus::Fail, HealthCheckStatus::Warn]);
     }
 
     #[tokio::test]

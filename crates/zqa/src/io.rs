@@ -9,7 +9,7 @@ use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use tokio::sync::oneshot;
 
 use crate::state::UsageMetadata;
-use crate::utils::terminal::{BLUE, BOLD, DIM_TEXT, ITALICS, RED, RESET, YELLOW};
+use crate::utils::terminal::{BLUE, BOLD, DIM_TEXT, GREEN, ITALICS, RED, RESET, YELLOW};
 
 /// A manager for [`indicatif`] progress bars used by the CLI renderer and used by
 /// [`EngineEvent::handle_event`] to update progress bars on events.
@@ -56,6 +56,13 @@ pub enum TextStyle {
     /// Secondary text in a visual hierarchy, recommended to display dimmed. The [`Display`] impl
     /// for [`EngineEvent`] renders this dimmed.
     Secondary,
+    /// A positive outcome, such as a passed check. The [`Display`] impl for [`EngineEvent`] renders
+    /// this in green.
+    Success,
+    /// A caveat or a skipped step. The [`Display`] impl for [`EngineEvent`] renders this in yellow.
+    Warning,
+    /// A failure. The [`Display`] impl for [`EngineEvent`] renders this in red.
+    Error,
 }
 
 /// A single styled span of text as part of a longer logical block of text. This is meant to be used
@@ -419,6 +426,9 @@ impl Display for EngineEvent {
                         TextStyle::Plain => write!(f, "{}", span.text)?,
                         TextStyle::Heading => write!(f, "{BOLD}{}{RESET}", span.text)?,
                         TextStyle::Secondary => write!(f, "{DIM_TEXT}{}{RESET}", span.text)?,
+                        TextStyle::Success => write!(f, "{GREEN}{}{RESET}", span.text)?,
+                        TextStyle::Warning => write!(f, "{YELLOW}{}{RESET}", span.text)?,
+                        TextStyle::Error => write!(f, "{RED}{}{RESET}", span.text)?,
                     }
                 }
 
@@ -551,6 +561,26 @@ mod tests {
                     ],
                 },
                 format!("{BOLD}Usage:\n{RESET}/help"),
+                false,
+            ),
+            (
+                EngineEvent::StyledText {
+                    spans: vec![
+                        StyledSpan {
+                            text: "pass ".into(),
+                            style: TextStyle::Success,
+                        },
+                        StyledSpan {
+                            text: "warn ".into(),
+                            style: TextStyle::Warning,
+                        },
+                        StyledSpan {
+                            text: "fail".into(),
+                            style: TextStyle::Error,
+                        },
+                    ],
+                },
+                format!("{GREEN}pass {RESET}{YELLOW}warn {RESET}{RED}fail{RESET}"),
                 false,
             ),
             (

@@ -14,6 +14,9 @@ pub const BLUE: &str = "\x1b[94m";
 /// ANSI escape code for italics
 pub const ITALICS: &str = "\x1b[3m";
 
+/// ANSI escape code for green text
+pub const GREEN: &str = "\x1b[32m";
+
 /// ANSI escape code for yellow text
 pub const YELLOW: &str = "\x1b[33m";
 
