@@ -133,12 +133,18 @@ while round_trips < limit {
         ChatHistoryItem::user_empty()   // the model answered; a steer opens a new user message
     };
 
-    if drain(ctrl, &mut buf).is_stop() { return Ok(self.stopped(..)) } // try_recv what arrived since
+    if drain(ctrl, &mut buf).is_stop() {   // try_recv what arrived since
+        if turn.has_tool_calls() {         // keep the round that just finished
+            provider_history.extend(Vec::from(tail.clone()));
+            history_additions.push(tail);
+        }
+        return Ok(self.stopped(..));
+    }
     let steer = if is_last_turn && extra_round_used { None } else { take_oldest_steer(&mut buf) };
     if steer.is_none() && !turn.has_tool_calls() { break } // answered, nothing to fold in: done
     if let Some(text) = steer {
         tail.push_text(text);           // one at a time, as in pi
-        if is_last_turn { limit += 1; extra_round_used = true; }
+        if is_last_turn { limit += 2; extra_round_used = true; } // one tool round, then the final answer
     }
     provider_history.extend(Vec::from(tail.clone()));
     history_additions.push(tail);
@@ -150,13 +156,14 @@ while round_trips < limit {
 - **Steers wait, as in pi** (decided in review). `until_stop` buffers Steer and Queue and keeps polling the same future, so a model call or tool batch always runs to completion unless the user stops. A steer that arrives mid-call costs that call; in return there is one code path and nothing is ever thrown away but a stopped call.
 - **Where a steer lands.** After tool results, it is appended as text to the same tool-results user message. After an answer with no tool calls, it opens a new user message and the loop continues instead of returning. pi does the same: its loop runs while there are tool calls or steering messages.
 - **Nothing is rebuilt.** The steer is added to the generic `ChatHistoryItem` before it is converted with the existing `Into<Vec<Self::HistoryItem>>`, so no native item is ever popped or re-converted. Anthropic gets text blocks after the `tool_result` blocks in one user message, and OpenAI gets `function_call_output` items followed by a user message (checked in `openai.rs`).
-- **One extra round for a late steer** (decided in review). A steer that arrives during the final, no-tools iteration waits for that answer, then raises the limit by one, once per run, so "also look for X" can be acted on.
+- **One extra round for a late steer** (decided in review). A steer that arrives during the final, no-tools iteration waits for that answer, then raises the limit by two, once per run: one round with tools, so "also look for X" can be acted on, then the usual final answer without tools. Raising it by one would not be enough, because `is_last_turn` is recomputed as `round_trips == limit - 1` and the next iteration would be the last one again.
+- **A Stop between rounds keeps the round.** A Stop seen at the drain point after a tool batch first pushes that batch's results (without a steer), so the finished round is kept, as decided in review.
 - **Leftovers.** Steers still buffered when the loop ends (because the extra round is spent) and every `Queue` item go back in `response.leftover`, steers first, since pi also runs leftover steers before follow-ups.
 
 ### `zqa`: wiring
 
 - **`Context`** gains `control_rx: Option<UnboundedReceiver<Control>>`; **`Session`** exposes a cloneable `SteerHandle` wrapping the sender. The CLI builds the pair in `run()` next to the event channel.
-- **`handle_query_cmd`** takes the receiver out with `.take()` for the run and passes `control: Some(&mut rx)` on the main request only. It has to take it, because `ctx.emit` borrows all of `ctx` while the request holds the receiver. A small guard puts it back on every exit path, since the handler returns early with `?`. Before the request, it drains stale controls (the same reason the bridge drains `cancel_rx`).
+- **`handle_query_cmd`** takes the receiver out with `.take()` for the run and passes `control: Some(&mut rx)` on the main request only. It has to take it, because `ctx.emit` borrows all of `ctx` while the request holds the receiver. A small guard puts it back on every exit path, since the handler returns early with `?`. Before the request, it drops stale `Stop`s (the same reason the bridge drains `cancel_rx`) and moves any stale `Steer` or `Queue` onto `pending_inputs`, so text typed while another command ran is not lost.
 - **Queued and leftover messages run as their own commands.** After `send_message` returns, the handler takes `response.leftover` (unrun steers first, then `Queue` items), then anything still in the channel, and pushes them onto a new `ctx.state.pending_inputs` queue. `Session::dispatch` and the CLI's `run_command` keep dispatching until it is empty, so a queued `/search` works too. This replaces the bridge's single `pending_command` slot.
 - **On Stop**, unrun steers and queued messages are not run. They go back to the frontend in `EngineEvent::Unsent { messages }`, the way pi puts queued text back into the editor when a run is aborted.
 - **New events:** `Steered { message }` when the loop folds a steer in, so the transcript shows it where the model saw it; `Stopped` when a run ends by Stop; `Unsent { messages }` as above. Which crate owns them is the next section.
@@ -251,7 +258,7 @@ A steer only ever appends after the last native item, and the only call ever dis
 | During a model call | Waits for the call. If the model asks for tools, folded in after them; if it answers, appended as a new user message and the loop continues. | Held; runs after the query. | Abort the call. On the first call, save the query alone; later, keep completed rounds. |
 | While tools run | Waits; folded in after the tools finish, before the next call. | Held. | Drop the `join_all` future. Retrieval and summarization futures go with it, which also stops summarization's own LLM calls. |
 | During the final, no-tools iteration | Waits for the answer, then continues with one extra tool round, once per run. | Held. | Abort; keep completed rounds. |
-| After the extra round is spent, or after the loop returns | Left over; runs as its own command, before queued ones. | Runs as its own command. | Ignored: nothing to stop. Drained before the next command. |
+| After the extra round is spent, or after the loop returns | Left over; runs as its own command, before queued ones. | Runs as its own command. | Ignored: nothing to stop. Dropped before the next query. |
 | While a prompt (`Confirm`, `Line`) waits for a reply | Waits until the loop next polls. No prompt is raised in the query path today. | Same. | Same, unless the user also cancels the prompt (GUI: dropping the reply sender). |
 | Several in quick succession | One per drain point, oldest first; one `Steered` event each. | All run, in order. | First Stop wins; unrun steers and queued items come back in `Unsent`. |
 | Provider request already sent when stopped | n/a: a steer never aborts a call. | n/a | The provider may still bill for it. Record the usage as unknown; it never enters history. |
@@ -279,7 +286,7 @@ Nothing here blocks the `AgentDriver` / `TurnEvent` split in ZOT-219; the contro
 
 1. **Provider layout of text after tool results.** Anthropic and OpenAI are covered above; Gemini (text parts beside `functionResponse` parts in one content), OpenRouter (role `tool` messages, then a user message) and Ollama need a fixture test each before this ships.
 
-### Decided in review (Oct 29)
+### Decided in review (Oct 29 and 30)
 
 - Stop keeps the finished tool rounds; design doc 04 gets the amendments listed under History persistence.
 - A steer during the final, no-tools iteration buys one more tool round, once per run.
