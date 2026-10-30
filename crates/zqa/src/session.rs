@@ -6,6 +6,7 @@
 //! the full retrieval/generation pipeline without depending on the crate internals
 //! ([`Context`], [`State`], the handler functions) being `pub`.
 
+use chrono::Local;
 use tokio::sync::mpsc;
 
 use crate::cli::app::dispatch_command;
@@ -100,5 +101,24 @@ impl Session {
         conversation: &SavedChatHistory,
     ) -> impl Future<Output = Result<(), CLIError>> + Send {
         resume_conversation(&mut self.ctx, conversation)
+    }
+
+    /// Take a snapshot of the current conversation: its history, title and total usage.
+    ///
+    /// The snapshot is a copy, so later commands don't change it. A front-end can compare snapshots
+    /// from before and after a command, such as a typed `/resume`, to learn whether the command
+    /// switched conversations. The snapshot's `date` is the time it was taken, since the session
+    /// does not track when a conversation started, and its `title` is empty until one is generated.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`CLIError`] if the conversation state cannot be locked.
+    pub fn conversation(&self) -> Result<SavedChatHistory, CLIError> {
+        Ok(SavedChatHistory {
+            history: self.ctx.state.chat_history.lock()?.clone(),
+            date: Local::now(),
+            title: self.ctx.state.title.lock()?.clone().unwrap_or_default(),
+            usage: self.ctx.state.usage,
+        })
     }
 }
