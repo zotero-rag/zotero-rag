@@ -122,7 +122,7 @@ async fn until_stop<F: Future>(
 while round_trips < limit {
     let Some(turn) = until_stop(ctrl, &mut buf, self.send_once(..)).await
         else { return Ok(self.stopped(..)) };
-    let turn = turn?;
+    let turn = turn.map_err(|e| e.with_leftover(take_all(&mut buf)))?; // keep buffered input on error
     // ...extend history, emit as today...
 
     let mut tail = if turn.has_tool_calls() {
@@ -159,13 +159,14 @@ while round_trips < limit {
 - **One extra round for a late steer** (decided in review). A steer that arrives during the final, no-tools iteration waits for that answer, then raises the limit by two, once per run: one round with tools, so "also look for X" can be acted on, then the usual final answer without tools. Raising it by one would not be enough, because `is_last_turn` is recomputed as `round_trips == limit - 1` and the next iteration would be the last one again.
 - **A Stop between rounds keeps the round.** A Stop seen at the drain point after a tool batch first pushes that batch's results (without a steer), so the finished round is kept, as decided in review.
 - **Leftovers.** Steers still buffered when the loop ends (because the extra round is spent) and every `Queue` item go back in `response.leftover`, steers first, since pi also runs leftover steers before follow-ups.
+- **Errors keep buffered input.** If a model call fails after `until_stop` has buffered a Steer or Queue, that text is no longer in the channel. So the error carries it out the same way, in a `leftover` field on the loop's error, and the handler treats it as on Stop (below).
 
 ### `zqa`: wiring
 
 - **`Context`** gains `control_rx: Option<UnboundedReceiver<Control>>`; **`Session`** exposes a cloneable `SteerHandle` wrapping the sender. The CLI builds the pair in `run()` next to the event channel.
 - **`handle_query_cmd`** takes the receiver out with `.take()` for the run and passes `control: Some(&mut rx)` on the main request only. It has to take it, because `ctx.emit` borrows all of `ctx` while the request holds the receiver. A small guard puts it back on every exit path, since the handler returns early with `?`.
 - **Queued and leftover messages run as their own commands.** After `send_message` returns, the handler pushes `response.leftover` (unrun steers first, then `Queue` items) onto a new `ctx.state.pending_inputs` queue. After every command, query or not, `Session::dispatch` and the CLI's `run_command` read what is still in the channel: they drop stale `Stop`s (the same reason the bridge drains `cancel_rx`) and push each `Steer` or `Queue` onto `pending_inputs`, in arrival order. They then keep dispatching until it is empty, so a queued `/search` works too, and text typed while any command ran is neither lost nor run out of order. This replaces the bridge's single `pending_command` slot.
-- **On Stop**, unrun steers and queued messages are not run. They go back to the frontend in `EngineEvent::Unsent { messages }`, the way pi puts queued text back into the editor when a run is aborted.
+- **On Stop or an error**, unrun steers and queued messages are not run. They go back to the frontend in `EngineEvent::Unsent { messages }`, the way pi puts queued text back into the editor when a run is aborted.
 - **New events:** `Steered { message }` when the loop folds a steer in, so the transcript shows it where the model saw it; `Stopped` when a run ends by Stop; `Unsent { messages }` as above. Which crate owns them is the next section.
 
 ### Frontends
