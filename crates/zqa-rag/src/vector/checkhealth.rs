@@ -13,9 +13,6 @@ use crate::vector::backends::backend::VectorBackend;
 /// this error is only used when a fast path fails before the result object exists.
 #[derive(Debug, thiserror::Error)]
 pub enum HealthCheckError {
-    /// An IO error, e.g. writing diagnostic output.
-    #[error(transparent)]
-    Io(#[from] io::Error),
     /// The store is in a state the diagnostics did not expect (likely a bug).
     #[error("The store is in an invalid state: {0}")]
     InvalidState(String),
