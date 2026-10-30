@@ -1481,19 +1481,15 @@ impl ZqaApp {
                     .into_any_element()
             }
             ChatRow::ToolCall(call) => Self::render_tool_call(ix, call, cx),
-            ChatRow::Status(lines) => h_flex()
+            // Left-aligned with answers: status lines include long tool arguments, which read
+            // badly centered.
+            ChatRow::Status(lines) => div()
                 .w_full()
-                .justify_center()
-                .child(
-                    div()
-                        .max_w_full()
-                        .px_2()
-                        .text_size(px(11.))
-                        .font_family(cx.theme().mono_font_family.clone())
-                        .text_color(cx.theme().muted_foreground)
-                        .whitespace_normal()
-                        .child(lines.clone()),
-                )
+                .text_size(px(11.))
+                .font_family(cx.theme().mono_font_family.clone())
+                .text_color(cx.theme().muted_foreground)
+                .whitespace_normal()
+                .child(lines.clone())
                 .into_any_element(),
             ChatRow::Failed(message) => h_flex()
                 .w_full()
