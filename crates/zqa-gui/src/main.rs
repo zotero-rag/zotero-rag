@@ -14,6 +14,7 @@ mod prompt_card;
 mod prompts;
 
 use std::collections::{HashMap, VecDeque};
+use std::ops::Range;
 use std::sync::Arc;
 
 use bridge::{EngineCommand, UiEvent, spawn_engine};
@@ -30,16 +31,16 @@ use gpui_kit::component::{
 };
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    AnyElement, App, Context, Decorations, Div, Entity, Focusable as _, FontWeight, IntoElement,
-    KeyBinding, MouseButton, Pixels, PromptButton, PromptLevel, Rems, Render, ScrollHandle,
-    SharedString, Stateful, Subscription, Window, WindowBackgroundAppearance, WindowBounds,
-    actions, div, px, rems, size, transparent_black,
+    AnyElement, App, Context, Decorations, Div, Entity, Focusable as _, FontWeight, HighlightStyle,
+    IntoElement, KeyBinding, MouseButton, Pixels, PromptButton, PromptLevel, Rems, Render,
+    ScrollHandle, SharedString, Stateful, StyledText, Subscription, Window,
+    WindowBackgroundAppearance, WindowBounds, actions, div, px, rems, size, transparent_black,
 };
 use prompt_card::{PromptCard, PromptEvent};
 use prompts::PromptRequest;
 use serde_json::Value;
 use tokio::sync::mpsc::UnboundedSender;
-use zqa::io::EngineEvent;
+use zqa::io::{EngineEvent, StyledSpan, TextStyle};
 use zqa::state::{SavedChatHistory, UsageMetadata};
 
 /// Width of the left sidebar.
@@ -79,6 +80,10 @@ enum ChatRow {
     ToolCall(ToolCallRow),
     /// Answer-style stdout. Grows in place while a command streams.
     Answer(String),
+    /// A block of text whose parts are styled differently, such as `/help` with its headings. The
+    /// ranges are byte ranges into the text for each span that isn't plain; see
+    /// [`ZqaApp::layout_spans`].
+    Styled(String, Vec<(Range<usize>, TextStyle)>),
     /// Engine status lines (timings, warnings) written to stderr.
     Status(String),
     /// A command that failed.
@@ -510,6 +515,9 @@ impl ZqaApp {
             EngineEvent::Reasoning { message } => {
                 self.rows.push(ChatRow::Reasoning(message.into()));
             }
+            EngineEvent::StyledText { spans } => {
+                Self::fold_styled(&mut self.rows, &spans);
+            }
             EngineEvent::StatusUpdate { message } | EngineEvent::Warning { message } => {
                 self.rows.push(ChatRow::Status(message));
             }
@@ -592,6 +600,58 @@ impl ZqaApp {
         if !text.trim().is_empty() {
             rows.push(ChatRow::Answer(text.to_string()));
         }
+    }
+
+    /// Fold a styled block of text into the transcript.
+    ///
+    /// A block that is all `Secondary` text, such as a timing, joins the muted status lines like
+    /// other engine status does. Anything else becomes its own [`ChatRow::Styled`] row.
+    fn fold_styled(rows: &mut Vec<ChatRow>, spans: &[StyledSpan]) {
+        if spans
+            .iter()
+            .all(|span| matches!(span.style, TextStyle::Secondary))
+        {
+            let text: String = spans.iter().map(|span| span.text.as_str()).collect();
+            Self::fold_stderr(rows, &text);
+            return;
+        }
+
+        let (text, styles) = Self::layout_spans(spans);
+        if !text.is_empty() {
+            rows.push(ChatRow::Styled(text, styles));
+        }
+    }
+
+    /// Join `spans` into one string and record where each non-plain span lies in it.
+    ///
+    /// Trailing whitespace is trimmed, as for answer rows, and ranges are cut to the trimmed text.
+    /// Plain spans get no range, since they use the row's default style.
+    ///
+    /// # Returns
+    ///
+    /// The joined text, and the byte range and style of each non-plain span, in order.
+    fn layout_spans(spans: &[StyledSpan]) -> (String, Vec<(Range<usize>, TextStyle)>) {
+        let mut text = String::new();
+        let mut styles = Vec::new();
+
+        for span in spans {
+            let start = text.len();
+            text.push_str(&span.text);
+
+            if !matches!(span.style, TextStyle::Plain) {
+                styles.push((start..text.len(), span.style));
+            }
+        }
+
+        text.truncate(text.trim_end().len());
+        let len = text.len();
+        let styles = styles
+            .into_iter()
+            .map(|(range, style)| (range.start..range.end.min(len), style))
+            .filter(|(range, _)| !range.is_empty())
+            .collect();
+
+        (text, styles)
     }
 
     /// Fold stderr lines (timings, warnings) into the transcript.
@@ -1357,6 +1417,30 @@ impl ZqaApp {
                     .child(body.to_string())
                     .into_any_element()
             }
+            ChatRow::Styled(text, styles) => {
+                let highlights = styles.iter().map(|(range, style)| {
+                    let highlight = match style {
+                        TextStyle::Plain => HighlightStyle::default(),
+                        TextStyle::Heading => HighlightStyle {
+                            font_weight: Some(FontWeight::SEMIBOLD),
+                            ..HighlightStyle::default()
+                        },
+                        TextStyle::Secondary => HighlightStyle {
+                            color: Some(cx.theme().muted_foreground),
+                            ..HighlightStyle::default()
+                        },
+                    };
+                    (range.clone(), highlight)
+                });
+
+                div()
+                    .w_full()
+                    .text_size(px(14.))
+                    .line_height(rems(1.45))
+                    .whitespace_normal()
+                    .child(StyledText::new(text.clone()).with_highlights(highlights))
+                    .into_any_element()
+            }
             ChatRow::Reasoning(text) => {
                 let body = text.trim();
                 if body.is_empty() {
@@ -1762,7 +1846,7 @@ mod tests {
     use gpui_kit::test::TestWindowExt;
     use gpui_kit::{Entity, TestAppContext, VisualTestContext, px, size};
     use tokio::sync::{mpsc, oneshot};
-    use zqa::io::EngineEvent;
+    use zqa::io::{EngineEvent, StyledSpan, TextStyle};
     use zqa_macros::test_eq;
     use zqa_rag::llm::base::{
         ChatHistoryContent, ChatHistoryItem, MessageRole, ToolCallRequest, ToolCallResponse,
@@ -2236,6 +2320,38 @@ mod tests {
         ZqaApp::fold_stdout(&mut rows, "\n");
 
         assert!(rows.is_empty());
+    }
+
+    #[test]
+    fn styled_text_becomes_a_styled_row_unless_it_is_all_secondary() {
+        let span = |text: &str, style| StyledSpan {
+            text: text.into(),
+            style,
+        };
+        let mut rows = Vec::new();
+
+        ZqaApp::fold_styled(
+            &mut rows,
+            &[
+                span("Usage:\n", TextStyle::Heading),
+                span("/help\n\n", TextStyle::Plain),
+                span("Commands:\n", TextStyle::Heading),
+            ],
+        );
+        ZqaApp::fold_styled(&mut rows, &[span("Search took 1s\n", TextStyle::Secondary)]);
+
+        let [ChatRow::Styled(text, styles), ChatRow::Status(status)] = rows.as_slice() else {
+            panic!("expected a styled row and a status row, got {rows:?}");
+        };
+        test_eq!(text, "Usage:\n/help\n\nCommands:");
+        let ranges: Vec<_> = styles.iter().map(|(range, _)| range.clone()).collect();
+        test_eq!(ranges, [0..7, 14..23]);
+        assert!(
+            styles
+                .iter()
+                .all(|(_, style)| matches!(style, TextStyle::Heading))
+        );
+        test_eq!(status, "Search took 1s");
     }
 
     #[test]
