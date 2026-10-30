@@ -22,6 +22,7 @@ use futures::channel::mpsc::UnboundedReceiver;
 use gpui_kit::assets::Assets;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{InputEvent, Textarea, TextareaState};
+use gpui_kit::component::progress::Progress;
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::{
     ActiveTheme as _, Icon, IconName, InteractiveElementExt as _, Root, Sizable as _,
@@ -101,6 +102,21 @@ struct ToolCallRow {
     response: Option<Result<Value, String>>,
     /// Whether the panel is expanded to show `args` and `response`.
     expanded: bool,
+}
+
+/// A task the engine reported with `ProgressStart`, shown above the "Working..." line until it
+/// completes or the command ends.
+#[derive(Debug, PartialEq)]
+struct ProgressTask {
+    /// The engine's ID for the task, which its updates and completion refer to.
+    id: String,
+    /// What the task is doing, such as "Parsing library".
+    label: SharedString,
+    /// The amount of work in the task. `None` means the amount is unknown, so the task shows a
+    /// spinner instead of a bar.
+    total: Option<u64>,
+    /// The work completed so far, in the same units as `total`.
+    completed: u64,
 }
 
 struct ChatRows(Vec<ChatRow>);
@@ -208,6 +224,9 @@ struct ZqaApp {
     /// carry one query's usage each and are added to this; it resets on `/new` and is replaced by the
     /// saved total when a conversation is resumed from the sidebar.
     usage: UsageMetadata,
+    /// Tasks that have started and not completed, in the order they started. Cleared when a
+    /// command ends, since the engine may not complete a task that a cancelled command started.
+    progress: Vec<ProgressTask>,
     /// Which pane the main area shows.
     pane: Pane,
     /// Whether the dark theme is active; toggled from the header.
@@ -280,6 +299,7 @@ impl ZqaApp {
                         },
                         UiEvent::Done(result) => {
                             app.clear_prompts();
+                            app.progress.clear();
                             Self::focus_input(&app.input_state, window, cx);
 
                             if app.phase != Phase::ShuttingDown {
@@ -295,6 +315,7 @@ impl ZqaApp {
                         }
                         UiEvent::ConversationResumed(result) => {
                             app.clear_prompts();
+                            app.progress.clear();
                             Self::focus_input(&app.input_state, window, cx);
 
                             if app.phase != Phase::ShuttingDown {
@@ -313,6 +334,7 @@ impl ZqaApp {
                         }
                         UiEvent::Cancelled => {
                             app.clear_prompts();
+                            app.progress.clear();
                             Self::focus_input(&app.input_state, window, cx);
 
                             if app.phase != Phase::ShuttingDown {
@@ -338,6 +360,7 @@ impl ZqaApp {
             // accepted into a dead channel.
             let _ = this.update(cx, |app, cx| {
                 app.clear_prompts();
+                app.progress.clear();
                 app.phase = Phase::Ended;
                 cx.notify();
             });
@@ -355,6 +378,7 @@ impl ZqaApp {
             exit_confirmation_open: false,
             pending_reset: false,
             usage: UsageMetadata::default(),
+            progress: Vec::new(),
             pane: Pane::Chat,
             dark_theme,
             drag_armed: false,
@@ -501,6 +525,17 @@ impl ZqaApp {
             EngineEvent::TokenUsage { usage } => {
                 self.usage += usage;
             }
+            EngineEvent::ProgressStart { id, label, total } => {
+                Self::start_progress(&mut self.progress, id, label, total);
+            }
+            EngineEvent::ProgressUpdate { id, completed } => {
+                if let Some(task) = self.progress.iter_mut().find(|task| task.id == id) {
+                    task.completed = completed;
+                }
+            }
+            EngineEvent::ProgressComplete { id } => {
+                self.progress.retain(|task| task.id != id);
+            }
             request @ (EngineEvent::Confirm { .. }
             | EngineEvent::Choose { .. }
             | EngineEvent::Line { .. }
@@ -511,6 +546,23 @@ impl ZqaApp {
                 // EngineEvent is non_exhaustive across crate boundaries.
             }
         }
+    }
+
+    /// Add a task that has started. A task that reuses a running task's ID replaces it, as in the
+    /// CLI, so a restarted task doesn't show twice.
+    fn start_progress(
+        tasks: &mut Vec<ProgressTask>,
+        id: String,
+        label: String,
+        total: Option<u64>,
+    ) {
+        tasks.retain(|task| task.id != id);
+        tasks.push(ProgressTask {
+            id,
+            label: label.into(),
+            total,
+            completed: 0,
+        });
     }
 
     /// Load saved conversations for the sidebar.
@@ -1196,7 +1248,13 @@ impl ZqaApp {
                     .filter_map(|(ix, row)| self.render_row(ix, row, cx)),
             )
             .when(busy, |this| {
-                this.child(
+                this.children(
+                    self.progress
+                        .iter()
+                        .enumerate()
+                        .map(|(ix, task)| Self::render_progress(ix, task, cx)),
+                )
+                .child(
                     h_flex()
                         .w_full()
                         .items_center()
@@ -1218,6 +1276,51 @@ impl ZqaApp {
 
         scroll()
             .child(div().w_full().flex().justify_center().child(column))
+            .into_any_element()
+    }
+
+    /// Render a running task: a spinner and its label when the amount of work is unknown, or its
+    /// label, a `completed / total` count and a progress bar when it is known.
+    fn render_progress(ix: usize, task: &ProgressTask, cx: &Context<Self>) -> AnyElement {
+        let label = div()
+            .flex_1()
+            .text_size(px(13.))
+            .text_color(cx.theme().muted_foreground)
+            .child(task.label.clone());
+
+        let Some(total) = task.total else {
+            return h_flex()
+                .w_full()
+                .items_center()
+                .gap_2()
+                .child(Spinner::new().xsmall())
+                .child(label)
+                .into_any_element();
+        };
+
+        // An empty task has nothing left to do, so it shows as full.
+        let percent = if total == 0 {
+            100.0
+        } else {
+            task.completed as f32 / total as f32 * 100.0
+        };
+
+        v_flex()
+            .w_full()
+            .gap_1()
+            .child(
+                h_flex().w_full().items_center().gap_2().child(label).child(
+                    div()
+                        .text_size(px(12.))
+                        .text_color(cx.theme().muted_foreground)
+                        .child(format!(
+                            "{} / {}",
+                            format_count(task.completed),
+                            format_count(total)
+                        )),
+                ),
+            )
+            .child(Progress::new(("progress", ix)).value(percent))
             .into_any_element()
     }
 
@@ -1517,8 +1620,14 @@ impl ZqaApp {
     /// price is known.
     fn render_usage_footer(&self, cx: &Context<Self>) -> AnyElement {
         let mut parts = vec![
-            format!("{} input tokens", format_count(self.usage.input_tokens)),
-            format!("{} output tokens", format_count(self.usage.output_tokens)),
+            format!(
+                "{} input tokens",
+                format_count(self.usage.input_tokens.into())
+            ),
+            format!(
+                "{} output tokens",
+                format_count(self.usage.output_tokens.into())
+            ),
         ];
 
         if self.usage.estimated_cost > 0 {
@@ -1546,7 +1655,7 @@ impl ZqaApp {
 }
 
 /// Format a count with comma thousands separators, such as `12,345`.
-fn format_count(count: u32) -> String {
+fn format_count(count: u64) -> String {
     let digits = count.to_string();
     let mut formatted = String::with_capacity(digits.len() + digits.len() / 3);
 
@@ -1659,7 +1768,7 @@ mod tests {
         ChatHistoryContent, ChatHistoryItem, MessageRole, ToolCallRequest, ToolCallResponse,
     };
 
-    use super::{ChatRow, ChatRows, EngineCommand, Phase, UiEvent, ZqaApp};
+    use super::{ChatRow, ChatRows, EngineCommand, Phase, ProgressTask, UiEvent, ZqaApp};
 
     /// A whole-app fixture with no engine thread, provider calls, or initial filesystem reads.
     /// Tests can seed private view state through `app.update`, inject engine events through
@@ -1724,6 +1833,49 @@ mod tests {
                 message: "Synthetic help output".into(),
             }))
             .unwrap();
+
+        // A restarted task replaces the old one, and a completed task disappears.
+        let progress_events = [
+            EngineEvent::ProgressStart {
+                id: "parse".into(),
+                label: "Parsing".into(),
+                total: Some(10),
+            },
+            EngineEvent::ProgressStart {
+                id: "embed".into(),
+                label: "Embedding".into(),
+                total: None,
+            },
+            EngineEvent::ProgressStart {
+                id: "parse".into(),
+                label: "Parsing again".into(),
+                total: Some(20),
+            },
+            EngineEvent::ProgressUpdate {
+                id: "parse".into(),
+                completed: 5,
+            },
+            EngineEvent::ProgressComplete { id: "embed".into() },
+        ];
+        for event in progress_events {
+            harness
+                .events
+                .unbounded_send(UiEvent::Engine(event))
+                .unwrap();
+        }
+        cx.run_until_parked();
+        harness.app.read_with(cx, |app, _| {
+            test_eq!(
+                app.progress,
+                [ProgressTask {
+                    id: "parse".into(),
+                    label: "Parsing again".into(),
+                    total: Some(20),
+                    completed: 5,
+                }]
+            );
+        });
+
         harness
             .events
             .unbounded_send(UiEvent::Done(Ok(true)))
@@ -1732,6 +1884,10 @@ mod tests {
         harness.app.read_with(cx, |app, _| {
             test_eq!(app.phase, Phase::Ready);
             test_eq!(trailing_answer(&app.rows), "Synthetic help output");
+            assert!(
+                app.progress.is_empty(),
+                "progress should clear when the command ends"
+            );
         });
     }
 
