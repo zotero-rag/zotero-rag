@@ -53,6 +53,9 @@ const TRAFFIC_LIGHT_INSET: Pixels = if cfg!(target_os = "macos") {
 };
 /// Width of the centered conversation column.
 const CONTENT_WIDTH: Rems = rems(46.);
+/// Width of the first column when a styled row's line has a tab, wide enough for the longest
+/// command in `/help` (`/batch cancel <id>`).
+const STYLED_FIRST_COLUMN_WIDTH: Rems = rems(11.);
 
 // Window actions
 actions!(window, [CloseWindow, QuitApp]);
@@ -122,6 +125,16 @@ struct ProgressTask {
     total: Option<u64>,
     /// The work completed so far, in the same units as `total`.
     completed: u64,
+}
+
+/// One line of a [`ChatRow::Styled`] row, as byte ranges into the row's text. See
+/// [`ZqaApp::styled_lines`].
+#[derive(Debug, PartialEq)]
+enum StyledLine {
+    /// A line with no tab, drawn as-is.
+    Text(Range<usize>),
+    /// A line with a tab, drawn as a fixed-width first column and the rest of the line.
+    Columns(Range<usize>, Range<usize>),
 }
 
 struct ChatRows(Vec<ChatRow>);
@@ -1418,27 +1431,36 @@ impl ZqaApp {
                     .into_any_element()
             }
             ChatRow::Styled(text, styles) => {
-                let highlights = styles.iter().map(|(range, style)| {
-                    let highlight = match style {
-                        TextStyle::Plain => HighlightStyle::default(),
-                        TextStyle::Heading => HighlightStyle {
-                            font_weight: Some(FontWeight::SEMIBOLD),
-                            ..HighlightStyle::default()
-                        },
-                        TextStyle::Secondary => HighlightStyle {
-                            color: Some(cx.theme().muted_foreground),
-                            ..HighlightStyle::default()
-                        },
-                    };
-                    (range.clone(), highlight)
+                let lines = Self::styled_lines(text).into_iter().map(|line| match line {
+                    StyledLine::Text(segment) if segment.is_empty() => {
+                        div().h(rems(1.45)).into_any_element()
+                    }
+                    StyledLine::Text(segment) => {
+                        Self::styled_segment(text, styles, segment, cx).into_any_element()
+                    }
+                    StyledLine::Columns(first, rest) => h_flex()
+                        .w_full()
+                        .items_start()
+                        .child(
+                            div()
+                                .w(STYLED_FIRST_COLUMN_WIDTH)
+                                .flex_shrink_0()
+                                .child(Self::styled_segment(text, styles, first, cx)),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .child(Self::styled_segment(text, styles, rest, cx)),
+                        )
+                        .into_any_element(),
                 });
 
-                div()
+                v_flex()
                     .w_full()
                     .text_size(px(14.))
                     .line_height(rems(1.45))
                     .whitespace_normal()
-                    .child(StyledText::new(text.clone()).with_highlights(highlights))
+                    .children(lines)
                     .into_any_element()
             }
             ChatRow::Reasoning(text) => {
@@ -1493,6 +1515,69 @@ impl ZqaApp {
                 .into_any_element(),
         };
         Some(element)
+    }
+
+    /// Split a styled row's text into lines, and lines that contain a tab into two columns.
+    ///
+    /// Engine text such as `/help` lines up its columns with tabs, which only works with a
+    /// terminal's tab stops. The GUI draws a tab as a fixed-width gap, so a line with a tab is
+    /// split at its first run of tabs instead: the part before it goes in a fixed-width first
+    /// column and the rest after it.
+    ///
+    /// # Returns
+    ///
+    /// Byte ranges into `text` for each line, or for each column of a line with a tab. Newlines
+    /// and the tabs between columns are not part of any range.
+    fn styled_lines(text: &str) -> Vec<StyledLine> {
+        let mut lines = Vec::new();
+        let mut start = 0;
+
+        for line in text.split('\n') {
+            let end = start + line.len();
+            lines.push(match line.find('\t') {
+                Some(tab) => {
+                    let rest = line[tab..].trim_start_matches('\t');
+                    StyledLine::Columns(start..start + tab, end - rest.len()..end)
+                }
+                None => StyledLine::Text(start..end),
+            });
+
+            start = end + 1;
+        }
+
+        lines
+    }
+
+    /// Draw `segment` of a styled row's `text`, with the parts of `styles` that fall inside it.
+    fn styled_segment(
+        text: &str,
+        styles: &[(Range<usize>, TextStyle)],
+        segment: Range<usize>,
+        cx: &Context<Self>,
+    ) -> StyledText {
+        let highlights = styles.iter().filter_map(|(range, style)| {
+            let start = range.start.max(segment.start);
+            let end = range.end.min(segment.end);
+            if start >= end {
+                return None;
+            }
+
+            let highlight = match style {
+                TextStyle::Plain => HighlightStyle::default(),
+                TextStyle::Heading => HighlightStyle {
+                    font_weight: Some(FontWeight::SEMIBOLD),
+                    ..HighlightStyle::default()
+                },
+                TextStyle::Secondary => HighlightStyle {
+                    color: Some(cx.theme().muted_foreground),
+                    ..HighlightStyle::default()
+                },
+            };
+
+            Some((start - segment.start..end - segment.start, highlight))
+        });
+
+        StyledText::new(text[segment.clone()].to_string()).with_highlights(highlights)
     }
 
     /// Render a tool call as a collapsible panel.
@@ -1852,7 +1937,9 @@ mod tests {
         ChatHistoryContent, ChatHistoryItem, MessageRole, ToolCallRequest, ToolCallResponse,
     };
 
-    use super::{ChatRow, ChatRows, EngineCommand, Phase, ProgressTask, UiEvent, ZqaApp};
+    use super::{
+        ChatRow, ChatRows, EngineCommand, Phase, ProgressTask, StyledLine, UiEvent, ZqaApp,
+    };
 
     /// A whole-app fixture with no engine thread, provider calls, or initial filesystem reads.
     /// Tests can seed private view state through `app.update`, inject engine events through
@@ -2352,6 +2439,21 @@ mod tests {
                 .all(|(_, style)| matches!(style, TextStyle::Heading))
         );
         test_eq!(status, "Search took 1s");
+    }
+
+    #[test]
+    fn styled_lines_split_at_the_first_run_of_tabs() {
+        let text = "Commands:\n/help\t\t\tShow help\n\n/batch cancel <id>\tCancel";
+
+        test_eq!(
+            ZqaApp::styled_lines(text),
+            [
+                StyledLine::Text(0..9),
+                StyledLine::Columns(10..15, 18..27),
+                StyledLine::Text(28..28),
+                StyledLine::Columns(29..47, 48..54),
+            ]
+        );
     }
 
     #[test]
