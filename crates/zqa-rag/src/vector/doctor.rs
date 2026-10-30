@@ -1,81 +1,65 @@
 //! Similar to `rag::vector::checkhealth`, this provides utilities to aid end-users in
 //! troubleshooting issues, providing suggestions where possible.
 
-use std::io::Write;
-
 use crate::vector::checkhealth::{HealthCheckError, HealthCheckable};
 
-const HELP: &str = "\x1b[32;1m";
-const SYMPTOM: &str = "\x1b[33;1m";
-const RESET: &str = "\x1b[0m";
-
-/// Print a `cargo`-style "help" message.
-///
-/// # Arguments:
-///
-/// * `out`: A writer object, such as a file pointer or `stdout`.
-/// * `msg`: The message to write.
-///
-/// # Errors
-///
-/// Returns an error if writing to the output stream fails.
-fn help(out: &mut impl Write, msg: &str) -> Result<(), HealthCheckError> {
-    writeln!(out, "{HELP}help:{RESET} {msg}")?;
-
-    Ok(())
+/// A problem found by [`doctor`], and how to fix it if there is a known fix.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Diagnosis {
+    /// What the health check observed, such as "database storage does not exist.".
+    pub symptom: String,
+    /// A suggested fix, if there is one.
+    pub help: Option<String>,
 }
 
-/// Print a helpful message showing the symptom observed from the healthcheck.
-///
-/// # Arguments:
-///
-/// * `out`: A writer object, such as a file pointer or `stdout`.
-/// * `msg`: The message to write.
-///
-/// # Errors
-///
-/// Returns an error if writing to the output stream fails.
-fn symptom(out: &mut impl Write, msg: &str) -> Result<(), HealthCheckError> {
-    writeln!(out, "{SYMPTOM}symptom:{RESET} {msg}")?;
-
-    Ok(())
+impl Diagnosis {
+    /// Build a diagnosis.
+    ///
+    /// # Arguments
+    ///
+    /// * `symptom` - What the health check observed.
+    /// * `help` - A suggested fix, if there is one.
+    ///
+    /// # Returns
+    ///
+    /// The diagnosis.
+    fn new(symptom: &str, help: Option<&str>) -> Self {
+        Self {
+            symptom: symptom.into(),
+            help: help.map(Into::into),
+        }
+    }
 }
 
-/// Run health checks on a vector store, and provide helpful suggestions to the user to fix
-/// errors they may have gotten from a health check. Note that this does not actually run those
-/// fixes--this is so the user of this function has autonomy over that (e.g., the user may want to
-/// first print some message or ask for confirmation before proceeding). There are a few
-/// assumptions made here, mainly that the end-user understands what "/index" means.
-/// These parts of the messages may later change, but for now, when this crate is somewhat tailored
-/// to `zqa`, this is a very low priority.
+/// Run health checks on a vector store, and suggest fixes for the problems they found. This does
+/// not run those fixes, so the caller keeps control over them (e.g., the caller may want to first
+/// print some message or ask for confirmation before proceeding). Some suggestions assume the
+/// end-user knows what "/index" means. That may change later, but while this crate is tailored to
+/// `zqa`, it is a very low priority.
 ///
-/// # Arguments:
+/// Diagnosis stops at the first problem that later checks depend on, such as missing storage or
+/// an inaccessible table, so the list may not cover every check.
 ///
-/// * `backend`: The vector store backend to diagnose.
-/// * `stdout`: A writer object. This does not *have* to be `stdout`, but it is unlikely you would
-///   want these messages going to an error stream, considering the messages printed here are meant
-///   for end-users.
+/// # Arguments
+///
+/// * `backend` - The vector store backend to diagnose.
 ///
 /// # Returns
 ///
-/// Nothing; errors if writing fails or if the health check is in an invalid state for some reason
-/// (an invalid state being one that is not expected, and is likely a bug).
+/// The problems found, in the order the checks ran. An empty list means no problems were found.
 ///
 /// # Errors
 ///
-/// Returns an error if writing to the output stream fails or if the health check is in an
-/// invalid state.
-pub async fn doctor<T: HealthCheckable>(
-    backend: &T,
-    stdout: &mut impl Write,
-) -> Result<(), HealthCheckError> {
+/// Returns [`HealthCheckError::InvalidState`] if the health check result is in a state it should
+/// never be in, which likely means a bug in the backend's health check.
+pub async fn doctor<T: HealthCheckable>(backend: &T) -> Result<Vec<Diagnosis>, HealthCheckError> {
     let healthcheck_results = backend.health_check().await;
 
     if !healthcheck_results.storage_exists {
-        symptom(stdout, "database storage does not exist.")?;
-        help(stdout, "maybe you are not in the right directory?")?;
-
-        return Ok(());
+        return Ok(vec![Diagnosis::new(
+            "database storage does not exist.",
+            Some("maybe you are not in the right directory?"),
+        )]);
     }
 
     let tbl_accessible =
@@ -88,36 +72,30 @@ pub async fn doctor<T: HealthCheckable>(
 
     if tbl_accessible.is_err() {
         // Usually, there isn't much we can do here
-        symptom(stdout, "the database table is not accessible.")?;
-        help(
-            stdout,
-            "check that the `data/` directory actually contains the DB and is not corrupted.",
-        )?;
-
-        return Ok(());
+        return Ok(vec![Diagnosis::new(
+            "the database table is not accessible.",
+            Some("check that the `data/` directory actually contains the DB and is not corrupted."),
+        )]);
     }
 
     let Some(row_count) = healthcheck_results.num_rows else {
-        symptom(
-            stdout,
+        return Ok(vec![Diagnosis::new(
             "row count check was skipped; the database may not support this operation.",
-        )?;
-        return Ok(());
+            None,
+        )]);
     };
 
-    if row_count.is_err() {
-        symptom(stdout, "row count cannot be obtained.")?;
-        help(
-            stdout,
-            "this is usually transient; if this persists, your database may be corrupted.",
-        )?;
+    let mut diagnoses = Vec::new();
 
-        writeln!(stdout)?;
+    if row_count.is_err() {
+        diagnoses.push(Diagnosis::new(
+            "row count cannot be obtained.",
+            Some("this is usually transient; if this persists, your database may be corrupted."),
+        ));
     }
 
     let Some(index_info) = healthcheck_results.index_info else {
-        writeln!(stdout, "Analysis completed.")?;
-        return Ok(());
+        return Ok(diagnoses);
     };
 
     if let Ok(indices) = index_info {
@@ -125,19 +103,19 @@ pub async fn doctor<T: HealthCheckable>(
             && let Ok(row_count) = row_count
             && row_count > 10000
         {
-            symptom(stdout, "there were no indices with > 10k rows.")?;
-            help(stdout, "run /index to create indices.")?;
+            diagnoses.push(Diagnosis::new(
+                "there were no indices with > 10k rows.",
+                Some("run /index to create indices."),
+            ));
         }
     } else {
-        symptom(stdout, "index information could not be obtained")?;
-        help(
-            stdout,
-            "this is usually transient; if this persists, your database may be corrupted.",
-        )?;
+        diagnoses.push(Diagnosis::new(
+            "index information could not be obtained",
+            Some("this is usually transient; if this persists, your database may be corrupted."),
+        ));
     }
-    writeln!(stdout, "Analysis completed.")?;
 
-    Ok(())
+    Ok(diagnoses)
 }
 
 #[cfg(test)]
@@ -201,19 +179,22 @@ mod tests {
     async fn test_doctor_reports_missing_database() {
         let (_dir, backend, _) = temp_backend();
 
-        let mut out: Vec<u8> = Vec::new();
-        let result = doctor(&backend, &mut out).await;
+        let result = doctor(&backend).await;
         test_ok!(result);
 
-        let output = String::from_utf8(out).unwrap();
-        assert!(output.contains("database storage does not exist"));
-        assert!(output.contains("help:"));
-        // The early return means the later checks (and their success marker) are never reached.
-        assert!(!output.contains("Analysis completed."));
+        // The early return means the later checks are never reached.
+        let diagnoses = result.unwrap();
+        assert_eq!(diagnoses.len(), 1);
+        assert!(
+            diagnoses[0]
+                .symptom
+                .contains("database storage does not exist")
+        );
+        assert!(diagnoses[0].help.is_some());
     }
 
     /// Builds a small, healthy database in an isolated temp directory and checks that `doctor` runs
-    /// every check through to completion without flagging a missing database.
+    /// every check through to completion without finding a problem.
     #[tokio::test]
     async fn test_doctor_healthy_database_completes() {
         let (_dir, backend, schema) = temp_backend();
@@ -232,12 +213,8 @@ mod tests {
             .await
             .unwrap();
 
-        let mut out: Vec<u8> = Vec::new();
-        let result = doctor(&backend, &mut out).await;
+        let result = doctor(&backend).await;
         test_ok!(result);
-
-        let output = String::from_utf8(out).unwrap();
-        assert!(output.contains("Analysis completed."));
-        assert!(!output.contains("database storage does not exist"));
+        assert_eq!(result.unwrap(), []);
     }
 }
