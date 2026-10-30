@@ -274,22 +274,45 @@ pub(crate) async fn handle_checkhealth_cmd(ctx: &mut Context) -> Result<(), CLIE
 /// Returns a [`CLIError`] if the event receiver is closed.
 /// Diagnostic failures are reported as error events.
 pub(crate) async fn handle_doctor_cmd(ctx: &mut Context) -> Result<(), CLIError> {
-    let mut output = Vec::new();
-    let result = rag_doctor(ctx.store.backend(), &mut output).await;
+    let diagnoses = match rag_doctor(ctx.store.backend()).await {
+        Ok(diagnoses) => diagnoses,
+        Err(e) => {
+            ctx.emit(EngineEvent::Error {
+                message: format!("{e}\n"),
+            })
+            .await?;
 
-    if !output.is_empty() {
-        ctx.emit(EngineEvent::Text {
-            message: String::from_utf8_lossy(&output).into_owned(),
-        })
-        .await?;
+            return Ok(());
+        }
+    };
+
+    let label = |label: &str, style, message: String| {
+        [
+            StyledSpan {
+                text: label.into(),
+                style,
+            },
+            StyledSpan {
+                text: format!(" {message}\n"),
+                style: TextStyle::Plain,
+            },
+        ]
+    };
+    let mut spans = Vec::new();
+
+    for diagnosis in diagnoses {
+        spans.extend(label("symptom:", TextStyle::Warning, diagnosis.symptom));
+
+        if let Some(help) = diagnosis.help {
+            spans.extend(label("help:", TextStyle::Success, help));
+        }
     }
 
-    if let Err(e) = result {
-        ctx.emit(EngineEvent::Error {
-            message: format!("{e}\n"),
-        })
-        .await?;
-    }
+    spans.push(StyledSpan {
+        text: "Analysis completed.\n".into(),
+        style: TextStyle::Plain,
+    });
+    ctx.emit(EngineEvent::StyledText { spans }).await?;
 
     Ok(())
 }
