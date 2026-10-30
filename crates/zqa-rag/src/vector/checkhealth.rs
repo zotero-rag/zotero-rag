@@ -8,12 +8,6 @@ use async_trait::async_trait;
 
 use crate::vector::backends::backend::VectorBackend;
 
-/// ANSI color codes for console output
-const RED: &str = "\x1b[31m";
-const YELLOW: &str = "\x1b[33m";
-const GREEN: &str = "\x1b[32m";
-const RESET: &str = "\x1b[0m";
-
 /// Errors from running health checks or diagnostics through [`HealthCheckable`] implementations.
 /// Individual check failures are captured inside [`HealthCheckResult`] rather than returned, so
 /// this error is only used when a fast path fails before the result object exists.
@@ -59,6 +53,160 @@ pub struct HealthCheckResult<E> {
     pub version_drift: Option<Result<(u64, u64), E>>,
 }
 
+/// How a line of a health check report went, so frontends can color or mark it.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum HealthCheckStatus {
+    /// The check passed.
+    Pass,
+    /// A detail about a check, such as the storage size. It carries no verdict.
+    Info,
+    /// The check passed with a caveat, or was skipped.
+    Warn,
+    /// The check failed.
+    Fail,
+}
+
+/// One line of a health check report, as built by [`HealthCheckResult::report`].
+#[derive(Clone, Debug)]
+pub struct HealthCheckReportLine {
+    /// How the check went.
+    pub status: HealthCheckStatus,
+    /// The line to show, without a trailing newline. Pass, warn and fail lines start with a
+    /// marker such as `✓`, and detail lines are indented with two spaces.
+    pub text: String,
+}
+
+/// Build a report line.
+///
+/// # Arguments
+///
+/// * `status` - How the check went.
+/// * `text` - The line to show, without a trailing newline.
+///
+/// # Returns
+///
+/// The report line.
+fn line(status: HealthCheckStatus, text: impl Into<String>) -> HealthCheckReportLine {
+    HealthCheckReportLine {
+        status,
+        text: text.into(),
+    }
+}
+
+impl<E: fmt::Display> HealthCheckResult<E> {
+    /// Describe the checks as report lines, in the order they ran.
+    ///
+    /// The report stops after a check that later checks depend on: when storage does not exist,
+    /// or when the table is not accessible or that check was skipped. A check that did not run
+    /// shows as a [`HealthCheckStatus::Warn`] line. The [`fmt::Display`] impl prints these lines
+    /// under a title, without color; frontends that can style text should use this instead.
+    ///
+    /// # Returns
+    ///
+    /// One line per check result or detail. The lines have no trailing newlines.
+    #[must_use]
+    pub fn report(&self) -> Vec<HealthCheckReportLine> {
+        use HealthCheckStatus::{Fail, Info, Pass, Warn};
+
+        if !self.storage_exists {
+            return vec![
+                line(Fail, "✗ Database storage does not exist"),
+                line(Warn, "  → Subsequent checks will be skipped"),
+            ];
+        }
+
+        let mut lines = vec![line(Pass, "✓ Database storage exists")];
+
+        match &self.storage_size {
+            Some(Ok(size)) => {
+                lines.push(line(Info, format!("  Size: {}", format_file_size(*size))));
+            }
+            Some(Err(e)) => lines.push(line(
+                Fail,
+                format!("  Error: Failed to calculate size: {e}"),
+            )),
+            None => {}
+        }
+
+        match &self.table_accessible {
+            Some(Ok(())) => lines.push(line(Pass, "✓ Table is accessible")),
+            Some(Err(e)) => {
+                lines.push(line(Fail, format!("✗ Table is not accessible: {e}")));
+                lines.push(line(Warn, "  → Subsequent checks will be skipped"));
+                return lines;
+            }
+            None => {
+                lines.push(line(Warn, "⚠ Table accessibility check was skipped"));
+                return lines;
+            }
+        }
+
+        match &self.num_rows {
+            Some(Ok(0)) => lines.push(line(Warn, "⚠ Table has no rows")),
+            Some(Ok(count)) => lines.push(line(Info, format!("  Table has {count} rows"))),
+            Some(Err(e)) => lines.push(line(Fail, format!("✗ Failed to get row count: {e}"))),
+            None => lines.push(line(Warn, "⚠ Row count check was skipped")),
+        }
+
+        match &self.index_info {
+            Some(Ok(indices)) if indices.is_empty() => match self.num_rows {
+                Some(Ok(count)) if count > 10000 => {
+                    lines.push(line(
+                        Warn,
+                        "⚠ No indices found (may impact query performance)",
+                    ));
+                }
+                Some(Ok(_)) => lines.push(line(
+                    Pass,
+                    "✓ No indices found. This should not affect performance for your library size.",
+                )),
+                _ => {}
+            },
+            Some(Ok(indices)) => {
+                lines.push(line(Pass, format!("✓ Found {} index(es):", indices.len())));
+                lines.extend(
+                    indices
+                        .iter()
+                        .map(|(name, index_type)| line(Info, format!("  - {name} ({index_type})"))),
+                );
+            }
+            Some(Err(e)) => lines.push(line(
+                Fail,
+                format!("✗ Failed to get index information: {e}"),
+            )),
+            None => lines.push(line(Warn, "⚠ Index information check was skipped")),
+        }
+
+        match &self.version_drift {
+            Some(Ok((stored, live))) if stored == live => {
+                lines.push(line(
+                    Pass,
+                    format!("✓ Metadata version is in sync (v{live})"),
+                ));
+            }
+            Some(Ok((stored, live))) => {
+                lines.push(line(
+                    Warn,
+                    format!(
+                        "⚠ Metadata version drift: metadata last synced at v{stored}, but the data table is at v{live}"
+                    ),
+                ));
+                lines.push(line(
+                    Warn,
+                    "  → A write may have bypassed metadata sync, or the database was modified out of band",
+                ));
+            }
+            Some(Err(e)) => lines.push(line(
+                Fail,
+                format!("✗ Failed to check metadata version: {e}"),
+            )),
+            None => lines.push(line(Warn, "⚠ Metadata version check was skipped")),
+        }
+
+        lines
+    }
+}
+
 /// A vector store backend that can report on its own health. Implementors should run every
 /// check that is meaningful for them, capture per-check failures in the corresponding
 /// [`HealthCheckResult`] field, and always produce a result object.
@@ -101,120 +249,12 @@ fn format_file_size(bytes: u64) -> String {
 }
 
 impl<E: fmt::Display> fmt::Display for HealthCheckResult<E> {
-    #[allow(clippy::too_many_lines)]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, "Vector Store Health Check Results")?;
         writeln!(f, "=================================")?;
 
-        // Check 1: Storage existence and size
-        if self.storage_exists {
-            writeln!(f, "{GREEN}✓ Database storage exists{RESET}")?;
-            match &self.storage_size {
-                Some(Ok(size)) => {
-                    let size_str = format_file_size(*size);
-                    writeln!(f, "\tSize: {size_str}")?;
-                }
-                Some(Err(e)) => {
-                    writeln!(f, "\t{RED}Error: Failed to calculate size: {e}{RESET}")?;
-                }
-                None => writeln!(f)?,
-            }
-        } else {
-            writeln!(f, "{RED}✗ Database storage does not exist{RESET}")?;
-            writeln!(f, "{YELLOW}  → Subsequent checks will be skipped{RESET}")?;
-            return Ok(());
-        }
-        writeln!(f)?;
-
-        // Check 2: Table accessibility
-        match &self.table_accessible {
-            Some(Ok(())) => {
-                writeln!(f, "{GREEN}✓ Table is accessible{RESET}")?;
-            }
-            Some(Err(e)) => {
-                writeln!(f, "{RED}✗ Table is not accessible: {e}{RESET}")?;
-                writeln!(f, "{YELLOW}  → Subsequent checks will be skipped{RESET}")?;
-                return Ok(());
-            }
-            None => {
-                writeln!(f, "{YELLOW}⚠ Table accessibility check was skipped{RESET}")?;
-                return Ok(());
-            }
-        }
-
-        // Check 3: Row count
-        match &self.num_rows {
-            Some(Ok(count)) => {
-                if *count == 0 {
-                    writeln!(f, "{YELLOW}⚠ Table has no rows{RESET}")?;
-                } else {
-                    writeln!(f, "\tTable has {count} rows{RESET}")?;
-                }
-            }
-            Some(Err(e)) => {
-                writeln!(f, "{RED}✗ Failed to get row count: {e}{RESET}")?;
-            }
-            None => {
-                writeln!(f, "{YELLOW}⚠ Row count check was skipped{RESET}")?;
-            }
-        }
-        writeln!(f)?;
-
-        // Check 4: Index information
-        match &self.index_info {
-            Some(Ok(indices)) => {
-                if indices.is_empty() {
-                    if let Some(Ok(row_count)) = self.num_rows {
-                        if row_count > 10000 {
-                            writeln!(
-                                f,
-                                "{YELLOW}⚠ No indices found (may impact query performance){RESET}"
-                            )?;
-                        } else {
-                            writeln!(
-                                f,
-                                "{GREEN}✓ No indices found. This should not affect performance for your library size.{RESET}"
-                            )?;
-                        }
-                    }
-                } else {
-                    writeln!(f, "{}✓ Found {} index(es):{}", GREEN, indices.len(), RESET)?;
-                    for (name, index_type) in indices {
-                        writeln!(f, "\t- {name} ({index_type})")?;
-                    }
-                }
-            }
-            Some(Err(e)) => {
-                writeln!(f, "{RED}✗ Failed to get index information: {e}{RESET}")?;
-            }
-            None => {
-                writeln!(f, "{YELLOW}⚠ Index information check was skipped{RESET}")?;
-            }
-        }
-        writeln!(f)?;
-
-        // Check 5: Metadata version sync
-        match &self.version_drift {
-            Some(Ok((stored, live))) => {
-                if stored == live {
-                    writeln!(f, "{GREEN}✓ Metadata version is in sync (v{live}){RESET}")?;
-                } else {
-                    writeln!(
-                        f,
-                        "{YELLOW}⚠ Metadata version drift: metadata last synced at v{stored}, but the data table is at v{live}{RESET}"
-                    )?;
-                    writeln!(
-                        f,
-                        "{YELLOW}  → A write may have bypassed metadata sync, or the database was modified out of band{RESET}"
-                    )?;
-                }
-            }
-            Some(Err(e)) => {
-                writeln!(f, "{RED}✗ Failed to check metadata version: {e}{RESET}")?;
-            }
-            None => {
-                writeln!(f, "{YELLOW}⚠ Metadata version check was skipped{RESET}")?;
-            }
+        for line in self.report() {
+            writeln!(f, "{}", line.text)?;
         }
 
         Ok(())
