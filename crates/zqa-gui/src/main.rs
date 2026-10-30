@@ -74,10 +74,8 @@ enum ChatRow {
     User(SharedString),
     /// Reasoning output from the engine.
     Reasoning(SharedString),
-    /// A tool call name and request/response pair from the engine.
-    /// TODO: This can look a little ugly since it's typically JSON request/responses. We should
-    /// consider a better formatting solution right here, maybe with a trait.
-    ToolCall((SharedString, Value, Value)),
+    /// A tool call, shown as a collapsible panel.
+    ToolCall(ToolCallRow),
     /// Answer-style stdout. Grows in place while a command streams.
     Answer(String),
     /// Engine status lines (timings, warnings) written to stderr.
@@ -85,6 +83,26 @@ enum ChatRow {
     /// A command that failed.
     Failed(SharedString),
 }
+
+/// A tool call in the transcript. The panel shows the tool's name and status, and expands to show
+/// its arguments and response when clicked.
+///
+/// TODO: The expanded panel shows raw JSON, which can be hard to read. We should consider a better
+/// formatting solution here, maybe with a trait.
+#[derive(Debug)]
+struct ToolCallRow {
+    /// The engine's ID for the call, which pairs a `ToolResponse` with its `ToolCall`.
+    id: SharedString,
+    /// The name of the tool that was called.
+    name: SharedString,
+    /// The arguments the model passed to the tool.
+    args: Value,
+    /// `None` while the tool is running, then the tool's result or its error message.
+    response: Option<Result<Value, String>>,
+    /// Whether the panel is expanded to show `args` and `response`.
+    expanded: bool,
+}
+
 struct ChatRows(Vec<ChatRow>);
 
 impl ChatRows {
@@ -117,12 +135,14 @@ impl ChatRows {
                         );
                     }
                     zqa_rag::llm::base::ChatHistoryContent::ToolCallResponse(response) => {
-                        if let Some((tool_name, args)) = tool_calls.remove(response.id.as_str()) {
-                            rows.push(ChatRow::ToolCall((
-                                tool_name,
+                        if let Some((name, args)) = tool_calls.remove(response.id.as_str()) {
+                            rows.push(ChatRow::ToolCall(ToolCallRow {
+                                id: response.id.as_str().into(),
+                                name,
                                 args,
-                                response.result.clone(),
-                            )));
+                                response: Some(Ok(response.result.clone())),
+                                expanded: false,
+                            }));
                         }
                     }
                 }
@@ -184,6 +204,10 @@ struct ZqaApp {
     /// Whether a `/new` reset is in flight; the transcript clears only when the engine confirms it, so a failed
     /// save cannot lose the visible copy.
     pending_reset: bool,
+    /// The current conversation's total token usage, shown under the input box. `TokenUsage` events
+    /// carry one query's usage each and are added to this; it resets on `/new` and is replaced by the
+    /// saved total when a conversation is resumed from the sidebar.
+    usage: UsageMetadata,
     /// Which pane the main area shows.
     pane: Pane,
     /// Whether the dark theme is active; toggled from the header.
@@ -265,6 +289,7 @@ impl ZqaApp {
                             let refresh_history = app.pending_reset && result.is_ok();
                             Self::finish_command(&mut app.rows, &mut app.pending_reset, result);
                             if refresh_history {
+                                app.usage = UsageMetadata::default();
                                 app.conversation_history = Self::load_conversation_history();
                             }
                         }
@@ -279,6 +304,7 @@ impl ZqaApp {
                             match result {
                                 Ok(conversation) => {
                                     app.rows = ChatRows::from(conversation.as_ref()).0;
+                                    app.usage = conversation.usage;
                                     app.pane = Pane::Chat;
                                     app.conversation_history = Self::load_conversation_history();
                                 }
@@ -328,6 +354,7 @@ impl ZqaApp {
             phase: Phase::Ready,
             exit_confirmation_open: false,
             pending_reset: false,
+            usage: UsageMetadata::default(),
             pane: Pane::Chat,
             dark_theme,
             drag_armed: false,
@@ -338,21 +365,43 @@ impl ZqaApp {
         }
     }
 
-    fn start_tool_call(&self, _id: String, _name: String, _args: serde_json::Value) {
-        todo!();
+    /// Add a collapsed panel for a tool call that has started running.
+    fn start_tool_call(rows: &mut Vec<ChatRow>, id: String, name: String, args: Value) {
+        rows.push(ChatRow::ToolCall(ToolCallRow {
+            id: id.into(),
+            name: name.into(),
+            args,
+            response: None,
+            expanded: false,
+        }));
     }
 
+    /// Record a tool's response on the panel its `ToolCall` opened.
+    ///
+    /// The engine sends the response with the call's ID, so the panel is found by ID; parallel tool
+    /// calls can finish in any order. A response with no matching running call still gets its own
+    /// panel, with no arguments, so the result is not lost.
     fn finish_tool_call(
-        &self,
-        _id: String,
-        _name: String,
-        _response: Result<serde_json::Value, String>,
+        rows: &mut Vec<ChatRow>,
+        id: String,
+        name: String,
+        response: Result<Value, String>,
     ) {
-        todo!();
-    }
+        let running_call = rows.iter_mut().rev().find_map(|row| match row {
+            ChatRow::ToolCall(call) if call.id == id && call.response.is_none() => Some(call),
+            _ => None,
+        });
 
-    fn accumulate_usage(&self, _usage: UsageMetadata) {
-        todo!();
+        match running_call {
+            Some(call) => call.response = Some(response),
+            None => rows.push(ChatRow::ToolCall(ToolCallRow {
+                id: id.into(),
+                name: name.into(),
+                args: Value::Null,
+                response: Some(response),
+                expanded: false,
+            })),
+        }
     }
 
     /// Keep input requests in arrival order without blocking the GUI event consumer.
@@ -437,22 +486,20 @@ impl ZqaApp {
             EngineEvent::Reasoning { message } => {
                 self.rows.push(ChatRow::Reasoning(message.into()));
             }
-            EngineEvent::StatusUpdate { message }
-            | EngineEvent::Warning { message }
-            | EngineEvent::RecoverableWarning { message } => {
+            EngineEvent::StatusUpdate { message } | EngineEvent::Warning { message } => {
                 self.rows.push(ChatRow::Status(message));
             }
             EngineEvent::Error { message } => {
                 self.rows.push(ChatRow::Failed(message.into()));
             }
             EngineEvent::ToolCall { id, name, args } => {
-                self.start_tool_call(id, name, args);
+                Self::start_tool_call(&mut self.rows, id, name, args);
             }
             EngineEvent::ToolResponse { id, name, response } => {
-                self.finish_tool_call(id, name, response);
+                Self::finish_tool_call(&mut self.rows, id, name, response);
             }
             EngineEvent::TokenUsage { usage } => {
-                self.accumulate_usage(usage);
+                self.usage += usage;
             }
             request @ (EngineEvent::Confirm { .. }
             | EngineEvent::Choose { .. }
@@ -1142,7 +1189,12 @@ impl ZqaApp {
             .px_2()
             .py_4()
             .gap_3()
-            .children(self.rows.iter().filter_map(|row| self.render_row(row, cx)))
+            .children(
+                self.rows
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(ix, row)| self.render_row(ix, row, cx)),
+            )
             .when(busy, |this| {
                 this.child(
                     h_flex()
@@ -1169,8 +1221,9 @@ impl ZqaApp {
             .into_any_element()
     }
 
-    /// Render one transcript block.
-    fn render_row(&self, row: &ChatRow, cx: &Context<Self>) -> Option<AnyElement> {
+    /// Render one transcript block. `ix` is the row's index in `self.rows`, which interactive rows
+    /// use for their element IDs and to find themselves again when clicked.
+    fn render_row(&self, ix: usize, row: &ChatRow, cx: &Context<Self>) -> Option<AnyElement> {
         let element = match row {
             ChatRow::User(text) => h_flex()
                 .w_full()
@@ -1218,36 +1271,7 @@ impl ZqaApp {
                     .child(body.to_string())
                     .into_any_element()
             }
-            ChatRow::ToolCall((tool_name, request, response)) => {
-                let request =
-                    serde_json::to_string_pretty(request).unwrap_or_else(|_| request.to_string());
-                let response =
-                    serde_json::to_string_pretty(response).unwrap_or_else(|_| response.to_string());
-
-                v_flex()
-                    .w_full()
-                    .rounded_lg()
-                    .border_1()
-                    .border_color(cx.theme().border)
-                    .bg(cx.theme().secondary.opacity(0.35))
-                    .p_3()
-                    .gap_2()
-                    .child(
-                        div()
-                            .text_size(px(12.))
-                            .font_weight(FontWeight::MEDIUM)
-                            .child(format!("Tool: {tool_name}")),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(11.))
-                            .font_family(cx.theme().mono_font_family.clone())
-                            .text_color(cx.theme().muted_foreground)
-                            .whitespace_normal()
-                            .child(format!("Request:\n{request}\n\nResponse:\n{response}")),
-                    )
-                    .into_any_element()
-            }
+            ChatRow::ToolCall(call) => Self::render_tool_call(ix, call, cx),
             ChatRow::Status(lines) => h_flex()
                 .w_full()
                 .justify_center()
@@ -1282,6 +1306,87 @@ impl ZqaApp {
                 .into_any_element(),
         };
         Some(element)
+    }
+
+    /// Render a tool call as a collapsible panel.
+    ///
+    /// The header shows a chevron, the tool's name, and its status: a spinner while it runs, then a
+    /// check or a cross. Clicking the header toggles the body, which shows the arguments and the
+    /// response or error as pretty-printed JSON.
+    fn render_tool_call(ix: usize, call: &ToolCallRow, cx: &Context<Self>) -> AnyElement {
+        let status = match &call.response {
+            None => Spinner::new().xsmall().into_any_element(),
+            Some(Ok(_)) => Icon::new(IconName::CircleCheck)
+                .xsmall()
+                .text_color(cx.theme().muted_foreground)
+                .into_any_element(),
+            Some(Err(_)) => Icon::new(IconName::CircleX)
+                .xsmall()
+                .text_color(cx.theme().danger)
+                .into_any_element(),
+        };
+
+        let header = h_flex()
+            .id(("tool-call", ix))
+            .w_full()
+            .items_center()
+            .gap_2()
+            .px_3()
+            .py_2()
+            .cursor_pointer()
+            .text_size(px(12.))
+            .child(
+                Icon::new(if call.expanded {
+                    IconName::ChevronDown
+                } else {
+                    IconName::ChevronRight
+                })
+                .xsmall()
+                .text_color(cx.theme().muted_foreground),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .font_weight(FontWeight::MEDIUM)
+                    .child(call.name.clone()),
+            )
+            .child(status)
+            .on_click(cx.listener(move |this, _, _, cx| {
+                if let Some(ChatRow::ToolCall(call)) = this.rows.get_mut(ix) {
+                    call.expanded = !call.expanded;
+                    cx.notify();
+                }
+            }));
+
+        let pretty = |value: &Value| {
+            serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string())
+        };
+        let body = call.expanded.then(|| {
+            let response = match &call.response {
+                None => "Response:\n(running)".to_string(),
+                Some(Ok(value)) => format!("Response:\n{}", pretty(value)),
+                Some(Err(message)) => format!("Error:\n{message}"),
+            };
+
+            div()
+                .px_3()
+                .pb_3()
+                .text_size(px(11.))
+                .font_family(cx.theme().mono_font_family.clone())
+                .text_color(cx.theme().muted_foreground)
+                .whitespace_normal()
+                .child(format!("Arguments:\n{}\n\n{response}", pretty(&call.args)))
+        });
+
+        v_flex()
+            .w_full()
+            .rounded_lg()
+            .border_1()
+            .border_color(cx.theme().border)
+            .bg(cx.theme().secondary.opacity(0.35))
+            .child(header)
+            .children(body)
+            .into_any_element()
     }
 
     /// Render the empty-state welcome panel.
@@ -1401,8 +1506,58 @@ impl ZqaApp {
                         .child(h_flex().justify_end().child(action)),
                 ),
             )
+            .when(self.usage != UsageMetadata::default(), |this| {
+                this.child(self.render_usage_footer(cx))
+            })
             .into_any_element()
     }
+
+    /// Render the conversation's token usage and estimated cost as one muted line under the input
+    /// box, aligned with its left edge. The cost is in U.S. dollars and is left out when no model's
+    /// price is known.
+    fn render_usage_footer(&self, cx: &Context<Self>) -> AnyElement {
+        let mut parts = vec![
+            format!("{} input tokens", format_count(self.usage.input_tokens)),
+            format!("{} output tokens", format_count(self.usage.output_tokens)),
+        ];
+
+        if self.usage.estimated_cost > 0 {
+            let dollars = f64::from(self.usage.estimated_cost) / 100.0;
+            parts.push(format!("${dollars:.4}"));
+        }
+
+        // The same centered, width-capped column as the input box, so the line starts at its edge.
+        div()
+            .w_full()
+            .flex()
+            .justify_center()
+            .child(
+                div()
+                    .w_full()
+                    .max_w(CONTENT_WIDTH)
+                    .px_3()
+                    .pt_2()
+                    .text_size(px(11.))
+                    .text_color(cx.theme().muted_foreground)
+                    .child(parts.join(" | ")),
+            )
+            .into_any_element()
+    }
+}
+
+/// Format a count with comma thousands separators, such as `12,345`.
+fn format_count(count: u32) -> String {
+    let digits = count.to_string();
+    let mut formatted = String::with_capacity(digits.len() + digits.len() / 3);
+
+    for (i, digit) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+            formatted.push(',');
+        }
+        formatted.push(digit);
+    }
+
+    formatted
 }
 
 impl Render for ZqaApp {
@@ -1857,12 +2012,66 @@ mod tests {
         let rows = ChatRows::from_history(&history).0;
 
         assert_eq!(rows.len(), 1);
-        let ChatRow::ToolCall((tool_name, args, result)) = &rows[0] else {
+        let ChatRow::ToolCall(call) = &rows[0] else {
             panic!("expected a tool call row, got {:?}", rows[0]);
         };
-        assert_eq!(tool_name.as_ref(), "search");
-        assert_eq!(args, &serde_json::json!({"query": "attention"}));
-        assert_eq!(result, &serde_json::json!({"matches": 3}));
+        assert_eq!(call.name.as_ref(), "search");
+        assert_eq!(call.args, serde_json::json!({"query": "attention"}));
+        assert_eq!(call.response, Some(Ok(serde_json::json!({"matches": 3}))));
+        assert!(!call.expanded);
+    }
+
+    #[test]
+    fn tool_responses_complete_their_own_calls() {
+        let mut rows = Vec::new();
+        ZqaApp::start_tool_call(
+            &mut rows,
+            "a".into(),
+            "search".into(),
+            serde_json::json!({}),
+        );
+        ZqaApp::start_tool_call(
+            &mut rows,
+            "b".into(),
+            "summarize".into(),
+            serde_json::json!({}),
+        );
+
+        // Parallel calls can finish out of order, and a response can arrive without its call.
+        ZqaApp::finish_tool_call(
+            &mut rows,
+            "b".into(),
+            "summarize".into(),
+            Err("failed".into()),
+        );
+        ZqaApp::finish_tool_call(
+            &mut rows,
+            "a".into(),
+            "search".into(),
+            Ok(serde_json::json!(1)),
+        );
+        ZqaApp::finish_tool_call(
+            &mut rows,
+            "c".into(),
+            "search".into(),
+            Ok(serde_json::json!(2)),
+        );
+
+        let responses: Vec<_> = rows
+            .iter()
+            .map(|row| match row {
+                ChatRow::ToolCall(call) => (call.id.as_ref(), call.response.clone()),
+                other => panic!("expected a tool call row, got {other:?}"),
+            })
+            .collect();
+        assert_eq!(
+            responses,
+            [
+                ("a", Some(Ok(serde_json::json!(1)))),
+                ("b", Some(Err("failed".to_string()))),
+                ("c", Some(Ok(serde_json::json!(2)))),
+            ]
+        );
     }
 
     #[test]
