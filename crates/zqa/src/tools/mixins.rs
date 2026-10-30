@@ -4,8 +4,7 @@ use std::time::Instant;
 use tokio::sync::mpsc::UnboundedSender;
 use zqa_rag::llm::tools::Tool;
 
-use crate::io::EngineEvent;
-use crate::utils::terminal::{DIM_TEXT, RESET};
+use crate::io::{EngineEvent, StyledSpan, TextStyle};
 
 /// `Tool` wrapper that reports its arguments on a status channel before delegating to the
 /// wrapped tool.
@@ -46,12 +45,11 @@ impl<T: Tool> Tool for Verbose<T> {
 
             // A send fails only when the consumer is gone, in which case the line has
             // nowhere useful to go anyway.
-            let _ = self.status_tx.send(EngineEvent::StatusUpdate {
-                message: format!(
-                    "{DIM_TEXT}{} ({}){RESET}\n",
-                    self.inner.name(),
-                    printed_args
-                ),
+            let _ = self.status_tx.send(EngineEvent::StyledText {
+                spans: vec![StyledSpan {
+                    text: format!("{} ({})\n", self.inner.name(), printed_args),
+                    style: TextStyle::Secondary,
+                }],
             });
             self.inner.call(args).await
         })
@@ -98,13 +96,16 @@ impl<T: Tool> Tool for Timed<T> {
             } else {
                 "failed after"
             };
-            let _ = self.status_tx.send(EngineEvent::StatusUpdate {
-                message: format!(
-                    "{DIM_TEXT}{}{RESET} {} {:.2}s\n",
-                    self.inner.name(),
-                    outcome,
-                    elapsed.as_secs_f64()
-                ),
+            let _ = self.status_tx.send(EngineEvent::StyledText {
+                spans: vec![StyledSpan {
+                    text: format!(
+                        "{} {} {:.2}s\n",
+                        self.inner.name(),
+                        outcome,
+                        elapsed.as_secs_f64()
+                    ),
+                    style: TextStyle::Secondary,
+                }],
             });
 
             result
