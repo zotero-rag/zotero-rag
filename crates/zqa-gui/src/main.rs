@@ -174,7 +174,7 @@ impl ChatRows {
                                 id: response.id.as_str().into(),
                                 name,
                                 args,
-                                response: Some(Ok(response.result.clone())),
+                                response: Some(response.result.clone()),
                                 expanded: false,
                             }));
                         }
@@ -2357,7 +2357,7 @@ mod tests {
                 content: vec![ChatHistoryContent::ToolCallResponse(ToolCallResponse {
                     id: "call-1".into(),
                     tool_name: "search".into(),
-                    result: serde_json::json!({"matches": 3}),
+                    result: Ok(serde_json::json!({"matches": 3})),
                 })],
             },
         ];
