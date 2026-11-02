@@ -166,16 +166,8 @@ fn build_query_tools(
     let summarization_tool = SummarizationTool::new(llm_client, store, cost_tx.clone());
 
     let mut tools: Vec<Box<dyn Tool>> = vec![
-        Box::new(
-            retrieval_tool
-                .verbose(status_tx.clone())
-                .timed(status_tx.clone()),
-        ),
-        Box::new(
-            summarization_tool
-                .verbose(status_tx.clone())
-                .timed(status_tx.clone()),
-        ),
+        Box::new(retrieval_tool.timed(status_tx.clone())),
+        Box::new(summarization_tool.timed(status_tx.clone())),
     ];
     let document_tools = get_user_document_tools(ctx, status_tx, cost_tx)?;
     tools.extend(document_tools);
@@ -297,15 +289,11 @@ pub(crate) async fn handle_query_cmd(query: String, ctx: &mut Context) -> Result
         });
     }
 
-    // Reasoning and answer text share one queue to preserve the provider's content order.
+    // Text, reasoning and tool events share one queue to preserve the provider's content order.
     let (response_tx, mut response_rx) = mpsc::unbounded_channel::<EngineEvent>();
     let (status_tx, mut status_rx) = mpsc::unbounded_channel::<EngineEvent>();
     let on_event: Arc<CallbackFn<AgentEvent>> = Arc::new(move |event: &AgentEvent| {
-        // Tool calls still print through the `Verbose` and `Timed` wrappers, so forwarding them
-        // here would show each call twice.
-        if matches!(event, AgentEvent::Text(_) | AgentEvent::Reasoning(_)) {
-            let _ = response_tx.send(event.clone().into());
-        }
+        let _ = response_tx.send(event.clone().into());
     });
 
     let final_draft_start = Instant::now();
