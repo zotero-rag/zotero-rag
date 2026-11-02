@@ -602,12 +602,12 @@ mod tests {
                 ChatHistoryContent::ToolCallResponse(ToolCallResponse {
                     id: "call-1".into(),
                     tool_name: "mock_tool".into(),
-                    result: serde_json::json!({"answer": 1}),
+                    result: Ok(serde_json::json!({"answer": 1})),
                 }),
                 ChatHistoryContent::ToolCallResponse(ToolCallResponse {
                     id: "call-2".into(),
                     tool_name: "mock_tool".into(),
-                    result: serde_json::json!({"answer": 2}),
+                    result: Ok(serde_json::json!({"answer": 2})),
                 }),
             ],
         };

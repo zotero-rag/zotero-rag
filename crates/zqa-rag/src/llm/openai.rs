@@ -166,11 +166,10 @@ impl From<ChatHistoryItem> for Vec<OpenAIRequestInput> {
                     OpenAIRequestInput::ToolResult(OpenAIRequestToolResultInputItem {
                         call_id: response.id,
                         r#type: "function_call_output".into(),
-                        output: if let Some(text) = response.result.as_str() {
-                            text.to_string()
-                        } else {
-                            serde_json::to_string(&response.result)
-                                .unwrap_or_else(|_| "null".to_string())
+                        output: match response.result {
+                            Ok(serde_json::Value::String(text)) | Err(text) => text,
+                            Ok(result) => serde_json::to_string(&result)
+                                .unwrap_or_else(|_| "null".to_string()),
                         },
                     }),
                 ),

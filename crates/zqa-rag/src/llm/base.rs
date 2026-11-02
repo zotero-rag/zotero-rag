@@ -54,7 +54,7 @@ pub struct ToolCallResponse {
     /// The name of the tool being called
     pub tool_name: String,
     /// The tool call result
-    pub result: serde_json::Value,
+    pub result: Result<serde_json::Value, String>,
 }
 
 /// This enum specifies the main kinds of content that is passed between the servers and us,
@@ -240,8 +240,8 @@ pub struct ToolUseStats {
     pub tool_name: String,
     /// The arguments passed to the tool
     pub tool_args: serde_json::Value,
-    /// The result of the tool call
-    pub tool_result: serde_json::Value,
+    /// The result of the tool call, or an error message, such as if the tool name was hallucinated.
+    pub tool_result: Result<serde_json::Value, String>,
 }
 
 /// A model response can contain multiple types of content, such as raw text and tool calls. This
@@ -623,12 +623,12 @@ mod tests {
                     ChatHistoryContent::ToolCallResponse(ToolCallResponse {
                         id: "call-1".into(),
                         tool_name: "mock_tool".into(),
-                        result: serde_json::json!("Hello, Alice!"),
+                        result: Ok(serde_json::json!("Hello, Alice!")),
                     }),
                     ChatHistoryContent::ToolCallResponse(ToolCallResponse {
                         id: "call-2".into(),
                         tool_name: "mock_tool".into(),
-                        result: serde_json::json!("Hello, Bob!"),
+                        result: Ok(serde_json::json!("Hello, Bob!")),
                     }),
                 ],
             },
@@ -645,7 +645,7 @@ mod tests {
                 content: vec![ChatHistoryContent::ToolCallResponse(ToolCallResponse {
                     id: "call-3".into(),
                     tool_name: "mock_tool".into(),
-                    result: serde_json::json!("Hello, Carol!"),
+                    result: Ok(serde_json::json!("Hello, Carol!")),
                 })],
             },
             ChatHistoryItem {

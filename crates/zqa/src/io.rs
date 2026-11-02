@@ -130,12 +130,10 @@ pub enum EngineEvent {
     StyledText { spans: Vec<StyledSpan> },
     /// Plain, unstyled text.
     Text { message: String },
-    /// A tool call. This event is emitted before the tool is executed, but after it is parsed and
-    /// known to be a valid tool call. Every emitted `ToolCall` is followed (but not necessarily
-    /// immediately) by a `ToolResponse` event with the same `id`. A tool call that fails
-    /// validation, such as a hallucinated tool call, emits an `Error` and no `ToolCall` event.
-    /// TODO: Currently we only learn about a tool call after execution, so the hooks in `zqa-rag`
-    /// should probably change.
+    /// A tool call. This event is emitted before the tool is executed. Every emitted `ToolCall` is
+    /// followed (but not necessarily immediately) by a `ToolResponse` event with the same `id`. A
+    /// call to a tool that does not exist, such as a hallucinated tool name, still emits a
+    /// `ToolCall`, and its `ToolResponse` carries an `Err`.
     ToolCall {
         name: String,
         id: String,
@@ -428,12 +426,9 @@ impl From<AgentEvent> for EngineEvent {
                 message: format!("{reasoning}\n"),
             },
             AgentEvent::ToolCall { id, name, args } => Self::ToolCall { name, id, args },
-            // zqa-rag doesn't report tool failures yet, so every response arrives as `Ok`.
-            AgentEvent::ToolResponse { id, name, response } => Self::ToolResponse {
-                name,
-                id,
-                response: Ok(response),
-            },
+            AgentEvent::ToolResponse { id, name, response } => {
+                Self::ToolResponse { name, id, response }
+            }
         }
     }
 }
