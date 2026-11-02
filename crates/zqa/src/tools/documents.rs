@@ -117,7 +117,7 @@ impl DocumentsToolFactory {
     ///
     /// # Arguments
     ///
-    /// * `status_tx` - The channel on which the tool wrappers report their status lines.
+    /// * `status_tx` - The channel on which the `Timed` wrapper reports how long each call took.
     pub(crate) fn build_tools(
         &self,
         status_tx: UnboundedSender<EngineEvent>,
@@ -125,12 +125,8 @@ impl DocumentsToolFactory {
         vec![
             // `ListDocumentsTool` doesn't take very long since it's just a listing, so it doesn't
             // need to be `timed()`.
-            Box::new(ListDocumentsTool::new(Arc::clone(&self.ctx)).verbose(status_tx.clone())),
-            Box::new(
-                QueryDocumentsTool::new(Arc::clone(&self.ctx))
-                    .verbose(status_tx.clone())
-                    .timed(status_tx),
-            ),
+            Box::new(ListDocumentsTool::new(Arc::clone(&self.ctx))),
+            Box::new(QueryDocumentsTool::new(Arc::clone(&self.ctx)).timed(status_tx)),
         ]
     }
 }
