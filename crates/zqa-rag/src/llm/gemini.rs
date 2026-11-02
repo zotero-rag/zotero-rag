@@ -98,11 +98,12 @@ impl From<ChatHistoryItem> for Vec<GeminiStep> {
                     signature: None,
                 }),
                 ChatHistoryContent::ToolCallResponse(tool_res) => {
-                    // Wrap the result in an object with a "result" field if it's not already an object
-                    let result = if tool_res.result.is_object() {
-                        tool_res.result
-                    } else {
-                        serde_json::json!({ "result": tool_res.result })
+                    // Wrap the result in an object with a "result" field if it's not already an
+                    // object. Gemini reads a failure from an "error" field.
+                    let result = match tool_res.result {
+                        Ok(result) if result.is_object() => result,
+                        Ok(result) => serde_json::json!({ "result": result }),
+                        Err(error) => serde_json::json!({ "error": error }),
                     };
 
                     Some(GeminiStep::FunctionResult {
