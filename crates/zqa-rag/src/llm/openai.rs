@@ -578,6 +578,7 @@ impl<T: HttpClient + Default + Debug> EmbeddingFunction for OpenAIClient<T> {
 
 #[cfg(test)]
 mod tests {
+    use crate::events::AgentEvent;
     use std::sync::{Arc, Mutex};
 
     use arrow_array::Array;
@@ -611,9 +612,7 @@ mod tests {
             system_prompt: None,
             reasoning: None,
             tools: None,
-            on_tool_call: None,
-            on_text: None,
-            on_reasoning: None,
+            on_event: None,
             tool_iteration_limit: None,
         };
         let res = client.send_message(&request).await;
@@ -668,9 +667,7 @@ mod tests {
             system_prompt: None,
             reasoning: None,
             tools: None,
-            on_tool_call: None,
-            on_text: None,
-            on_reasoning: None,
+            on_event: None,
             tool_iteration_limit: None,
         };
         let res = mock_client.send_message(&request).await;
@@ -728,9 +725,7 @@ mod tests {
             system_prompt: None,
             reasoning: None,
             tools: Some(&[Box::new(tool)]),
-            on_tool_call: None,
-            on_text: None,
-            on_reasoning: None,
+            on_event: None,
             tool_iteration_limit: None,
         };
 
@@ -854,6 +849,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::too_many_lines)]
     async fn test_callbacks_fire_and_reasoning_is_replayed() {
         let tool_call_response = mock_response(
             "resp-1",
@@ -895,13 +891,14 @@ mod tests {
                 summary: Some("detailed".into()),
             }),
             tools: Some(&[Box::new(tool)]),
-            on_tool_call: Some(Arc::new({
+            on_event: Some(Arc::new({
                 let tool_call_count = Arc::clone(&tool_call_count);
-                move |_| *tool_call_count.lock().unwrap() += 1
-            })),
-            on_text: Some(Arc::new({
                 let text_segments = Arc::clone(&text_segments);
-                move |text| text_segments.lock().unwrap().push(text.to_string())
+                move |event| match event {
+                    AgentEvent::ToolCall { .. } => *tool_call_count.lock().unwrap() += 1,
+                    AgentEvent::Text(text) => text_segments.lock().unwrap().push(text.clone()),
+                    _ => {}
+                }
             })),
             // The second request is the last turn, which forbids tool calls.
             tool_iteration_limit: Some(2),
