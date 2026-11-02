@@ -1,7 +1,5 @@
 //! Event enum and associated implementations.
 
-use crate::llm::base::ContentType;
-
 /// Enum of events emitted by this crate.
 ///
 /// Events are primarily used by long-running parts of this crate, particularly the
