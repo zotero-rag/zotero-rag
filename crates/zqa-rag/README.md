@@ -25,8 +25,7 @@ let request = ChatRequest {
     max_tokens: None,
     message: prompt,
     tools: None,
-    on_tool_call: None,
-    on_text: None,
+    on_event: None,
 };
 ```
 
