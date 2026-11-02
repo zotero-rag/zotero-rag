@@ -125,9 +125,7 @@ where
                         system_prompt: Some(get_extraction_system_prompt().to_owned()),
                         reasoning: client.get_reasoning_config(),
                         tools: None, // We ARE the tool :3
-                        on_tool_call: None,
-                        on_text: None,
-                        on_reasoning: None,
+                        on_event: None,
                         tool_iteration_limit: None,
                     };
 

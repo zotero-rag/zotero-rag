@@ -12,6 +12,7 @@
 /// Events are not an authoritative conversational record. Functions in this crate help you manage
 /// conversation history better; events are most useful in a rendering loop to keep the user
 /// informed of progress.
+#[derive(Clone, Debug)]
 pub enum AgentEvent {
     /// A piece of text, which may not be the final response.
     Text(String),
