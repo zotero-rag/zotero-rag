@@ -2,7 +2,7 @@
 
 **Linear issues:** ZOT-219 (related: ZOT-248, ZOT-249, ZOT-230, ZOT-211, ZOT-78)  
 **GitHub issues:** [#315](https://github.com/zotero-rag/zotero-rag/issues/315)  
-**Author(s):** Rahul Yedida + Claude Code  
+**Author(s):** Rahul Yedida + Claude Code (TODO: model, high effort)  
 **`master` as of writing:** b1ac77a  
 **Code read at:** `feat/migrate-zqa-gui-events` @ `ebaabba` (tip of the event-architecture stack)  
 **Date:** 2026-10-29  
@@ -10,41 +10,39 @@
 
 ## Summary
 
-Steering should live inside the tool loop in `AgenticClient::send_message`, fed by one inbound control channel that every frontend writes to. This is ZOT-219's Phase 1, made concrete against the event architecture now in review.
+Once a query starts in zqa, the user can only wait for it or kill it. This doc proposes a way to talk to a query while it runs. The user can **Stop** it, **Steer** it with guidance that the model sees before its next call, or **Queue** a message that runs as its own query once this one is done. Steer and Queue work like pi's steering and follow-up queues, and we follow pi's choices in most places below.
 
-- **What steering means here:** while a query is running, the user can **Stop** it, **Steer** it with guidance the model sees before its next call, or **Queue** a message that runs as its own query once this one finishes. Steer and Queue mirror pi's steering and follow-up queues.
-- **Why inside the loop:** cancelling the dispatch and re-sending a new query would rebuild history from canonical `ChatHistoryItem`s, which drop signed reasoning, and would lose the run's tool results, which only come back on success. Only the loop holds the native `provider_history`.
-- **Decided in review (Oct 29):** steer text is a plain user message, as in pi; only Stop interrupts anything, so a steer waits for the model call and any running tools to finish, as in pi; Stop keeps the finished tool rounds; a steer during the final, no-tools iteration buys one more tool round; the GUI defaults to Steer, configurable to Queue.
-- **Size:** one new, breaking field on `ChatRequest` (`send_message` takes `&mut ChatRequest`), a `select!` in the loop, Steer, Queue and Stop commands in the GUI bridge, a Ctrl-C path in the CLI, and three new events (see Where the events live). No provider adapter changes.
+The core idea is that steering lives inside the tool loop in `AgenticClient::send_message`, fed by one inbound control channel that every frontend writes to. It has to live there because only the loop holds the native `provider_history`. The obvious alternative, cancelling the dispatch and sending a new query with the steer in it, would rebuild history from canonical `ChatHistoryItem`s. That drops signed reasoning, and it loses the run's tool results, which today only come back when a run succeeds. This is ZOT-219's Phase 1, made concrete against the event architecture that is now in review.
 
-## Context: what runs today
+A few decisions came out of review on Oct 29. Steer text is sent as a plain user message, as in pi. Only Stop interrupts anything: a steer waits for the model call and any running tools to finish. Stop keeps the tool rounds that already finished. A steer that arrives during the final, no-tools iteration buys one more round with tools. And the GUI sends Steer by default while a query runs, with a setting to make Queue the default instead.
 
-A query is one long future with no way in once it starts, except prompt replies.
+The change is fairly small. `ChatRequest` gets one new field, which is breaking because `send_message` now takes `&mut ChatRequest`. `send_message`'s error type gains a wrapper so a failed run can hand back buffered input, which is also breaking. The loop gets a `select!`, the GUI bridge gets Steer, Queue and Stop commands, the CLI gets a Ctrl-C path, and there are three new events (see Where the events live). No provider adapter changes.
 
-- **The loop** (`zqa-rag/src/llm/base.rs`, `send_message`): builds `provider_history` once, then repeats `send_once` (one full, non-streaming request) and `process_tool_calls`. Tools in a turn run concurrently through `join_all`. `on_text` and `on_reasoning` fire only after the whole turn and its tools finish. The last iteration sends tools with tool calls disallowed.
-- **The query handler** (`zqa/src/cli/handlers/query.rs`, `handle_query_cmd`): `select!`s over `send_message` and three channels (response segments, tool status, cost) and forwards them as `EngineEvent`s. On success it pushes the raw query plus `response.history_additions` into `ctx.state.chat_history`. On error nothing from the run is kept.
-- **What the user sees mid-run:** the `Verbose` tool wrapper emits a `StatusUpdate` with the tool name and args *before* each tool runs, then `Timed` reports its duration. Model text and reasoning appear only per completed turn. So in Phase 1 the user steers mostly on seeing a bad retrieval query.
-- **Events** (`zqa/src/io.rs`, `EngineEvent`): outbound only. Input flows back solely through `oneshot` reply senders on `Confirm`, `Choose`, `Secret` and `Line`.
-- **GUI** (`zqa-gui/src/bridge.rs`): the engine thread races `session.dispatch()` against `cancel_rx` and `cmd_rx`. Cancel drops the dispatch future. A command sent while one runs is parked in `pending_command`. A `TODO(ZOT-219)` notes the detached title task survives cancellation.
-- **CLI** (`zqa/src/cli/app.rs`, `run_command`): `select!`s dispatch against the event channel and renders each event with `handle_event`, which reads stdin synchronously for prompts. Rustyline is not active during a command, and nothing handles Ctrl-C there, so a Ctrl-C mid-query most likely ends the process (not tested).
-- **Storage plan** (`docs/design/04_conversation_storage.md`, Approved): one immutable node per provider message, committed through a new `on_history_item` callback, and append-only requests so Anthropic preserved thinking stays valid. It already says steering injections fit as ordinary nodes.
+## Context
+
+Today a query is one long future, and once it starts the only way in is a reply to a prompt.
+
+The loop itself is `send_message` in `zqa-rag/src/llm/base.rs`. It builds `provider_history` once, then repeats `send_once` (one full, non-streaming request) and `process_tool_calls`. Tools in a turn run concurrently through `join_all`. The `on_text` and `on_reasoning` callbacks fire only after the whole turn and its tools are done, and the last iteration sends tools with tool calls disallowed.
+
+On the `zqa` side, `handle_query_cmd` (`zqa/src/cli/handlers/query.rs`) `select!`s over `send_message` and three channels (response segments, tool status and cost) and forwards them as `EngineEvent`s. On success it pushes the raw query plus `response.history_additions` into `ctx.state.chat_history`. On error, nothing from the run is kept.
+
+While a query runs, the user sees less than you might expect. The `Verbose` tool wrapper emits a `StatusUpdate` with the tool name and args before each tool runs, and `Timed` reports its duration afterwards, but model text and reasoning only appear once a turn has completed. So in Phase 1, the moment a user will most often want to steer is when they see a bad retrieval query go by.
+
+`EngineEvent` (`zqa/src/io.rs`) is outbound only. Input flows back solely through the `oneshot` reply senders on `Confirm`, `Choose`, `Secret` and `Line`.
+
+The two frontends handle a running command differently. In the GUI (`zqa-gui/src/bridge.rs`), the engine thread races `session.dispatch()` against `cancel_rx` and `cmd_rx`. Cancelling drops the dispatch future, and a command sent while another runs is parked in a single `pending_command` slot. There is also a `TODO(ZOT-219)` noting that the detached title task survives cancellation. The CLI (`zqa/src/cli/app.rs`, `run_command`) `select!`s the dispatch against the event channel and renders each event with `handle_event`, which reads stdin synchronously for prompts. Rustyline is not active during a command and nothing handles Ctrl-C there, so a Ctrl-C mid-query most likely ends the process. We haven't tested that.
+
+Finally, the storage plan in design doc 04 (Approved) matters here. It stores one immutable node per provider message, committed through a new `on_history_item` callback, and keeps requests append-only so that Anthropic's preserved thinking stays valid. It already says that steering injections fit in as ordinary nodes.
 
 ## Goals and non-goals
 
-- **Goals**
-  - Stop a running query from the GUI and the CLI, with the conversation left in a valid, resumable state.
-  - Steer a running query with free text that the model sees before its next call.
-  - Keep requests append-only, so preserved thinking and prompt caches survive a steer.
-  - One mechanism in `zqa-rag`, shared by all five providers and by both frontends.
-- **Non-goals**
-  - Token streaming and mid-stream steering. That is Phase 2 (the `TurnEvent` stream); this design leaves room for it.
-  - Steering in headless mode (ZOT-78). Piped stdin is the command stream, so there is no second input; SIGINT stops, nothing steers.
-  - Changing the frame mid-run (system prompt, tool set, reasoning settings). A steer is conversation content only.
-  - Steering subrequests: title generation and the summarization subagent never get a control channel.
+We want to be able to stop a running query from both the GUI and the CLI, and leave the conversation in a valid state that can be resumed. We want to steer a running query with free text that the model sees before its next call. Requests should stay append-only, so that preserved thinking and prompt caches survive a steer. And all of this should be one mechanism in `zqa-rag`, shared by all five providers and both frontends.
+
+Some things are deliberately out of scope. Token streaming, and steering in the middle of a stream, is Phase 2 (the `TurnEvent` stream); this design leaves room for it. Headless mode (ZOT-78) won't support steering, because piped stdin is the command stream and there is no second input. SIGINT still stops a query there. A steer is conversation content only, so it can't change the frame mid-run: the system prompt, tool set and reasoning settings stay as they were. And subrequests, meaning title generation and the summarization subagent, never get a control channel.
 
 ## Design
 
-Frontends write `Control` messages into one channel per session; the tool loop is the only reader, and it reports what it did back through `EngineEvent`s.
+Frontends write `Control` messages into one channel per session. The tool loop is the only reader, and it reports what it did back through `EngineEvent`s.
 
 ```mermaid
 flowchart LR
@@ -62,7 +60,7 @@ flowchart LR
     classDef effect fill:#fde68a,stroke:#b45309
 ```
 
-The highlighted boxes are the only two places a control takes effect; everything else only forwards it.
+The highlighted boxes are the only two places where a control takes effect. Everything else just forwards it.
 
 ### `zqa-rag`: the control channel
 
@@ -80,7 +78,7 @@ pub struct ChatRequest<'a> {
 }
 
 // Breaking: the loop needs `&mut` to call `recv`.
-async fn send_message(&self, request: &mut ChatRequest<'_>) -> Result<CompletionApiResponse, LLMError>;
+async fn send_message(&self, request: &mut ChatRequest<'_>) -> Result<CompletionApiResponse, SendError>;
 
 pub struct CompletionApiResponse {
     // ...existing fields...
@@ -88,11 +86,17 @@ pub struct CompletionApiResponse {
     pub steered: Vec<String>,   // steers folded in, in order
     pub leftover: Vec<Control>, // unrun steers first, then Queue items
 }
+
+/// Breaking: wraps `LLMError` so a failed run can hand back input it had already buffered.
+pub struct SendError {
+    pub source: LLMError,
+    pub leftover: Vec<Control>,
+}
 ```
 
-- **A plain field, no `Mutex`** (decided in review). Every caller changes `&request` to `&mut request`: `generate_title`, the summarization tool, `handle_query_cmd` and the per-provider tests.
-- **Unbounded:** controls are rare and tiny, and a frontend must never block on sending one.
-- **`Queue` is not the loop's business.** The loop never acts on it; it buffers each `Queue` it reads and hands it back in `response.leftover`, so nothing is lost. `zqa` runs them (wiring, below). A second channel would keep `Queue` out of `zqa-rag` entirely, but one ordered channel keeps the order the user typed in.
+The receiver is a plain `&mut` field on the request, with no `Mutex` around it (decided in review). That means every caller changes `&request` to `&mut request`: `generate_title`, the summarization tool, `handle_query_cmd` and the per-provider tests. The channel is unbounded because controls are rare and tiny, and a frontend should never block on sending one. `LLMError` is a flat `thiserror` enum, so rather than adding a `leftover` field to every variant, `send_message` returns a small `SendError` wrapper.
+
+`Queue` isn't really the loop's business. The loop never acts on one; it buffers each `Queue` it reads and hands it back in `response.leftover`, so nothing is lost, and `zqa` runs them (see the wiring below). A second channel would keep `Queue` out of `zqa-rag` entirely, but a single ordered channel preserves the order the user typed things in, which matters more.
 
 ### The loop
 
@@ -122,7 +126,7 @@ async fn until_stop<F: Future>(
 while round_trips < limit {
     let Some(turn) = until_stop(ctrl, &mut buf, self.send_once(..)).await
         else { return Ok(self.stopped(..)) };
-    let turn = turn.map_err(|e| e.with_leftover(take_all(&mut buf)))?; // keep buffered input on error
+    let turn = turn.map_err(|e| SendError { source: e, leftover: take_all(&mut buf) })?; // keep buffered input
     // ...extend history, emit as today...
 
     let mut tail = if turn.has_tool_calls() {
@@ -153,34 +157,41 @@ while round_trips < limit {
 // response.leftover = steers still in `buf`, then its Queue items
 ```
 
-- **Steers wait, as in pi** (decided in review). `until_stop` buffers Steer and Queue and keeps polling the same future, so a model call or tool batch always runs to completion unless the user stops. A steer that arrives mid-call costs that call; in return there is one code path and nothing is ever thrown away but a stopped call.
-- **Where a steer lands.** After tool results, it is appended as text to the same tool-results user message. After an answer with no tool calls, it opens a new user message and the loop continues instead of returning. pi does the same: its loop runs while there are tool calls or steering messages.
-- **Nothing is rebuilt.** The steer is added to the generic `ChatHistoryItem` before it is converted with the existing `Into<Vec<Self::HistoryItem>>`, so no native item is ever popped or re-converted. Anthropic gets text blocks after the `tool_result` blocks in one user message, and OpenAI gets `function_call_output` items followed by a user message (checked in `openai.rs`).
-- **One extra round for a late steer** (decided in review). A steer that arrives during the final, no-tools iteration waits for that answer, then raises the limit by two, once per run: one round with tools, so "also look for X" can be acted on, then the usual final answer without tools. Raising it by one would not be enough, because `is_last_turn` is recomputed as `round_trips == limit - 1` and the next iteration would be the last one again.
-- **A Stop between rounds keeps the round.** A Stop seen at the drain point after a tool batch first pushes that batch's results (without a steer), so the finished round is kept, as decided in review.
-- **Leftovers.** Steers still buffered when the loop ends (because the extra round is spent) and every `Queue` item go back in `response.leftover`, steers first, since pi also runs leftover steers before follow-ups.
-- **Errors keep buffered input.** If a model call fails after `until_stop` has buffered a Steer or Queue, that text is no longer in the channel. So the error carries it out the same way, in a `leftover` field on the loop's error, and the handler treats it as on Stop (below).
+Steers wait, as they do in pi (decided in review). `until_stop` buffers Steer and Queue and keeps polling the same future, so a model call or tool batch always runs to completion unless the user stops. That means a steer that arrives mid-call costs us that call. In return there is a single code path, and nothing is ever thrown away except a call the user explicitly stopped.
+
+Where a steer lands depends on what the model just did. If it asked for tools, the steer is appended as text to the same user message that carries the tool results. If it answered with no tool calls, the steer opens a new user message and the loop carries on instead of returning. pi does the same thing: its loop keeps running while there are tool calls or steering messages.
+
+Importantly, nothing is ever rebuilt. The steer is added to the generic `ChatHistoryItem` before it goes through the existing `Into<Vec<Self::HistoryItem>>` conversion, so no native item is popped or re-converted. Anthropic ends up with text blocks after the `tool_result` blocks in one user message, and OpenAI gets `function_call_output` items followed by a user message (checked in `openai.rs`).
+
+A steer that arrives during the final, no-tools iteration gets one extra round (decided in review). It waits for that final answer, then raises the limit by two, once per run. The first of those two iterations has tools, so "also look for X" can actually be acted on, and the second is the usual final answer without tools. Raising it by one wouldn't be enough: `is_last_turn` is recomputed as `round_trips == limit - 1`, so the next iteration would be the last one again.
+
+A Stop that shows up at the drain point, right after a tool batch finished, first pushes that batch's results (without any steer) and then returns. That way the round that just finished is kept, which is what review decided Stop should do.
+
+When the loop ends, any steers still buffered (because the extra round was already used) and every `Queue` item go back in `response.leftover`, steers first, since pi also runs leftover steers before follow-ups. Errors get the same treatment. If a model call fails after `until_stop` has already pulled a Steer or Queue out of the channel, that text would otherwise be lost, so `SendError` carries it out in its `leftover` field and the handler treats it the same way as a Stop (below).
 
 ### `zqa`: wiring
 
-- **`Context`** gains `control_rx: Option<UnboundedReceiver<Control>>`; **`Session`** exposes a cloneable `SteerHandle` wrapping the sender. The CLI builds the pair in `run()` next to the event channel.
-- **`handle_query_cmd`** takes the receiver out with `.take()` for the run and passes `control: Some(&mut rx)` on the main request only. It has to take it, because `ctx.emit` borrows all of `ctx` while the request holds the receiver. A small guard puts it back on every exit path, since the handler returns early with `?`.
-- **Queued and leftover messages run as their own commands.** After `send_message` returns, the handler pushes `response.leftover` (unrun steers first, then `Queue` items) onto a new `ctx.state.pending_inputs` queue. After every command, query or not, `Session::dispatch` and the CLI's `run_command` read what is still in the channel: they drop stale `Stop`s (the same reason the bridge drains `cancel_rx`) and push each `Steer` or `Queue` onto `pending_inputs`, in arrival order. They then keep dispatching until it is empty, so a queued `/search` works too, and text typed while any command ran is neither lost nor run out of order. This replaces the bridge's single `pending_command` slot.
-- **On Stop or an error**, unrun steers and queued messages are not run. They go back to the frontend in `EngineEvent::Unsent { messages }`, the way pi puts queued text back into the editor when a run is aborted. This covers the whole chain, not just the current query: a `Stopped` or error outcome also moves everything left on `pending_inputs` into `Unsent`. So does a Stop that the sweep finds while `pending_inputs` is not empty, which is how a Stop sent during a non-query command (a queued `/search`) ends the chain.
-- **New events:** `Steered { message }` when the loop folds a steer in, so the transcript shows it where the model saw it; `Stopped` when a run ends by Stop; `Unsent { messages }` as above. Which crate owns them is the next section.
+`Context` gains a `control_rx: Option<UnboundedReceiver<Control>>`, and `Session` exposes a cloneable `SteerHandle` that wraps the sender. The CLI builds the pair in `run()`, next to the event channel.
+
+`handle_query_cmd` takes the receiver out of the context with `.take()` for the duration of the run and passes `control: Some(&mut rx)` on the main request only. It has to take it rather than borrow it, because `ctx.emit` borrows all of `ctx` while the request holds the receiver. Since the handler returns early with `?` in several places, a small guard puts the receiver back on every exit path.
+
+Queued and leftover messages run as their own commands. After `send_message` returns, the handler pushes `response.leftover` (unrun steers first, then `Queue` items) onto a new `ctx.state.pending_inputs` queue. Then, after every command, query or not, `Session::dispatch` and the CLI's `run_command` look at whatever is still in the channel. They drop stale `Stop`s (for the same reason the bridge drains `cancel_rx`) and push each `Steer` or `Queue` onto `pending_inputs` in arrival order. They then keep dispatching until `pending_inputs` is empty, so a queued `/search` works too, and text typed while any command was running is neither lost nor run out of order. This replaces the bridge's single `pending_command` slot.
+
+When a run ends by Stop or by an error, the unrun steers and queued messages don't run. They go back to the frontend in `EngineEvent::Unsent { messages }`, the same way pi puts queued text back into the editor when a run is aborted. This applies to the whole chain, not just the current query: a `Stopped` or error outcome also moves everything left on `pending_inputs` into `Unsent`. So does a Stop that the sweep finds while `pending_inputs` isn't empty, which is how a Stop sent during a non-query command, such as a queued `/search`, ends the chain.
+
+That leaves three new events. `Steered { message }` fires when the loop folds a steer in, so the transcript shows it at the point where the model saw it. `Stopped` fires when a run ends by Stop, and `Unsent { messages }` is described above. Which crate owns them is the subject of the next section.
 
 ### Frontends
 
-- **GUI:** add `EngineCommand::Steer(String)`, `EngineCommand::Queue(String)` and `EngineCommand::Stop`. Enter while running sends Steer by default; a config setting (for example `running_input = "steer" | "queue"`) flips the default, and a modifier sends the other one, like pi's Alt+Enter for follow-ups. While idle, both become a `Dispatch`. The existing cancel path (drop the future) stays as the hard stop for a second click, because a soft Stop waits for the loop to reach a `select!` point and keeps the partial run.
-- **CLI:** add a `tokio::signal::ctrl_c()` arm to the `select!` in `run_command`. On Ctrl-C, stop polling the dispatch and prompt on stdin: a line is sent as the configured default (Steer unless set to Queue), and an empty line sends Stop. That read is synchronous like `handle_event`'s prompt reads, and while it blocks the dispatch is not polled, so the run is effectively paused. This avoids a second concurrent stdin reader, which would fight with prompt replies.
+In the GUI, we add `EngineCommand::Steer(String)`, `EngineCommand::Queue(String)` and `EngineCommand::Stop`. Pressing Enter while a query runs sends a Steer by default. A config setting (for example `running_input = "steer" | "queue"`) flips that default, and a modifier sends the other one, like pi's Alt+Enter for follow-ups. While nothing is running, both simply become a `Dispatch`. The existing cancel path, which drops the future, stays around as the hard stop on a second click. A soft Stop has to wait for the loop to reach a `select!` point, and it keeps the partial run; sometimes you just want it gone.
+
+In the CLI, we add a `tokio::signal::ctrl_c()` arm to the `select!` in `run_command`. On Ctrl-C, it stops polling the dispatch and prompts on stdin. A line of text is sent as the configured default (Steer, unless set to Queue), and an empty line sends Stop. That read is synchronous, like `handle_event`'s prompt reads, and the dispatch isn't polled while it blocks, so the run is effectively paused while the user types. Doing it this way avoids a second concurrent stdin reader, which would fight with prompt replies.
 
 ## Where the events live
 
-Two sets: `zqa-rag` owns an `AgentEvent` enum for what the loop knows, and `zqa`'s `EngineEvent` wraps it in one variant beside the app-level events.
+There are two sets of events. `zqa-rag` owns an `AgentEvent` enum for the things the loop knows about, and `zqa`'s `EngineEvent` wraps it in one variant, alongside the app-level events.
 
-- **`zqa-rag` already emits events, as callbacks.** `on_text`, `on_reasoning` and `on_tool_call` today; design doc 04 adds `on_history_item`; Phase 2 adds `TurnEvent`. Much of `handle_query_cmd` exists to turn those callbacks into `EngineEvent`s (`ResponseSegment` plus three unbounded channels).
-- **Some `EngineEvent`s describe the loop, not the app.** `ToolCall` and `ToolResponse` are never constructed anywhere in `zqa`; only the GUI matches them, and their own TODO says the `zqa-rag` hooks should change.
-- **Steering adds loop-only facts.** Only the loop knows when a steer was folded in or a run stopped.
+The reasoning is that `zqa-rag` already emits events; it just does it through callbacks. Today there are `on_text`, `on_reasoning` and `on_tool_call`, design doc 04 adds `on_history_item`, and Phase 2 adds `TurnEvent`. A good part of `handle_query_cmd` exists only to turn those callbacks into `EngineEvent`s, through `ResponseSegment` and three unbounded channels. Meanwhile some `EngineEvent`s really describe the loop rather than the app: `ToolCall` and `ToolResponse` are never constructed anywhere in `zqa`, only the GUI matches on them, and their own TODO says the `zqa-rag` hooks should change. Steering adds more facts that only the loop knows, namely when a steer was folded in and when a run stopped.
 
 ```rust
 // zqa-rag: replaces on_text, on_reasoning, on_tool_call (and the planned on_history_item)
@@ -208,51 +219,55 @@ pub enum EngineEvent {
 }
 ```
 
-- **Cost of wrapping:** frontends match two levels (`EngineEvent::Agent(AgentEvent::Text(..))`), and `Display` delegates for that arm. The alternative, flattening with a `From` impl in `zqa`, keeps one level but needs every new loop event added in both crates plus a translation arm, which is what `handle_query_cmd` does today.
-- **Subagents get it for free.** The summarization tool can give its sub-request its own sender and choose what to forward, the same concern as the branch's "keep reasoning and tool calls out of sub-request results" fix.
-- **When (decided Oct 30):** after ZOT-248 and ZOT-249 merge, since that stack still has work left. `AgentEvent` is the first change after the merge, and steering builds on it, so its three variants land in the right crate from the start.
+Wrapping has a cost: frontends match two levels deep (`EngineEvent::Agent(AgentEvent::Text(..))`), and `Display` has to delegate for that arm. The alternative is to flatten with a `From` impl in `zqa`. That keeps one level, but every new loop event then has to be added in both crates plus a translation arm, which is exactly what `handle_query_cmd` does today. Wrapping also gives subagents something for free: the summarization tool can give its sub-request its own sender and choose what to forward, which is the same concern as the branch's "keep reasoning and tool calls out of sub-request results" fix.
+
+As for timing, `AgentEvent` comes after ZOT-248 and ZOT-249 merge, since that stack still has some work left (decided Oct 30). It is the first change after the merge, and steering builds on top of it, so the three steering variants land in the right crate from the start.
 
 ## Semantics: ZOT-219's three questions
 
-| Question | Recommendation | Why |
+ZOT-219 asks three questions about what steering means. Here is how this design answers them.
+
+| Question | Answer | Why |
 | --- | --- | --- |
-| 1. Does steering text become a new user turn? | User-role text. After tool results it is appended to the same user message; after an answer with no tool calls it opens a new user message and the loop goes on. Either way it is not a new user turn in `zqa`'s sense: no new rendered summarize prompt, no new title, same run. | Both are placements every provider accepts mid-loop without synthetic messages, and both keep the request append-only. |
-| 2. Cancel outstanding tool calls, or wait? | **Steer waits** for tools already running. **Stop drops** them. | Every tool today is read-only, and their results are useful context for the steered call. Dropping them would leave a `tool_use` with no result, which every provider rejects, so a steer would need fake "cancelled" results. Stop ends the run, so nothing needs a result. |
-| 3. Mid-stream, or only at the next model call? | At the next model call, **after the call in flight finishes** (decided in review, as pi does). | Nothing but a stopped call is ever thrown away, so there is one code path and no half-sent request to reason about. The cost is paying for a turn the user may already have rejected; once Phase 2 streams that turn, the user can see what they are steering. |
+| 1. Does steering text become a new user turn? | It is user-role text. After tool results it is appended to the same user message; after an answer with no tool calls it opens a new user message and the loop goes on. Either way it is not a new user turn in `zqa`'s sense: no new rendered summarize prompt, no new title, same run. | Both are placements that every provider accepts mid-loop without synthetic messages, and both keep the request append-only. |
+| 2. Cancel outstanding tool calls, or wait? | **Steer waits** for tools that are already running. **Stop drops** them. | Every tool today is read-only, and its results are useful context for the steered call. Dropping them would leave a `tool_use` with no result, which every provider rejects, so a steer would need fake "cancelled" results. Stop ends the run, so nothing needs a result. |
+| 3. Mid-stream, or only at the next model call? | At the next model call, **after the call in flight finishes** (decided in review, as pi does). | Nothing but a stopped call is ever thrown away, so there is one code path and no half-sent request to reason about. The cost is paying for a turn the user may already have rejected; once Phase 2 streams that turn, the user can at least see what they are steering. |
 
-A steer is sent as plain user text with no wrapper, as pi does (decided in review). The transcript shows the same text.
+A steer is sent as plain user text with no wrapper, as in pi (decided in review), and the transcript shows the same text. When several steers are queued, they are delivered one at a time, also following pi, whose default `steeringMode` is `one-at-a-time` (the alternative is `all`). Each drain point takes the oldest steer and the rest wait for the next call. A config switch could offer `all` later.
 
-Queued steers are delivered one at a time, also as in pi, whose default `steeringMode` is `one-at-a-time` (the alternative is `all`). Each drain point takes the oldest steer and the rest wait for the next call. A config switch can offer `all` later.
-
-Steers wait, as in pi (decided in review). pi never aborts an in-flight call: a steer waits until the current assistant turn and its tools finish, and its loop keeps going while there are tool calls or steering messages, so a steer that arrives during a final answer still gets a reply. This design does the same.
+It's worth spelling out how pi handles timing, since we copy it. pi never aborts an in-flight call. A steer waits until the current assistant turn and its tools finish, and the loop keeps going while there are tool calls or steering messages, so a steer that arrives during a final answer still gets a reply. This design behaves the same way.
 
 ## History persistence and reasoning preservation
 
-A steer only ever appends after the last native item, and the only call ever discarded is one cut off by Stop, so the request stays append-only and nothing signed is lost.
+A steer only ever appends after the last native item, and the only call that is ever discarded is one cut off by Stop. So the request stays append-only and nothing signed is lost.
 
 ### Reasoning (ZOT-230)
 
-- **Inside the loop it just works.** `provider_history` holds native items, including Anthropic `thinking` blocks with signatures, OpenAI reasoning items and Gemini thought signatures. A steer adds text after the tool results or after the answer; the prefix, and so every preserved thinking block, is unchanged. The frame is unchanged too, because a steer never touches tools, system prompt or reasoning settings.
-- **A stopped call leaves no gap.** Its response was never appended, so there is nothing to strip. Anthropic allows dropping thinking only from the start of history, never from the middle, and this design never needs to.
-- **Nothing native is rebuilt.** A steer is added to the generic item before it is converted, and tool-result items are built locally from generic `ToolCallResponse`s anyway, so no native payload is ever popped or re-converted.
-- **This is the main reason steering cannot be cancel-and-redispatch.** A new dispatch rebuilds history through `From<ChatHistoryItem>`, which drops `ChatHistoryContent::Reasoning` (`anthropic.rs`, line 54 on the branch). The steered call would then continue a `tool_use` turn without its thinking block.
+Inside the loop, this just works. `provider_history` holds native items, including Anthropic `thinking` blocks with their signatures, OpenAI reasoning items and Gemini thought signatures. A steer adds text after the tool results or after the answer, so the prefix, and every preserved thinking block in it, is unchanged. The frame is unchanged too, because a steer never touches the tools, the system prompt or the reasoning settings.
+
+A stopped call doesn't leave a gap either. Its response was never appended, so there is nothing to strip out. That matters because Anthropic only allows dropping thinking from the start of history, never from the middle, and this design never needs to. Nothing native is rebuilt along the way: a steer is added to the generic item before conversion, and tool-result items are built locally from generic `ToolCallResponse`s anyway.
+
+This is also the main reason steering can't be done as cancel-and-redispatch. A new dispatch rebuilds history through `From<ChatHistoryItem>`, which drops `ChatHistoryContent::Reasoning` (`anthropic.rs`, line 54 on the branch). The steered call would then continue a `tool_use` turn without its thinking block.
 
 ### Persistence, with today's JSON history
 
-- **Steer:** the text lives in a user `ChatHistoryItem`, either the tool-results item or a new one after an answer, so `history_additions` carries it to disk with no format change. It is added before the item is pushed, so what is saved matches what was sent.
-- **Stop:** `send_message` returns `Ok` with `RunOutcome::Stopped` instead of an error. `handle_query_cmd` saves the query plus `history_additions`, trimmed to the last complete round: a trailing assistant item whose tool calls have no results is dropped. Usage is still recorded. Today, a GUI cancel loses the whole run, the user's query included.
-- **Aside on ZOT-211:** both `master` and the branch already do `history.extend(response.history_additions)`, which includes tool calls and results. The issue text (only the query and final answer are kept) looks out of date. Inferred from the code; worth confirming before closing it.
+A steer needs no format change. Its text lives in a user `ChatHistoryItem`, either the tool-results item or a new one after an answer, so `history_additions` carries it to disk. It's added before the item is pushed, so what gets saved matches what was sent.
+
+For a Stop, `send_message` returns `Ok` with `RunOutcome::Stopped` rather than an error. `handle_query_cmd` saves the query plus `history_additions`, trimmed to the last complete round, which means dropping a trailing assistant item whose tool calls have no results. Usage is still recorded. This is an improvement over today, where a GUI cancel loses the whole run, including the user's query.
+
+As an aside on ZOT-211: both `master` and the branch already do `history.extend(response.history_additions)`, which includes tool calls and results. The issue text says only the query and final answer are kept, which looks out of date. That's inferred from the code, so it's worth confirming before closing the issue.
 
 ### Persistence, with the conversation graph (design doc 04)
 
-- **A steer after tool results** is part of the `ToolResults` node, since it is in the same provider message. The node gains `steering: Vec<String>` as display text, next to `provenance`.
-- **A steer after an answer with no tool calls** is its own `User` node, a child of that `Assistant` node, and the loop's next call continues from it.
-- **A Stop keeps the finished tool rounds** (decided in review). The stopped call becomes a `Failed { error: "stopped" }` node with the attempt marked `cancelled`, and the head moves to the last complete `ToolResults` node, so a follow-up can reuse what was retrieved.
-- **Design doc 04 needs two amendments** (agreed in review, not yet made):
-  - Under *Settled nodes*, count a `ToolResults` node whose calls all have results as settled, so a user message may follow it after a Stop.
-  - Under *Write path*, step 4, a Stop moves the head to that node instead of leaving it where the run started; errors and refusals keep today's rule.
+With the conversation graph, a steer that follows tool results becomes part of the `ToolResults` node, since it's in the same provider message. The node gains a `steering: Vec<String>` field for display text, next to `provenance`. A steer that follows an answer with no tool calls is its own `User` node, a child of that `Assistant` node, and the loop's next call continues from it.
+
+A Stop keeps the finished tool rounds (decided in review). The stopped call becomes a `Failed { error: "stopped" }` node with the attempt marked `cancelled`, and the head moves to the last complete `ToolResults` node, so a follow-up question can reuse whatever was retrieved.
+
+That needs two amendments to design doc 04, which were agreed in review but haven't been made yet. Under *Settled nodes*, a `ToolResults` node whose calls all have results should count as settled, so that a user message may follow it after a Stop. And under *Write path*, step 4, a Stop should move the head to that node instead of leaving it where the run started. Errors and refusals keep today's rule.
 
 ## Edge cases
+
+The table below walks through when each control can arrive and what happens.
 
 | When | Steer | Queue | Stop |
 | --- | --- | --- | --- |
@@ -269,23 +284,25 @@ A steer only ever appends after the last native item, and the only call ever dis
 
 ## Phase 2: streaming
 
-Nothing here blocks the `AgentDriver` / `TurnEvent` split in ZOT-219; the control channel and the `select!` points move into the driver unchanged.
+Nothing here gets in the way of the `AgentDriver` / `TurnEvent` split that ZOT-219 plans. The control channel and the `select!` points move into the driver unchanged.
 
-- **Mid-stream Stop** drops the turn stream exactly as Phase 1 drops `send_once`. The partial text was already shown, so it should stay in the transcript, marked interrupted, but never enter history. A mid-stream Steer still waits for the turn to end, as in pi; streaming only lets the user see what they are steering.
-- **Partial reasoning must be discarded.** A thinking block cut off mid-stream has no signature and cannot be replayed. Storing it as `Failed { partial }` (design doc 04) keeps it visible without sending it.
-- **The `ToolCall` event TODO in `io.rs` gets fixed for free:** a streamed `ToolCall` arrives before execution, so `EngineEvent::ToolCall` can fire at the right time instead of after the tool runs.
+With streaming, a mid-stream Stop drops the turn stream exactly the way Phase 1 drops `send_once`. The partial text has already been shown, so it should stay in the transcript, marked as interrupted, but it should never enter history. A mid-stream Steer still waits for the turn to end, as in pi; streaming only lets the user see what they are steering.
+
+Partial reasoning has to be thrown away, though. A thinking block that's cut off mid-stream has no signature and can't be replayed. Storing it as `Failed { partial }` (design doc 04) keeps it visible without ever sending it. As a bonus, the `ToolCall` event TODO in `io.rs` gets fixed for free: a streamed `ToolCall` arrives before the tool runs, so `EngineEvent::ToolCall` can finally fire at the right time.
 
 ## Rejected alternatives
 
-- **Cancel and re-dispatch with the steer as a new query.** No `zqa-rag` change, but it rebuilds history from canonical items, losing reasoning and, on error paths, the run's tool results (see History persistence).
-- **Steering through the `EngineEvent` reply channels** (a standing `Line` prompt the frontend can answer at any time). Events are outbound by contract and replies are one-shot; a standing prompt would also block the CLI's single stdin reader.
-- **A `CancellationToken` for Stop alone, deferring Steer.** Simpler, but Steer then needs a second mechanism later. One channel covers both for almost the same cost.
-- **Cancelling running tools on Steer.** Needs synthetic tool results to keep the request valid, and throws away work the model probably wants.
-- **Aborting the in-flight model call on Steer** (rejected in review). It saves paying for a turn the user has rejected, but needs a second path (abort, re-convert the tail, resend, a `CallAborted` event) and differs from pi.
+The simplest option would be to cancel the run and re-dispatch with the steer as a new query. It needs no `zqa-rag` change at all, but it rebuilds history from canonical items, which loses reasoning and, on error paths, the run's tool results (see History persistence).
+
+We also considered steering through the existing `EngineEvent` reply channels, as a standing `Line` prompt the frontend could answer at any time. But events are outbound by contract and replies are one-shot, and a standing prompt would block the CLI's single stdin reader.
+
+A `CancellationToken` for Stop alone, with Steer deferred, would be simpler at first. Steer would then need a second mechanism later, though, and one channel covers both for almost the same cost.
+
+Cancelling running tools when a steer arrives was rejected because it needs synthetic tool results to keep the request valid, and it throws away work the model probably wants. Aborting the in-flight model call on a steer was rejected in review. It would save paying for a turn the user has already rejected, but it needs a second path (abort, re-convert the tail, resend, plus a `CallAborted` event), and it differs from pi.
 
 ## Open questions
 
-1. **Provider layout of text after tool results.** Anthropic and OpenAI are covered above; Gemini (text parts beside `functionResponse` parts in one content), OpenRouter (role `tool` messages, then a user message) and Ollama need a fixture test each before this ships.
+The main open question is how each provider lays out text that follows tool results. Anthropic and OpenAI are covered above. Gemini (text parts beside `functionResponse` parts in one content), OpenRouter (role `tool` messages, then a user message) and Ollama each need a fixture test before this ships.
 
 ### Decided in review (Oct 29 and 30)
 
