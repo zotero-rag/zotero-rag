@@ -115,6 +115,7 @@ impl<T: HttpClient> AgenticClient for OllamaClient<T> {
 
 #[cfg(test)]
 mod tests {
+    use crate::events::AgentEvent;
     use std::sync::{Arc, Mutex};
 
     use dotenv::dotenv;
@@ -151,9 +152,7 @@ mod tests {
             system_prompt: None,
             reasoning: None,
             tools: None,
-            on_tool_call: None,
-            on_text: None,
-            on_reasoning: None,
+            on_event: None,
             tool_iteration_limit: None,
         };
 
@@ -185,9 +184,7 @@ mod tests {
             system_prompt: None,
             reasoning: None,
             tools: Some(&[Box::new(tool)]),
-            on_tool_call: None,
-            on_text: None,
-            on_reasoning: None,
+            on_event: None,
             tool_iteration_limit: None,
         };
 
@@ -320,13 +317,11 @@ mod tests {
             system_prompt: Some("Follow the system instructions.".into()),
             reasoning: None,
             tools: Some(&[Box::new(tool)]),
-            on_tool_call: Some(Arc::new(move |_| {
-                *tool_call_count_cb.lock().unwrap() += 1;
+            on_event: Some(Arc::new(move |event| match event {
+                AgentEvent::ToolCall { .. } => *tool_call_count_cb.lock().unwrap() += 1,
+                AgentEvent::Text(s) => text_segments_cb.lock().unwrap().push(s.clone()),
+                _ => {}
             })),
-            on_text: Some(Arc::new(move |s| {
-                text_segments_cb.lock().unwrap().push(s.to_string());
-            })),
-            on_reasoning: None,
             tool_iteration_limit: None,
         };
 
