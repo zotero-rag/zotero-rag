@@ -12,9 +12,12 @@ use serde::Serialize;
 use serde::ser::SerializeMap;
 use serde_json::{Map, Value};
 
-use crate::llm::base::{
-    ChatHistoryContent, ChatHistoryItem, ContentType, MessageRole, ToolCallRequest,
-    ToolCallResponse, ToolUseStats,
+use crate::{
+    events::AgentEvent,
+    llm::base::{
+        ChatHistoryContent, ChatHistoryItem, ContentType, MessageRole, ToolCallRequest,
+        ToolCallResponse, ToolUseStats,
+    },
 };
 
 /// The key for the input schema for tools passed to Anthropic.
@@ -245,12 +248,9 @@ async fn execute_tool_call(tool_call: &ToolCallRequest, tools: &[SerializedTool<
 /// * `new_contents` - Accumulates user-facing `ContentType` items produced while processing.
 /// * `contents` - The model's latest message converted to `ChatHistoryContent` values.
 /// * `tools` - The available tools for invocation.
-/// * `on_tool_call` - Optional callback invoked after each tool call completes, receiving a
-///   reference to the [`ToolUseStats`] for that call.
-/// * `on_text` - Optional callback invoked for each text segment in the model's response,
-///   receiving the text as a string slice.
-/// * `on_reasoning` - Optional callback invoked for each reasoning block, receiving the reasoning
-///   as a string slice. Callbacks follow the order of content in the model's response.
+/// * `on_event` - Optional callback invoked for each text segment, reasoning block and tool call in
+///   the model's response, in response order. A tool call sends [`AgentEvent::ToolCall`] followed
+///   by [`AgentEvent::ToolResponse`], both after the tool finishes.
 ///
 /// # Returns
 ///
@@ -259,9 +259,7 @@ pub(crate) async fn process_tool_calls(
     new_contents: &mut Vec<ContentType>,
     contents: &[ChatHistoryContent],
     tools: &[SerializedTool<'_>],
-    on_tool_call: Option<&Arc<CallbackFn<ToolUseStats>>>,
-    on_text: Option<&Arc<CallbackFn<str>>>,
-    on_reasoning: Option<&Arc<CallbackFn<str>>>,
+    on_event: Option<&Arc<CallbackFn<AgentEvent>>>,
 ) -> Option<ChatHistoryItem> {
     let futures = contents.iter().map(|content| async move {
         match content {
@@ -307,23 +305,25 @@ pub(crate) async fn process_tool_calls(
     let mut tool_call_responses = Vec::new();
     for (content_opt, history_opt) in results {
         if let Some(content) = content_opt {
-            match &content {
-                ContentType::ToolCall(stats) => {
-                    if let Some(cb) = on_tool_call {
-                        cb(stats);
+            if let Some(cb) = on_event {
+                match &content {
+                    ContentType::ToolCall(stats) => {
+                        cb(&AgentEvent::ToolCall {
+                            id: stats.tool_call_id.clone(),
+                            name: stats.tool_name.clone(),
+                            args: stats.tool_args.clone(),
+                        });
+                        cb(&AgentEvent::ToolResponse {
+                            id: stats.tool_call_id.clone(),
+                            name: stats.tool_name.clone(),
+                            response: stats.tool_result.clone(),
+                        });
                     }
-                }
-                ContentType::Text(s) => {
-                    if let Some(cb) = on_text {
-                        cb(s);
-                    }
-                }
-                ContentType::Reasoning(s) => {
-                    if let Some(cb) = on_reasoning {
-                        cb(s);
-                    }
+                    ContentType::Text(s) => cb(&AgentEvent::Text(s.clone())),
+                    ContentType::Reasoning(s) => cb(&AgentEvent::Reasoning(s.clone())),
                 }
             }
+
             new_contents.push(content);
         }
         if let Some(history_content) = history_opt {
@@ -470,15 +470,8 @@ mod tests {
         let mut new_contents: Vec<ContentType> = vec![];
 
         let start = Instant::now();
-        let tool_call_results = process_tool_calls(
-            &mut new_contents,
-            &contents,
-            &serialized_tools,
-            None,
-            None,
-            None,
-        )
-        .await;
+        let tool_call_results =
+            process_tool_calls(&mut new_contents, &contents, &serialized_tools, None).await;
         let duration = start.elapsed();
 
         // Expect ~500ms for concurrent execution
@@ -502,15 +495,8 @@ mod tests {
         })];
         let mut new_contents = Vec::new();
 
-        let tool_call_results = process_tool_calls(
-            &mut new_contents,
-            &contents,
-            &serialized_tools,
-            None,
-            None,
-            None,
-        )
-        .await;
+        let tool_call_results =
+            process_tool_calls(&mut new_contents, &contents, &serialized_tools, None).await;
         let expected_result = Value::String(
             "Tool 'imaginary_tool' does not exist. Available tools: mock_tool.".into(),
         );
