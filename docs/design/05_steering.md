@@ -16,7 +16,7 @@ The core idea is that steering lives inside the tool loop in `AgenticClient::sen
 
 A few decisions came out of review on Oct 29. Steer text is sent as a plain user message, as in pi. Only Stop interrupts anything: a steer waits for the model call and any running tools to finish. Stop keeps the tool rounds that already finished. A steer that arrives during the final, no-tools iteration buys one more round with tools. And the GUI sends Steer by default while a query runs, with a setting to make Queue the default instead.
 
-The change is fairly small. `ChatRequest` gets one new field, which is breaking because `send_message` now takes `&mut ChatRequest`. `send_message`'s error type gains a wrapper so a failed run can hand back buffered input, which is also breaking. The loop gets a `select!`, the GUI bridge gets Steer, Queue and Stop commands, the CLI gets a Ctrl-C path, and there are three new events (see Where the events live). No provider adapter changes.
+The change is fairly small. `ChatRequest` gets one new field, which is breaking because `send_message` now takes `&mut ChatRequest`. `send_message`'s error type gains a wrapper so a failed run can hand back buffered input, which is also breaking. The loop gets a `select!`, the GUI bridge gets Steer, Queue and Stop commands, the CLI gets a Ctrl-C path, and there are three new events (see Where the events live). One provider adapter needs a small fix: OpenRouter's, described under Open questions.
 
 ## Context
 
@@ -302,7 +302,9 @@ Cancelling running tools when a steer arrives was rejected because it needs synt
 
 ## Open questions
 
-The main open question is how each provider lays out text that follows tool results. Anthropic and OpenAI are covered above. Gemini (text parts beside `functionResponse` parts in one content), OpenRouter (role `tool` messages, then a user message) and Ollama each need a fixture test before this ships.
+The main open question is how each provider lays out text that follows tool results. Anthropic and OpenAI are covered above. Gemini (text parts beside `functionResponse` parts in one content) and Ollama each need a fixture test before this ships.
+
+OpenRouter needs a fix as well as a test. `convert_to_openrouter_messages` (`openrouter.rs`) collects an item's text into one message and puts it first with `messages.insert(0, ..)`, ahead of the role `tool` messages. That order is right for an assistant turn, where the text and tool calls come before the results, but for a user item holding tool results plus a steer it would send the steer before the results it is meant to follow, splitting the tool call from its results. For an item that carries tool results, the text message has to go after the tool messages instead. `test_tool_responses_expand_to_tool_messages` can grow a mixed case to cover it.
 
 ### Decided in review (Oct 29 and 30)
 
