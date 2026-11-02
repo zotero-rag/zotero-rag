@@ -43,7 +43,7 @@ pub const DEFAULT_OPENAI_EMBEDDING_DIM: u32 = 3072;
 pub const DEFAULT_OPENAI_EMBEDDING_MODEL: &str = "text-embedding-3-large";
 
 /// Default Anthropic model for chat completions
-pub const DEFAULT_ANTHROPIC_MODEL: &str = "claude-sonnet-5.5";
+pub const DEFAULT_ANTHROPIC_MODEL: &str = "claude-sonnet-5-5";
 
 /// Default Anthropic model for conversation title generation
 pub const DEFAULT_ANTHROPIC_MODEL_SMALL: &str = "claude-haiku-5-5";
