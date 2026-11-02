@@ -33,7 +33,8 @@ pub enum AgentEvent {
         id: String,
         /// Tool name
         name: String,
-        /// Tool response.
-        response: serde_json::Value,
+        /// Tool response, if successful, or an error message, such as if a tool name was
+        /// hallucinated.
+        response: Result<serde_json::Value, String>,
     },
 }

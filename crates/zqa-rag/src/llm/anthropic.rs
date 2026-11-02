@@ -353,19 +353,26 @@ pub(crate) struct AnthropicToolUseResult {
     r#type: String,
     /// The ID of the tool call request that this is a result for.
     tool_use_id: String,
-    /// The result from the tool call.
+    /// The result from the tool call, or the error message if it failed.
     content: String,
+    /// Whether the tool call failed. Omitted when `false`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    is_error: bool,
 }
 
 impl From<ToolCallResponse> for AnthropicToolUseResult {
     fn from(value: ToolCallResponse) -> Self {
+        let is_error = value.result.is_err();
+        let content = match value.result {
+            Ok(serde_json::Value::String(s)) | Err(s) => s,
+            Ok(other) => other.to_string(),
+        };
+
         Self {
             r#type: "tool_result".into(),
             tool_use_id: value.id,
-            content: match value.result {
-                serde_json::Value::String(s) => s,
-                other => other.to_string(),
-            },
+            content,
+            is_error,
         }
     }
 }
@@ -1150,7 +1157,7 @@ mod tests {
             ToolCallResponse {
                 id: "tool-1".into(),
                 tool_name: "mock_tool".into(),
-                result: serde_json::json!({"answer": 42}),
+                result: Ok(serde_json::json!({"answer": 42})),
             }
             .into(),
         );
@@ -1168,12 +1175,28 @@ mod tests {
             ToolCallResponse {
                 id: "tool-2".into(),
                 tool_name: "mock_tool".into(),
-                result: serde_json::json!("plain text"),
+                result: Ok(serde_json::json!("plain text")),
             }
             .into(),
         );
         let json = serde_json::to_value(&content).unwrap();
         test_eq!(json["content"].as_str().unwrap(), "plain text");
+        assert!(json.get("is_error").is_none());
+
+        let failed = AnthropicResponseContent::ToolResult(
+            ToolCallResponse {
+                id: "tool-3".into(),
+                tool_name: "mock_tool".into(),
+                result: Err("Tool 'mock_tool' failed.".into()),
+            }
+            .into(),
+        );
+        let json = serde_json::to_value(&failed).unwrap();
+        test_eq!(
+            json["content"].as_str().unwrap(),
+            "Tool 'mock_tool' failed."
+        );
+        test_eq!(json["is_error"].as_bool(), Some(true));
     }
 
     #[tokio::test]

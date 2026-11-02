@@ -187,7 +187,10 @@ pub type CallbackFn<T> = dyn Fn(&T) + Send + Sync + 'static;
 /// # Returns
 ///
 /// The tool's unmodified result, or an error string for failed or unknown calls.
-async fn execute_tool_call(tool_call: &ToolCallRequest, tools: &[SerializedTool<'_>]) -> Value {
+async fn execute_tool_call(
+    tool_call: &ToolCallRequest,
+    tools: &[SerializedTool<'_>],
+) -> Result<Value, String> {
     let tool_call_id = &tool_call.id;
     let tool_name = &tool_call.tool_name;
     let start = std::time::Instant::now();
@@ -205,12 +208,12 @@ async fn execute_tool_call(tool_call: &ToolCallRequest, tools: &[SerializedTool<
             result.is_ok(),
             start.elapsed()
         );
-        result.unwrap_or_else(|e| {
+        result.map_err(|e| {
             log::debug!(
                 "Tool {tool_name} (id={tool_call_id}) error: {}",
                 crate::logging::preview(&e)
             );
-            Value::String(format!("Error calling tool: {e}"))
+            format!("Error calling tool: {e}")
         })
     } else {
         let available_tool_names = tools
@@ -228,7 +231,7 @@ async fn execute_tool_call(tool_call: &ToolCallRequest, tools: &[SerializedTool<
             "Model called unknown tool '{}'. Available tools: {available_tools}.",
             tool_call.tool_name
         );
-        Value::String(format!(
+        Err(format!(
             "Tool '{}' does not exist. Available tools: {available_tools}.",
             tool_call.tool_name
         ))
@@ -531,9 +534,8 @@ mod tests {
 
         let tool_call_results =
             process_tool_calls(&mut new_contents, &contents, &serialized_tools, None).await;
-        let expected_result = Value::String(
-            "Tool 'imaginary_tool' does not exist. Available tools: mock_tool.".into(),
-        );
+        let expected_result: Result<Value, String> =
+            Err("Tool 'imaginary_tool' does not exist. Available tools: mock_tool.".into());
 
         assert_eq!(*call_count.lock().unwrap(), 0);
         assert_eq!(
