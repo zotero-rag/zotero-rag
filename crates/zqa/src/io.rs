@@ -6,6 +6,7 @@ use std::io::{self, BufRead, Write};
 use std::time::Duration;
 
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
+use serde_json::Value;
 use tokio::sync::oneshot;
 use zqa_rag::events::AgentEvent;
 
@@ -111,8 +112,8 @@ pub struct StyledSpan {
 /// * [`EngineEvent::ToolCall`] is rendered in a dimmed text with the tool name followed by
 ///   JSON args.
 /// * [`EngineEvent::ToolResponse`] is rendered in a dimmed text with two leading spaces, followed
-///   by `->`, followed by the tool name in parentheses, and finally the
-///   pretty-printed JSON response.
+///   by `->`, followed by the tool name in parentheses, and finally the pretty-printed JSON
+///   response with long strings and arrays shortened, or the error message if the tool failed.
 /// * [`EngineEvent::Reasoning`] renders as dimmed, italics text.
 /// * [`EngineEvent::Confirm`] renders the message, followed by either "([y]/n): " or "(y/[n]): ",
 ///   so it assumes users are presented a yes/no question. For other binary-response questions, use
@@ -434,6 +435,67 @@ fn read_answer<T>(
     }
 }
 
+/// How many leading and trailing words of a string, or items of an array, the CLI keeps when it
+/// prints a tool response. See [`truncate_json`].
+const TOOL_RESPONSE_KEEP: usize = 5;
+
+/// Shorten the long strings and arrays in a JSON value so it can be shown to the user.
+///
+/// Tool responses can be large, such as the paper text a document tool returns or the list of
+/// matches from a search, and printing them whole buries the rest of the output. This keeps the
+/// value's structure, so object keys and nesting stay visible, and shortens only the parts that are
+/// long:
+///
+/// * A string with more than `2 * keep` words becomes its first `keep` words, ` ... `, and its last
+///   `keep` words. Words are split on whitespace, so a shortened string loses its line breaks.
+/// * An array with more than `2 * keep` items becomes its first `keep` items, a string marker such
+///   as `"... (3 more)"`, and its last `keep` items.
+/// * Everything else is copied, and objects and arrays are shortened recursively.
+///
+/// Values at or under the limits are returned unchanged, so this never makes a value longer. The
+/// result is for display only: a shortened array's marker is a string even when the items are not.
+///
+/// # Arguments
+///
+/// * `value` - The JSON value to shorten.
+/// * `keep` - How many leading and trailing words or items to keep.
+///
+/// # Returns
+///
+/// A copy of `value` with long strings and arrays shortened.
+fn truncate_json(value: &Value, keep: usize) -> Value {
+    match value {
+        Value::String(s) => {
+            let words: Vec<&str> = s.split_whitespace().collect();
+            if words.len() <= 2 * keep {
+                return value.clone();
+            }
+
+            Value::String(format!(
+                "{} ... {}",
+                words[..keep].join(" "),
+                words[words.len() - keep..].join(" ")
+            ))
+        }
+        Value::Array(items) if items.len() > 2 * keep => {
+            let omitted = Value::String(format!("... ({} more)", items.len() - 2 * keep));
+
+            items[..keep]
+                .iter()
+                .chain([&omitted])
+                .chain(&items[items.len() - keep..])
+                .map(|item| truncate_json(item, keep))
+                .collect()
+        }
+        Value::Array(items) => items.iter().map(|item| truncate_json(item, keep)).collect(),
+        Value::Object(map) => map
+            .iter()
+            .map(|(key, item)| (key.clone(), truncate_json(item, keep)))
+            .collect(),
+        _ => value.clone(),
+    }
+}
+
 impl From<AgentEvent> for EngineEvent {
     fn from(event: AgentEvent) -> Self {
         match event {
@@ -473,7 +535,7 @@ impl Display for EngineEvent {
             EngineEvent::ToolResponse { name, response, .. } => {
                 write!(f, "  {DIM_TEXT}-> ({name}) ")?;
                 match response {
-                    Ok(response) => write!(f, "{response:#}"),
+                    Ok(response) => write!(f, "{:#}", truncate_json(response, TOOL_RESPONSE_KEEP)),
                     Err(error) => f.write_str(error),
                 }?;
                 f.write_str(RESET)
@@ -659,6 +721,24 @@ mod tests {
                     response: Err("failed".into()),
                 },
                 format!("  {DIM_TEXT}-> (search) failed{RESET}"),
+                false,
+            ),
+            (
+                EngineEvent::ToolResponse {
+                    name: "search".into(),
+                    id: "call-1".into(),
+                    response: Ok(serde_json::json!({
+                        "text": "one two three four five six seven eight nine ten eleven twelve",
+                        "results": (1..=12).collect::<Vec<_>>(),
+                    })),
+                },
+                format!(
+                    "  {DIM_TEXT}-> (search) {:#}{RESET}",
+                    serde_json::json!({
+                        "text": "one two three four five ... eight nine ten eleven twelve",
+                        "results": [1, 2, 3, 4, 5, "... (2 more)", 8, 9, 10, 11, 12],
+                    })
+                ),
                 false,
             ),
             (
