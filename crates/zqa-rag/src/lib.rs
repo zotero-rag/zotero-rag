@@ -38,6 +38,7 @@ pub(crate) mod clients;
 pub mod config;
 pub mod constants;
 pub mod embedding;
+pub mod events;
 pub(crate) mod http_client;
 pub mod llm;
 pub mod logging;
