@@ -302,7 +302,7 @@ Cancelling running tools when a steer arrives was rejected because it needs synt
 
 ## Open questions
 
-The main open question is how each provider lays out text that follows tool results. Anthropic and OpenAI are covered above. Gemini (text parts beside `functionResponse` parts in one content) and Ollama each need a fixture test before this ships.
+The main open question is how each provider lays out text that follows tool results. Anthropic and OpenAI are covered above. Gemini (text parts beside `functionResponse` parts in one content) and Ollama each need a fixture test before this ships, and those tests should check that the steer lands after the tool results, not only that the request is accepted.
 
 OpenRouter needs a fix as well as a test. `convert_to_openrouter_messages` (`openrouter.rs`) collects an item's text into one message and puts it first with `messages.insert(0, ..)`, ahead of the role `tool` messages. That order is right for an assistant turn, where the text and tool calls come before the results, but for a user item holding tool results plus a steer it would send the steer before the results it is meant to follow, splitting the tool call from its results. For an item that carries tool results, the text message has to go after the tool messages instead. `test_tool_responses_expand_to_tool_messages` can grow a mixed case to cover it.
 
