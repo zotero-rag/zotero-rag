@@ -1,5 +1,6 @@
 use std::borrow::Cow;
 use std::env;
+use std::pin::Pin;
 use std::sync::Arc;
 
 use arrow_schema::{DataType, Field};
@@ -13,6 +14,7 @@ use crate::constants::{
     DEFAULT_GEMINI_EMBEDDING_DIM, DEFAULT_GEMINI_EMBEDDING_MODEL, DEFAULT_MAX_CONCURRENT_REQUESTS,
     DEFAULT_MAX_RETRIES,
 };
+use crate::embedding::common::{Embed, QueryEmbedding};
 use crate::http_client::HttpClient;
 use crate::llm::errors::LLMError;
 use crate::requests::request_with_backoff;
@@ -41,6 +43,56 @@ where
         })
     }
 
+    /// Resolve the endpoint, headers, model, dimensions, concurrency and retry settings from the
+    /// configuration, falling back to the environment and defaults.
+    ///
+    /// # Errors
+    ///
+    /// * `LLMError::EnvError` - If there is no configuration and neither GEMINI_API_KEY nor
+    ///   GOOGLE_API_KEY is set
+    /// * `LLMError::InvalidHeaderError` - If the API key is not a valid header value
+    fn request_settings(&self) -> Result<GeminiRequestSettings, LLMError> {
+        let config = self.config.as_ref();
+        let (embedding_dim, max_retries, max_concurrent) = config.map_or(
+            (
+                DEFAULT_GEMINI_EMBEDDING_DIM as usize,
+                DEFAULT_MAX_RETRIES,
+                DEFAULT_MAX_CONCURRENT_REQUESTS,
+            ),
+            |config| {
+                (
+                    config.embedding_dims,
+                    config.max_retries,
+                    config.max_concurrent_requests,
+                )
+            },
+        );
+
+        let api_key =
+            config.map_or_else(get_gemini_api_key, |config| Ok(config.api_key.clone()))?;
+        let model = config.map_or_else(
+            || {
+                env::var("GEMINI_EMBEDDING_MODEL")
+                    .unwrap_or_else(|_| DEFAULT_GEMINI_EMBEDDING_MODEL.to_string())
+            },
+            |config| config.embedding_model.clone(),
+        );
+        let model = format!("models/{model}");
+        let url = format!("https://generativelanguage.googleapis.com/v1beta/{model}:embedContent");
+        let mut headers = HeaderMap::new();
+        headers.insert("content-type", "application/json".parse()?);
+        headers.insert("x-goog-api-key", api_key.parse()?);
+
+        Ok(GeminiRequestSettings {
+            url,
+            headers,
+            model,
+            embedding_dim,
+            max_retries,
+            max_concurrent,
+        })
+    }
+
     /// Compute embeddings asynchronously using the Gemini API.
     ///
     /// # Arguments:
@@ -59,54 +111,42 @@ where
             .iter()
             .filter_map(|s| Some(s?.to_owned()))
             .collect();
-        let config = self.config.as_ref();
-        let (embedding_dim, max_retries, max_concurrent) = config.map_or(
-            (
-                DEFAULT_GEMINI_EMBEDDING_DIM as usize,
-                DEFAULT_MAX_RETRIES,
-                DEFAULT_MAX_CONCURRENT_REQUESTS,
-            ),
-            |config| {
-                (
-                    config.embedding_dims,
-                    config.max_retries,
-                    config.max_concurrent_requests,
-                )
-            },
-        );
+        let embedding_dim = self
+            .config
+            .as_ref()
+            .map_or(DEFAULT_GEMINI_EMBEDDING_DIM as usize, |config| {
+                config.embedding_dims
+            });
 
         let embeddings: Vec<Vec<f32>> = if texts.is_empty() {
             Vec::new()
         } else {
-            let api_key =
-                config.map_or_else(get_gemini_api_key, |config| Ok(config.api_key.clone()))?;
-            let model = config.map_or_else(
-                || {
-                    env::var("GEMINI_EMBEDDING_MODEL")
-                        .unwrap_or_else(|_| DEFAULT_GEMINI_EMBEDDING_MODEL.to_string())
-                },
-                |config| config.embedding_model.clone(),
-            );
-            let model = format!("models/{model}");
-            let url =
-                format!("https://generativelanguage.googleapis.com/v1beta/{model}:embedContent");
-            let mut headers = HeaderMap::new();
-            headers.insert("content-type", "application/json".parse()?);
-            headers.insert("x-goog-api-key", api_key.parse()?);
-
+            let settings = self.request_settings()?;
             let futures = texts.into_iter().map(|text| {
-                let request_body =
-                    GeminiEmbeddingRequest::from_text(text, model.clone(), embedding_dim);
-                call_gemini_embedding_api(&self.client, &url, &headers, request_body, max_retries)
+                let request_body = GeminiEmbeddingRequest::from_text(
+                    text,
+                    settings.model.clone(),
+                    settings.embedding_dim,
+                );
+                call_gemini_embedding_api(
+                    &self.client,
+                    &settings.url,
+                    &settings.headers,
+                    request_body,
+                    settings.max_retries,
+                )
             });
 
             // Preserve input order so vectors remain associated with their source rows.
             let results = stream::iter(futures)
-                .buffered(max_concurrent.max(1))
+                .buffered(settings.max_concurrent.max(1))
                 .collect::<Vec<_>>()
                 .await;
 
-            results.into_iter().collect::<Result<_, _>>()?
+            results
+                .into_iter()
+                .map(|result| result.map(|embedding| embedding.embedding))
+                .collect::<Result<_, _>>()?
         };
 
         // Convert to Arrow FixedSizeListArray
@@ -129,6 +169,44 @@ where
     }
 }
 
+impl<T: HttpClient + std::fmt::Debug> Embed for GeminiClient<T> {
+    fn embed_query<'a>(
+        &'a self,
+        query: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<QueryEmbedding, LLMError>> + Send + 'a>> {
+        Box::pin(async move {
+            let settings = self.request_settings()?;
+            let request_body = GeminiEmbeddingRequest::from_text(
+                query.to_owned(),
+                settings.model,
+                settings.embedding_dim,
+            );
+
+            call_gemini_embedding_api(
+                &self.client,
+                &settings.url,
+                &settings.headers,
+                request_body,
+                settings.max_retries,
+            )
+            .await
+        })
+    }
+}
+
+/// Settings for embedding requests, resolved from the client configuration or the environment.
+struct GeminiRequestSettings {
+    /// The `embedContent` endpoint for the configured model.
+    url: String,
+    /// Request headers containing the API key.
+    headers: HeaderMap,
+    /// The model, prefixed with `models/`.
+    model: String,
+    embedding_dim: usize,
+    max_retries: usize,
+    max_concurrent: usize,
+}
+
 /// Call the Gemini embeddings API.
 ///
 /// # Arguments
@@ -141,7 +219,8 @@ where
 ///
 /// # Returns
 ///
-/// An embedding vector of the requested width, normalized for reduced-width Gemini Embedding 001 requests.
+/// An embedding vector of the requested width, normalized for reduced-width Gemini Embedding 001
+/// requests, with the prompt tokens Gemini reported if the response includes usage metadata.
 /// See: [Google's normalization guidance](https://ai.google.dev/gemini-api/docs/embeddings#ensuring-quality-for-smaller-dimensions).
 async fn call_gemini_embedding_api(
     client: &impl HttpClient,
@@ -149,11 +228,14 @@ async fn call_gemini_embedding_api(
     headers: &HeaderMap,
     request_body: GeminiEmbeddingRequest,
     max_retries: usize,
-) -> Result<Vec<f32>, LLMError> {
+) -> Result<QueryEmbedding, LLMError> {
     let res = request_with_backoff(client, url, headers, &request_body, max_retries).await?;
     let body = res.text().await?;
     let json: serde_json::Value = serde_json::from_str(&body)?;
     let parsed: GeminiEmbeddingResponse = serde_json::from_value(json)?;
+    let input_tokens = parsed
+        .usage_metadata
+        .and_then(|usage| usage.prompt_token_count);
     let mut values = parsed.embedding.values;
     let embedding_dim = match request_body.dimensions {
         GeminiEmbeddingDimensions::OutputDimensionality(dimensions)
@@ -183,7 +265,10 @@ async fn call_gemini_embedding_api(
         }
     }
 
-    Ok(values)
+    Ok(QueryEmbedding {
+        embedding: values,
+        input_tokens,
+    })
 }
 
 /// A text part of an embedding API request
@@ -245,11 +330,22 @@ struct GeminiEmbeddingVector {
     values: Vec<f32>,
 }
 
+/// Usage metadata for an embedding request. The API reference documents this as output only,
+/// without saying which models fill it in, so it may be absent.
+///
+/// See: [`EmbeddingUsageMetadata`](https://ai.google.dev/api/embeddings#EmbeddingUsageMetadata).
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GeminiEmbeddingUsageMetadata {
+    prompt_token_count: Option<u32>,
+}
+
 /// The full embedding API response
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct GeminiEmbeddingResponse {
     embedding: GeminiEmbeddingVector,
+    usage_metadata: Option<GeminiEmbeddingUsageMetadata>,
 }
 
 /// Implements the LanceDB EmbeddingFunction trait for Gemini client.
@@ -299,5 +395,48 @@ impl<T: HttpClient + std::fmt::Debug> EmbeddingFunction for GeminiClient<T> {
                 source: None,
             }),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+    use zqa_macros::test_eq;
+
+    use crate::clients::gemini::GeminiClient;
+    use crate::config::GeminiConfig;
+    use crate::embedding::common::Embed;
+    use crate::http_client::SequentialMockHttpClient;
+
+    #[tokio::test]
+    async fn test_embed_query_reads_usage_metadata() {
+        let config = GeminiConfig {
+            api_key: "test-key".into(),
+            model: String::new(),
+            embedding_model: "gemini-embedding-2".into(),
+            embedding_dims: 4,
+            reasoning_effort: None,
+            max_retries: 0,
+            max_concurrent_requests: 1,
+        };
+        // Usage metadata is output only, so a response may leave it out.
+        let client = GeminiClient {
+            client: SequentialMockHttpClient::from_bodies([
+                json!({
+                    "embedding": {"values": [0.5, 0.5, 0.5, 0.5]},
+                    "usageMetadata": {"promptTokenCount": 7}
+                })
+                .to_string(),
+                json!({"embedding": {"values": [0.5, 0.5, 0.5, 0.5]}}).to_string(),
+            ]),
+            config: Some(config),
+        };
+
+        let reported = client.embed_query("a query").await.unwrap();
+        test_eq!(reported.embedding, vec![0.5; 4]);
+        test_eq!(reported.input_tokens, Some(7));
+
+        let unreported = client.embed_query("a query").await.unwrap();
+        test_eq!(unreported.input_tokens, None);
     }
 }

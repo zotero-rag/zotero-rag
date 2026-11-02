@@ -18,6 +18,7 @@ use zqa_rag::vector::checkhealth::{HealthCheckResult, HealthCheckable};
 
 use crate::cli::errors::CLIError;
 use crate::config::Config;
+use crate::state::estimate_tokens;
 use crate::store::common::{VectorSearchStats, ZoteroStore};
 use crate::utils::arrow::{DbFields, get_schema, library_to_arrow};
 use crate::utils::library::{ZoteroItem, ZoteroItemSet};
@@ -157,8 +158,9 @@ impl ZoteroStore for LanceZoteroStore {
         limit: usize,
         reranker_config: Option<&RerankProviderConfig>,
     ) -> Result<(Vec<ZoteroItem>, VectorSearchStats), CLIError> {
-        let embedding_tokens = query.len();
-        let items = <Self as ZoteroStore>::vector_search_raw(self, &query, limit).await?;
+        let (items, reported_tokens) =
+            <Self as ZoteroStore>::vector_search_raw(self, &query, limit).await?;
+        let embedding_tokens = reported_tokens.unwrap_or_else(|| estimate_tokens(query.len()));
         let raw_count = items.len();
 
         let filtered_items: Vec<ZoteroItem> = items
@@ -206,7 +208,8 @@ impl ZoteroStore for LanceZoteroStore {
             .map(|f| f.text.as_str())
             .collect::<Vec<_>>();
 
-        let rerank_tokens = item_strings.iter().map(|s| s.len()).sum::<usize>() + query.len();
+        let rerank_tokens =
+            estimate_tokens(item_strings.iter().map(|s| s.len()).sum::<usize>() + query.len());
         let indices = rerank_provider.rerank(&item_strings, &query).await?;
 
         let reranked_items: Vec<ZoteroItem> = indices
@@ -348,6 +351,14 @@ impl ZoteroStore for LanceZoteroStore {
     /// * `query` - The query string.
     /// * `limit` - The maximum number of results to return.
     ///
+    /// # Returns
+    ///
+    /// A tuple containing:
+    ///
+    /// * The matching items.
+    /// * The input tokens the embedding provider reported for the query, or `None` if it does not
+    ///   report usage.
+    ///
     /// # Errors
     ///
     /// Returns a [`CLIError`] if the search fails.
@@ -355,9 +366,9 @@ impl ZoteroStore for LanceZoteroStore {
         &self,
         query: &str,
         limit: usize,
-    ) -> Result<Vec<ZoteroItem>, Self::StoreError> {
-        let batches = self.backend.vector_search(query.to_string(), limit).await?;
-        Ok(ZoteroItemSet::from(batches).into())
+    ) -> Result<(Vec<ZoteroItem>, Option<u32>), Self::StoreError> {
+        let (batches, input_tokens) = self.backend.vector_search(query.to_string(), limit).await?;
+        Ok((ZoteroItemSet::from(batches).into(), input_tokens))
     }
 
     /// Returns the items with the given keys from the store.

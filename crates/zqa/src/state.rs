@@ -90,27 +90,42 @@ pub(crate) fn get_state_dir() -> Result<PathBuf, StateError> {
     Ok(state_dir.join("zqa"))
 }
 
-/// For embedding and reranking, where we currently only have characters, estimate the cost if
-/// possible and return the usage.
+/// Estimate the tokens in `bytes` bytes of text, for embedding and reranking requests whose
+/// provider does not report usage.
+///
+/// # Arguments
+///
+/// * `bytes` - The length of the text in bytes.
+///
+/// # Returns
+///
+/// The estimated token count, at four bytes per token.
+pub(crate) fn estimate_tokens(bytes: usize) -> u32 {
+    u32::try_from(bytes / 4).unwrap_or(u32::MAX)
+}
+
+/// For embedding and reranking, which have only input tokens, estimate the cost if possible and
+/// return the usage.
 ///
 /// Cost lookup uses the LiteLLM JSON catalog of models, and uses `{provider_name}/{model}`.
-///
-/// TODO: We should probably just use the provider-sent usage directly instead of the approximation
-/// here.
 ///
 /// # Arguments
 ///
 /// * `provider_name` - The provider name to use in the lookup.
 /// * `model` - The model string to use in the lookup.
-/// * `chars` - The character count to use in the estimate.
+/// * `input_tokens` - The input tokens to price, either reported by the provider or from
+///   [`estimate_tokens`].
 ///
 /// # Returns
 ///
 /// A [`UsageMetadata`] with estimated cost if the model was found.
-pub(crate) async fn get_model_usage(provider_name: &str, model: &str, chars: u64) -> UsageMetadata {
+pub(crate) async fn get_model_usage(
+    provider_name: &str,
+    model: &str,
+    input_tokens: u32,
+) -> UsageMetadata {
     let mut usage = UsageMetadata {
-        #[allow(clippy::cast_possible_truncation)]
-        input_tokens: (chars / 4) as u32,
+        input_tokens,
         ..Default::default()
     };
 

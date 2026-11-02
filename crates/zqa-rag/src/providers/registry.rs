@@ -2,11 +2,9 @@
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock};
 
-use lancedb::embeddings::EmbeddingFunction;
-
 use crate::capabilities::{BatchEmbeddingFactory, EmbeddingFactory, LlmFactory, RerankFactory};
 use crate::config::LLMClientConfig;
-use crate::embedding::common::EmbeddingProviderConfig;
+use crate::embedding::common::{Embed, EmbeddingProviderConfig};
 use crate::llm::errors::LLMError;
 use crate::llm::factory::{BatchEmbeddingClient, LLMClient};
 use crate::providers::anthropic::AnthropicProvider;
@@ -102,7 +100,7 @@ impl ProviderRegistry {
     pub fn create_embedding(
         &self,
         config: &EmbeddingProviderConfig,
-    ) -> Result<Arc<dyn EmbeddingFunction>, LLMError> {
+    ) -> Result<Arc<dyn Embed>, LLMError> {
         let provider = config.provider_id();
         let factory = self
             .embedding

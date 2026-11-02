@@ -5,13 +5,12 @@
 use std::cmp::Ordering;
 use std::sync::Arc;
 
-use lancedb::embeddings::EmbeddingFunction;
 use serde::{Deserialize, Serialize};
 use zqa_pdftools::chunk::ChunkingStrategy;
 
 use crate::config::LLMClientConfig;
 use crate::embedding::common::{
-    BatchEmbeddingRequest, BatchEmbeddingResults, BatchSubmission, EmbeddingProviderConfig,
+    BatchEmbeddingRequest, BatchEmbeddingResults, BatchSubmission, Embed, EmbeddingProviderConfig,
 };
 use crate::llm::errors::LLMError;
 use crate::llm::factory::{BatchEmbeddingClient, LLMClient};
@@ -48,8 +47,8 @@ impl ModelProvider {
     }
 }
 
-/// Providers of embedding models. Structs corresponding to these should implement LanceDB's
-/// `EmbeddingFunction` trait. Depending on if the provider also has models that support text
+/// Providers of embedding models. Structs corresponding to these should implement [`Embed`],
+/// which extends LanceDB's `EmbeddingFunction` trait. Depending on if the provider also has models that support text
 /// generation, you will find the structs in `llm/` or `embedding/`.
 #[derive(Copy, Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -255,7 +254,7 @@ pub trait LlmFactory: Send + Sync {
     fn create_llm(&self, config: &LLMClientConfig) -> Result<LLMClient, LLMError>;
 }
 
-/// Factory trait to create an [`EmbeddingFunction`] object
+/// Factory trait to create an [`Embed`] object
 pub trait EmbeddingFactory: Send + Sync {
     /// Return the canonical provider ID
     fn provider_id(&self) -> ProviderId;
@@ -268,7 +267,7 @@ pub trait EmbeddingFactory: Send + Sync {
     fn create_embedding(
         &self,
         config: &EmbeddingProviderConfig,
-    ) -> Result<Arc<dyn EmbeddingFunction>, LLMError>;
+    ) -> Result<Arc<dyn Embed>, LLMError>;
 }
 
 /// Factory trait to create an [`Rerank`] object
@@ -303,8 +302,6 @@ pub trait BatchEmbeddingFactory: Send + Sync {
 
 #[cfg(test)]
 mod tests {
-    use lancedb::embeddings::EmbeddingFunction;
-
     use super::BatchAPIProvider;
     use crate::clients::anthropic::AnthropicClient;
     use crate::clients::gemini::GeminiClient;
@@ -312,6 +309,7 @@ mod tests {
     use crate::clients::openai::OpenAIClient;
     use crate::clients::openrouter::OpenRouterClient;
     use crate::embedding::cohere::CohereClient;
+    use crate::embedding::common::Embed;
     use crate::embedding::voyage::VoyageAIClient;
     use crate::http_client::ReqwestClient;
     use crate::llm::base::{AgenticClient, ChatHistoryItem};
@@ -323,7 +321,7 @@ mod tests {
         ChatHistoryItem: Into<Vec<T::HistoryItem>>,
     {
     }
-    fn assert_embedding_fn<T: EmbeddingFunction>() {}
+    fn assert_embedding_fn<T: Embed>() {}
     fn assert_batch_provider<T: BatchAPIProvider>() {}
     fn assert_reranker<T: Rerank>() {}
 
@@ -340,7 +338,7 @@ mod tests {
     }
 
     /// Verify that every [`super::EmbeddingProvider`] variant has a corresponding client that
-    /// implements LanceDB's [`EmbeddingFunction`].
+    /// implements [`Embed`], and so LanceDB's `EmbeddingFunction`.
     #[test]
     fn embedding_providers_implement_embedding_function() {
         assert_embedding_fn::<OpenAIClient<ReqwestClient>>();

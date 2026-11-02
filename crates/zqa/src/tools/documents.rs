@@ -28,7 +28,7 @@ use zqa_rag::reranking::common::{RerankProviderConfig, get_reranking_provider_wi
 
 use crate::common::UserDocument;
 use crate::io::EngineEvent;
-use crate::state::{UsageMetadata, get_model_usage};
+use crate::state::{UsageMetadata, estimate_tokens, get_model_usage};
 use crate::tools::mixins::ToolExt;
 
 // TODO: Tune this in a future story; possibly look at embedding provider
@@ -297,7 +297,7 @@ applicable. However, you MUST return the text verbatim.
 /// Get embeddings for a list of texts using the specified embedding provider.
 fn get_embeddings(
     texts: &[&str],
-    embedding_provider: &Arc<dyn EmbeddingFunction>,
+    embedding_provider: &dyn EmbeddingFunction,
 ) -> Result<Vec<f32>, DocumentError> {
     let embeddings = embedding_provider.compute_source_embeddings(Arc::new(StringArray::from(
         texts.iter().map(|s| &**s).collect::<Vec<_>>(),
@@ -403,16 +403,16 @@ async fn embedding_retrieval(
         .collect();
 
     let provider = get_embedding_provider_with_config(embedding_config)?;
-    let chunk_embeddings = get_embeddings(&chunk_text_refs, &provider)?;
+    let chunk_embeddings = get_embeddings(&chunk_text_refs, provider.as_ref())?;
 
-    let query_embeddings = get_embeddings(&[query], &provider)?;
+    let query_embeddings = get_embeddings(&[query], provider.as_ref())?;
     let dim = query_embeddings.len();
 
     let embedded_chars = chunk_texts.iter().map(String::len).sum::<usize>() + query.len();
     let usage = get_model_usage(
         embedding_config.provider_name(),
         embedding_config.model_name(),
-        embedded_chars as u64,
+        estimate_tokens(embedded_chars),
     )
     .await;
     let _ = cost_tx.send(usage);
@@ -483,7 +483,7 @@ async fn embedding_retrieval(
     let usage = get_model_usage(
         reranker_config.provider_name(),
         reranker_config.model_name(),
-        reranked_chars as u64,
+        estimate_tokens(reranked_chars),
     )
     .await;
     let _ = cost_tx.send(usage);
