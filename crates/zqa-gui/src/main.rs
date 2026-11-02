@@ -56,6 +56,8 @@ const CONTENT_WIDTH: Rems = rems(46.);
 /// Width of the first column when a styled row's line has a tab, wide enough for the longest
 /// command in `/help` (`/batch cancel <id>`).
 const STYLED_FIRST_COLUMN_WIDTH: Rems = rems(11.);
+/// The error shown on a tool panel whose command ended before the tool reported a result.
+const INTERRUPTED_TOOL_CALL: &str = "The command ended before this tool finished.";
 
 // Window actions
 actions!(window, [CloseWindow, QuitApp]);
@@ -318,6 +320,7 @@ impl ZqaApp {
                         UiEvent::Done(result) => {
                             app.clear_prompts();
                             app.progress.clear();
+                            Self::interrupt_tool_calls(&mut app.rows);
                             Self::focus_input(&app.input_state, window, cx);
 
                             if app.phase != Phase::ShuttingDown {
@@ -353,6 +356,7 @@ impl ZqaApp {
                         UiEvent::Cancelled => {
                             app.clear_prompts();
                             app.progress.clear();
+                            Self::interrupt_tool_calls(&mut app.rows);
                             Self::focus_input(&app.input_state, window, cx);
 
                             if app.phase != Phase::ShuttingDown {
@@ -443,6 +447,25 @@ impl ZqaApp {
                 response: Some(response),
                 expanded: false,
             })),
+        }
+    }
+
+    /// Finish the tool panels that are still running when a command ends.
+    ///
+    /// A cancelled command, or one that fails while a tool runs, never sends a `ToolResponse` for
+    /// the calls in flight, so their panels would keep spinning. This marks them failed with a
+    /// message saying the command ended first. Panels that already have a response are unchanged.
+    ///
+    /// # Arguments
+    ///
+    /// * `rows` - The transcript rows to update.
+    fn interrupt_tool_calls(rows: &mut [ChatRow]) {
+        for row in rows {
+            if let ChatRow::ToolCall(call) = row
+                && call.response.is_none()
+            {
+                call.response = Some(Err(INTERRUPTED_TOOL_CALL.into()));
+            }
         }
     }
 
@@ -1964,7 +1987,8 @@ mod tests {
     };
 
     use super::{
-        ChatRow, ChatRows, EngineCommand, Phase, ProgressTask, StyledLine, UiEvent, ZqaApp,
+        ChatRow, ChatRows, EngineCommand, INTERRUPTED_TOOL_CALL, Phase, ProgressTask, StyledLine,
+        UiEvent, ZqaApp,
     };
 
     /// A whole-app fixture with no engine thread, provider calls, or initial filesystem reads.
@@ -2410,6 +2434,15 @@ mod tests {
             Ok(serde_json::json!(2)),
         );
 
+        // A call still running when the command ends is marked failed; finished calls keep theirs.
+        ZqaApp::start_tool_call(
+            &mut rows,
+            "d".into(),
+            "search".into(),
+            serde_json::json!({}),
+        );
+        ZqaApp::interrupt_tool_calls(&mut rows);
+
         let responses: Vec<_> = rows
             .iter()
             .map(|row| match row {
@@ -2423,6 +2456,7 @@ mod tests {
                 ("a", Some(Ok(serde_json::json!(1)))),
                 ("b", Some(Err("failed".to_string()))),
                 ("c", Some(Ok(serde_json::json!(2)))),
+                ("d", Some(Err(INTERRUPTED_TOOL_CALL.to_string()))),
             ]
         );
     }
