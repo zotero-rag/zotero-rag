@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use tokio::sync::oneshot;
+use zqa_rag::events::AgentEvent;
 
 use crate::state::UsageMetadata;
 use crate::utils::terminal::{BLUE, BOLD, DIM_TEXT, GREEN, ITALICS, RED, RESET, YELLOW};
@@ -414,6 +415,26 @@ fn read_answer<T>(
         }
         write!(out, "{retry}")?;
         out.flush()?;
+    }
+}
+
+impl From<AgentEvent> for EngineEvent {
+    fn from(event: AgentEvent) -> Self {
+        match event {
+            AgentEvent::Text(text) => Self::Text {
+                message: format!("{text}\n"),
+            },
+            AgentEvent::Reasoning(reasoning) => Self::Reasoning {
+                message: format!("{reasoning}\n"),
+            },
+            AgentEvent::ToolCall { id, name, args } => Self::ToolCall { name, id, args },
+            // zqa-rag doesn't report tool failures yet, so every response arrives as `Ok`.
+            AgentEvent::ToolResponse { id, name, response } => Self::ToolResponse {
+                name,
+                id,
+                response: Ok(response),
+            },
+        }
     }
 }
 

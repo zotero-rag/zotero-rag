@@ -7,6 +7,7 @@ use std::sync::{Arc, atomic};
 use std::time::Instant;
 
 use tokio::sync::mpsc::{self, UnboundedSender};
+use zqa_rag::events::AgentEvent;
 use zqa_rag::llm::base::{ChatHistoryContent, ChatHistoryItem, ChatRequest, MessageRole};
 use zqa_rag::llm::factory::{LLMClient, get_client_with_config};
 use zqa_rag::llm::tools::{CallbackFn, Tool};
@@ -26,25 +27,6 @@ use crate::store::common::ZoteroStore;
 use crate::tools::mixins::ToolExt;
 use crate::tools::retrieval::RetrievalTool;
 use crate::tools::summarization::SummarizationTool;
-
-/// Reasoning and answer segments share one queue to preserve the provider's content order.
-enum ResponseSegment {
-    Text(String),
-    Reasoning(String),
-}
-
-impl From<ResponseSegment> for EngineEvent {
-    fn from(segment: ResponseSegment) -> Self {
-        match segment {
-            ResponseSegment::Text(text) => Self::Text {
-                message: format!("{text}\n"),
-            },
-            ResponseSegment::Reasoning(reasoning) => Self::Reasoning {
-                message: format!("{reasoning}\n"),
-            },
-        }
-    }
-}
 
 /// Perform a vector search and emit matching titles as text events.
 ///
@@ -126,9 +108,7 @@ async fn generate_title(
         system_prompt: Some(get_title_system_prompt().to_owned()),
         reasoning: None,
         tools: None,
-        on_tool_call: None,
-        on_text: None,
-        on_reasoning: None,
+        on_event: None,
         tool_iteration_limit: None,
     };
 
@@ -295,14 +275,15 @@ pub(crate) async fn handle_query_cmd(query: String, ctx: &mut Context) -> Result
         });
     }
 
-    let (response_tx, mut response_rx) = mpsc::unbounded_channel::<ResponseSegment>();
+    // Reasoning and answer text share one queue to preserve the provider's content order.
+    let (response_tx, mut response_rx) = mpsc::unbounded_channel::<EngineEvent>();
     let (status_tx, mut status_rx) = mpsc::unbounded_channel::<EngineEvent>();
-    let text_tx = response_tx.clone();
-    let on_text: Arc<CallbackFn<str>> = Arc::new(move |text: &str| {
-        let _ = text_tx.send(ResponseSegment::Text(text.to_string()));
-    });
-    let on_reasoning: Arc<CallbackFn<str>> = Arc::new(move |reasoning: &str| {
-        let _ = response_tx.send(ResponseSegment::Reasoning(reasoning.to_string()));
+    let on_event: Arc<CallbackFn<AgentEvent>> = Arc::new(move |event: &AgentEvent| {
+        // Tool calls still print through the `Verbose` and `Timed` wrappers, so forwarding them
+        // here would show each call twice.
+        if matches!(event, AgentEvent::Text(_) | AgentEvent::Reasoning(_)) {
+            let _ = response_tx.send(event.clone().into());
+        }
     });
 
     let final_draft_start = Instant::now();
@@ -322,9 +303,7 @@ pub(crate) async fn handle_query_cmd(query: String, ctx: &mut Context) -> Result
                 system_prompt: Some(get_summarize_system_prompt()),
                 reasoning: llm_client.get_reasoning_config(),
                 tools: Some(&tools),
-                on_tool_call: None,
-                on_text: Some(on_text),
-                on_reasoning: Some(on_reasoning),
+                on_event: Some(on_event),
                 tool_iteration_limit: Some(ctx.config.tool_iteration_limit),
             }
         };
@@ -337,7 +316,7 @@ pub(crate) async fn handle_query_cmd(query: String, ctx: &mut Context) -> Result
         let mut send_message = pin!(llm_client.send_message(&request));
         loop {
             tokio::select! {
-                Some(segment) = response_rx.recv() => ctx.emit(segment.into()).await?,
+                Some(event) = response_rx.recv() => ctx.emit(event).await?,
                 Some(event) = status_rx.recv() => ctx.emit(event).await?,
                 Some(usage) = cost_rx.recv() => query_usage += usage,
                 result = &mut send_message => break result,
@@ -348,8 +327,8 @@ pub(crate) async fn handle_query_cmd(query: String, ctx: &mut Context) -> Result
     drop(cost_tx);
 
     // Producers can race the response's completion; drain the leftovers.
-    while let Ok(segment) = response_rx.try_recv() {
-        ctx.emit(segment.into()).await?;
+    while let Ok(event) = response_rx.try_recv() {
+        ctx.emit(event).await?;
     }
     while let Ok(event) = status_rx.try_recv() {
         ctx.emit(event).await?;
@@ -427,18 +406,20 @@ mod tests {
     use zqa_macros::{test_eq, test_ok};
     use zqa_macros_proc::retry;
 
-    use super::{ResponseSegment, handle_query_cmd, handle_search_cmd};
+    use zqa_rag::events::AgentEvent;
+
+    use super::{handle_query_cmd, handle_search_cmd};
     use crate::cli::handlers::library::handle_process_cmd;
     use crate::common::test_support::{TestPaths, capture_events};
     use crate::io::EngineEvent;
 
     /// Reasoning and answers retain distinct event types and trailing newlines.
     #[test]
-    fn response_segments_keep_reasoning_separate_from_answers() {
-        let reasoning = EngineEvent::from(ResponseSegment::Reasoning(
+    fn agent_events_keep_reasoning_separate_from_answers() {
+        let reasoning = EngineEvent::from(AgentEvent::Reasoning(
             "Compare the sources.\nThey agree.".into(),
         ));
-        let answer = EngineEvent::from(ResponseSegment::Text("The answer.".into()));
+        let answer = EngineEvent::from(AgentEvent::Text("The answer.".into()));
 
         let EngineEvent::Reasoning { message } = reasoning else {
             panic!("Expected a reasoning event");
@@ -456,7 +437,7 @@ mod tests {
     /// A text-only response produces an answer event, not a reasoning event.
     #[test]
     fn text_response_leaves_reasoning_output_empty() {
-        let event = EngineEvent::from(ResponseSegment::Text("The answer.".into()));
+        let event = EngineEvent::from(AgentEvent::Text("The answer.".into()));
 
         let EngineEvent::Text { message } = event else {
             panic!("Expected a text event");
