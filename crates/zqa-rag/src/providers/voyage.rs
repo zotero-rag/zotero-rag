@@ -1,10 +1,8 @@
 //! Voyage AI provider implementation
 use std::sync::Arc;
 
-use lancedb::embeddings::EmbeddingFunction;
-
 use crate::capabilities::{BatchEmbeddingFactory, EmbeddingFactory, RerankFactory};
-use crate::embedding::common::EmbeddingProviderConfig;
+use crate::embedding::common::{Embed, EmbeddingProviderConfig};
 use crate::embedding::voyage::VoyageAIClient;
 use crate::http_client::ReqwestClient;
 use crate::llm::errors::LLMError;
@@ -25,7 +23,7 @@ impl EmbeddingFactory for VoyageAIProvider {
     fn create_embedding(
         &self,
         config: &EmbeddingProviderConfig,
-    ) -> Result<Arc<dyn EmbeddingFunction>, LLMError> {
+    ) -> Result<Arc<dyn Embed>, LLMError> {
         let EmbeddingProviderConfig::VoyageAI(cfg) = config else {
             return Err(LLMError::InvalidProviderError("voyageai".into()));
         };
