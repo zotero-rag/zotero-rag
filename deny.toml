@@ -29,8 +29,9 @@ feature-depth = 1
 yanked = "deny"
 
 # Advisory IDs we have explicitly reviewed and chosen to accept. Every entry
-# must include a rationale. None of these are exploitable vulnerabilities —
-# they are all "unmaintained" notices for transitive crates we don't control.
+# must include a rationale. Most are "unmaintained" notices for transitive
+# crates we don't control; the zstd entries are vulnerabilities with no
+# compatible fix, each with a note on why it doesn't reach zqa's inputs.
 # Revisit this list whenever dependencies are updated.
 ignore = [
     # dotenv: unmaintained (author archived the repo). We use it directly in
@@ -67,7 +68,19 @@ ignore = [
     # https://rustsec.org/advisories/RUSTSEC-2026-0372
     { id = "RUSTSEC-2026-0370", reason = "zvariant; transitive via zbus in gpui-kit's Linux stack" },
     { id = "RUSTSEC-2026-0371", reason = "zbus_names; transitive via zbus in gpui-kit's Linux stack" },
-    { id = "RUSTSEC-2026-0372", reason = "zvariant_derive; transitive via zbus in gpui-kit's Linux stack" }
+    { id = "RUSTSEC-2026-0372", reason = "zvariant_derive; transitive via zbus in gpui-kit's Linux stack" },
+
+    # zstd 0.13 and zstd-safe 7: fixed only in zstd 0.14.3 and zstd-safe 8.2.0.
+    # Both come in through arrow-ipc 57, lance-encoding 4.0 and tantivy-sstable
+    # 0.5, which lancedb 0.27 pins. The real fix is upgrading lancedb (0.41 moves
+    # to arrow 60). The only zstd data zqa reads is the Lance and Arrow files it
+    # writes itself.
+    # https://rustsec.org/advisories/RUSTSEC-2026-0391
+    # https://rustsec.org/advisories/RUSTSEC-2026-0398
+    # https://rustsec.org/advisories/RUSTSEC-2026-0403
+    { id = "RUSTSEC-2026-0391", reason = "zstd 0.13 via lancedb's arrow/lance; needs an encoder abandoned mid-stream and its context reused, at worst corrupting local index data" },
+    { id = "RUSTSEC-2026-0398", reason = "zstd-safe 7 via lancedb's arrow/lance; needs the `seekable` feature, which nothing in the tree enables" },
+    { id = "RUSTSEC-2026-0403", reason = "zstd-safe 7 via lancedb's arrow/lance; needs a corrupt legacy frame, and zqa only decompresses Lance/Arrow files it wrote" }
 ]
 
 [licenses]
