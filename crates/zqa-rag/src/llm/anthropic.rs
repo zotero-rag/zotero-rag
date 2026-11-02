@@ -90,6 +90,10 @@ pub(crate) enum AnthropicThinkingConfig {
     },
     /// Disabled thinking
     Disabled,
+    /// The lowest thinking setting on models that reject `Disabled` (Claude Sonnet 5.5): no
+    /// thinking before responding, but progress updates between tool calls come back as signed
+    /// thinking blocks. Accepts no other fields.
+    BetweenTools,
 }
 
 /// Output-level request configuration, currently only the reasoning effort.
@@ -99,11 +103,49 @@ pub(crate) struct AnthropicOutputConfig {
     effort: String,
 }
 
+/// Parse a Claude model name into its family and version.
+///
+/// The version can follow the family ("claude-opus-4-5") or precede it ("claude-3-7-sonnet"); a
+/// date suffix ("claude-opus-4-5-20251001") is ignored, and a bare major version
+/// ("claude-opus-4") has minor version 0.
+///
+/// # Arguments
+///
+/// * `model` - The model name (e.g., "claude-opus-4-8")
+///
+/// # Returns
+///
+/// The family ("opus", "sonnet", "haiku", or "fable") and the `(major, minor)` version, or `None`
+/// if the name has no recognized family or version.
+fn parse_model_name(model: &str) -> Option<(&'static str, (u32, u32))> {
+    const FAMILIES: [&str; 4] = ["opus", "sonnet", "haiku", "fable"];
+
+    let lower = model.to_lowercase();
+    let tokens: Vec<&str> = lower.split('-').collect();
+    let (i, family) = tokens
+        .iter()
+        .enumerate()
+        .find_map(|(i, t)| FAMILIES.into_iter().find(|f| f == t).map(|f| (i, f)))?;
+
+    let version = |a: usize, b: usize| {
+        Some((
+            tokens.get(a)?.parse::<u32>().ok()?,
+            tokens.get(b)?.parse::<u32>().ok()?,
+        ))
+    };
+    let version = i
+        .checked_sub(2)
+        .and_then(|j| version(j, j + 1))
+        .or_else(|| version(i + 1, i + 2))
+        .or_else(|| tokens.get(i + 1)?.parse::<u32>().ok().map(|m| (m, 0)))?;
+
+    Some((family, version))
+}
+
 /// Whether the given Claude model supports adaptive thinking (`thinking.type: "adaptive"`)
 /// rather than manual extended thinking (`thinking.type: "enabled"`).
 ///
-/// The model name is parsed into a model family (Opus, Sonnet, or Haiku) and a version, and
-/// adaptive thinking is enabled for versions above the per-family threshold (Opus and
+/// Adaptive thinking is enabled for versions above the per-family threshold (Opus and
 /// Sonnet 4.6+, and all 5.x+ models); the thresholds should not need updating as
 /// new models are released. Unrecognized model names are assumed to support adaptive thinking.
 ///
@@ -115,37 +157,41 @@ pub(crate) struct AnthropicOutputConfig {
 ///
 /// `true` if the model supports adaptive thinking.
 fn supports_adaptive_thinking(model: &str) -> bool {
-    let lower = model.to_lowercase();
-    let tokens: Vec<&str> = lower.split('-').collect();
-    let Some(i) = tokens
-        .iter()
-        .position(|t| matches!(*t, "opus" | "sonnet" | "haiku" | "fable"))
-    else {
-        return true;
-    };
+    parse_model_name(model).is_none_or(|(_, version)| version >= (4, 6))
+}
 
-    // The version can follow the family ("claude-opus-4-5") or precede it
-    // ("claude-3-7-sonnet"); a date suffix ("claude-opus-4-5-20251001") is ignored.
-    let version = |a: usize, b: usize| {
-        Some((
-            tokens.get(a)?.parse::<u32>().ok()?,
-            tokens.get(b)?.parse::<u32>().ok()?,
-        ))
-    };
-    let Some((major, minor)) = i
-        .checked_sub(2)
-        .and_then(|j| version(j, j + 1))
-        .or_else(|| version(i + 1, i + 2))
-        // A bare major version ("claude-opus-4") has minor 0.
-        .or_else(|| tokens.get(i + 1)?.parse::<u32>().ok().map(|m| (m, 0)))
-    else {
-        return true;
-    };
+/// Whether the given Claude model turns thinking off with `thinking.type: "between_tools"`.
+/// Claude Sonnet 5.5 rejects `"disabled"` and accepts `"between_tools"`, which no other model
+/// accepts; later Sonnet models are assumed to keep this behavior.
+///
+/// # Arguments
+///
+/// * `model` - The model name (e.g., "claude-sonnet-5-5")
+///
+/// # Returns
+///
+/// `true` if requests with reasoning off must send `"between_tools"` to this model.
+fn disables_thinking_with_between_tools(model: &str) -> bool {
+    matches!(parse_model_name(model), Some(("sonnet", version)) if version >= (5, 5))
+}
 
-    if major >= 5 {
-        return true;
-    }
-    major == 4 && minor >= 6
+/// Whether thinking is always on for the given Claude model, so that it rejects both
+/// `thinking.type: "disabled"` and `"between_tools"`. This holds for Claude Opus 5.5 and later
+/// Opus models and for every Fable and Mythos model.
+///
+/// # Arguments
+///
+/// * `model` - The model name (e.g., "claude-opus-5-5")
+///
+/// # Returns
+///
+/// `true` if the model cannot turn thinking off.
+fn thinking_always_on(model: &str) -> bool {
+    model
+        .to_lowercase()
+        .split('-')
+        .any(|t| matches!(t, "fable" | "mythos"))
+        || matches!(parse_model_name(model), Some(("opus", version)) if version >= (5, 5))
 }
 
 /// Build the thinking and output configuration for a request. Adaptive-thinking models use
@@ -158,7 +204,9 @@ fn supports_adaptive_thinking(model: &str) -> bool {
 ///
 /// # Returns
 ///
-/// The `(thinking, output_config)` pair for the request; both `None` when thinking is disabled.
+/// The `(thinking, output_config)` pair for the request. Without `reasoning`, `thinking` turns
+/// thinking off in the form the model accepts and `output_config` is `None`; models that cannot
+/// turn thinking off instead get no `thinking` and `low` effort.
 pub(crate) fn make_thinking_config(
     model: &str,
     reasoning: Option<&ReasoningConfig>,
@@ -167,7 +215,16 @@ pub(crate) fn make_thinking_config(
     Option<AnthropicOutputConfig>,
 ) {
     let Some(mut reasoning) = reasoning.cloned() else {
-        return (Some(AnthropicThinkingConfig::Disabled), None);
+        if thinking_always_on(model) {
+            let effort = ReasoningEffort::Low.to_string();
+            return (None, Some(AnthropicOutputConfig { effort }));
+        }
+        let thinking = if disables_thinking_with_between_tools(model) {
+            AnthropicThinkingConfig::BetweenTools
+        } else {
+            AnthropicThinkingConfig::Disabled
+        };
+        return (Some(thinking), None);
     };
 
     reasoning.normalize();
@@ -702,6 +759,27 @@ mod tests {
         let thinking = serde_json::to_value(thinking).unwrap();
         test_eq!(thinking["type"].as_str(), Some("disabled"));
         assert!(output_config.is_none());
+
+        // Sonnet 5.5 rejects "disabled" and accepts no other field beside "between_tools".
+        let (thinking, output_config) = make_thinking_config("claude-sonnet-5-5", None);
+        let thinking = serde_json::to_value(thinking).unwrap();
+        test_eq!(thinking, serde_json::json!({ "type": "between_tools" }));
+        assert!(output_config.is_none());
+
+        // Models that cannot turn thinking off run adaptive thinking at low effort instead.
+        for model in [
+            "claude-opus-5-5",
+            "claude-fable-5-1",
+            "claude-mythos-preview",
+        ] {
+            let (thinking, output_config) = make_thinking_config(model, None);
+            assert!(thinking.is_none(), "{model}");
+            let output_config = serde_json::to_value(output_config).unwrap();
+            test_eq!(output_config["effort"].as_str(), Some("low"));
+        }
+        let (thinking, _) = make_thinking_config("claude-opus-5", None);
+        let thinking = serde_json::to_value(thinking).unwrap();
+        test_eq!(thinking["type"].as_str(), Some("disabled"));
     }
 
     fn content_block<'a>(
