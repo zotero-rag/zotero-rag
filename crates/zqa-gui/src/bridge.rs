@@ -1,8 +1,8 @@
 //! The runtime bridge between GPUI (which owns the main thread and its own executor)
 //! and the tokio-based zqa pipeline.
 //!
-//! [`spawn_engine`] dedicates one OS thread to a tokio runtime and [`Session`]. It runs first-run
-//! setup if needed, then receives commands sequentially and forwards typed engine events to GPUI. Dispatch can be cancelled
+//! [`spawn_engine`] dedicates one OS thread to a tokio runtime and [`Session`]. It runs the startup
+//! steps, then receives commands sequentially and forwards typed engine events to GPUI. Dispatch can be cancelled
 //! by dropping its future; shutdown itself cannot be cancelled and acknowledges a successful
 //! save before exiting. A failed save leaves the engine available for retry.
 
@@ -91,8 +91,8 @@ async fn forward_events<T>(
 
 /// Spawn the engine thread.
 ///
-/// The thread builds a [`Session`] from the loaded config, runs first-run setup if this is the
-/// first run (see [`Session::setup_if_first_run`]), and then loops, dispatching each
+/// The thread builds a [`Session`] from the loaded config, runs the startup steps (see
+/// [`Session::start`]), and then loops, dispatching each
 /// command received on `cmd_rx` and streaming output to `event_tx`. Each dispatch is raced
 /// against `cancel_rx`; a value on `cancel_rx` aborts the in-flight command. It exits when
 /// the command channel is closed (all senders dropped) or a command returns `Ok(false)`.
@@ -142,16 +142,21 @@ pub fn spawn_engine(
             };
 
             runtime.block_on(async move {
-                // Setup isn't a command the UI sent, so it ends without a `Done`. A failure shows
-                // as an error row and the engine starts with the config it loaded.
-                let setup = session.setup_if_first_run();
-                match forward_events(setup, &mut engine_rx, &event_tx).await {
+                // Startup isn't a command the UI sent, so it ends without a `Done`. A failure shows
+                // as an error row and the engine continues with the config it has.
+                let start = session.start();
+                match forward_events(start, &mut engine_rx, &event_tx).await {
                     None => return,
+                    Some(Ok(true)) => {}
+                    Some(Ok(false)) => {
+                        // The user chose to quit, and there is nothing to save yet.
+                        let _ = event_tx.unbounded_send(UiEvent::ShutdownComplete(Ok(())));
+                        return;
+                    }
                     Some(Err(e)) => {
-                        let message = format!("Setup failed: {e}");
+                        let message = format!("Startup failed: {e}\n");
                         let _ = event_tx.unbounded_send(UiEvent::Engine(EngineEvent::Error { message }));
                     }
-                    Some(Ok(())) => {}
                 }
 
                 let mut pending_command = None;
