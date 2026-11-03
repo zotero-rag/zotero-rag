@@ -183,39 +183,15 @@ async fn run_command<R: BufRead, O: Write, E: Write>(
     err: &mut E,
     pbar_manager: &mut TerminalProgress,
 ) -> Result<bool, CLIError> {
-    let mut command_usage: Option<UsageMetadata> = None;
-
-    let rendered = async {
-        let dispatch = dispatch_command(command, ctx);
-        tokio::pin!(dispatch);
-
-        let result = loop {
-            tokio::select! {
-                result = &mut dispatch => break result,
-                Some(event) = rx.recv() => {
-                    if let EngineEvent::TokenUsage { usage } = &event {
-                        *command_usage.get_or_insert_default() += *usage;
-                    }
-
-                    event.handle_event(input, output, err, read_password, pbar_manager)?;
-                }
-            }
-        };
-
-        while let Ok(event) = rx.try_recv() {
-            if let EngineEvent::TokenUsage { usage } = &event {
-                *command_usage.get_or_insert_default() += *usage;
-            }
-
-            event.handle_event(input, output, err, read_password, pbar_manager)?;
-        }
-
-        Ok::<_, CLIError>(result)
-    }
-    .await;
-
-    pbar_manager.clear_all();
-    let result = rendered?;
+    let (result, command_usage) = render_while(
+        dispatch_command(command, ctx),
+        rx,
+        input,
+        output,
+        err,
+        pbar_manager,
+    )
+    .await?;
 
     if let Some(usage) = command_usage {
         write_usage_footer(output, &usage, ctx).await?;
@@ -228,6 +204,77 @@ async fn run_command<R: BufRead, O: Write, E: Write>(
             Ok(true)
         }
     }
+}
+
+/// Run `future` to completion while rendering the events it sends on `rx`.
+///
+/// Events are rendered as they arrive, so a prompt the future is waiting on gets its reply from
+/// `input`. Events still queued when the future finishes are rendered before this returns. The
+/// progress bars are then cleared, including when rendering an event fails.
+///
+/// # Arguments
+///
+/// * `future` - The work whose events to render, such as a dispatched command.
+/// * `rx` - The receiver for events sent by `future`.
+/// * `input` - Input for event-prompt replies.
+/// * `output` - Output for model text, status updates, and prompts.
+/// * `err` - Output for warnings and errors.
+/// * `pbar_manager` - The progress bars that progress events update.
+///
+/// # Returns
+///
+/// The output of `future`, and the sum of its `TokenUsage` events, or `None` if it sent none.
+///
+/// # Errors
+///
+/// * `CLIError::IOError` - If rendering an event or reading a prompt reply fails. `future` is
+///   dropped unfinished in that case.
+pub(crate) async fn render_while<T, R: BufRead, O: Write, E: Write>(
+    future: impl Future<Output = T>,
+    rx: &mut mpsc::Receiver<EngineEvent>,
+    input: &mut R,
+    output: &mut O,
+    err: &mut E,
+    pbar_manager: &mut TerminalProgress,
+) -> Result<(T, Option<UsageMetadata>), CLIError> {
+    let mut usage: Option<UsageMetadata> = None;
+
+    tokio::pin!(future);
+
+    // A labeled block keeps `future` in this function's state; an inner `async` block would
+    // nest it and push the `cli` future past clippy's `large_futures` limit.
+    let rendered = 'render: {
+        let result = loop {
+            tokio::select! {
+                result = &mut future => break result,
+                Some(event) = rx.recv() => {
+                    if let EngineEvent::TokenUsage { usage: delta } = &event {
+                        *usage.get_or_insert_default() += *delta;
+                    }
+
+                    if let Err(e) = event.handle_event(input, output, err, read_password, pbar_manager) {
+                        break 'render Err(e);
+                    }
+                }
+            }
+        };
+
+        while let Ok(event) = rx.try_recv() {
+            if let EngineEvent::TokenUsage { usage: delta } = &event {
+                *usage.get_or_insert_default() += *delta;
+            }
+
+            if let Err(e) = event.handle_event(input, output, err, read_password, pbar_manager) {
+                break 'render Err(e);
+            }
+        }
+
+        Ok(result)
+    };
+
+    pbar_manager.clear_all();
+
+    Ok((rendered?, usage))
 }
 
 /// The core CLI implementation that implements a REPL for user commands.
