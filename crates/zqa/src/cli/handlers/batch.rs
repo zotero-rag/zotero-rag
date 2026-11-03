@@ -733,7 +733,7 @@ async fn prompt_and_fetch_batch_results(
                     fs::remove_file(log_file)?;
                 }
                 3 => {}
-                _ => unreachable!("read_char restricts to the valid set"),
+                _ => unreachable!("`state::choose` restricts to the valid set"),
             }
         }
     }
@@ -1050,7 +1050,7 @@ async fn handle_batch_create_cmd(ctx: &mut Context) -> Result<(), CLIError> {
 
                     Ok(())
                 }
-                _ => unreachable!("read_char guarantees valid input"),
+                _ => unreachable!("`state::choose` guarantees valid input"),
             }
         }
     }
