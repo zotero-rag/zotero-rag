@@ -513,12 +513,16 @@ impl Display for EngineEvent {
                 Ok(())
             }
             EngineEvent::Text { message } => f.write_str(message),
-            EngineEvent::ToolCall { name, args, .. } => write!(f, "{DIM_TEXT}{name} {args}{RESET}"),
+            EngineEvent::ToolCall { name, args, .. } => {
+                write!(f, "{DIM_TEXT}{name} {args}{RESET}\n")
+            }
             EngineEvent::ToolResponse { name, response, .. } => {
                 write!(f, "  {DIM_TEXT}-> ({name}) ")?;
                 match response {
-                    Ok(response) => write!(f, "{:#}", truncate_json(response, TOOL_RESPONSE_KEEP)),
-                    Err(error) => f.write_str(error),
+                    Ok(response) => {
+                        write!(f, "{:#}\n", truncate_json(response, TOOL_RESPONSE_KEEP))
+                    }
+                    Err(error) => write!(f, "{error}\n"),
                 }?;
                 f.write_str(RESET)
             }
@@ -681,7 +685,7 @@ mod tests {
                     id: "call-1".into(),
                     args: serde_json::json!({"query": "rust"}),
                 },
-                format!("{DIM_TEXT}search {{\"query\":\"rust\"}}{RESET}"),
+                format!("{DIM_TEXT}search {{\"query\":\"rust\"}}{RESET}\n"),
                 false,
             ),
             (
@@ -690,7 +694,7 @@ mod tests {
                     id: "call-1".into(),
                     response: Ok(serde_json::json!({"count": 1})),
                 },
-                format!("  {DIM_TEXT}-> (search) {{\n  \"count\": 1\n}}{RESET}"),
+                format!("  {DIM_TEXT}-> (search) {{\n  \"count\": 1\n}}\n{RESET}"),
                 false,
             ),
             (
@@ -699,7 +703,7 @@ mod tests {
                     id: "call-1".into(),
                     response: Err("failed".into()),
                 },
-                format!("  {DIM_TEXT}-> (search) failed{RESET}"),
+                format!("  {DIM_TEXT}-> (search) failed\n{RESET}"),
                 false,
             ),
             (
@@ -712,7 +716,7 @@ mod tests {
                     })),
                 },
                 format!(
-                    "  {DIM_TEXT}-> (search) {:#}{RESET}",
+                    "  {DIM_TEXT}-> (search) {:#}\n{RESET}",
                     serde_json::json!({
                         "text": "one two three four five ... eight nine ten eleven twelve",
                         "results": [1, 2, 3, 4, 5, "... (2 more)", 8, 9, 10, 11, 12],
