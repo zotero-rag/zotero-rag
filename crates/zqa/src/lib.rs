@@ -3,7 +3,7 @@
 #![allow(clippy::cast_precision_loss)]
 #![allow(clippy::cast_possible_wrap)]
 
-use std::io::{IsTerminal, stderr, stdout};
+use std::io::{stderr, stdout};
 
 use clap::Parser;
 
@@ -18,7 +18,7 @@ pub mod tools;
 pub mod utils;
 
 // Re-export commonly used items
-use cli::app::cli;
+use cli::app::{cli, render_while};
 use common::{Args, Context, setup_logger};
 use config::Config;
 use state::{check_or_create_first_run_file, oobe};
@@ -31,6 +31,7 @@ use zqa_rag::reranking::common::RerankProviderConfig;
 
 use crate::cli::errors::CLIError;
 use crate::common::{PathOptions, State};
+use crate::io::TerminalProgress;
 use crate::utils::terminal::{RED, RED_BOLD, RESET, YELLOW, YELLOW_BOLD};
 
 /// Load the application configuration from the TOML config file (if present) and the
@@ -169,7 +170,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     // Point LanceDB at the XDG state dir if the caller hasn't already overridden it.
     set_default_lancedb_uri();
 
-    let mut config = load_config()?;
+    let config = load_config()?;
     let args = Args::parse();
 
     check_api_keys_exist(&config, args.log_level);
@@ -230,25 +231,35 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         })
         .unwrap();
 
-    if is_first_run {
-        let mut stdin = std::io::stdin().lock();
-        if let Err(e) = oobe(&mut stdin, std::io::stdin().is_terminal()) {
-            eprintln!("Error during setup: {e}");
-        } else {
-            // Reload possibly different config from OOBE
-            config = load_config()?;
-        }
-    }
-
     let store = LanceZoteroStore::from_config(&config)?;
-    let (event_tx, event_rx) = mpsc::channel(256);
-    let context = Context {
+    let (event_tx, mut event_rx) = mpsc::channel(256);
+    let mut context = Context {
         state: State::default(),
         event_tx: Some(event_tx),
         config,
         store,
         path_options: PathOptions::default(),
     };
+
+    if is_first_run {
+        let (setup, _) = render_while(
+            oobe(&context),
+            &mut event_rx,
+            &mut std::io::stdin().lock(),
+            &mut stdout(),
+            &mut stderr(),
+            &mut TerminalProgress::new(),
+        )
+        .await?;
+
+        if let Err(e) = setup {
+            eprintln!("Error during setup: {e}");
+        } else {
+            // Setup wrote a new config, which can change the embedding provider the store uses.
+            context.config = load_config()?;
+            context.store = LanceZoteroStore::from_config(&context.config)?;
+        }
+    }
 
     cli(
         context,

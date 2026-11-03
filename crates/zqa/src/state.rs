@@ -2,25 +2,22 @@
 
 use std::cmp::Reverse;
 use std::fs;
-use std::io::{self, BufRead};
+use std::io;
 use std::ops::{Add, AddAssign};
 use std::path::PathBuf;
 
 use chrono::{DateTime, Local};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use tokio::sync::{mpsc, oneshot};
 use zqa_rag::capabilities::{EmbeddingProvider, ModelProvider, RerankerProvider};
 use zqa_rag::llm::base::{ChatHistoryContent, ChatHistoryItem};
 use zqa_rag::pricing::{ModelUsage, PricingCacheOptions, get_model_pricing};
+use zqa_rag::providers::ProviderId;
 
+use crate::common::Context;
 use crate::config::{BaseDirError, Config, get_config_dir};
-use crate::utils::terminal::{read_char, read_number, read_password};
-
-/// ANSI escape code for dimming text
-const DIM_TEXT: &str = "\x1b[2m";
-
-/// ANSI escape code for resetting text formatting
-const RESET: &str = "\x1b[0m";
+use crate::io::{EngineEvent, StyledSpan, TextStyle};
 
 /// Errors that can occur when interacting with the state directory.
 #[derive(PartialEq, Debug, Error)]
@@ -31,8 +28,10 @@ pub enum StateError {
     FileWriteError,
     #[error("Serialization error: {0}")]
     SerializationError(String),
-    #[error("Failed to read password: {0}")]
-    PasswordReadError(String),
+    #[error("Failed to emit event: {0}")]
+    EventEmitError(String),
+    #[error("Failed to receive a reply: {0}")]
+    ChannelRecvError(#[from] oneshot::error::RecvError),
     #[error("Other error: {0}")]
     Other(String),
 }
@@ -40,6 +39,12 @@ pub enum StateError {
 impl From<toml::ser::Error> for StateError {
     fn from(value: toml::ser::Error) -> Self {
         Self::SerializationError(format!("Serialization error: {value}"))
+    }
+}
+
+impl From<Box<mpsc::error::SendError<EngineEvent>>> for StateError {
+    fn from(value: Box<mpsc::error::SendError<EngineEvent>>) -> Self {
+        Self::EventEmitError(value.to_string())
     }
 }
 
@@ -356,6 +361,157 @@ pub(crate) fn check_or_create_first_run_file() -> Result<bool, StateError> {
     }
 }
 
+/// The model providers offered during setup, in the order they are shown.
+const MODEL_PROVIDERS: [(&str, ModelProvider); 5] = [
+    ("Anthropic", ModelProvider::Anthropic),
+    ("Ollama", ModelProvider::Ollama),
+    ("OpenAI", ModelProvider::OpenAI),
+    ("Gemini", ModelProvider::Gemini),
+    ("OpenRouter", ModelProvider::OpenRouter),
+];
+
+/// The embedding providers offered during setup, in the order they are shown.
+const EMBEDDING_PROVIDERS: [(&str, EmbeddingProvider); 4] = [
+    ("Cohere", EmbeddingProvider::Cohere),
+    ("Gemini", EmbeddingProvider::Gemini),
+    ("OpenAI", EmbeddingProvider::OpenAI),
+    ("Voyage AI", EmbeddingProvider::VoyageAI),
+];
+
+/// The reranking providers offered during setup, in the order they are shown.
+const RERANKER_PROVIDERS: [(&str, RerankerProvider); 2] = [
+    ("Cohere", RerankerProvider::Cohere),
+    ("Voyage AI", RerankerProvider::VoyageAI),
+];
+
+/// Ask the user to pick one of `choices` and return the value paired with the chosen label.
+///
+/// # Arguments
+///
+/// * `ctx` - The context whose event sender carries the prompt.
+/// * `message` - The question shown above the labels.
+/// * `choices` - Labels to show, each paired with the value returned if the user picks it.
+/// * `default` - The 0-based index picked when the user just presses Enter.
+///
+/// # Returns
+///
+/// The value paired with the chosen label.
+///
+/// # Errors
+///
+/// * `StateError::EventEmitError` if the prompt could not be sent.
+/// * `StateError::ChannelRecvError` if the consumer dropped the prompt without replying, which
+///   includes a context with no event sender.
+/// * `StateError::Other` if the reply is not an index into `choices`.
+async fn choose<T: Copy>(
+    ctx: &Context,
+    message: &str,
+    choices: &[(&str, T)],
+    default: usize,
+) -> Result<T, StateError> {
+    let (reply, answer) = oneshot::channel();
+
+    ctx.emit(EngineEvent::Choose {
+        message: message.into(),
+        options: choices
+            .iter()
+            .map(|(label, _)| (*label).to_owned())
+            .collect(),
+        reply,
+        default,
+    })
+    .await?;
+
+    let index = answer.await?;
+
+    choices
+        .get(index)
+        .map(|(_, value)| *value)
+        .ok_or_else(|| StateError::Other(format!("Invalid choice {index} for {message:?}")))
+}
+
+/// Return the API key field in `config` for `provider`, or `None` if `provider` doesn't use a key.
+///
+/// # Arguments
+///
+/// * `config` - The config being built.
+/// * `provider` - The provider whose key field to return.
+///
+/// # Returns
+///
+/// The provider's `api_key` field, or `None` for keyless providers such as Ollama.
+///
+/// # Panics
+///
+/// If the config section for `provider` is `None`. [`Config::default`] fills every section, so
+/// this can't happen for the config [`oobe`] builds.
+fn api_key_slot(config: &mut Config, provider: ProviderId) -> Option<&mut Option<String>> {
+    let api_key = match provider {
+        ProviderId::Anthropic => config.anthropic.as_mut().map(|c| &mut c.api_key),
+        ProviderId::OpenAI => config.openai.as_mut().map(|c| &mut c.api_key),
+        ProviderId::OpenRouter => config.openrouter.as_mut().map(|c| &mut c.api_key),
+        ProviderId::Gemini => config.gemini.as_mut().map(|c| &mut c.api_key),
+        ProviderId::Cohere => config.cohere.as_mut().map(|c| &mut c.api_key),
+        ProviderId::VoyageAI => config.voyageai.as_mut().map(|c| &mut c.api_key),
+        _ => return None,
+    };
+
+    Some(api_key.expect("`Config::default()` fills every provider section"))
+}
+
+/// Ask for `provider`'s API key and store it in `config`.
+///
+/// A provider can fill more than one role, such as Gemini for both generation and embeddings. The
+/// user is asked for each provider's key once: `asked` records the providers already asked, and
+/// this returns without a prompt for those and for keyless providers. Surrounding whitespace is
+/// trimmed from the key.
+///
+/// # Arguments
+///
+/// * `ctx` - The context whose event sender carries the prompt.
+/// * `config` - The config that receives the key.
+/// * `asked` - Providers whose key was already asked for. `provider` is added to it.
+/// * `provider` - The provider whose key to ask for.
+/// * `role` - The role shown in the prompt, such as "model" or "embedding".
+///
+/// # Errors
+///
+/// * `StateError::EventEmitError` if the prompt could not be sent.
+/// * `StateError::ChannelRecvError` if the consumer dropped the prompt without replying.
+async fn ask_api_key(
+    ctx: &Context,
+    config: &mut Config,
+    asked: &mut Vec<ProviderId>,
+    provider: ProviderId,
+    role: &str,
+) -> Result<(), StateError> {
+    if asked.contains(&provider) {
+        return Ok(());
+    }
+
+    let Some(api_key) = api_key_slot(config, provider) else {
+        return Ok(());
+    };
+
+    let (reply, answer) = oneshot::channel();
+
+    ctx.emit(EngineEvent::Secret {
+        message: format!("Enter your {role} provider's API key: "),
+        reply,
+    })
+    .await?;
+
+    *api_key = Some(answer.await?.trim().to_owned());
+    asked.push(provider);
+
+    ctx.emit(EngineEvent::Text {
+        message: "\n".into(),
+    })
+    .await?;
+
+    Ok(())
+}
+
 /// Set up the out-of-box experience (OOBE) for the application.
 ///
 /// This function uses reasonable defaults for most config attributes. The goal here is not to be meticulous, but
@@ -363,223 +519,171 @@ pub(crate) fn check_or_create_first_run_file() -> Result<bool, StateError> {
 /// keys for the choices they make. For most providers, we use the defaults provided by the `rag` crate; the onus
 /// is on that to provide reasonable defaults. Fortunately, I am the author of both :) (and I am reasonable, usually).
 ///
+/// The questions are sent as prompt events on `ctx`, so a consumer must be rendering events and replying while this
+/// runs. The config file is written only after every question is answered; if the user declines setup, nothing is
+/// written.
+///
+/// # Arguments
+///
+/// * `ctx` - The context whose event sender carries the prompts.
+///
 /// # Errors
 ///
-/// * `StateErrors::DirectoryError` if we could not get the config directory.
-/// * `StateErrors::SerializationError` if serialization to JSON failed.
-///
-/// # Panics
-///
-/// * If getting the config for the chosen provider fails.
+/// * `StateError::DirectoryError` if we could not get the config directory.
+/// * `StateError::SerializationError` if serialization to TOML failed.
+/// * `StateError::EventEmitError` if emitting events fails.
+/// * `StateError::ChannelRecvError` if a prompt was dropped without a reply.
+/// * `StateError::Other` if an invalid reply is received, or writing the config file fails.
 #[allow(clippy::too_many_lines)]
-pub(crate) fn oobe<R: BufRead>(reader: &mut R, is_terminal: bool) -> Result<(), StateError> {
+pub(crate) async fn oobe(ctx: &Context) -> Result<(), StateError> {
     // Here, we don't load the env because that's directory-specific.
     let mut config = Config::default();
 
-    println!("Let's set up your config.");
-    println!(
-        "{DIM_TEXT}Since this is your first run, you will set up a basic configuration. This should take a few minutes. You can always update these by editing ~/.config/zqa/config.toml directly. For most options, a default will be shown in [square brackets]; if that is okay, you can simply press Enter. You can use uppercase or lowercase.\n{RESET}"
-    );
+    let (reply, answer) = oneshot::channel();
+    ctx.emit_multiple([
+        EngineEvent::StyledText {
+            spans: vec![
+                StyledSpan {
+                    text: "Let's set up your config.\n".into(),
+                    style: TextStyle::Plain,
+                },
+                StyledSpan {
+                    text: "Since this is your first run, you will set up a basic configuration. This should take a few minutes. You can always update these by editing ~/.config/zqa/config.toml directly. For most options, a default is shown; if that is okay, you can simply press Enter.\n\n".into(),
+                    style: TextStyle::Secondary,
+                },
+            ],
+        },
+        // TODO: We need smarter defaults where if the user for some reason has a config file, we use that value. We
+        // could skip users that have a *valid* config.
+        EngineEvent::Confirm {
+            message: "Would you like to set up your configuration?".into(),
+            default: true,
+            reply,
+        },
+    ])
+    .await?;
 
-    // TODO: We need smarter defaults where if the user for some reason has a config file, we use that value. We could
-    // skip users that have a *valid* config.
-    println!("Would you like to set up your configuration?");
-    println!("[Y]es");
-    println!("(N)o");
-    let choice = read_char(reader, 'y', &['y', 'n']);
-
-    if choice == 'n' {
+    if !answer.await? {
         return Ok(());
     }
 
-    println!("What model provider do you want to use?");
-    println!("[A]nthropic");
-    println!("O[l]lama");
-    println!("(O)penAI");
-    println!("(G)emini");
-    println!("Open(R)outer");
-    println!();
-    let model_provider = read_char(reader, 'a', &['a', 'l', 'o', 'g', 'r']);
+    let mut asked = Vec::new();
 
-    let model_api_key = if model_provider == 'l' {
-        String::new()
-    } else {
-        println!("Enter your model provider's API key: ");
-        let model_api_key = read_password(reader, is_terminal)?.trim().to_string();
-        println!();
+    config.model_provider = choose(
+        ctx,
+        "What model provider do you want to use?",
+        &MODEL_PROVIDERS,
+        0,
+    )
+    .await?;
+    let model_id = ProviderId::from(&config.model_provider);
+    ask_api_key(ctx, &mut config, &mut asked, model_id, "model").await?;
 
-        model_api_key
-    };
+    config.embedding_provider = choose(
+        ctx,
+        "What provider do you want to use for embeddings?",
+        &EMBEDDING_PROVIDERS,
+        3,
+    )
+    .await?;
+    let embedding_id = ProviderId::from(&config.embedding_provider);
+    ask_api_key(ctx, &mut config, &mut asked, embedding_id, "embedding").await?;
 
-    config.model_provider = match model_provider {
-        'a' => ModelProvider::Anthropic,
-        'l' => ModelProvider::Ollama,
-        'o' => ModelProvider::OpenAI,
-        'g' => ModelProvider::Gemini,
-        'r' => ModelProvider::OpenRouter,
-        _ => {
-            unreachable!("Unknown model provider");
-        }
-    };
+    ctx.emit(EngineEvent::StyledText {
+        spans: vec![StyledSpan {
+            text: "In general, you will want to use the same provider as embeddings.\n".into(),
+            style: TextStyle::Secondary,
+        }],
+    })
+    .await?;
 
-    println!("What provider do you want to use for embeddings?");
-    println!(
-        "{DIM_TEXT}Note that we strongly discourage OpenAI at this time, since we do not chunk PDF texts, and it is very likely to fail. The other providers use truncated texts.{RESET}"
-    );
-    println!("(C)ohere");
-    println!("(G)emini");
-    println!("(O)penAI");
-    println!("[V]oyage AI");
-    println!();
-    let embedding_provider = read_char(reader, 'v', &['c', 'g', 'o', 'v']);
-
-    config.embedding_provider = match embedding_provider {
-        'c' => EmbeddingProvider::Cohere,
-        'g' => EmbeddingProvider::Gemini,
-        'o' => EmbeddingProvider::OpenAI,
-        'v' => EmbeddingProvider::VoyageAI,
-        _ => {
-            unreachable!("Unknown model provider");
-        }
-    };
-
-    let embedding_api_key = if embedding_provider == model_provider {
-        model_api_key.clone()
-    } else {
-        println!("Enter your embedding provider's API key: ");
-        let key = read_password(reader, is_terminal)?.trim().to_string();
-        println!();
-        key
-    };
-
-    println!("What provider do you want to use for reranking results?");
-    println!("{DIM_TEXT}In general, you will want to use the same provider as embeddings.{RESET}");
-    match embedding_provider {
-        'c' | 'g' | 'o' => {
-            println!("[C]ohere");
-            println!("(V)oyage AI");
-        }
-        'v' => {
-            println!("(C)ohere");
-            println!("[V]oyage AI");
-        }
-        _ => {
-            unreachable!("Embedding provider was validated.");
-        }
-    }
-    println!();
-    let reranker_default = match embedding_provider {
-        'c' | 'g' | 'o' => 'c', // UI shows [C]ohere as the default for this group
-        other => other,
-    };
-    let reranker_provider = read_char(reader, reranker_default, &['c', 'v']);
-    config.reranker_provider = match reranker_provider {
-        'c' => Some(RerankerProvider::Cohere),
-        'v' => Some(RerankerProvider::VoyageAI),
-        _ => unreachable!("Reranker provider was validated."),
-    };
-
-    let reranker_api_key = if reranker_provider == embedding_provider {
-        embedding_api_key.clone()
-    } else {
-        println!("Enter your reranker provider's API key: ");
-        println!();
-        let key = read_password(reader, is_terminal)?.trim().to_string();
-        println!();
-        key
-    };
+    let reranker_default = usize::from(config.embedding_provider == EmbeddingProvider::VoyageAI);
+    let reranker_provider = choose(
+        ctx,
+        "What provider do you want to use for reranking results?",
+        &RERANKER_PROVIDERS,
+        reranker_default,
+    )
+    .await?;
+    config.reranker_provider = Some(reranker_provider);
+    ask_api_key(
+        ctx,
+        &mut config,
+        &mut asked,
+        ProviderId::from(&reranker_provider),
+        "reranker",
+    )
+    .await?;
 
     // The 100k and 150k are somewhat napkin math-based, but pretty decent. In practice, embedding providers usually
     // have much higher TPM limits, so we're limited by the generation model provider's TPM. A half-decent estimate
     // for one paper is ~30k-50k tokens. For example, I have an 800k TPM with Claude, and a value of 5 works well,
     // though I haven't tested other values. For most users, the RPM will be far higher than necessary.
-    println!("How many requests do you want to send at a time?");
-    println!(
-        "{DIM_TEXT}A higher number can yield faster results, but can also result in being rate-limited. You should check what tier of API you have access to and check the TPM (tokens per minute) limit to make a choice here. As a rough estimate, your TPM limit divided by 150,000 is a somewhat reasonable estimate.{RESET}"
-    );
-    let max_concurrent_requests = read_number(reader, 5, (1, 20));
-    config.max_concurrent_requests = max_concurrent_requests;
+    ctx.emit(EngineEvent::StyledText {
+        spans: vec![
+            StyledSpan {
+                text: "How many requests do you want to send at a time? [5]\n".into(),
+                style: TextStyle::Plain,
+            },
+            StyledSpan {
+                text: "A higher number can yield faster results, but can also result in being rate-limited. You should check what tier of API you have access to and check the TPM (tokens per minute) limit to make a choice here. As a rough estimate, your TPM limit divided by 150,000 is a somewhat reasonable estimate.\n".into(),
+                style: TextStyle::Secondary,
+            },
+        ],
+    })
+    .await?;
 
-    // We can unwrap the provider configs since we initialized via `Default`, which sets them to a `Some(..)`.
-    match model_provider {
-        'a' => {
-            let anthropic_config = config.anthropic.as_mut().unwrap();
-            anthropic_config.api_key = Some(model_api_key);
-        }
-        'l' => {}
-        'o' => {
-            let openai_config = config.openai.as_mut().unwrap();
-            openai_config.api_key = Some(model_api_key);
-        }
-        'g' => {
-            let gemini_config = config.gemini.as_mut().unwrap();
-            gemini_config.api_key = Some(model_api_key);
-        }
-        'r' => {
-            let openrouter_config = config.openrouter.as_mut().unwrap();
-            openrouter_config.api_key = Some(model_api_key);
-        }
-        _ => unreachable!("Model provider was validated."),
-    }
+    config.max_concurrent_requests = loop {
+        let (reply, answer) = oneshot::channel();
+        ctx.emit(EngineEvent::Line {
+            message: None,
+            reply,
+        })
+        .await?;
 
-    if embedding_provider != model_provider {
-        match embedding_provider {
-            'c' => {
-                let cohere_config = config.cohere.as_mut().unwrap();
-                cohere_config.api_key = Some(embedding_api_key);
-            }
-            'g' => {
-                let gemini_config = config.gemini.as_mut().unwrap();
-                gemini_config.api_key = Some(embedding_api_key);
-            }
-            'o' => {
-                let openai_config = config.openai.as_mut().unwrap();
-                openai_config.api_key = Some(embedding_api_key);
-            }
-            'v' => {
-                let voyage_config = config.voyageai.as_mut().unwrap();
-                voyage_config.api_key = Some(embedding_api_key);
-            }
-            _ => unreachable!("Embedding provider was validated."),
+        let answer = answer.await?;
+        let answer = answer.trim();
+        if answer.is_empty() {
+            break 5;
         }
-    }
 
-    if reranker_provider != embedding_provider {
-        match reranker_provider {
-            'c' => {
-                let cohere_config = config.cohere.as_mut().unwrap();
-                cohere_config.api_key = Some(reranker_api_key);
-            }
-            'v' => {
-                let voyage_config = config.voyageai.as_mut().unwrap();
-                voyage_config.api_key = Some(reranker_api_key);
-            }
-            _ => unreachable!("Reranker provider was validated."),
+        if let Ok(requests) = answer.parse::<usize>()
+            && (1..20).contains(&requests)
+        {
+            break requests;
         }
-    }
+
+        ctx.emit(EngineEvent::Warning {
+            message: "Enter a number from 1 to 19.\n".into(),
+        })
+        .await?;
+    };
 
     let config_dir = get_config_dir()?;
     let config_path = config_dir.join("config.toml");
     fs::create_dir_all(&config_dir)?;
     fs::write(config_path, toml::to_string_pretty(&config)?)?;
 
-    println!("You've set up your config!");
-    println!(
-        "{DIM_TEXT}You can change these values any time by editing ~/.config/zqa/config.toml.\n"
-    );
-    println!(
-        "Next, you will likely want to set up your embeddings by typing /process in the prompt that follows. Note that this will take a while! If you don't have time, you can quit now, reopen the CLI later, and run it then.\n"
-    );
-    println!(
-        "Since your API keys are stored in plain-text, make sure to never commit ~/.config/zqa/config.toml without first deleting the keys. The recommended setup is to set the values in the TOML file blank and use .env files where you need them with the keys. As an additional security measure, consider running `chmod 600 ~/.config/zqa/config.toml`.{RESET}"
-    );
+    ctx.emit(EngineEvent::StyledText {
+        spans: vec![
+            StyledSpan {
+                text: "You've set up your config!\n".into(),
+                style: TextStyle::Plain,
+            },
+            StyledSpan {
+                text: "You can change these values any time by editing ~/.config/zqa/config.toml.\n\nNext, you will likely want to set up your embeddings by typing /process in the prompt that follows. Note that this will take a while! If you don't have time, you can quit now, reopen the CLI later, and run it then.\n\nSince your API keys are stored in plain-text, make sure to never commit ~/.config/zqa/config.toml without first deleting the keys. The recommended setup is to set the values in the TOML file blank and use .env files where you need them with the keys. As an additional security measure, consider running `chmod 600 ~/.config/zqa/config.toml`.\n\n".into(),
+                style: TextStyle::Secondary,
+            },
+        ],
+    })
+    .await?;
+
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use std::fs;
-    use std::io::Cursor;
     use std::path::Component;
 
     use chrono::{Duration, Local};
@@ -588,6 +692,8 @@ mod tests {
     use zqa_macros::test_ok;
     use zqa_rag::llm::base::{ChatHistoryContent, ChatHistoryItem, MessageRole};
 
+    use crate::common::test_support::{create_test_context, respond_to_events};
+    use crate::io::EngineEvent;
     use crate::state::{
         SavedChatHistory, UsageMetadata, get_conversation_history, get_state_dir, oobe,
         save_conversation,
@@ -750,38 +856,62 @@ mod tests {
         });
     }
 
-    #[test]
+    #[tokio::test]
     #[serial]
-    fn test_oobe_interactive() {
+    async fn test_oobe_interactive() {
         // Create temp directories
         let temp_home = std::env::temp_dir().join("zqa_test_home");
         let temp_config = std::env::temp_dir().join("zqa_test_config");
         fs::create_dir_all(&temp_home).unwrap();
         fs::create_dir_all(&temp_config).unwrap();
 
-        temp_env::with_vars(
+        temp_env::async_with_vars(
             [
                 ("XDG_CONFIG_HOME", Some(temp_config.to_str().unwrap())),
                 ("HOME", Some(temp_home.to_str().unwrap())),
             ],
-            || {
-                // Prepare a fake input stream for the OOBE wizard
-                // Inputs:
-                // 1. "y" (Would you like to set up?)
-                // 2. "a" (Model provider: Anthropic)
-                // 3. "sk-test-model" (Model API key)
-                // 4. "v" (Embedding provider: Voyage AI)
-                // 5. "sk-test-embedding" (Embedding API key)
-                // 6. "\n" (Reranker provider: Voyage AI - same as embedding default choice)
-                // 7. Max concurrent requests: "10"
-                let input_data = "y\na\nsk-test-model\nv\nsk-test-embedding\n\n10\n";
-                let mut cursor = Cursor::new(input_data);
+            async {
+                // Anthropic for generation, then Voyage AI for embeddings. The reranker takes its
+                // default, which follows the embedding provider, so Voyage's key is asked once.
+                let mut choices = [Some("Anthropic"), Some("Voyage AI"), None].into_iter();
+                let mut secrets = ["sk-test-model\n", "  sk-test-embedding  "].into_iter();
+                // The first answer is out of range, so the question is asked again.
+                let mut lines = ["abc\n", "10\n"].into_iter();
 
-                // Run OOBE with is_terminal = false to test fallback path
-                let result = oobe(&mut cursor, false);
+                let mut ctx = create_test_context(Vec::new());
+                let result = respond_to_events(
+                    &mut ctx,
+                    async |ctx| oobe(ctx).await,
+                    |event| match event {
+                        EngineEvent::Confirm { reply, .. } => reply.send(true).unwrap(),
+                        EngineEvent::Choose {
+                            options,
+                            default,
+                            reply,
+                            ..
+                        } => {
+                            let choice = choices.next().unwrap();
+                            let index = choice.map_or(default, |label| {
+                                options.iter().position(|o| o == label).unwrap()
+                            });
+                            reply.send(index).unwrap();
+                        }
+                        EngineEvent::Secret { reply, .. } => {
+                            reply.send(secrets.next().unwrap().into()).unwrap();
+                        }
+                        EngineEvent::Line { reply, .. } => {
+                            reply.send(lines.next().unwrap().into()).unwrap();
+                        }
+                        _ => {}
+                    },
+                )
+                .await;
                 result.unwrap();
 
-                // Verify config file was created
+                assert_eq!(choices.next(), None);
+                assert_eq!(secrets.next(), None);
+                assert_eq!(lines.next(), None);
+
                 // get_config_dir depends on directories crate which depends on HOME/XDG_CONFIG_HOME
                 // We mocked them.
                 let config_dir = crate::config::get_config_dir().unwrap();
@@ -791,11 +921,13 @@ mod tests {
                 let content = fs::read_to_string(config_path).unwrap();
                 assert!(content.contains("model_provider = \"anthropic\""));
                 assert!(content.contains("embedding_provider = \"voyageai\""));
-                assert!(content.contains("sk-test-model"));
-                assert!(content.contains("sk-test-embedding"));
+                assert!(content.contains("reranker_provider = \"voyageai\""));
+                assert!(content.contains("api_key = \"sk-test-model\"\n"));
+                assert!(content.contains("api_key = \"sk-test-embedding\"\n"));
                 assert!(content.contains("max_concurrent_requests = 10"));
             },
-        );
+        )
+        .await;
 
         // Cleanup
         let _ = fs::remove_dir_all(temp_home);
