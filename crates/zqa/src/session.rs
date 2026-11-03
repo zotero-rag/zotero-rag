@@ -18,7 +18,8 @@ use crate::cli::handlers::conversation::resume_conversation;
 use crate::common::{Context, PathOptions, State};
 use crate::config::Config;
 use crate::io::EngineEvent;
-use crate::state::SavedChatHistory;
+use crate::run_setup;
+use crate::state::{SavedChatHistory, check_or_create_first_run_file};
 use crate::store::lance::LanceZoteroStore;
 
 /// An embeddable driver around the zqa command handlers.
@@ -72,6 +73,25 @@ impl Session {
         };
 
         Ok(Self { ctx })
+    }
+
+    /// Run first-run setup if this is the first time zqa has run on this machine.
+    ///
+    /// The CLI and the GUI share the first-run marker in the state directory, so setup runs once,
+    /// in whichever starts first. Setup asks its questions as prompt events, so keep receiving and
+    /// answering events while the returned future runs, as with [`Self::dispatch`]. After setup,
+    /// the session uses the config it wrote.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`CLIError`] if the first-run marker can't be checked or created, or if setup
+    /// fails. The session keeps its previous config in that case.
+    pub async fn setup_if_first_run(&mut self) -> Result<(), CLIError> {
+        if check_or_create_first_run_file()? {
+            run_setup(&mut self.ctx).await?;
+        }
+
+        Ok(())
     }
 
     /// Dispatch a single command string (e.g. `"/help"` or a bare query) through the
