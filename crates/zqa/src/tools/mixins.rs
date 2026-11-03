@@ -6,58 +6,7 @@ use zqa_rag::llm::tools::Tool;
 
 use crate::io::{EngineEvent, StyledSpan, TextStyle};
 
-/// `Tool` wrapper that reports its arguments on a status channel before delegating to the
-/// wrapped tool.
-///
-/// The wrappers in this module send their lines over a channel rather than printing, so the
-/// consumer decides where they land: the query handler forwards each line as an
-/// [`EngineEvent::StatusUpdate`](crate::io::EngineEvent::StatusUpdate).
-pub struct Verbose<T: Tool> {
-    inner: T,
-    status_tx: UnboundedSender<EngineEvent>,
-}
-
-impl<T: Tool> Verbose<T> {
-    pub fn new(inner: T, status_tx: UnboundedSender<EngineEvent>) -> Self {
-        Self { inner, status_tx }
-    }
-}
-
-impl<T: Tool> Tool for Verbose<T> {
-    fn name(&self) -> String {
-        self.inner.name()
-    }
-
-    fn description(&self) -> String {
-        self.inner.description()
-    }
-
-    fn parameters(&self) -> schemars::Schema {
-        self.inner.parameters()
-    }
-
-    fn call<'a>(
-        &'a self,
-        args: serde_json::Value,
-    ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, String>> + Send + 'a>> {
-        Box::pin(async move {
-            let printed_args = serde_json::to_string(&args).unwrap_or_default();
-
-            // A send fails only when the consumer is gone, in which case the line has
-            // nowhere useful to go anyway.
-            let _ = self.status_tx.send(EngineEvent::StyledText {
-                spans: vec![StyledSpan {
-                    text: format!("{} ({})\n", self.inner.name(), printed_args),
-                    style: TextStyle::Secondary,
-                }],
-            });
-            self.inner.call(args).await
-        })
-    }
-}
-
 /// `Tool` wrapper that reports how long the wrapped tool took to run on a status channel
-/// (see [`Verbose`] for where the lines end up).
 pub struct Timed<T: Tool> {
     inner: T,
     status_tx: UnboundedSender<EngineEvent>,
@@ -157,16 +106,11 @@ impl<T: Tool> Tool for Timed<T> {
 ///
 ///    let (status_tx, _status_rx) = tokio::sync::mpsc::unbounded_channel();
 ///    let tool: Box<dyn Tool> = Box::new(
-///        Foo::new().verbose(status_tx.clone()).timed(status_tx)
+///        Foo::new().timed(status_tx)
 ///    );
 ///    let _future = tool.call(serde_json::Value::Null);
 /// ```
 pub trait ToolExt: Tool + Sized {
-    /// Report the tool's arguments on `status_tx` before each call.
-    fn verbose(self, status_tx: UnboundedSender<EngineEvent>) -> Verbose<Self> {
-        Verbose::new(self, status_tx)
-    }
-
     /// Report each call's duration and outcome on `status_tx`.
     fn timed(self, status_tx: UnboundedSender<EngineEvent>) -> Timed<Self> {
         Timed::new(self, status_tx)
@@ -215,26 +159,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn verbose_forwards_call_and_reports_args() {
-        let seen_args = Arc::new(Mutex::new(None));
-        let (status_tx, mut status_rx) = tokio::sync::mpsc::unbounded_channel();
-        let tool = MockTool {
-            seen_args: Arc::clone(&seen_args),
-        }
-        .verbose(status_tx);
-
-        let args = json!({ "foo": "bar" });
-        let result = tool.call(args.clone()).await.unwrap();
-
-        assert_eq!(result, json!({ "ok": true }));
-        assert_eq!(*seen_args.lock().unwrap(), Some(args));
-
-        let line = status_rx.try_recv().unwrap().to_string();
-        assert!(line.contains("mock_tool"));
-        assert!(line.contains(r#"{"foo":"bar"}"#));
-    }
-
-    #[tokio::test]
     async fn timed_forwards_call_and_reports_duration() {
         let seen_args = Arc::new(Mutex::new(None));
         let (status_tx, mut status_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -252,41 +176,6 @@ mod tests {
         let line = status_rx.try_recv().unwrap().to_string();
         assert!(line.contains("mock_tool"));
         assert!(line.contains("completed in"));
-    }
-
-    #[tokio::test]
-    async fn chained_wrappers_forward_call_and_report_in_order() {
-        let seen_args = Arc::new(Mutex::new(None));
-        let (status_tx, mut status_rx) = tokio::sync::mpsc::unbounded_channel();
-        let tool = MockTool {
-            seen_args: Arc::clone(&seen_args),
-        }
-        .verbose(status_tx.clone())
-        .timed(status_tx);
-
-        let args = json!({ "foo": "bar" });
-        let result = tool.call(args.clone()).await.unwrap();
-
-        assert_eq!(result, json!({ "ok": true }));
-        assert_eq!(*seen_args.lock().unwrap(), Some(args));
-
-        // The argument announcement precedes the timing line.
-        let first = status_rx.try_recv().unwrap().to_string();
-        let second = status_rx.try_recv().unwrap().to_string();
-        assert!(first.contains(r#"{"foo":"bar"}"#));
-        assert!(second.contains("completed in"));
-    }
-
-    #[test]
-    fn verbose_delegates_metadata() {
-        let (status_tx, _status_rx) = tokio::sync::mpsc::unbounded_channel();
-        let tool = MockTool {
-            seen_args: Arc::new(Mutex::new(None)),
-        }
-        .verbose(status_tx);
-
-        assert_eq!(tool.name(), "mock_tool");
-        assert_eq!(tool.description(), "A mock tool");
     }
 
     #[test]
