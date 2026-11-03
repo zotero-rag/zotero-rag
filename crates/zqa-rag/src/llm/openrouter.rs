@@ -148,7 +148,10 @@ fn convert_to_openrouter_messages(item: &ChatHistoryItem) -> Vec<OpenRouterMessa
                 // Tool responses in OpenRouter are sent as a separate message with role "tool"
                 messages.push(OpenRouterMessage {
                     role: OpenRouterMessageRole::Tool,
-                    content: Some(serde_json::to_string(&res.result).unwrap_or_default()),
+                    content: Some(match &res.result {
+                        Ok(serde_json::Value::String(text)) | Err(text) => text.clone(),
+                        Ok(result) => serde_json::to_string(result).unwrap_or_default(),
+                    }),
                     tool_calls: None,
                     tool_call_id: Some(res.id.clone()),
                     reasoning_details: None,
@@ -607,7 +610,7 @@ mod tests {
                 ChatHistoryContent::ToolCallResponse(ToolCallResponse {
                     id: "call-2".into(),
                     tool_name: "mock_tool".into(),
-                    result: Ok(serde_json::json!({"answer": 2})),
+                    result: Err("tool failed".into()),
                 }),
             ],
         };
@@ -620,6 +623,8 @@ mod tests {
         assert_eq!(messages[0]["tool_call_id"].as_str(), Some("call-1"));
         assert_eq!(messages[1]["role"].as_str(), Some("tool"));
         assert_eq!(messages[1]["tool_call_id"].as_str(), Some("call-2"));
+        assert_eq!(messages[0]["content"].as_str(), Some(r#"{"answer":1}"#));
+        assert_eq!(messages[1]["content"].as_str(), Some("tool failed"));
     }
 
     #[tokio::test]
