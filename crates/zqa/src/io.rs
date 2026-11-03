@@ -522,7 +522,7 @@ impl Display for EngineEvent {
                     Ok(response) => {
                         write!(f, "{:#}\n", truncate_json(response, TOOL_RESPONSE_KEEP))
                     }
-                    Err(error) => write!(f, "{error}\n"),
+                    Err(error) => write!(f, "{RED}failed: {error}\n"),
                 }?;
                 f.write_str(RESET)
             }
@@ -703,7 +703,7 @@ mod tests {
                     id: "call-1".into(),
                     response: Err("failed".into()),
                 },
-                format!("  {DIM_TEXT}-> (search) failed\n{RESET}"),
+                format!("  {DIM_TEXT}-> (search) {RED}failed: failed\n{RESET}"),
                 false,
             ),
             (
