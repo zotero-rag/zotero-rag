@@ -535,15 +535,15 @@ impl Display for EngineEvent {
             }
             EngineEvent::Text { message } => f.write_str(message),
             EngineEvent::ToolCall { name, args, .. } => {
-                write!(f, "{DIM_TEXT}{name} {args}{RESET}\n")
+                writeln!(f, "{DIM_TEXT}{name} {args}{RESET}")
             }
             EngineEvent::ToolResponse { name, response, .. } => {
                 write!(f, "  {DIM_TEXT}-> ({name}) ")?;
                 match response {
                     Ok(response) => {
-                        write!(f, "{:#}\n", truncate_json(response, TOOL_RESPONSE_KEEP))
+                        writeln!(f, "{:#}", truncate_json(response, TOOL_RESPONSE_KEEP))
                     }
-                    Err(error) => write!(f, "{RED}failed: {error}\n"),
+                    Err(error) => writeln!(f, "{RED}failed: {error}"),
                 }?;
                 f.write_str(RESET)
             }
