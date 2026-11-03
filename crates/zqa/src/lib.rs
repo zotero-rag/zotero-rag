@@ -34,6 +34,30 @@ use crate::common::{PathOptions, State};
 use crate::io::TerminalProgress;
 use crate::utils::terminal::{RED, RED_BOLD, RESET, YELLOW, YELLOW_BOLD};
 
+/// Run first-run setup, then load the config it wrote into `ctx`.
+///
+/// Setup asks its questions as prompt events on `ctx`, so the caller must render events and reply
+/// while this runs. The new config can change the embedding provider, so the store is rebuilt from
+/// it too. If the user declines setup, nothing is written and the config is reloaded unchanged.
+///
+/// # Arguments
+///
+/// * `ctx` - The context whose event sender carries the prompts, and that receives the new config.
+///
+/// # Errors
+///
+/// Returns a [`CLIError`] if setup fails, or if the new config can't be loaded or doesn't yield a
+/// store. `ctx` keeps its previous config and store in that case.
+pub(crate) async fn run_setup(ctx: &mut Context) -> Result<(), CLIError> {
+    oobe(ctx).await?;
+
+    let config = load_config()?;
+    ctx.store = LanceZoteroStore::from_config(&config)?;
+    ctx.config = config;
+
+    Ok(())
+}
+
 /// Load the application configuration from the TOML config file (if present) and the
 /// environment, in priority order: TOML < env.
 ///
@@ -243,7 +267,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     if is_first_run {
         let (setup, _) = render_while(
-            oobe(&context),
+            run_setup(&mut context),
             &mut event_rx,
             &mut std::io::stdin().lock(),
             &mut stdout(),
@@ -254,10 +278,6 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
         if let Err(e) = setup {
             eprintln!("Error during setup: {e}");
-        } else {
-            // Setup wrote a new config, which can change the embedding provider the store uses.
-            context.config = load_config()?;
-            context.store = LanceZoteroStore::from_config(&context.config)?;
         }
     }
 
