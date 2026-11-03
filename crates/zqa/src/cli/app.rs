@@ -1,6 +1,4 @@
-use std::fs;
 use std::io::{BufRead, Write};
-use std::path::Path;
 use std::sync::Arc;
 
 use rpassword::read_password;
@@ -25,7 +23,7 @@ use crate::cli::placeholder::PlaceholderText;
 use crate::cli::readline::get_readline_config;
 use crate::common::Context;
 use crate::io::{EngineEvent, TerminalProgress};
-use crate::state::{UsageMetadata, get_state_dir};
+use crate::state::UsageMetadata;
 use crate::utils::terminal::{DIM_TEXT, RESET};
 
 /// Handle a single command or query from the user.
@@ -281,36 +279,6 @@ pub(crate) async fn cli<R: BufRead, O: Write, E: Write>(
     mut output: O,
     mut err: E,
 ) -> Result<(), CLIError> {
-    // At startup, we should check if there are pending embedding batches and notify the user if so.
-    // [`crate::cli::handlers::batch`] has more details about the semantics of interacting with
-    // batch APIs. We don't do the check itself since we have two bad options:
-    //
-    // * If we `await` the check, we risk a longer startup time
-    // * If we use a task, we need to be careful about not messing with the CLI output/readline.
-    let batch_dir = get_state_dir()?.join("batches");
-
-    // `batch_dir` is created lazily on the first batch
-    if batch_dir.exists() {
-        let batch_files: Vec<String> = fs::read_dir(&batch_dir)?
-            .filter_map(|x| x.ok()?.file_name().into_string().ok())
-            .filter(|f| {
-                f.starts_with("batch_")
-                    && Path::new(f)
-                        .extension()
-                        .is_some_and(|ext| ext.eq_ignore_ascii_case("log"))
-            })
-            .collect();
-
-        if !batch_files.is_empty() {
-            writeln!(
-                &mut output,
-                "You have {} embedding batch{} pending. Use /batch check to check their status.\n",
-                batch_files.len(),
-                if batch_files.len() > 1 { "es" } else { "" }
-            )?;
-        }
-    }
-
     // First, get the path to the history file used by the `readline` implementation.
     let user_dirs = directories::UserDirs::new().ok_or(CLIError::ReadlineError(
         "Could not get user directories".into(),
