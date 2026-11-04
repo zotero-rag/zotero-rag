@@ -1,5 +1,6 @@
 use std::borrow::Cow;
 use std::fmt::Debug;
+use std::pin::Pin;
 use std::sync::Arc;
 
 use arrow_schema::{DataType, Field};
@@ -12,7 +13,9 @@ use crate::constants::{
     DEFAULT_MAX_CONCURRENT_REQUESTS, DEFAULT_MAX_RETRIES, DEFAULT_OLLAMA_BASE_URL,
     DEFAULT_OLLAMA_EMBEDDING_DIM, DEFAULT_OLLAMA_EMBEDDING_MODEL,
 };
-use crate::embedding::common::{EmbeddingApiResponse, compute_embeddings_async};
+use crate::embedding::common::{
+    Embed, EmbeddingApiResponse, QueryEmbedding, compute_embeddings_async, embed_query_async,
+};
 use crate::http_client::HttpClient;
 use crate::llm::errors::LLMError;
 
@@ -26,6 +29,8 @@ struct OllamaEmbeddingRequest {
 struct OllamaEmbeddingSuccessResponse {
     /// Embeddings result
     embeddings: Vec<Vec<f32>>,
+    /// Number of input tokens the model processed
+    prompt_eval_count: Option<u32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -61,11 +66,50 @@ impl EmbeddingApiResponse for OllamaEmbeddingResponse {
             Self::Error(e) => Some(e.error),
         }
     }
+
+    fn get_input_tokens(&self) -> Option<u32> {
+        match self {
+            Self::Error(_) => None,
+            Self::Success(res) => res.prompt_eval_count,
+        }
+    }
 }
 
 impl<T: HttpClient + Debug + Default + Clone> OllamaClient<T> {
     fn get_embedding_dims(&self) -> Option<usize> {
         self.config.as_ref().map(|c| c.embedding_dims)
+    }
+
+    /// Resolve the model, endpoint, concurrency and retry settings from the configuration,
+    /// falling back to defaults.
+    fn request_settings(&self) -> OllamaRequestSettings {
+        let model = self
+            .config
+            .as_ref()
+            .map_or(DEFAULT_OLLAMA_EMBEDDING_MODEL.into(), |c| {
+                c.embedding_model.clone()
+            });
+        let base_url = self
+            .config
+            .as_ref()
+            .map_or(DEFAULT_OLLAMA_BASE_URL.into(), |c| c.base_url.clone());
+        let max_concurrent = self
+            .config
+            .as_ref()
+            .map_or(DEFAULT_MAX_CONCURRENT_REQUESTS, |c| {
+                c.max_concurrent_requests
+            });
+        let max_retries = self
+            .config
+            .as_ref()
+            .map_or(DEFAULT_MAX_RETRIES, |c| c.max_retries);
+
+        OllamaRequestSettings {
+            model,
+            url: format!("{}/api/embed", base_url.trim_end_matches('/')),
+            max_concurrent,
+            max_retries,
+        }
     }
 
     /// Internal method to compute embeddings
@@ -84,29 +128,7 @@ impl<T: HttpClient + Debug + Default + Clone> OllamaClient<T> {
         const BATCH_SIZE: usize = 32;
         const WAIT_AFTER_REQUEST_S: u64 = 0;
 
-        let model = self
-            .config
-            .as_ref()
-            .map_or(DEFAULT_OLLAMA_EMBEDDING_MODEL.into(), |c| {
-                c.embedding_model.clone()
-            });
-        let base_url = self
-            .config
-            .as_ref()
-            .map_or(DEFAULT_OLLAMA_BASE_URL.into(), |c| c.base_url.clone());
-        let base_url = base_url.trim_end_matches('/');
-        let max_concurrent = self
-            .config
-            .as_ref()
-            .map_or(DEFAULT_MAX_CONCURRENT_REQUESTS, |c| {
-                c.max_concurrent_requests
-            });
-        let max_retries = self
-            .config
-            .as_ref()
-            .map_or(DEFAULT_MAX_RETRIES, |c| c.max_retries);
-
-        let url = format!("{base_url}/api/embed");
+        let settings = self.request_settings();
 
         tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(compute_embeddings_async::<
@@ -115,11 +137,11 @@ impl<T: HttpClient + Debug + Default + Clone> OllamaClient<T> {
                 _,
             >(
                 source,
-                &url,
+                &settings.url,
                 "",
                 self.client.clone(),
                 |input| OllamaEmbeddingRequest {
-                    model: model.clone(),
+                    model: settings.model.clone(),
                     input,
                 },
                 EmbeddingProvider::Ollama.as_str().to_string(),
@@ -127,11 +149,44 @@ impl<T: HttpClient + Debug + Default + Clone> OllamaClient<T> {
                 WAIT_AFTER_REQUEST_S,
                 self.get_embedding_dims()
                     .unwrap_or(DEFAULT_OLLAMA_EMBEDDING_DIM),
-                max_concurrent,
-                max_retries,
+                settings.max_concurrent,
+                settings.max_retries,
             ))
         })
     }
+}
+
+impl<T: HttpClient + Debug + Default + Clone> Embed for OllamaClient<T> {
+    fn embed_query<'a>(
+        &'a self,
+        query: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<QueryEmbedding, LLMError>> + Send + 'a>> {
+        Box::pin(async move {
+            let settings = self.request_settings();
+            let request = OllamaEmbeddingRequest {
+                model: settings.model,
+                input: vec![query.to_owned()],
+            };
+
+            embed_query_async::<_, OllamaEmbeddingResponse>(
+                &settings.url,
+                "",
+                &self.client,
+                &request,
+                settings.max_retries,
+            )
+            .await
+        })
+    }
+}
+
+/// Settings for embedding requests, resolved from the client configuration.
+struct OllamaRequestSettings {
+    model: String,
+    /// The full embedding endpoint URL.
+    url: String,
+    max_concurrent: usize,
+    max_retries: usize,
 }
 
 impl<T> EmbeddingFunction for OllamaClient<T>
@@ -225,6 +280,7 @@ mod tests {
     fn test_success_variant_get_embeddings_returns_some() {
         let resp = OllamaEmbeddingResponse::Success(OllamaEmbeddingSuccessResponse {
             embeddings: vec![vec![0.1, 0.2]],
+            prompt_eval_count: None,
         });
         assert!(resp.get_embeddings().is_some());
     }
@@ -239,8 +295,10 @@ mod tests {
 
     #[test]
     fn test_success_variant_get_error_message_returns_none() {
-        let resp =
-            OllamaEmbeddingResponse::Success(OllamaEmbeddingSuccessResponse { embeddings: vec![] });
+        let resp = OllamaEmbeddingResponse::Success(OllamaEmbeddingSuccessResponse {
+            embeddings: vec![],
+            prompt_eval_count: None,
+        });
         assert!(resp.get_error_message().is_none());
     }
 

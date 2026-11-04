@@ -3,6 +3,7 @@
 
 use std::borrow::Cow;
 use std::env;
+use std::pin::Pin;
 use std::sync::Arc;
 
 use arrow_schema::{DataType, Field};
@@ -19,7 +20,8 @@ use crate::constants::{
 };
 use crate::embedding::common::{
     BatchEmbeddingError, BatchEmbeddingRequest, BatchEmbeddingResult, BatchEmbeddingResults,
-    BatchSubmission, EmbeddingApiResponse, compute_embeddings_async,
+    BatchSubmission, Embed, EmbeddingApiResponse, QueryEmbedding, compute_embeddings_async,
+    embed_query_async,
 };
 use crate::http_client::{HttpClient, ReqwestClient};
 use crate::llm::errors::LLMError;
@@ -62,35 +64,13 @@ where
         }
     }
 
-    /// Internal method to compute embeddings that works with LLMError
+    /// Resolve the API key, model, output dimension, concurrency and retry settings from the
+    /// configuration, falling back to the environment and defaults.
     ///
     /// # Errors
     ///
-    /// * `LLMError::EnvError` - If the VOYAGE_AI_API_KEY environment variable is not set
-    /// * `LLMError::TimeoutError` - If the HTTP request times out
-    /// * `LLMError::CredentialError` - If the API returns 401 or 403 status
-    /// * `LLMError::HttpStatusError` - If the API returns other unsuccessful HTTP status codes
-    /// * `LLMError::NetworkError` - If a network connectivity error occurs
-    /// * `LLMError::DeserializationError` - If the API response cannot be parsed
-    /// * `LLMError::InvalidHeaderError` - If header values cannot be parsed
-    /// * `LLMError::GenericLLMError` - If other HTTP errors occur or Arrow array creation fails
-    ///
-    /// * `input_type` - The Voyage AI `input_type` specialization ("query" or "document").
-    pub(crate) fn compute_embeddings_internal(
-        &self,
-        source: Arc<dyn arrow_array::Array>,
-        input_type: &'static str,
-    ) -> Result<Arc<dyn arrow_array::Array>, LLMError> {
-        // Wait for two seconds after each batch to avoid RPM and TPM throttling. At the base
-        // tier, Voyage AI has a 3M TPM and a 2K RPM. However, although the context of their
-        // models is 32k, we can't just sent 3M / 32k ~= 93 requests at a time and then wait a
-        // minute, because there is also a 120k token per request limit. This actually means we
-        // can only send floor(120k / 32k) = 3 requests at a time. Now our effective requests
-        // per minute is 3M (tokens / min) / 96k (tokens / request) = 31.25 RPM. Rounding down,
-        // we can send 30 RPM, so we wait 2s between requests.
-        const BATCH_SIZE: usize = 3;
-        const WAIT_AFTER_REQUEST_S: u64 = 2;
-
+    /// * `LLMError::EnvError` - If there is no configuration and VOYAGE_AI_API_KEY is not set
+    fn request_settings(&self) -> Result<VoyageAIRequestSettings, LLMError> {
         let api_key = self.config.as_ref().map_or_else(
             || env::var("VOYAGE_AI_API_KEY"),
             |config| Ok(config.api_key.clone()),
@@ -117,6 +97,49 @@ where
             .as_ref()
             .map_or(DEFAULT_MAX_RETRIES, |c| c.max_retries);
 
+        Ok(VoyageAIRequestSettings {
+            api_key,
+            model,
+            output_dimension,
+            max_concurrent,
+            max_retries,
+        })
+    }
+
+    /// Internal method to compute embeddings that works with LLMError
+    ///
+    /// # Arguments
+    ///
+    /// * `source` - An Arrow array of strings to embed.
+    /// * `input_type` - The Voyage AI `input_type` specialization ("query" or "document").
+    ///
+    /// # Errors
+    ///
+    /// * `LLMError::EnvError` - If the VOYAGE_AI_API_KEY environment variable is not set
+    /// * `LLMError::TimeoutError` - If the HTTP request times out
+    /// * `LLMError::CredentialError` - If the API returns 401 or 403 status
+    /// * `LLMError::HttpStatusError` - If the API returns other unsuccessful HTTP status codes
+    /// * `LLMError::NetworkError` - If a network connectivity error occurs
+    /// * `LLMError::DeserializationError` - If the API response cannot be parsed
+    /// * `LLMError::InvalidHeaderError` - If header values cannot be parsed
+    /// * `LLMError::GenericLLMError` - If other HTTP errors occur or Arrow array creation fails
+    pub(crate) fn compute_embeddings_internal(
+        &self,
+        source: Arc<dyn arrow_array::Array>,
+        input_type: &'static str,
+    ) -> Result<Arc<dyn arrow_array::Array>, LLMError> {
+        // Wait for two seconds after each batch to avoid RPM and TPM throttling. At the base
+        // tier, Voyage AI has a 3M TPM and a 2K RPM. However, although the context of their
+        // models is 32k, we can't just sent 3M / 32k ~= 93 requests at a time and then wait a
+        // minute, because there is also a 120k token per request limit. This actually means we
+        // can only send floor(120k / 32k) = 3 requests at a time. Now our effective requests
+        // per minute is 3M (tokens / min) / 96k (tokens / request) = 31.25 RPM. Rounding down,
+        // we can send 30 RPM, so we wait 2s between requests.
+        const BATCH_SIZE: usize = 3;
+        const WAIT_AFTER_REQUEST_S: u64 = 2;
+
+        let settings = self.request_settings()?;
+
         tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(compute_embeddings_async::<
                 VoyageAIRequest,
@@ -124,26 +147,55 @@ where
                 _,
             >(
                 source,
-                "https://api.voyageai.com/v1/embeddings",
-                &api_key,
+                VOYAGE_EMBEDDING_URL,
+                &settings.api_key,
                 self.client.clone(),
-                |texts| VoyageAIRequest {
-                    input: texts,
-                    model: model.clone(),
-                    input_type: Some(input_type.into()),
-                    truncation: true,
-                    output_dimension, // Matryoshka embeddings
-                    output_dtype: "float".to_string(),
-                },
+                |texts| VoyageAIRequest::new(texts, &settings, input_type),
                 EmbeddingProvider::VoyageAI.as_str().to_string(),
                 BATCH_SIZE,
                 WAIT_AFTER_REQUEST_S,
-                output_dimension as usize,
-                max_concurrent,
-                max_retries,
+                settings.output_dimension as usize,
+                settings.max_concurrent,
+                settings.max_retries,
             ))
         })
     }
+}
+
+impl<T> Embed for VoyageAIClient<T>
+where
+    T: HttpClient + Default + Clone + std::fmt::Debug,
+{
+    fn embed_query<'a>(
+        &'a self,
+        query: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<QueryEmbedding, LLMError>> + Send + 'a>> {
+        Box::pin(async move {
+            let settings = self.request_settings()?;
+            let request = VoyageAIRequest::new(vec![query.to_owned()], &settings, "query");
+
+            embed_query_async::<_, VoyageAIResponse>(
+                VOYAGE_EMBEDDING_URL,
+                &settings.api_key,
+                &self.client,
+                &request,
+                settings.max_retries,
+            )
+            .await
+        })
+    }
+}
+
+/// The Voyage AI embeddings endpoint.
+const VOYAGE_EMBEDDING_URL: &str = "https://api.voyageai.com/v1/embeddings";
+
+/// Settings for embedding requests, resolved from the client configuration or the environment.
+struct VoyageAIRequestSettings {
+    api_key: String,
+    model: String,
+    output_dimension: u32,
+    max_concurrent: usize,
+    max_retries: usize,
 }
 
 /// A request to Voyage AI's embedding endpoint.
@@ -155,6 +207,30 @@ struct VoyageAIRequest {
     truncation: bool,
     output_dimension: u32,
     output_dtype: String,
+}
+
+impl VoyageAIRequest {
+    /// Build a request for `texts` with the resolved settings.
+    ///
+    /// # Arguments
+    ///
+    /// * `texts` - The texts to embed.
+    /// * `settings` - The model and output dimension to request.
+    /// * `input_type` - The Voyage AI `input_type` specialization ("query" or "document").
+    ///
+    /// # Returns
+    ///
+    /// A request with truncation enabled and float output.
+    fn new(texts: Vec<String>, settings: &VoyageAIRequestSettings, input_type: &str) -> Self {
+        Self {
+            input: texts,
+            model: settings.model.clone(),
+            input_type: Some(input_type.into()),
+            truncation: true,
+            output_dimension: settings.output_dimension, // Matryoshka embeddings
+            output_dtype: "float".to_string(),
+        }
+    }
 }
 
 /// Embeddings for one text input
@@ -227,6 +303,13 @@ impl EmbeddingApiResponse for VoyageAIResponse {
         match self {
             VoyageAIResponse::Error(err) => Some(err.detail),
             VoyageAIResponse::Success(_) => None,
+        }
+    }
+
+    fn get_input_tokens(&self) -> Option<u32> {
+        match self {
+            VoyageAIResponse::Error(_) => None,
+            VoyageAIResponse::Success(res) => Some(res.usage.total_tokens),
         }
     }
 }

@@ -9,8 +9,8 @@ use std::time::Instant;
 use std::{fs, io};
 
 use arrow_array::cast::AsArray;
-use arrow_array::types::{Float32Type, Int64Type};
-use arrow_array::{Array, RecordBatch, RecordBatchIterator, StringArray, record_batch};
+use arrow_array::types::Int64Type;
+use arrow_array::{RecordBatch, RecordBatchIterator, record_batch};
 use arrow_schema::{ArrowError, Schema};
 use async_trait::async_trait;
 use futures::TryStreamExt;
@@ -21,7 +21,7 @@ use lancedb::query::{ExecutableQuery, QueryBase};
 use lancedb::{Connection, Error as LanceDbError, connect};
 use thiserror::Error;
 
-use crate::embedding::common::EmbeddingProviderConfig;
+use crate::embedding::common::{EmbeddingProviderConfig, get_embedding_provider_with_config};
 use crate::providers::ProviderId;
 use crate::providers::registry::provider_registry;
 use crate::vector::backends::backend::VectorBackend;
@@ -701,8 +701,8 @@ impl VectorBackend for LanceBackend {
         Ok(results)
     }
 
-    /// Perform a vector search on the database using the `query` and the `embedding_name` embedding
-    /// method. Returns a vector of Arrow `RecordBatch` objects containing the results.
+    /// Perform a vector search on the database, embedding `query` with the configured embedding
+    /// provider.
     ///
     /// # Arguments
     ///
@@ -711,20 +711,23 @@ impl VectorBackend for LanceBackend {
     ///
     /// # Returns
     ///
-    /// A vector of Arrow `RecordBatch` objects containing the results.
+    /// A tuple containing:
+    ///
+    /// * Arrow `RecordBatch` objects containing the results.
+    /// * The input tokens the embedding provider reported for the query, or `None` if it does not
+    ///   report usage.
     ///
     /// # Errors
     ///
-    /// * `LanceError::ParameterError` - If the embedding provider is not recognized
     /// * `LanceError::ConnectionError` - If the database connection fails
-    /// * `LanceError::InvalidStateError` - If the table doesn't exist or embedding provider not in registry
+    /// * `LanceError::InvalidStateError` - If the table doesn't exist
     /// * `LanceError::QueryError` - If the provider could not embed the query
-    /// * `LanceError::Other` - If embedding computation or query execution fails
+    /// * `LanceError::Other` - If query execution fails
     async fn vector_search(
         &self,
         query: String,
         limit: usize,
-    ) -> Result<Vec<Self::Record>, Self::Error> {
+    ) -> Result<(Vec<Self::Record>, Option<u32>), Self::Error> {
         let start_time = Instant::now();
         log::debug!("Vector search: limit={limit}, query_bytes={}", query.len());
         let db = self.connect().await?;
@@ -741,41 +744,26 @@ impl VectorBackend for LanceBackend {
         log::debug!("Opening the DB and table took {:.1?}", start_time.elapsed());
 
         let start_time = Instant::now();
-        let embedding = db
-            .embedding_registry()
-            .get(self.config.provider_id().as_str())
-            .ok_or(LanceError::InvalidStateError(format!(
-                "{} is not in the database embedding registry",
-                self.config.provider_id().as_str()
-            )))?;
-
-        let query_vec =
-            embedding.compute_query_embeddings(Arc::new(StringArray::from(vec![query])))?;
-        log::debug!("Computing embeddings took {:.1?}", start_time.elapsed());
-
-        // Convert FixedSizeListArray to Vec<f32>
-        // The embedding functions return `FixedSizeListArray` with Float32 elements
-        // See https://github.com/apache/arrow-rs/discussions/6087#discussioncomment-10851422 for
-        // converting an Arrow Array to a `Vec`.
-        let query_vec: Vec<f32> = {
-            let list_array = arrow_array::cast::as_fixed_size_list_array(&query_vec);
-
-            // A null entry means the provider failed to embed the query. Searching with a
-            // placeholder vector would return arbitrary rows, so fail instead.
-            if list_array.is_empty() || list_array.is_null(0) {
-                return Err(LanceError::QueryError(
-                    "Could not compute the query embedding".into(),
-                ));
-            }
-            let values = list_array.value(0);
-            values.as_primitive::<Float32Type>().values().to_vec()
-        };
+        let query_embedding = get_embedding_provider_with_config(&self.config)
+            .map_err(|e| {
+                LanceError::QueryError(format!("Could not get the embedding provider: {e}"))
+            })?
+            .embed_query(&query)
+            .await
+            .map_err(|e| {
+                LanceError::QueryError(format!("Could not compute the query embedding: {e}"))
+            })?;
+        log::debug!(
+            "Computing embeddings took {:.1?}: input_tokens={:?}",
+            start_time.elapsed(),
+            query_embedding.input_tokens
+        );
 
         let start_time = Instant::now();
         let stream = tbl
             .query()
             .limit(limit)
-            .nearest_to(query_vec)?
+            .nearest_to(query_embedding.embedding)?
             .execute()
             .await?;
         let batches: Vec<RecordBatch> = stream.try_collect().await?;
@@ -786,7 +774,7 @@ impl VectorBackend for LanceBackend {
             batches.iter().map(RecordBatch::num_rows).sum::<usize>()
         );
 
-        Ok(batches)
+        Ok((batches, query_embedding.input_tokens))
     }
 
     /// Given the name of the key column and the value of a row's key, return the row with that key if
@@ -1915,8 +1903,12 @@ mod tests {
             .await;
         test_ok!(results);
 
-        let results = results.unwrap();
+        let (results, input_tokens) = results.unwrap();
         assert!(!results.is_empty(), "Expected at least one search result");
+        assert!(
+            input_tokens.is_some_and(|tokens| tokens > 0),
+            "Expected OpenAI to report query tokens, got {input_tokens:?}"
+        );
 
         let returned_ids: Vec<String> = results
             .iter()
