@@ -395,7 +395,6 @@ impl<T: HttpClient> AgenticClient for GeminiClient<T> {
                 }
             }
 
-            // `incomplete` means the output was cut off, e.g. by `max_output_tokens`.
             let contents = map_response_to_chat_contents(&steps);
             if status == "completed" && contents.is_empty() && attempt < max_retries {
                 // The model sometimes finishes a turn without any output; a new attempt usually
@@ -407,6 +406,7 @@ impl<T: HttpClient> AgenticClient for GeminiClient<T> {
                 continue;
             }
 
+            // `incomplete` means the output was cut off, e.g. by `max_output_tokens`.
             if !matches!(
                 status.as_str(),
                 "completed" | "requires_action" | "incomplete"
