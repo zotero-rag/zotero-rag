@@ -22,7 +22,7 @@ use crate::utils::library::{get_new_library_items, parse_library, parse_library_
 ///
 /// # Errors
 ///
-/// * `CLIError::ChannelError` - If the event receiver is closed.
+/// * `CLIError::ChannelSendError` - If the event receiver is closed.
 pub(crate) async fn handle_stats_cmd(ctx: &mut Context) -> Result<(), CLIError> {
     match ctx.store.get_metadata().await {
         Ok(stats) => {
@@ -150,7 +150,7 @@ pub(crate) async fn handle_process_cmd(ctx: &mut Context) -> Result<(), CLIError
 ///
 /// # Errors
 ///
-/// * `CLIError::ChannelError` - If the event receiver is closed.
+/// * `CLIError::ChannelSendError` - If the event receiver is closed.
 pub(crate) async fn handle_dedup_cmd(ctx: &mut Context) -> Result<(), CLIError> {
     let result = ctx.store.dedup_by_title().await;
 
@@ -186,7 +186,7 @@ pub(crate) async fn handle_dedup_cmd(ctx: &mut Context) -> Result<(), CLIError> 
 ///
 /// # Errors
 ///
-/// * `CLIError::ChannelError` - If the event receiver is closed.
+/// * `CLIError::ChannelSendError` - If the event receiver is closed.
 pub(crate) async fn handle_index_cmd(ctx: &mut Context) -> Result<(), CLIError> {
     ctx.emit(EngineEvent::StatusUpdate {
         message: "Updating indices. This may take a while depending on how many items need to be added.\n"
@@ -221,7 +221,7 @@ pub(crate) async fn handle_index_cmd(ctx: &mut Context) -> Result<(), CLIError> 
 ///
 /// # Errors
 ///
-/// * `CLIError::ChannelError` - If the event receiver is closed.
+/// * `CLIError::ChannelSendError` - If the event receiver is closed.
 pub(crate) async fn handle_checkhealth_cmd(ctx: &mut Context) -> Result<(), CLIError> {
     ctx.emit(EngineEvent::Text {
         message: format!("{}\n", ctx.store.health_check().await),

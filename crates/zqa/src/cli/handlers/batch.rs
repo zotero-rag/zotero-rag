@@ -321,7 +321,7 @@ fn update_hash_cache(
 ///     * writing to the state directory failed. This is typically caused by permission issues.
 ///     * writing out the serialized data failed
 /// * `CLIError::SerializationError` if JSON serialization failed.
-/// * `CLIError::ChannelError` if the event receiver is closed.
+/// * `CLIError::ChannelSendError` if the event receiver is closed.
 #[allow(clippy::too_many_lines)]
 async fn handle_successful_batch_results(
     ctx: &mut Context,
@@ -507,7 +507,7 @@ fn persist_hash_cache(file: &mut fs::File, cache: &HashCache) -> Result<(), CLIE
 /// * `CLIError::IOError` in the following cases:
 ///     * writing to the state directory failed. This is typically caused by permission issues.
 ///     * writing out the serialized data failed
-/// * `CLIError::ChannelError` if the event receiver is closed.
+/// * `CLIError::ChannelSendError` if the event receiver is closed.
 async fn retry_items(ctx: &mut Context, items: Vec<BatchItem>) -> Result<(), CLIError> {
     let cfg = ctx.config.get_embedding_config();
     let Some(cfg) = cfg else {
@@ -586,7 +586,8 @@ async fn retry_items(ctx: &mut Context, items: Vec<BatchItem>) -> Result<(), CLI
 ///     * writing to the state directory failed. This is typically caused by permission issues.
 ///     * writing out the serialized data failed
 /// * `CLIError::SerializationError` if JSON serialization failed.
-/// * `CLIError::ChannelError` if the event receiver is closed.
+/// * `CLIError::ChannelSendError` if the event receiver is closed.
+/// * `CLIError::ChannelRecvError` if the frontend drops a prompt without replying.
 #[allow(clippy::too_many_lines)]
 async fn prompt_and_fetch_batch_results(
     ctx: &mut Context,
