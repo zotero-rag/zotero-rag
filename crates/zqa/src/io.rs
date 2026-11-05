@@ -11,6 +11,8 @@ use tokio::sync::oneshot;
 use crate::state::UsageMetadata;
 use crate::utils::terminal::{BLUE, DIM_TEXT, ITALICS, RED, RESET, YELLOW};
 
+const PBAR_TEMPLATE: &str = "{bar} {msg} ({percent}%)";
+
 /// A manager for [`indicatif`] progress bars used by the CLI renderer and used by
 /// [`EngineEvent::handle_event`] to update progress bars on events.
 pub(crate) struct TerminalProgress {
@@ -249,15 +251,17 @@ impl EngineEvent {
                 pbar_manager.remove(&id);
 
                 let pbar = if let Some(total) = total {
-                    // NOTE: Maintainers should keep this in sync with `pbar_template_is_valid` below.
-                    pbar_manager.mbar.add(ProgressBar::new(total).with_style(
-                        ProgressStyle::with_template("{bar} {msg} ({percent}%)").unwrap(),
-                    ))
+                    pbar_manager.mbar.add(
+                        ProgressBar::new(total)
+                            .with_style(ProgressStyle::with_template(PBAR_TEMPLATE).unwrap()),
+                    )
                 } else {
-                    pbar_manager.mbar.add(ProgressBar::new_spinner())
+                    let pbar = pbar_manager.mbar.add(ProgressBar::new_spinner());
+                    pbar.enable_steady_tick(Duration::from_millis(100));
+
+                    pbar
                 };
                 pbar.set_message(label);
-                pbar.enable_steady_tick(Duration::from_millis(100));
 
                 pbar_manager.pbar_map.insert(id, pbar);
 
@@ -922,9 +926,7 @@ mod tests {
 
     #[test]
     fn pbar_template_is_valid() {
-        // NOTE: Maintainers should keep this in sync with the template used in
-        // [`EngineEvent::handle_event`].
-        assert!(ProgressStyle::with_template("{bar} {msg} ({percent}%)").is_ok());
+        assert!(ProgressStyle::with_template(PBAR_TEMPLATE).is_ok());
     }
 
     #[test]
