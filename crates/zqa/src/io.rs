@@ -236,7 +236,10 @@ impl EngineEvent {
                 let _ = reply.send(answer);
             }
             Self::Line { reply, .. } => {
-                let _ = reply.send(read_input_line(input)?);
+                let mut line = read_input_line(input)?;
+                let len = line.trim_end_matches(['\r', '\n']).len();
+                line.truncate(len);
+                let _ = reply.send(line);
             }
             Self::Secret { reply, .. } => {
                 let _ = reply.send(read_secret()?);
