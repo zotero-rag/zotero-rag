@@ -268,6 +268,22 @@ fn map_response_to_chat_contents(steps: &[GeminiStep]) -> Vec<ChatHistoryContent
         .collect()
 }
 
+/// Whether an error response body says the model generated a tool call that could not be parsed.
+/// The Interactions API reports this as an HTTP error rather than a `failed` interaction, so it
+/// needs its own check to be retried. A new attempt usually produces a valid call.
+///
+/// # Arguments
+///
+/// * `body` - The error response body.
+///
+/// # Returns
+///
+/// `true` if the body is a JSON error with the code `malformed_tool_call`.
+fn is_malformed_tool_call(body: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(body)
+        .is_ok_and(|value| value["error"]["code"] == "malformed_tool_call")
+}
+
 impl<T: HttpClient> AgenticClient for GeminiClient<T> {
     type HistoryItem = GeminiStep;
     const SCHEMA_KEY: &'static str = GEMINI_SCHEMA_KEY;
@@ -342,7 +358,19 @@ impl<T: HttpClient> AgenticClient for GeminiClient<T> {
         let mut attempt = 0;
         loop {
             let response: GeminiResponseBody =
-                send_generation_request(&self.client, &request, &headers, url, max_retries).await?;
+                match send_generation_request(&self.client, &request, &headers, url, max_retries)
+                    .await
+                {
+                    Err(LLMError::HttpStatusError(body))
+                        if attempt < max_retries && is_malformed_tool_call(&body) =>
+                    {
+                        log::warn!("Gemini generated a malformed tool call; retrying generation");
+                        tokio::time::sleep(exponential_backoff_delay(attempt)).await;
+                        attempt += 1;
+                        continue;
+                    }
+                    result => result?,
+                };
             usage.push(response.usage.into());
 
             let status = response.status;
@@ -662,19 +690,12 @@ mod tests {
         let tool = MockTool {
             call_count: Arc::new(Mutex::new(0)),
         };
-        // `max_output_tokens` counts thought tokens, and the default model thinks at `high` unless
-        // told otherwise. With a small cap, a turn could spend it all on thinking and come back
-        // `incomplete` with no output, so use low effort and no cap.
         let request = ChatRequest {
             chat_history: Vec::new(),
-            max_tokens: None,
+            max_tokens: Some(1024),
             message: "This is a test. Call the `mock_tool`, passing in a `name`, and ensure it returns a greeting".into(),
             system_prompt: None,
-            reasoning: Some(ReasoningConfig {
-                max_tokens: None,
-                effort: Some("low".into()),
-                summary: None,
-            }),
+            reasoning: None,
             tools: Some(&[Box::new(tool)]),
             on_tool_call: None,
             on_text: None,
@@ -736,6 +757,25 @@ mod tests {
         let max_retries = 1;
         let http_client = RecordingSequentialMockHttpClient::from_status_bodies(
             std::iter::repeat_n((429, String::from("{}")), max_retries + 1),
+        );
+        let client = GeminiClient {
+            client: http_client.clone(),
+            config: Some(GeminiConfig {
+                max_retries,
+                ..GeminiConfig::default()
+            }),
+        };
+
+        let result = client.send_message(&ChatRequest::default()).await;
+
+        assert!(matches!(result, Err(LLMError::HttpStatusError(_))));
+        test_eq!(http_client.requests().len(), max_retries + 1);
+
+        // A malformed tool call comes back as an HTTP error, not a `failed` interaction, and is
+        // retried too. CI logs show the body but not the status, so 400 is an assumption.
+        let malformed = r#"{"error":{"message":"Model generated invalid JSON syntax and the output could not be parsed.","code":"malformed_tool_call"}}"#;
+        let http_client = RecordingSequentialMockHttpClient::from_status_bodies(
+            std::iter::repeat_n((400, String::from(malformed)), max_retries + 1),
         );
         let client = GeminiClient {
             client: http_client.clone(),
