@@ -662,12 +662,19 @@ mod tests {
         let tool = MockTool {
             call_count: Arc::new(Mutex::new(0)),
         };
+        // `max_output_tokens` counts thought tokens, and the default model thinks at `high` unless
+        // told otherwise. With a small cap, a turn could spend it all on thinking and come back
+        // `incomplete` with no output, so use low effort and no cap.
         let request = ChatRequest {
             chat_history: Vec::new(),
-            max_tokens: Some(1024),
+            max_tokens: None,
             message: "This is a test. Call the `mock_tool`, passing in a `name`, and ensure it returns a greeting".into(),
             system_prompt: None,
-            reasoning: None,
+            reasoning: Some(ReasoningConfig {
+                max_tokens: None,
+                effort: Some("low".into()),
+                summary: None,
+            }),
             tools: Some(&[Box::new(tool)]),
             on_tool_call: None,
             on_text: None,
