@@ -20,7 +20,7 @@ use crate::cli::handlers::library::{
 use crate::cli::handlers::query::{handle_query_cmd, handle_search_cmd};
 use crate::cli::placeholder::PlaceholderText;
 use crate::cli::readline::get_readline_config;
-use crate::common::Context;
+use crate::common::{CliCommand, Context};
 use crate::state::get_state_dir;
 
 /// Handle a single command or query from the user.
@@ -60,10 +60,33 @@ pub(crate) async fn dispatch_command<O: Write, E: Write>(
         }
         Command::Query { text } => handle_query_cmd(text, ctx).await,
         Command::Resume => handle_resume_cmd(ctx),
-        Command::Search { query } => handle_search_cmd(query, ctx).await,
+        Command::Search { query } => {
+            handle_search_cmd(query, ctx).await?;
+            writeln!(&mut ctx.out).map_err(CLIError::from)
+        }
         Command::Stats => handle_stats_cmd(ctx).await,
     }
     .and(Ok(true))
+}
+
+/// Run a single command given on the command line, without starting the REPL.
+///
+/// # Arguments
+///
+/// * `command` - The subcommand parsed from the command-line arguments.
+/// * `ctx` - A `Context` object that contains CLI args and objects that implement
+///   [`std::io::Write`] for `stdout` and `stderr`.
+///
+/// # Errors
+///
+/// * Returns a [`CLIError`] if the command fails.
+pub(crate) async fn run_command<O: Write, E: Write>(
+    command: CliCommand,
+    ctx: &mut Context<O, E>,
+) -> Result<(), CLIError> {
+    match command {
+        CliCommand::Search { query } => handle_search_cmd(query.join(" "), ctx).await,
+    }
 }
 
 /// The core CLI implementation that implements a REPL for user commands.
@@ -193,7 +216,9 @@ mod tests {
     use zqa_rag::llm::tools::Tool;
     use zqa_rag::reranking::common::RerankProviderConfig;
 
-    use super::dispatch_command;
+    use super::{dispatch_command, run_command};
+    use crate::cli::errors::CLIError;
+    use crate::common::CliCommand;
     use crate::common::test_support::{TestPaths, create_test_context};
     use crate::store::lance::LanceZoteroStore;
     use crate::tools::retrieval::RetrievalTool;
@@ -291,8 +316,27 @@ mod tests {
         test_ok!(dedup_result);
         assert!(dedup_result.unwrap());
 
+        let search_result = dispatch_command("/search machine learning", &mut ctx).await;
+        test_ok!(search_result);
+        assert!(search_result.unwrap());
+
         let output = String::from_utf8(ctx.out.into_inner()).unwrap();
         test_contains!(output, "Deduped ");
+        assert!(output.ends_with("\n\n"));
+    }
+
+    #[tokio::test]
+    async fn test_run_command_rejects_blank_search() {
+        let mut ctx = create_test_context(vec![]);
+
+        let result = run_command(
+            CliCommand::Search {
+                query: vec!["  ".into()],
+            },
+            &mut ctx,
+        )
+        .await;
+        assert!(matches!(result, Err(CLIError::CommandError(_))));
     }
 
     #[retry(3)]

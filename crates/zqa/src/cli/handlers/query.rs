@@ -95,8 +95,8 @@ fn format_number(num: u32) -> String {
 ///
 /// # Errors
 ///
-/// Returns a [`CLIError`] if provider configuration is invalid, vector search fails,
-/// or writing to an output stream fails.
+/// * Returns a [`CLIError`] if the search term is blank, provider configuration is invalid,
+///   vector search fails, or writing to an output stream fails.
 pub(crate) async fn handle_search_cmd<O, E>(
     search_term: String,
     ctx: &mut Context<O, E>,
@@ -105,16 +105,18 @@ where
     O: Write,
     E: Write,
 {
+    let search_term = search_term.trim();
     if search_term.is_empty() {
-        writeln!(&mut ctx.err, "Please provide a search term after /search.")?;
-        return Ok(());
+        return Err(CLIError::CommandError(
+            "Please provide a search term.".to_string(),
+        ));
     }
 
     let vector_search_start = Instant::now();
     let (search_results, _) = ctx
         .store
         .vector_search(
-            search_term.clone(),
+            search_term.to_string(),
             10,
             ctx.config.get_reranker_config().as_ref(),
         )
@@ -128,7 +130,6 @@ where
     for item in &search_results {
         writeln!(&mut ctx.out, "{}", item.metadata.title)?;
     }
-    writeln!(&mut ctx.out)?;
 
     Ok(())
 }

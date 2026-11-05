@@ -17,7 +17,7 @@ pub mod tools;
 pub mod utils;
 
 // Re-export commonly used items
-use cli::app::cli;
+use cli::app::{cli, run_command};
 use common::{Args, Context, setup_logger};
 use config::Config;
 use state::{check_or_create_first_run_file, oobe};
@@ -153,7 +153,8 @@ fn check_api_keys_exist(config: &Config, log_level: log::LevelFilter) {
 
 /// Main entry point for the zqa application.
 ///
-/// This function handles configuration loading, first-run setup, and launches the CLI.
+/// This function handles configuration loading, first-run setup, and launches the CLI. When a
+/// subcommand such as `search` is given, it skips first-run setup, runs that command, and exits.
 ///
 /// # Errors
 ///
@@ -200,33 +201,35 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         config.tool_iteration_limit
     );
 
-    let is_first_run = check_or_create_first_run_file()
-        .or_else(|e| {
-            println!(
-                "Error setting up: {e}. (R)etry, (I)gnore, (S)how error and ignore, or (Q)uit: "
-            );
+    // First-run setup prompts on stdin, so only the interactive prompt runs it.
+    let is_first_run = args.command.is_none()
+        && check_or_create_first_run_file()
+            .or_else(|e| {
+                println!(
+                    "Error setting up: {e}. (R)etry, (I)gnore, (S)how error and ignore, or (Q)uit: "
+                );
 
-            let mut input = String::new();
-            io::stdin()
-                .read_line(&mut input)
-                .expect("Failed to read input");
+                let mut input = String::new();
+                io::stdin()
+                    .read_line(&mut input)
+                    .expect("Failed to read input");
 
-            // Return whether this is a "first run". Most options are treated as if it is not a first run.
-            match input.trim().to_lowercase().as_str() {
-                "r" => check_or_create_first_run_file(),
-                "i" => Ok(false),
-                "s" => {
-                    println!("{e:?}");
-                    Ok(false)
+                // Return whether this is a "first run". Most options are treated as if it is not a first run.
+                match input.trim().to_lowercase().as_str() {
+                    "r" => check_or_create_first_run_file(),
+                    "i" => Ok(false),
+                    "s" => {
+                        println!("{e:?}");
+                        Ok(false)
+                    }
+                    "q" => std::process::exit(1),
+                    _ => {
+                        println!("Invalid input");
+                        std::process::exit(1);
+                    }
                 }
-                "q" => std::process::exit(1),
-                _ => {
-                    println!("Invalid input");
-                    std::process::exit(1);
-                }
-            }
-        })
-        .unwrap();
+            })
+            .unwrap();
 
     if is_first_run {
         let mut stdin = io::stdin().lock();
@@ -239,7 +242,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let store = LanceZoteroStore::from_config(&config)?;
-    let context = Context {
+    let mut context = Context {
         state: State::default(),
         config,
         store,
@@ -249,6 +252,10 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         err: stderr(),
     };
 
-    cli(context).await?;
+    match args.command {
+        Some(command) => run_command(command, &mut context).await?,
+        None => cli(context).await?,
+    }
+
     Ok(())
 }
