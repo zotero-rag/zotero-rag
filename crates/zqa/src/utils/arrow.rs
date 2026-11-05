@@ -148,8 +148,9 @@ pub fn get_schema(embedding_config: &EmbeddingProviderConfig) -> arrow_schema::S
 ///
 /// # Returns
 ///
-/// A `RecordBatch` that can be used to interact with `LanceDB`, and a `Vec` of indices of items
-/// where embedding failed.
+/// A tuple with:
+/// * a `RecordBatch` that can be used to interact with `LanceDB`;
+/// * a `Vec` of indices of items where embedding failed.
 pub fn library_to_arrow(
     items: &[ZoteroItem],
     embedding_config: &EmbeddingProviderConfig,
@@ -185,8 +186,9 @@ pub fn library_to_arrow(
 ///
 /// # Returns
 ///
-/// A `RecordBatch` containing only the items that were embedded, and a `Vec` containing the indices
-/// of the items where embedding failed.
+/// A tuple with:
+/// * a `RecordBatch` containing only the items that were embedded;
+/// * a `Vec` of indices of items where embedding failed.
 fn embedded_items_to_arrow(
     items: &[ZoteroItem],
     embeddings: &FixedSizeListArray,
