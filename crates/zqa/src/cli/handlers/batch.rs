@@ -829,13 +829,9 @@ async fn handle_batch_check_status_cmd(ctx: &mut Context) -> Result<(), CLIError
         }
         1 => pending_batches.first().unwrap(),
         _ => {
-            ctx.emit(EngineEvent::Text {
-                message: "You have multiple submitted batches. Please choose one from the below options:\n".into(),
-            }).await?;
-
             let choices = pending_batches
                 .iter()
-                .map(|batch| format!("[seq {}] {batch}\n", batch.seq_id))
+                .map(|batch| format!("[seq {}] {batch}", batch.seq_id))
                 .collect::<Vec<_>>();
             let (tx, rx) = oneshot::channel();
 
