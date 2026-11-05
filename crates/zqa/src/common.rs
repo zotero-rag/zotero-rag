@@ -115,11 +115,11 @@ impl<OutStream: Write, ErrStream: Write> Context<OutStream, ErrStream> {
         not(test),
         expect(dead_code, reason = "Event producers are not connected yet.")
     )]
-    pub(crate) async fn emit(&self, event: EngineEvent) -> Result<(), SendError<EngineEvent>> {
+    pub(crate) async fn emit(&self, event: EngineEvent) -> Result<(), Box<SendError<EngineEvent>>> {
         let Some(tx) = &self.event_tx else {
             return Ok(());
         };
-        tx.send(event).await
+        tx.send(event).await.map_err(Box::new)
     }
 }
 
