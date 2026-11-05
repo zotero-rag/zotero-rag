@@ -397,6 +397,16 @@ impl<T: HttpClient> AgenticClient for GeminiClient<T> {
 
             // `incomplete` means the output was cut off, e.g. by `max_output_tokens`.
             let contents = map_response_to_chat_contents(&steps);
+            if status == "completed" && contents.is_empty() && attempt < max_retries {
+                // The model sometimes finishes a turn without any output; a new attempt usually
+                // produces one. Truncated or cancelled turns are not retried, since a retry under
+                // the same limits would likely end the same way.
+                log::warn!("Gemini completed without any output; retrying generation");
+                tokio::time::sleep(exponential_backoff_delay(attempt)).await;
+                attempt += 1;
+                continue;
+            }
+
             if !matches!(
                 status.as_str(),
                 "completed" | "requires_action" | "incomplete"
@@ -789,6 +799,37 @@ mod tests {
 
         assert!(matches!(result, Err(LLMError::HttpStatusError(_))));
         test_eq!(http_client.requests().len(), max_retries + 1);
+
+        // A turn that completes without any output is retried, and is still an error once the
+        // retries run out.
+        for steps in [
+            serde_json::json!([]),
+            serde_json::json!([{"type": "model_output", "content": []}]),
+        ] {
+            let mut response: serde_json::Value = serde_json::from_str(FAILED_RESPONSE).unwrap();
+            response["status"] = "completed".into();
+            response["steps"] = steps;
+            let http_client = RecordingSequentialMockHttpClient::new(std::iter::repeat_n(
+                response,
+                max_retries + 1,
+            ));
+            let client = GeminiClient {
+                client: http_client.clone(),
+                config: Some(GeminiConfig {
+                    max_retries,
+                    ..GeminiConfig::default()
+                }),
+            };
+
+            let result = client.send_message(&ChatRequest::default()).await;
+
+            assert!(matches!(
+                result,
+                Err(LLMError::GenerationError { provider: "Gemini", finish_reason: reason })
+                    if reason == "completed"
+            ));
+            test_eq!(http_client.requests().len(), max_retries + 1);
+        }
     }
 
     #[tokio::test]
@@ -797,10 +838,9 @@ mod tests {
 
         for (finish_reason, steps) in [
             ("cancelled", None),
-            ("completed", None),
             ("incomplete", None),
             (
-                "completed",
+                "incomplete",
                 Some(serde_json::json!([{"type": "model_output", "content": []}])),
             ),
         ] {
@@ -874,10 +914,13 @@ mod tests {
         };
 
         let failed_response: serde_json::Value = serde_json::from_str(FAILED_RESPONSE).unwrap();
+        // A turn that completes without any output is retried like a failed one.
+        let mut empty_response = failed_response.clone();
+        empty_response["status"] = "completed".into();
         let http_client = RecordingSequentialMockHttpClient::new([
-            failed_response.clone(),
-            tool_call_response,
             failed_response,
+            tool_call_response,
+            empty_response,
             text_response,
         ]);
         let mock_client = GeminiClient {
