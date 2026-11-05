@@ -117,7 +117,7 @@ async fn run_command<R: BufRead, O: Write, E: Write>(
     match result {
         Ok(keep_running) => Ok(keep_running),
         Err(e) => {
-            write!(err, "{e}")?;
+            writeln!(err, "{e}")?;
             Ok(true)
         }
     }
