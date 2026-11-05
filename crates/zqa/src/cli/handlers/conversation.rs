@@ -27,7 +27,7 @@ use crate::state::{SavedChatHistory, get_conversation_history, save_conversation
 /// # Errors
 ///
 /// * `CLIError::CommandError` - If the current conversation could not be saved.
-/// * `CLIError::ChannelError` - If the event receiver is closed.
+/// * `CLIError::ChannelSendError` - If the event receiver is closed.
 /// * `CLIError::LockPoisoningError` - If a lock on conversation state could not be obtained.
 pub(crate) async fn handle_resume_cmd(ctx: &mut Context) -> Result<(), CLIError> {
     match get_conversation_history() {

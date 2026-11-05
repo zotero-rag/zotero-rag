@@ -43,7 +43,7 @@ pub(crate) async fn handle_quit_cmd(ctx: &mut Context) -> Result<(), CLIError> {
 ///
 /// # Errors
 ///
-/// * `CLIError::ChannelError` - If the event receiver is closed.
+/// * `CLIError::ChannelSendError` - If the event receiver is closed.
 pub(crate) async fn handle_config_cmd(ctx: &mut Context) -> Result<(), CLIError> {
     ctx.emit(EngineEvent::Text {
         message: ctx.config.to_string(),
@@ -93,7 +93,7 @@ pub(crate) async fn handle_new_conversation_cmd(ctx: &mut Context) -> Result<(),
 ///
 /// # Errors
 ///
-/// * `CLIError::ChannelError` - If the event receiver is closed.
+/// * `CLIError::ChannelSendError` - If the event receiver is closed.
 pub(crate) async fn handle_help_cmd(ctx: &mut Context) -> Result<(), CLIError> {
     ctx.emit(EngineEvent::Text {
         message: format!(
