@@ -46,7 +46,7 @@ pub(crate) async fn handle_quit_cmd(ctx: &mut Context) -> Result<(), CLIError> {
 /// * `CLIError::ChannelSendError` - If the event receiver is closed.
 pub(crate) async fn handle_config_cmd(ctx: &mut Context) -> Result<(), CLIError> {
     ctx.emit(EngineEvent::Text {
-        message: ctx.config.to_string(),
+        message: format!("{}\n", ctx.config),
     })
     .await?;
 
