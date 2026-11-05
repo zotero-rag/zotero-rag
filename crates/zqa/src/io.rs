@@ -204,10 +204,10 @@ impl EngineEvent {
         match self {
             Self::Confirm { default, reply, .. } => {
                 let answer = read_answer(input, out, "Enter y or n.\n> ", |line| {
-                    match line.chars().next().map(|c| c.to_ascii_lowercase()) {
-                        None => Some(default),
-                        Some('y') => Some(true),
-                        Some('n') => Some(false),
+                    match line.to_ascii_lowercase().trim() {
+                        "" => Some(default),
+                        "y" | "yes" => Some(true),
+                        "n" | "no" => Some(false),
                         _ => None,
                     }
                 })?;
