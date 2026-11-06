@@ -222,6 +222,7 @@ impl EngineEvent {
     /// * Returns `InvalidInput` for a choice request with no options, before writing or reading.
     /// * Returns `UnexpectedEof` when input ends before a confirmation, choice, or line reply.
     /// * Propagates read, write, flush, and secret-reader errors. The reply sender is dropped.
+    #[allow(clippy::too_many_lines)]
     pub(crate) fn handle_event<R, O, E>(
         mut self,
         input: &mut R,
