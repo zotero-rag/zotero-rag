@@ -1,15 +1,16 @@
 //! Command handlers for query operations.
 
+use std::iter;
 use std::path::Path;
 use std::pin::pin;
-use std::sync::{Arc, Mutex, atomic};
+use std::sync::Arc;
+use std::sync::atomic;
 use std::time::Instant;
 
-use tokio::sync::mpsc;
+use tokio::sync::mpsc::{self, UnboundedSender};
 use zqa_rag::llm::base::{ChatHistoryContent, ChatHistoryItem, ChatRequest, MessageRole};
-use zqa_rag::llm::factory::get_client_with_config;
+use zqa_rag::llm::factory::{LLMClient, get_client_with_config};
 use zqa_rag::llm::tools::{CallbackFn, Tool};
-use zqa_rag::pricing::{ModelUsage, get_model_pricing, get_usd_exchange_rate};
 use zqa_rag::providers::registry::provider_registry;
 
 use crate::cli::errors::CLIError;
@@ -46,26 +47,6 @@ impl From<ResponseSegment> for EngineEvent {
             },
         }
     }
-}
-
-/// Given a positive number, returns a thousands separator-formatted string representation
-///
-/// # Arguments:
-///
-/// * `num` - The number to format
-///
-/// # Returns
-///
-/// The thousands-separated string
-fn format_number(num: u32) -> String {
-    num.to_string()
-        .as_bytes()
-        .rchunks(3)
-        .rev()
-        .map(std::str::from_utf8)
-        .collect::<Result<Vec<&str>, _>>()
-        .unwrap_or_default()
-        .join(",")
 }
 
 /// Perform a vector search and emit matching titles as text events.
@@ -105,26 +86,127 @@ pub(crate) async fn handle_search_cmd(
         )
         .await?;
     let vector_search_duration = vector_search_start.elapsed();
-    ctx.emit(EngineEvent::StatusUpdate {
-        message: format!(
-            "{DIM_TEXT}Vector search completed in {vector_search_duration:.2?}{RESET}\n"
-        ),
-    })
-    .await?;
-
-    for item in &search_results {
-        ctx.emit(EngineEvent::Text {
-            message: format!("{}\n", item.metadata.title),
+    ctx.emit_multiple(
+        iter::once(EngineEvent::StatusUpdate {
+            message: format!(
+                "{DIM_TEXT}Vector search completed in {vector_search_duration:.2?}{RESET}\n"
+            ),
         })
-        .await?;
-    }
-
-    ctx.emit(EngineEvent::Text {
-        message: "\n".into(),
-    })
+        .chain(search_results.iter().map(|item| EngineEvent::Text {
+            message: format!("{}\n", item.metadata.title),
+        }))
+        .chain(iter::once(EngineEvent::Text {
+            message: "\n".into(),
+        })),
+    )
     .await?;
 
     Ok(())
+}
+
+/// Generate a title for a conversation based on the given user query.
+///
+/// # Arguments
+///
+/// * `user_query` - The user query.
+/// * `client` - A configured [`LLMClient`].
+/// * `model` - The model string to use.
+///
+/// # Returns
+///
+/// A tuple consisting of the generated title and the usage statistics for the LLM call.
+async fn generate_title(
+    user_query: String,
+    client: LLMClient,
+    model: String,
+) -> Option<(String, UsageMetadata)> {
+    let prompt = get_title_prompt(&user_query);
+    let request = ChatRequest {
+        chat_history: Vec::new(),
+        max_tokens: Some(20),
+        message: prompt,
+        system_prompt: Some(get_title_system_prompt().to_owned()),
+        reasoning: None,
+        tools: None,
+        on_tool_call: None,
+        on_text: None,
+        on_reasoning: None,
+        tool_iteration_limit: None,
+    };
+
+    let response = match client.send_message(&request).await {
+        Ok(r) => r,
+        Err(error) => {
+            log::debug!(
+                "Background title generation failed: {}",
+                zqa_rag::logging::preview(error)
+            );
+            return None;
+        }
+    };
+
+    let title = ModelResponse::from(&response.content).to_string();
+    let title = title.trim().to_string();
+
+    let usage = UsageMetadata::from_rag_usage(&response.usage, client.get_provider(), &model).await;
+    Some((title, usage))
+}
+
+/// Build the tools available to the model for a query, each reporting on `status_tx`.
+///
+/// # Arguments
+///
+/// * `llm_client` - The client the summarization tool uses.
+/// * `ctx` - The application context, for the store, configuration and imported documents.
+/// * `status_tx` - The channel the tool wrappers send their status events on.
+/// * `cost_tx` - The channel to send priced usage over.
+///
+/// # Returns
+///
+/// The retrieval and summarization tools, plus tools for any imported documents.
+///
+/// # Errors
+///
+/// Returns a [`CLIError`] if the document tools can't be built (see [`get_user_document_tools`]).
+fn build_query_tools(
+    llm_client: LLMClient,
+    ctx: &mut Context,
+    status_tx: UnboundedSender<EngineEvent>,
+    cost_tx: UnboundedSender<UsageMetadata>,
+) -> Result<Vec<Box<dyn Tool>>, CLIError> {
+    let Some(embedding_config) = ctx.config.get_embedding_config() else {
+        return Err(CLIError::ConfigError(
+            "Embedding config is required before queries can be run.".into(),
+        ));
+    };
+
+    let store = Arc::new(ctx.store.clone());
+    let retrieval_tool = RetrievalTool::new(
+        Arc::clone(&store),
+        embedding_config,
+        ctx.config.get_reranker_config(),
+        ctx.path_options.library_path.clone(),
+        cost_tx.clone(),
+    );
+
+    let summarization_tool = SummarizationTool::new(llm_client, store, cost_tx.clone());
+
+    let mut tools: Vec<Box<dyn Tool>> = vec![
+        Box::new(
+            retrieval_tool
+                .verbose(status_tx.clone())
+                .timed(status_tx.clone()),
+        ),
+        Box::new(
+            summarization_tool
+                .verbose(status_tx.clone())
+                .timed(status_tx.clone()),
+        ),
+    ];
+    let document_tools = get_user_document_tools(ctx, status_tx, cost_tx)?;
+    tools.extend(document_tools);
+
+    Ok(tools)
 }
 
 /// Answer a user query using retrieval and generation over the user's Zotero library.
@@ -170,6 +252,7 @@ pub(crate) async fn handle_query_cmd(query: String, ctx: &mut Context) -> Result
         })
         .await?;
     }
+
     let llm_client = ctx
         .config
         .get_generation_config()
@@ -179,13 +262,14 @@ pub(crate) async fn handle_query_cmd(query: String, ctx: &mut Context) -> Result
             "Failed to get LLM generation config in `run_query`".into(),
         ))?;
 
-    let embedding_config = ctx
+    // `build_query_tools` needs this config too. Checking here fails the query before the title
+    // task is spawned and its tokens are spent.
+    let _embedding_config = ctx
         .config
         .get_embedding_config()
         .ok_or(CLIError::ConfigError(
             "Could not get embedding config".into(),
         ))?;
-    let reranker_config = ctx.config.get_reranker_config();
 
     // Set up channels to communicate cost
     let (cost_tx, mut cost_rx) = mpsc::unbounded_channel::<UsageMetadata>();
@@ -198,69 +282,24 @@ pub(crate) async fn handle_query_cmd(query: String, ctx: &mut Context) -> Result
         && let Ok(small_client) = get_client_with_config(&small_config)
     {
         let title_cost_tx = cost_tx.clone();
-        let config_clone = ctx.config.clone();
-        let title_model_name = small_config.model_name().to_owned();
-        let prompt = get_title_prompt(&query);
+        let title_model_name = small_config.model_name().to_string();
+        let query = query.clone();
         tokio::spawn(async move {
-            let request = ChatRequest {
-                chat_history: Vec::new(),
-                max_tokens: Some(20),
-                message: prompt,
-                system_prompt: Some(get_title_system_prompt().to_owned()),
-                reasoning: None,
-                tools: None,
-                on_tool_call: None,
-                on_text: None,
-                on_reasoning: None,
-                tool_iteration_limit: None,
-            };
-            if let Ok(response) = small_client
-                .send_message(&request)
-                .await
-                .inspect_err(|error| {
-                    log::debug!(
-                        "Background title generation failed: {}",
-                        zqa_rag::logging::preview(error)
-                    );
-                })
+            if let Some((title, usage)) =
+                generate_title(query, small_client, title_model_name).await
             {
-                let title = ModelResponse::from(&response.content).to_string();
-                let title = title.trim().to_string();
+                let _ = title_cost_tx.send(usage);
                 if !title.is_empty()
                     && let Ok(mut slot) = title_slot.lock()
                 {
                     *slot = Some(title);
                 }
-
-                let usage = UsageMetadata::from_rag_usage(
-                    &response.usage,
-                    config_clone.model_provider,
-                    &title_model_name,
-                )
-                .await;
-                let _ = title_cost_tx.send(usage);
             }
         });
     }
-    drop(cost_tx);
-
-    let embedding_provider_name = embedding_config.provider_name().to_string();
-    let embedding_model_name = embedding_config.model_name().to_string();
-    let reranker_provider_and_model = reranker_config
-        .as_ref()
-        .map(|c| (c.provider_name().to_string(), c.model_name().to_string()));
-
-    let store_arc = Arc::new(ctx.store.clone());
-    let retrieval_tool = RetrievalTool::new(
-        std::sync::Arc::clone(&store_arc),
-        reranker_config,
-        ctx.path_options.library_path.clone(),
-    );
-    let retrieval_embedding_tokens = Arc::clone(&retrieval_tool.embedding_tokens);
-    let retrieval_rerank_tokens = Arc::clone(&retrieval_tool.rerank_tokens);
 
     let (response_tx, mut response_rx) = mpsc::unbounded_channel::<ResponseSegment>();
-    let (status_tx, mut status_rx) = mpsc::unbounded_channel::<String>();
+    let (status_tx, mut status_rx) = mpsc::unbounded_channel::<EngineEvent>();
     let text_tx = response_tx.clone();
     let on_text: Arc<CallbackFn<str>> = Arc::new(move |text: &str| {
         let _ = text_tx.send(ResponseSegment::Text(text.to_string()));
@@ -269,80 +308,57 @@ pub(crate) async fn handle_query_cmd(query: String, ctx: &mut Context) -> Result
         let _ = response_tx.send(ResponseSegment::Reasoning(reasoning.to_string()));
     });
 
-    // Since `Box::new` moves the tool but we still need the modified usage after the tool runs, we
-    // pass in an `Arc` that we create here. We use the `zqa-rag` struct `ModelUsage` since that
-    // doesn't require a `Config` object.
-    let summarization_usage = Arc::new(Mutex::new(Vec::new()));
-    let summarization_tool = SummarizationTool::new(
-        llm_client.clone(),
-        store_arc,
-        Arc::clone(&summarization_usage),
-    );
-    let mut tools: Vec<Box<dyn Tool>> = vec![
-        Box::new(
-            retrieval_tool
-                .verbose(status_tx.clone())
-                .timed(status_tx.clone()),
-        ),
-        Box::new(
-            summarization_tool
-                .verbose(status_tx.clone())
-                .timed(status_tx.clone()),
-        ),
-    ];
-    let document_tools = get_user_document_tools(ctx, status_tx)?;
-    tools.extend(document_tools);
-
-    let chat_history = Arc::clone(&ctx.state.chat_history);
-
-    let request = {
-        let history = chat_history
-            .lock()
-            .expect("Could not obtain lock on chat history.");
-        ChatRequest {
-            chat_history: history.clone(),
-            max_tokens: None,
-            message: get_summarize_prompt(&query),
-            system_prompt: Some(get_summarize_system_prompt()),
-            reasoning: llm_client.get_reasoning_config(),
-            tools: Some(&tools),
-            on_tool_call: None,
-            on_text: Some(on_text),
-            on_reasoning: Some(on_reasoning),
-            tool_iteration_limit: Some(ctx.config.tool_iteration_limit),
-        }
-    };
-    log::debug!(
-        "Query ready: history_items={}, tools={}",
-        request.chat_history.len(),
-        tools.len()
-    );
-
     let final_draft_start = Instant::now();
-    let mut send_message = pin!(llm_client.send_message(&request));
-    let result = loop {
-        tokio::select! {
-            Some(segment) = response_rx.recv() => ctx.emit(segment.into()).await?,
-            Some(line) = status_rx.recv() => ctx.emit(EngineEvent::StatusUpdate {
-                message: format!("{line}\n"),
-            }).await?,
-            Some(title_cost) = cost_rx.recv() => ctx.state.usage += title_cost,
-            result = &mut send_message => break result,
+    let chat_history = Arc::clone(&ctx.state.chat_history);
+    let mut query_usage = UsageMetadata::default();
+    let result = {
+        let tools = build_query_tools(llm_client.clone(), ctx, status_tx, cost_tx.clone())?;
+
+        let request = {
+            let history = chat_history
+                .lock()
+                .expect("Could not obtain lock on chat history.");
+            ChatRequest {
+                chat_history: history.clone(),
+                max_tokens: None,
+                message: get_summarize_prompt(&query),
+                system_prompt: Some(get_summarize_system_prompt()),
+                reasoning: llm_client.get_reasoning_config(),
+                tools: Some(&tools),
+                on_tool_call: None,
+                on_text: Some(on_text),
+                on_reasoning: Some(on_reasoning),
+                tool_iteration_limit: Some(ctx.config.tool_iteration_limit),
+            }
+        };
+        log::debug!(
+            "Query ready: history_items={}, tools={}",
+            request.chat_history.len(),
+            tools.len()
+        );
+
+        let mut send_message = pin!(llm_client.send_message(&request));
+        loop {
+            tokio::select! {
+                Some(segment) = response_rx.recv() => ctx.emit(segment.into()).await?,
+                Some(event) = status_rx.recv() => ctx.emit(event).await?,
+                Some(usage) = cost_rx.recv() => query_usage += usage,
+                result = &mut send_message => break result,
+            }
         }
     };
-    // Both producers can race the response's completion; drain the leftovers.
+    // Once the above block ends, the remaining sender left is the title generation task's.
+    drop(cost_tx);
+
+    // Producers can race the response's completion; drain the leftovers.
     while let Ok(segment) = response_rx.try_recv() {
         ctx.emit(segment.into()).await?;
     }
-
-    while let Ok(line) = status_rx.try_recv() {
-        ctx.emit(EngineEvent::StatusUpdate {
-            message: format!("{line}\n"),
-        })
-        .await?;
+    while let Ok(event) = status_rx.try_recv() {
+        ctx.emit(event).await?;
     }
     while let Some(usage) = cost_rx.recv().await {
-        ctx.state.usage += usage;
+        query_usage += usage;
     }
 
     let final_draft_duration = final_draft_start.elapsed();
@@ -360,56 +376,12 @@ pub(crate) async fn handle_query_cmd(query: String, ctx: &mut Context) -> Result
             })
             .await?;
 
-            // Collect the usage of every request; `UsageMetadata::from_rag_usage` prices each one
-            let mut request_usage = response.usage;
-            request_usage.extend(
-                summarization_usage
-                    .lock()
-                    .map(|mut u| std::mem::take(&mut *u))?,
-            );
-            let usage = UsageMetadata::from_rag_usage(
-                &request_usage,
+            query_usage += UsageMetadata::from_rag_usage(
+                &response.usage,
                 ctx.config.model_provider,
                 &ctx.config.get_generation_model_name().unwrap_or_default(),
             )
             .await;
-            ctx.state.usage += usage;
-
-            // Add embedding cost to session cost
-            let emb_chars = retrieval_embedding_tokens.load(atomic::Ordering::Relaxed);
-            if emb_chars > 0 {
-                let emb_pricing =
-                    get_model_pricing(&embedding_provider_name, &embedding_model_name, None).await;
-
-                if let Some(ref p) = emb_pricing {
-                    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-                    let emb_cost = (p.estimate_cost(ModelUsage {
-                        // TODO: Do better
-                        input_tokens: (emb_chars / 4) as u32,
-                        ..Default::default()
-                    }) * 100.0) as u32;
-                    ctx.state.usage.estimated_cost += emb_cost;
-                }
-            }
-
-            // Add reranker cost to session cost
-            let rerank_chars_val = retrieval_rerank_tokens.load(atomic::Ordering::Relaxed);
-            if rerank_chars_val > 0
-                && let Some((rerank_provider, rerank_model)) = reranker_provider_and_model
-            {
-                let rerank_pricing = get_model_pricing(&rerank_provider, &rerank_model, None).await;
-
-                if let Some(ref p) = rerank_pricing {
-                    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-                    let rerank_cost = (p.estimate_cost(ModelUsage {
-                        // TODO: Do better
-                        input_tokens: (rerank_chars_val / 4) as u32,
-                        ..Default::default()
-                    }) * 100.0) as u32;
-
-                    ctx.state.usage.estimated_cost += rerank_cost;
-                }
-            }
 
             // Update state - re-acquire lock
             let mut history = chat_history
@@ -417,7 +389,7 @@ pub(crate) async fn handle_query_cmd(query: String, ctx: &mut Context) -> Result
                 .expect("Could not obtain lock on chat history.");
             history.push(ChatHistoryItem {
                 role: MessageRole::User,
-                content: vec![ChatHistoryContent::Text(query.clone())],
+                content: vec![ChatHistoryContent::Text(query)],
             });
 
             history.extend(response.history_additions);
@@ -428,68 +400,25 @@ pub(crate) async fn handle_query_cmd(query: String, ctx: &mut Context) -> Result
                 "Query failed in {final_draft_duration:.2?}: {}",
                 zqa_rag::logging::preview(&e)
             );
-            ctx.emit(EngineEvent::StatusUpdate {
-                message: format!(
-                    "{DIM_TEXT}Final draft failed in {final_draft_duration:.2?}{RESET}\n"
-                ),
-            })
-            .await?;
-
-            ctx.emit(EngineEvent::Error {
-                message: format!("Failed to call the LLM endpoint for the final response: {e}\n"),
-            })
+            ctx.emit_multiple([
+                EngineEvent::StatusUpdate {
+                    message: format!(
+                        "{DIM_TEXT}Final draft failed in {final_draft_duration:.2?}{RESET}\n"
+                    ),
+                },
+                EngineEvent::Error {
+                    message: format!(
+                        "Failed to call the LLM endpoint for the final response: {e}\n"
+                    ),
+                },
+            ])
             .await?;
         }
     }
 
-    ctx.emit(EngineEvent::Text {
-        message: "\n-----\n".into(),
-    })
-    .await?;
-    ctx.emit(EngineEvent::Text {
-        message: format!("{DIM_TEXT}Total token usage:{RESET}\n"),
-    })
-    .await?;
-    ctx.emit(EngineEvent::Text {
-        message: format!(
-            "\t{DIM_TEXT}Input tokens: {}{RESET}\n",
-            format_number(ctx.state.usage.input_tokens)
-        ),
-    })
-    .await?;
-    ctx.emit(EngineEvent::Text {
-        message: format!(
-            "\t{DIM_TEXT}Output tokens: {}{RESET}\n\n",
-            format_number(ctx.state.usage.output_tokens)
-        ),
-    })
-    .await?;
-
-    let cost = f64::from(ctx.state.usage.estimated_cost) / 100.0;
-    if cost > 0.0 {
-        let rate = *ctx
-            .state
-            .exchange_rate
-            .get_or_init(|| get_usd_exchange_rate(&ctx.config.currency))
-            .await;
-        let (cost, currency) = match rate {
-            Some(rate) => (cost * rate, ctx.config.currency.to_ascii_uppercase()),
-            None => (cost, String::from("USD")),
-        };
-
-        ctx.emit(EngineEvent::Text {
-            message: format!(
-                "\t{DIM_TEXT}Session cost: {cost:.4} {currency} ({}){RESET}\n",
-                ctx.config.get_generation_model_name().unwrap_or_default()
-            ),
-        })
+    ctx.state.usage += query_usage;
+    ctx.emit(EngineEvent::TokenUsage { usage: query_usage })
         .await?;
-    }
-
-    ctx.emit(EngineEvent::Text {
-        message: "\n".into(),
-    })
-    .await?;
 
     Ok(())
 }
@@ -592,9 +521,12 @@ mod tests {
 
         test_ok!(result);
         assert!(result.is_ok());
-        assert!(events.iter().any(|event| matches!(
-            event,
-            EngineEvent::Text { message } if message.contains("Total token usage:")
-        )));
+        test_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(event, EngineEvent::TokenUsage { .. }))
+                .count(),
+            1
+        );
     }
 }

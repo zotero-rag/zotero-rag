@@ -27,6 +27,8 @@ use zqa_rag::logging::preview;
 use zqa_rag::reranking::common::{RerankProviderConfig, get_reranking_provider_with_config};
 
 use crate::common::UserDocument;
+use crate::io::EngineEvent;
+use crate::state::{UsageMetadata, get_model_usage};
 use crate::tools::mixins::ToolExt;
 use crate::utils::rag::ModelResponse;
 
@@ -78,6 +80,8 @@ pub(crate) struct DocumentsToolContext {
     pub(crate) reranker_config: Option<RerankProviderConfig>,
     /// The client to interface with the LLM provider's text generation endpoint.
     pub(crate) client: Option<LLMClient>,
+    /// The channel that priced embedding, reranking and sub-agent usage is sent on.
+    pub(crate) cost_tx: UnboundedSender<UsageMetadata>,
 }
 
 /// Factory to create the canonical toolset used by agents to interact with the user-imported
@@ -88,12 +92,13 @@ pub(crate) struct DocumentsToolFactory {
 }
 
 impl DocumentsToolFactory {
-    /// Create a new factory.
+    /// Create a new factory. The tools it builds send their priced usage on `cost_tx`.
     pub(crate) fn new(
         imports: &Arc<RwLock<HashMap<String, Arc<UserDocument>>>>,
         embedding_config: EmbeddingProviderConfig,
         reranker_config: Option<RerankProviderConfig>,
         client: Option<LLMClient>,
+        cost_tx: UnboundedSender<UsageMetadata>,
     ) -> Self {
         let documents = Arc::clone(imports);
 
@@ -103,6 +108,7 @@ impl DocumentsToolFactory {
                 embedding_config,
                 reranker_config,
                 client,
+                cost_tx,
             }),
         }
     }
@@ -113,7 +119,10 @@ impl DocumentsToolFactory {
     /// # Arguments
     ///
     /// * `status_tx` - The channel on which the tool wrappers report their status lines.
-    pub(crate) fn build_tools(&self, status_tx: UnboundedSender<String>) -> Vec<Box<dyn Tool>> {
+    pub(crate) fn build_tools(
+        &self,
+        status_tx: UnboundedSender<EngineEvent>,
+    ) -> Vec<Box<dyn Tool>> {
         vec![
             // `ListDocumentsTool` doesn't take very long since it's just a listing, so it doesn't
             // need to be `timed()`.
@@ -319,6 +328,7 @@ fn get_embeddings(
 /// * `retrieved_chunks` - A list of relevant chunks retrieved via embeddings
 /// * `summary` - Extracted summary. See [`get_summary_end_index`].
 /// * `client` - A configured [`LLMClient`] to use for the sub-agent call
+/// * `cost_tx` - The channel the sub-agent call's priced usage is sent on.
 ///
 /// # Returns
 ///
@@ -326,12 +336,13 @@ fn get_embeddings(
 ///
 /// # Errors
 ///
-/// * [`DocumentError::ApiError`] if the LLM client returns an error.
+/// * [`DocumentError::ApiError`] if the LLM client returns an error. No usage is sent in that case.
 async fn call_subagent(
     query: &str,
     retrieved_chunks: &[&str],
     summary: &str,
     client: &LLMClient,
+    cost_tx: &UnboundedSender<UsageMetadata>,
 ) -> Result<String, DocumentError> {
     let request = ChatRequest {
         message: get_prompt(query, retrieved_chunks, summary),
@@ -339,19 +350,21 @@ async fn call_subagent(
         ..ChatRequest::default()
     };
 
-    client
-        .send_message(&request)
-        .await
-        .map(|response| {
-            let response = ModelResponse::from(&response.content).to_string();
+    let response = client.send_message(&request).await?;
+    let usage = UsageMetadata::from_rag_usage(
+        &response.usage,
+        client.get_provider(),
+        &client.get_model_name().unwrap_or_default(),
+    )
+    .await;
+    let _ = cost_tx.send(usage);
 
-            // TODO: In a future refactor, this will be updated to actually get
-            // a `Vec` of chunks. That requires implementing structured
-            // outputs, which is a larger-scale change
+    // TODO: In a future refactor, this will be updated to actually get
+    // a `Vec` of chunks. That requires implementing structured
+    // outputs, which is a larger-scale change
+    let response = ModelResponse::from(&response.content).to_string();
 
-            response.trim().to_string()
-        })
-        .map_err(Into::<DocumentError>::into)
+    Ok(response.trim().to_string())
 }
 
 /// Perform embedding-only retrieval from unchunked `contents`, based on `query`.
@@ -362,6 +375,9 @@ async fn call_subagent(
 /// * `contents` - The [`zqa_pdftools::parse::ExtractedContent`] from the PDF parser.
 /// * `embedding_config` - Configuration for an embedding provider
 /// * `reranker_config` - Configuration for an reranker provider
+/// * `cost_tx` - The channel that priced usage is sent on: once after embedding, and once more
+///   after reranking if it runs. Like Zotero library search, both are estimated from character
+///   counts (see [`get_model_usage`]).
 ///
 /// # Returns
 ///
@@ -376,6 +392,7 @@ async fn embedding_retrieval(
     contents: &ExtractedContent,
     embedding_config: &EmbeddingProviderConfig,
     reranker_config: Option<&RerankProviderConfig>,
+    cost_tx: &UnboundedSender<UsageMetadata>,
 ) -> Result<Vec<String>, DocumentError> {
     let chunker = Chunker::new(contents.clone(), ChunkingStrategy::SectionBased(2048));
     let chunks = chunker.chunk();
@@ -397,6 +414,15 @@ async fn embedding_retrieval(
 
     let query_embeddings = get_embeddings(&[query], &provider)?;
     let dim = query_embeddings.len();
+
+    let embedded_chars = chunk_texts.iter().map(String::len).sum::<usize>() + query.len();
+    let usage = get_model_usage(
+        embedding_config.provider_name(),
+        embedding_config.model_name(),
+        embedded_chars as u64,
+    )
+    .await;
+    let _ = cost_tx.send(usage);
 
     let query_normalized = normalize(&query_embeddings);
     let chunk_embeddings_normalized: Vec<f32> = chunk_embeddings
@@ -460,6 +486,15 @@ async fn embedding_retrieval(
     let reranker = get_reranking_provider_with_config(reranker_config)?;
     let reranked_idx: Vec<usize> = reranker.rerank(&kept_chunks, query).await?;
 
+    let reranked_chars = kept_chunks.iter().map(|s| s.len()).sum::<usize>() + query.len();
+    let usage = get_model_usage(
+        reranker_config.provider_name(),
+        reranker_config.model_name(),
+        reranked_chars as u64,
+    )
+    .await;
+    let _ = cost_tx.send(usage);
+
     let reranked_chunks: Vec<String> = reranked_idx
         .into_iter()
         .map(|i| kept_chunks[i].to_string())
@@ -496,6 +531,7 @@ async fn embedding_retrieval(
 /// * `reranker_config` - Configuration for an reranker provider
 /// * `client` - An optional [`zqa_rag::llm::factory::LLMClient`]. Must be `Some(..)` if
 ///   `query_method` is [`QueryMethod::Hybrid`].
+/// * `cost_tx` - The channel that priced usage is sent on, once per provider call.
 ///
 /// # Returns
 ///
@@ -507,6 +543,7 @@ async fn embedding_retrieval(
 ///   error.
 /// * `DocumentError::ApiError` if either the embedding or reranker provider could not be
 ///   obtained, or if the embeddings or reranked chunks could not be computed.
+#[allow(clippy::too_many_lines)]
 async fn process_document(
     document: &UserDocument,
     query: &str,
@@ -514,13 +551,20 @@ async fn process_document(
     embedding_config: &EmbeddingProviderConfig,
     reranker_config: Option<&RerankProviderConfig>,
     client: Option<&LLMClient>,
+    cost_tx: &UnboundedSender<UsageMetadata>,
 ) -> Result<Vec<String>, DocumentError> {
     log::debug!(
         "Processing document {}: method={query_method:?}",
         document.filename
     );
-    let reranked_chunks =
-        embedding_retrieval(query, &document.contents, embedding_config, reranker_config).await?;
+    let reranked_chunks = embedding_retrieval(
+        query,
+        &document.contents,
+        embedding_config,
+        reranker_config,
+        cost_tx,
+    )
+    .await?;
 
     log::debug!(
         "Retrieved {} chunks for {}: {}",
@@ -612,6 +656,7 @@ async fn process_document(
                 .collect::<Vec<_>>(),
             &document.summary,
             client,
+            cost_tx,
         )
         .await?;
 
@@ -809,6 +854,7 @@ impl Tool for QueryDocumentsTool {
                 let embedding_config = embedding_config.clone();
                 let reranker_config = reranker_config.clone();
                 let client = client.clone();
+                let cost_tx = &self.ctx.cost_tx;
 
                 futures.push(Box::pin(async move {
                     let chunks = process_document(
@@ -818,6 +864,7 @@ impl Tool for QueryDocumentsTool {
                         &embedding_config,
                         reranker_config.as_ref(),
                         client.as_ref(),
+                        cost_tx,
                     )
                     .await
                     .map_err(|e| {
@@ -862,6 +909,7 @@ mod tests {
 
     use dotenv::dotenv;
     use serde_json::json;
+    use tokio::sync::mpsc;
     use zqa_macros::{test_eq, test_ok};
     use zqa_pdftools::parse::{ExtractedContent, SectionBoundary};
     use zqa_rag::config::{
@@ -969,6 +1017,7 @@ mod tests {
                 max_retries: zqa_rag::constants::DEFAULT_MAX_RETRIES,
             })),
             client: None,
+            cost_tx: mpsc::unbounded_channel().0,
         });
         let tool = QueryDocumentsTool::new(ctx);
 
@@ -999,6 +1048,7 @@ mod tests {
             embedding_config: EmbeddingProviderConfig::VoyageAI(voyage_config.clone()),
             reranker_config: Some(RerankProviderConfig::VoyageAI(voyage_config)),
             client: None,
+            cost_tx: mpsc::unbounded_channel().0,
         });
         let tool = QueryDocumentsTool::new(ctx);
 
@@ -1029,6 +1079,7 @@ mod tests {
             embedding_config: EmbeddingProviderConfig::Cohere(cohere_config.clone()),
             reranker_config: Some(RerankProviderConfig::Cohere(cohere_config)),
             client: None,
+            cost_tx: mpsc::unbounded_channel().0,
         });
         let tool = QueryDocumentsTool::new(ctx);
 
@@ -1068,6 +1119,7 @@ mod tests {
                 max_retries: zqa_rag::constants::DEFAULT_MAX_RETRIES,
             })),
             client: None,
+            cost_tx: mpsc::unbounded_channel().0,
         });
         let tool = QueryDocumentsTool::new(ctx);
 
@@ -1096,6 +1148,7 @@ mod tests {
             }))
             .expect("Failed to create OpenAI client");
 
+        let (cost_tx, mut cost_rx) = mpsc::unbounded_channel();
         let _documents = test_pdf();
         let ctx = Arc::new(DocumentsToolContext {
             documents: Arc::new(RwLock::new(HashMap::from([(
@@ -1121,6 +1174,7 @@ mod tests {
                 max_retries: zqa_rag::constants::DEFAULT_MAX_RETRIES,
             })),
             client: Some(client),
+            cost_tx,
         });
         let tool = QueryDocumentsTool::new(ctx);
 
@@ -1145,6 +1199,12 @@ mod tests {
             !results.is_empty(),
             "Hybrid OpenAI results should not be empty"
         );
+
+        let mut usage = UsageMetadata::default();
+        while let Ok(update) = cost_rx.try_recv() {
+            usage += update;
+        }
+        assert!(usage.input_tokens > 0, "document usage should be reported");
 
         println!(
             "Hybrid OpenAI QueryDocumentsTool test passed. Got {} file result(s).",
