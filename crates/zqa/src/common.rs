@@ -6,11 +6,14 @@ use std::sync::{Arc, Mutex, RwLock};
 
 use clap::Parser;
 use log::LevelFilter;
+use tokio::sync::mpsc;
+use tokio::sync::mpsc::error::SendError;
 use zqa_pdftools::parse::ExtractedContent;
 use zqa_rag::llm::base::ChatHistoryItem;
 use {fern, humantime};
 
 use crate::config::Config;
+use crate::io::EngineEvent;
 use crate::state::UsageMetadata;
 use crate::store::lance::LanceZoteroStore;
 
@@ -75,6 +78,8 @@ pub(crate) struct PathOptions {
 pub(crate) struct Context<OutStream: Write, ErrStream: Write> {
     /// Application state
     pub(crate) state: State,
+    /// Optional channel for transmitting events. If `None`, no events are published.
+    pub(crate) event_tx: Option<mpsc::Sender<EngineEvent>>,
     /// Config from TOML and env
     pub(crate) config: Config,
     /// The store to use for storage and retrieval
@@ -90,6 +95,32 @@ pub(crate) struct Context<OutStream: Write, ErrStream: Write> {
     pub(crate) out: OutStream,
     /// Abstraction for `stderr()`
     pub(crate) err: ErrStream,
+}
+
+impl<OutStream: Write, ErrStream: Write> Context<OutStream, ErrStream> {
+    /// Emit an event to the channel, if it exists.
+    ///
+    /// # Arguments
+    ///
+    /// * `event` - The event to publish.
+    ///
+    /// # Returns
+    ///
+    /// `Ok(())` if the event is sent, or if no sender is configured and the event is dropped.
+    ///
+    /// # Errors
+    ///
+    /// * `SendError<EngineEvent>` - If the receiver is closed; the error retains the event.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "Event producers are not connected yet.")
+    )]
+    pub(crate) async fn emit(&self, event: EngineEvent) -> Result<(), Box<SendError<EngineEvent>>> {
+        let Some(tx) = &self.event_tx else {
+            return Ok(());
+        };
+        tx.send(event).await.map_err(Box::new)
+    }
 }
 
 /// Initialize the `fern` logger.
@@ -118,6 +149,65 @@ pub fn setup_logger(log_level: LevelFilter) -> Result<(), log::SetLoggerError> {
         .level_for("rustyline", log::LevelFilter::Off)
         .chain(std::io::stdout())
         .apply()
+}
+
+#[cfg(test)]
+mod tests {
+    use tokio::sync::mpsc;
+
+    use super::test_support::create_test_context;
+    use crate::io::EngineEvent;
+
+    #[tokio::test]
+    async fn test_emit_without_sender() {
+        let ctx = create_test_context(vec![]);
+
+        let result = ctx
+            .emit(EngineEvent::Text {
+                message: "No receiver configured".into(),
+            })
+            .await;
+
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_emit_to_active_receiver() {
+        let mut ctx = create_test_context(vec![]);
+        let (tx, mut rx) = mpsc::channel(1);
+        ctx.event_tx = Some(tx);
+
+        ctx.emit(EngineEvent::Text {
+            message: "Delivered event".into(),
+        })
+        .await
+        .unwrap();
+
+        assert!(matches!(
+            rx.try_recv().unwrap(),
+            EngineEvent::Text { message } if message == "Delivered event"
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_emit_to_closed_receiver_retains_event() {
+        let mut ctx = create_test_context(vec![]);
+        let (tx, rx) = mpsc::channel(1);
+        ctx.event_tx = Some(tx);
+        drop(rx);
+
+        let error = ctx
+            .emit(EngineEvent::Text {
+                message: "Undelivered event".into(),
+            })
+            .await
+            .unwrap_err();
+
+        assert!(matches!(
+            error.0,
+            EngineEvent::Text { message } if message == "Undelivered event"
+        ));
+    }
 }
 
 #[cfg(test)]
@@ -178,6 +268,7 @@ pub(crate) mod test_support {
 
         Context {
             state: State::default(),
+            event_tx: None,
             store: LanceZoteroStore::from_schema(embedding_config, schema.into()),
             config,
             path_options: PathOptions::default(),

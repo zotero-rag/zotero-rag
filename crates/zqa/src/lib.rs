@@ -3,13 +3,14 @@
 #![allow(clippy::cast_precision_loss)]
 #![allow(clippy::cast_possible_wrap)]
 
-use std::io::{self, IsTerminal, stderr, stdout};
+use std::io::{IsTerminal, stderr, stdout};
 
 use clap::Parser;
 
 pub mod cli;
 pub mod common;
 pub mod config;
+pub mod io;
 pub mod session;
 pub mod state;
 pub mod store;
@@ -207,7 +208,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
             );
 
             let mut input = String::new();
-            io::stdin()
+            std::io::stdin()
                 .read_line(&mut input)
                 .expect("Failed to read input");
 
@@ -229,8 +230,8 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap();
 
     if is_first_run {
-        let mut stdin = io::stdin().lock();
-        if let Err(e) = oobe(&mut stdin, io::stdin().is_terminal()) {
+        let mut stdin = std::io::stdin().lock();
+        if let Err(e) = oobe(&mut stdin, std::io::stdin().is_terminal()) {
             eprintln!("Error during setup: {e}");
         } else {
             // Reload possibly different config from OOBE
@@ -241,10 +242,11 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let store = LanceZoteroStore::from_config(&config)?;
     let context = Context {
         state: State::default(),
+        event_tx: None,
         config,
         store,
         path_options: PathOptions::default(),
-        input: Box::new(io::stdin().lock()),
+        input: Box::new(std::io::stdin().lock()),
         out: stdout(),
         err: stderr(),
     };
