@@ -610,7 +610,7 @@ enum ParseOutcome {
 /// # Errors
 ///
 /// * `LibraryParsingError::LanceDBError` if fetching library metadata fails.
-/// * `LibraryParsingError::PdfParsingError` if an error reason statistics could not be updated.
+/// * `LibraryParsingError::PdfParsingError` if sending tasks to the worker threads fails.
 #[allow(clippy::too_many_lines)]
 pub async fn parse_library<T: ZoteroStore>(
     event_tx: Option<&mpsc::Sender<EngineEvent>>,
