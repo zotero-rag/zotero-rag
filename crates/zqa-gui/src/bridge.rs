@@ -1,8 +1,8 @@
 //! The runtime bridge between GPUI (which owns the main thread and its own executor)
 //! and the tokio-based zqa pipeline.
 //!
-//! [`spawn_engine`] dedicates one OS thread to a tokio runtime and [`Session`]. It receives
-//! commands sequentially and forwards typed engine events to GPUI. Dispatch can be cancelled
+//! [`spawn_engine`] dedicates one OS thread to a tokio runtime and [`Session`]. It runs the startup
+//! steps, then receives commands sequentially and forwards typed engine events to GPUI. Dispatch can be cancelled
 //! by dropping its future; shutdown itself cannot be cancelled and acknowledges a successful
 //! save before exiting. A failed save leaves the engine available for retry.
 
@@ -67,9 +67,49 @@ fn switched_conversation(
     (before.history != after.history || before.title != after.title).then_some(after)
 }
 
+/// Run `future` while forwarding the engine events it sends to the UI.
+///
+/// Events still queued when `future` finishes are forwarded before this returns, so the UI sees
+/// all of its output before any completion event the caller sends. Prompts are answered by the UI
+/// like any other forwarded event; nothing here cancels `future`.
+///
+/// # Arguments
+///
+/// * `future` - The engine work to run, such as resuming a conversation.
+/// * `engine_rx` - The receiver for events sent by `future`.
+/// * `event_tx` - Where the events are forwarded.
+///
+/// # Returns
+///
+/// The output of `future`, or `None` if the UI has gone away. `future` is dropped unfinished in
+/// that case, and the engine should stop.
+async fn forward_events<T>(
+    future: impl Future<Output = T>,
+    engine_rx: &mut mpsc::Receiver<EngineEvent>,
+    event_tx: &UnboundedSender<UiEvent>,
+) -> Option<T> {
+    tokio::pin!(future);
+
+    let result = loop {
+        tokio::select! {
+            result = &mut future => break result,
+            Some(event) = engine_rx.recv() => {
+                event_tx.unbounded_send(UiEvent::Engine(event)).ok()?;
+            }
+        }
+    };
+
+    while let Ok(event) = engine_rx.try_recv() {
+        event_tx.unbounded_send(UiEvent::Engine(event)).ok()?;
+    }
+
+    Some(result)
+}
+
 /// Spawn the engine thread.
 ///
-/// The thread builds a [`Session`] from the loaded config and then loops, dispatching each
+/// The thread builds a [`Session`] from the loaded config, runs the startup steps (see
+/// [`Session::start`]), and then loops, dispatching each
 /// command received on `cmd_rx` and streaming output to `event_tx`. Each dispatch is raced
 /// against `cancel_rx`; a value on `cancel_rx` aborts the in-flight command. It exits when
 /// the command channel is closed (all senders dropped) or a command returns `Ok(false)`.
@@ -119,6 +159,23 @@ pub fn spawn_engine(
             };
 
             runtime.block_on(async move {
+                // Startup isn't a command the UI sent, so it ends without a `Done`. A failure shows
+                // as an error row and the engine continues with the config it has.
+                let start = session.start();
+                match forward_events(start, &mut engine_rx, &event_tx).await {
+                    None => return,
+                    Some(Ok(true)) => {}
+                    Some(Ok(false)) => {
+                        // The user chose to quit, and there is nothing to save yet.
+                        let _ = event_tx.unbounded_send(UiEvent::ShutdownComplete(Ok(())));
+                        return;
+                    }
+                    Some(Err(e)) => {
+                        let message = format!("Startup failed: {e}\n");
+                        let _ = event_tx.unbounded_send(UiEvent::Engine(EngineEvent::Error { message }));
+                    }
+                }
+
                 let mut pending_command = None;
 
                 loop {
@@ -239,27 +296,10 @@ pub fn spawn_engine(
                             }
                         }
                         EngineCommand::ResumeConversation(conversation) => {
-                            let result = {
-                                let resume = session.resume_conversation(&conversation);
-                                tokio::pin!(resume);
-
-                                loop {
-                                    tokio::select! {
-                                        result = &mut resume => break result,
-                                        Some(event) = engine_rx.recv() => {
-                                            if event_tx.unbounded_send(UiEvent::Engine(event)).is_err() {
-                                                return;
-                                            }
-                                        }
-                                    }
-                                }
+                            let resume = session.resume_conversation(&conversation);
+                            let Some(result) = forward_events(resume, &mut engine_rx, &event_tx).await else {
+                                return;
                             };
-
-                            while let Ok(event) = engine_rx.try_recv() {
-                                if event_tx.unbounded_send(UiEvent::Engine(event)).is_err() {
-                                    return;
-                                }
-                            }
 
                             let result = result.map(|()| conversation).map_err(|error| error.to_string());
                             let _ = event_tx.unbounded_send(UiEvent::ConversationResumed(result));

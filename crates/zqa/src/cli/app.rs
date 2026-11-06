@@ -1,6 +1,4 @@
-use std::fs;
 use std::io::{BufRead, Write};
-use std::path::Path;
 use std::sync::Arc;
 
 use rpassword::read_password;
@@ -25,7 +23,7 @@ use crate::cli::placeholder::PlaceholderText;
 use crate::cli::readline::get_readline_config;
 use crate::common::Context;
 use crate::io::{EngineEvent, TerminalProgress};
-use crate::state::{UsageMetadata, get_state_dir};
+use crate::state::UsageMetadata;
 use crate::utils::terminal::{DIM_TEXT, RESET};
 
 /// Handle a single command or query from the user.
@@ -175,39 +173,15 @@ async fn run_command<R: BufRead, O: Write, E: Write>(
     err: &mut E,
     pbar_manager: &mut TerminalProgress,
 ) -> Result<bool, CLIError> {
-    let mut command_usage: Option<UsageMetadata> = None;
-
-    let rendered = async {
-        let dispatch = dispatch_command(command, ctx);
-        tokio::pin!(dispatch);
-
-        let result = loop {
-            tokio::select! {
-                result = &mut dispatch => break result,
-                Some(event) = rx.recv() => {
-                    if let EngineEvent::TokenUsage { usage } = &event {
-                        *command_usage.get_or_insert_default() += *usage;
-                    }
-
-                    event.handle_event(input, output, err, read_password, pbar_manager)?;
-                }
-            }
-        };
-
-        while let Ok(event) = rx.try_recv() {
-            if let EngineEvent::TokenUsage { usage } = &event {
-                *command_usage.get_or_insert_default() += *usage;
-            }
-
-            event.handle_event(input, output, err, read_password, pbar_manager)?;
-        }
-
-        Ok::<_, CLIError>(result)
-    }
-    .await;
-
-    pbar_manager.clear_all();
-    let result = rendered?;
+    let (result, command_usage) = render_while(
+        dispatch_command(command, ctx),
+        rx,
+        input,
+        output,
+        err,
+        pbar_manager,
+    )
+    .await?;
 
     if let Some(usage) = command_usage {
         write_usage_footer(output, &usage, ctx).await?;
@@ -220,6 +194,77 @@ async fn run_command<R: BufRead, O: Write, E: Write>(
             Ok(true)
         }
     }
+}
+
+/// Run `future` to completion while rendering the events it sends on `rx`.
+///
+/// Events are rendered as they arrive, so a prompt the future is waiting on gets its reply from
+/// `input`. Events still queued when the future finishes are rendered before this returns. The
+/// progress bars are then cleared, including when rendering an event fails.
+///
+/// # Arguments
+///
+/// * `future` - The work whose events to render, such as a dispatched command.
+/// * `rx` - The receiver for events sent by `future`.
+/// * `input` - Input for event-prompt replies.
+/// * `output` - Output for model text, status updates, and prompts.
+/// * `err` - Output for warnings and errors.
+/// * `pbar_manager` - The progress bars that progress events update.
+///
+/// # Returns
+///
+/// The output of `future`, and the sum of its `TokenUsage` events, or `None` if it sent none.
+///
+/// # Errors
+///
+/// * `CLIError::IOError` - If rendering an event or reading a prompt reply fails. `future` is
+///   dropped unfinished in that case.
+pub(crate) async fn render_while<T, R: BufRead, O: Write, E: Write>(
+    future: impl Future<Output = T>,
+    rx: &mut mpsc::Receiver<EngineEvent>,
+    input: &mut R,
+    output: &mut O,
+    err: &mut E,
+    pbar_manager: &mut TerminalProgress,
+) -> Result<(T, Option<UsageMetadata>), CLIError> {
+    let mut usage: Option<UsageMetadata> = None;
+
+    tokio::pin!(future);
+
+    // A labeled block keeps `future` in this function's state; an inner `async` block would
+    // nest it and push the `cli` future past clippy's `large_futures` limit.
+    let rendered = 'render: {
+        let result = loop {
+            tokio::select! {
+                result = &mut future => break result,
+                Some(event) = rx.recv() => {
+                    if let EngineEvent::TokenUsage { usage: delta } = &event {
+                        *usage.get_or_insert_default() += *delta;
+                    }
+
+                    if let Err(e) = event.handle_event(input, output, err, read_password, pbar_manager) {
+                        break 'render Err(e);
+                    }
+                }
+            }
+        };
+
+        while let Ok(event) = rx.try_recv() {
+            if let EngineEvent::TokenUsage { usage: delta } = &event {
+                *usage.get_or_insert_default() += *delta;
+            }
+
+            if let Err(e) = event.handle_event(input, output, err, read_password, pbar_manager) {
+                break 'render Err(e);
+            }
+        }
+
+        Ok(result)
+    };
+
+    pbar_manager.clear_all();
+
+    Ok((rendered?, usage))
 }
 
 /// The core CLI implementation that implements a REPL for user commands.
@@ -246,36 +291,6 @@ pub(crate) async fn cli<R: BufRead, O: Write, E: Write>(
     mut output: O,
     mut err: E,
 ) -> Result<(), CLIError> {
-    // At startup, we should check if there are pending embedding batches and notify the user if so.
-    // [`crate::cli::handlers::batch`] has more details about the semantics of interacting with
-    // batch APIs. We don't do the check itself since we have two bad options:
-    //
-    // * If we `await` the check, we risk a longer startup time
-    // * If we use a task, we need to be careful about not messing with the CLI output/readline.
-    let batch_dir = get_state_dir()?.join("batches");
-
-    // `batch_dir` is created lazily on the first batch
-    if batch_dir.exists() {
-        let batch_files: Vec<String> = fs::read_dir(&batch_dir)?
-            .filter_map(|x| x.ok()?.file_name().into_string().ok())
-            .filter(|f| {
-                f.starts_with("batch_")
-                    && Path::new(f)
-                        .extension()
-                        .is_some_and(|ext| ext.eq_ignore_ascii_case("log"))
-            })
-            .collect();
-
-        if !batch_files.is_empty() {
-            writeln!(
-                &mut output,
-                "You have {} embedding batch{} pending. Use /batch check to check their status.\n",
-                batch_files.len(),
-                if batch_files.len() > 1 { "es" } else { "" }
-            )?;
-        }
-    }
-
     // First, get the path to the history file used by the `readline` implementation.
     let user_dirs = directories::UserDirs::new().ok_or(CLIError::ReadlineError(
         "Could not get user directories".into(),
