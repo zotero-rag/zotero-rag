@@ -353,19 +353,26 @@ pub(crate) struct AnthropicToolUseResult {
     r#type: String,
     /// The ID of the tool call request that this is a result for.
     tool_use_id: String,
-    /// The result from the tool call.
+    /// The result from the tool call, or the error message if it failed.
     content: String,
+    /// Whether the tool call failed. Omitted when `false`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    is_error: bool,
 }
 
 impl From<ToolCallResponse> for AnthropicToolUseResult {
     fn from(value: ToolCallResponse) -> Self {
+        let is_error = value.result.is_err();
+        let content = match value.result {
+            Ok(serde_json::Value::String(s)) | Err(s) => s,
+            Ok(other) => other.to_string(),
+        };
+
         Self {
             r#type: "tool_result".into(),
             tool_use_id: value.id,
-            content: match value.result {
-                serde_json::Value::String(s) => s,
-                other => other.to_string(),
-            },
+            content,
+            is_error,
         }
     }
 }
@@ -603,6 +610,7 @@ impl<T: HttpClient> AgenticClient for AnthropicClient<T> {
 
 #[cfg(test)]
 mod tests {
+    use crate::events::AgentEvent;
     use std::sync::{Arc, Mutex};
 
     use dotenv::dotenv;
@@ -833,9 +841,7 @@ mod tests {
             system_prompt: None,
             reasoning: None,
             tools: None,
-            on_tool_call: None,
-            on_text: None,
-            on_reasoning: None,
+            on_event: None,
             tool_iteration_limit: None,
         };
 
@@ -885,9 +891,7 @@ mod tests {
             system_prompt: None,
             reasoning: None,
             tools: None,
-            on_tool_call: None,
-            on_text: None,
-            on_reasoning: None,
+            on_event: None,
             tool_iteration_limit: None,
         };
 
@@ -930,9 +934,7 @@ mod tests {
             system_prompt: None,
             reasoning: None,
             tools: Some(&[Box::new(tool)]),
-            on_tool_call: None,
-            on_text: None,
-            on_reasoning: None,
+            on_event: None,
             tool_iteration_limit: None,
         };
         let res = client.send_message(&request).await;
@@ -1010,13 +1012,11 @@ mod tests {
             system_prompt: Some("Follow the system instructions.".into()),
             reasoning: None,
             tools: Some(&[Box::new(tool)]),
-            on_tool_call: Some(Arc::new(move |_| {
-                *tool_call_count_cb.lock().unwrap() += 1;
+            on_event: Some(Arc::new(move |event| match event {
+                AgentEvent::ToolCall { .. } => *tool_call_count_cb.lock().unwrap() += 1,
+                AgentEvent::Text(s) => text_segments_cb.lock().unwrap().push(s.clone()),
+                _ => {}
             })),
-            on_text: Some(Arc::new(move |s| {
-                text_segments_cb.lock().unwrap().push(s.to_string());
-            })),
-            on_reasoning: None,
             tool_iteration_limit: None,
         };
 
@@ -1128,9 +1128,7 @@ mod tests {
                 summary: None,
             }),
             tools: Some(&[Box::new(tool)]),
-            on_tool_call: None,
-            on_text: None,
-            on_reasoning: None,
+            on_event: None,
             // The second request is the last turn, which forbids tool calls.
             tool_iteration_limit: Some(2),
         };
@@ -1159,7 +1157,7 @@ mod tests {
             ToolCallResponse {
                 id: "tool-1".into(),
                 tool_name: "mock_tool".into(),
-                result: serde_json::json!({"answer": 42}),
+                result: Ok(serde_json::json!({"answer": 42})),
             }
             .into(),
         );
@@ -1177,12 +1175,28 @@ mod tests {
             ToolCallResponse {
                 id: "tool-2".into(),
                 tool_name: "mock_tool".into(),
-                result: serde_json::json!("plain text"),
+                result: Ok(serde_json::json!("plain text")),
             }
             .into(),
         );
         let json = serde_json::to_value(&content).unwrap();
         test_eq!(json["content"].as_str().unwrap(), "plain text");
+        assert!(json.get("is_error").is_none());
+
+        let failed = AnthropicResponseContent::ToolResult(
+            ToolCallResponse {
+                id: "tool-3".into(),
+                tool_name: "mock_tool".into(),
+                result: Err("Tool 'mock_tool' failed.".into()),
+            }
+            .into(),
+        );
+        let json = serde_json::to_value(&failed).unwrap();
+        test_eq!(
+            json["content"].as_str().unwrap(),
+            "Tool 'mock_tool' failed."
+        );
+        test_eq!(json["is_error"].as_bool(), Some(true));
     }
 
     #[tokio::test]

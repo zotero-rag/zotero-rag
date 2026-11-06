@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use super::errors::LLMError;
 use crate::constants::DEFAULT_MAX_TOOL_ITERATIONS;
+use crate::events::AgentEvent;
 use crate::http_client::HttpClient;
 use crate::llm::tools::{CallbackFn, SerializedTool, Tool, get_owned_tools, process_tool_calls};
 use crate::pricing::ModelUsage;
@@ -53,7 +54,7 @@ pub struct ToolCallResponse {
     /// The name of the tool being called
     pub tool_name: String,
     /// The tool call result
-    pub result: serde_json::Value,
+    pub result: Result<serde_json::Value, String>,
 }
 
 /// This enum specifies the main kinds of content that is passed between the servers and us,
@@ -201,6 +202,7 @@ impl ReasoningConfig {
 // TODO: The driver options probably don't belong here; it might at some point make sense to make a
 // new `Request<'a>` or similar type, that has this struct along with a `DriverOptions` or
 // something. It's not yet clear *when* (i.e., at how many fields) that transition should happen.
+
 /// Represents a request to the chat API with optional tools, along with options for the behavior of
 /// the agentic loop itself.
 #[derive(Default)]
@@ -220,13 +222,9 @@ pub struct ChatRequest<'a> {
 
     // Driver options: these must be `Option<T>`; semantically, it doesn't make sense to force
     // end-users into supplying these options.
-    /// Optional callback invoked each time a tool call completes.
-    pub on_tool_call: Option<Arc<CallbackFn<ToolUseStats>>>,
-    /// Optional callback invoked each time a text chunk is produced.
-    pub on_text: Option<Arc<CallbackFn<str>>>,
-    /// Optional callback invoked for each reasoning summary or thinking block, in response order
-    /// relative to text and tool callbacks. Reasoning is not passed to `on_text`.
-    pub on_reasoning: Option<Arc<CallbackFn<str>>>,
+    /// Optional callback invoked for any event, such as model text, tool calls, or responses. For
+    /// details, see [`crate::events::AgentEvent`].
+    pub on_event: Option<Arc<CallbackFn<AgentEvent>>>,
     /// Optional limit on the number of tool call iterations per user message.
     pub tool_iteration_limit: Option<usize>,
 }
@@ -242,8 +240,8 @@ pub struct ToolUseStats {
     pub tool_name: String,
     /// The arguments passed to the tool
     pub tool_args: serde_json::Value,
-    /// The result of the tool call
-    pub tool_result: serde_json::Value,
+    /// The result of the tool call, or an error message, such as if the tool name was hallucinated.
+    pub tool_result: Result<serde_json::Value, String>,
 }
 
 /// A model response can contain multiple types of content, such as raw text and tool calls. This
@@ -440,9 +438,7 @@ where
                 } else {
                     tools.as_deref().unwrap_or_default()
                 },
-                request.on_tool_call.as_ref(),
-                request.on_text.as_ref(),
-                request.on_reasoning.as_ref(),
+                request.on_event.as_ref(),
             )
             .await;
 
@@ -527,6 +523,7 @@ where
 
 #[cfg(test)]
 mod tests {
+    use crate::events::AgentEvent;
     use std::collections::VecDeque;
     use std::future::{Future, ready};
     use std::sync::{Arc, Mutex};
@@ -626,12 +623,12 @@ mod tests {
                     ChatHistoryContent::ToolCallResponse(ToolCallResponse {
                         id: "call-1".into(),
                         tool_name: "mock_tool".into(),
-                        result: serde_json::json!("Hello, Alice!"),
+                        result: Ok(serde_json::json!("Hello, Alice!")),
                     }),
                     ChatHistoryContent::ToolCallResponse(ToolCallResponse {
                         id: "call-2".into(),
                         tool_name: "mock_tool".into(),
-                        result: serde_json::json!("Hello, Bob!"),
+                        result: Ok(serde_json::json!("Hello, Bob!")),
                     }),
                 ],
             },
@@ -648,7 +645,7 @@ mod tests {
                 content: vec![ChatHistoryContent::ToolCallResponse(ToolCallResponse {
                     id: "call-3".into(),
                     tool_name: "mock_tool".into(),
-                    result: serde_json::json!("Hello, Carol!"),
+                    result: Ok(serde_json::json!("Hello, Carol!")),
                 })],
             },
             ChatHistoryItem {
@@ -772,24 +769,19 @@ mod tests {
             tools_seen: Arc::default(),
         };
         let events = Arc::new(Mutex::new(Vec::new()));
-        let texts = Arc::clone(&events);
-        let reasoning = Arc::clone(&events);
-        let tool_calls = Arc::clone(&events);
+        let recorded = Arc::clone(&events);
         let request = ChatRequest {
             tools: Some(&[Box::new(MockTool {
                 call_count: Arc::default(),
             })]),
-            on_text: Some(Arc::new(move |text| {
-                texts.lock().unwrap().push(format!("text: {text}"));
-            })),
-            on_reasoning: Some(Arc::new(move |text| {
-                reasoning.lock().unwrap().push(format!("reasoning: {text}"));
-            })),
-            on_tool_call: Some(Arc::new(move |stats| {
-                tool_calls
-                    .lock()
-                    .unwrap()
-                    .push(format!("tool: {}", stats.tool_name));
+            on_event: Some(Arc::new(move |event| {
+                let line = match event {
+                    AgentEvent::Text(text) => format!("text: {text}"),
+                    AgentEvent::Reasoning(text) => format!("reasoning: {text}"),
+                    AgentEvent::ToolCall { name, .. } => format!("tool call: {name}"),
+                    AgentEvent::ToolResponse { name, .. } => format!("tool response: {name}"),
+                };
+                recorded.lock().unwrap().push(line);
             })),
             ..ChatRequest::default()
         };
@@ -801,7 +793,8 @@ mod tests {
             [
                 "reasoning: Check the source.",
                 "text: Looking it up.",
-                "tool: mock_tool",
+                "tool call: mock_tool",
+                "tool response: mock_tool",
                 "reasoning: The source agrees.",
                 "text: Done.",
             ]
@@ -809,9 +802,9 @@ mod tests {
         assert_eq!(response.text(), "Looking it up.\nDone.");
     }
 
-    /// Text-only responses must not invoke the reasoning callback.
+    /// Text-only responses must not send reasoning events.
     #[tokio::test]
-    async fn send_message_without_reasoning_only_calls_on_text() {
+    async fn send_message_without_reasoning_only_sends_text_events() {
         let client = TestClient {
             turns: Mutex::new(VecDeque::from([ProviderTurn {
                 native_items: Vec::new(),
@@ -823,11 +816,14 @@ mod tests {
         };
         let text_segments = Arc::new(Mutex::new(Vec::new()));
         let request = ChatRequest {
-            on_text: Some(Arc::new({
+            on_event: Some(Arc::new({
                 let text_segments = Arc::clone(&text_segments);
-                move |text| text_segments.lock().unwrap().push(text.to_string())
+                move |event| match event {
+                    AgentEvent::Text(text) => text_segments.lock().unwrap().push(text.clone()),
+                    AgentEvent::Reasoning(_) => panic!("unexpected reasoning event"),
+                    _ => {}
+                }
             })),
-            on_reasoning: Some(Arc::new(|_| panic!("unexpected reasoning callback"))),
             ..ChatRequest::default()
         };
 

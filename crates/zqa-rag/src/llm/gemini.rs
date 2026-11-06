@@ -98,11 +98,12 @@ impl From<ChatHistoryItem> for Vec<GeminiStep> {
                     signature: None,
                 }),
                 ChatHistoryContent::ToolCallResponse(tool_res) => {
-                    // Wrap the result in an object with a "result" field if it's not already an object
-                    let result = if tool_res.result.is_object() {
-                        tool_res.result
-                    } else {
-                        serde_json::json!({ "result": tool_res.result })
+                    // Wrap the result in an object with a "result" field if it's not already an
+                    // object. Gemini reads a failure from an "error" field.
+                    let result = match tool_res.result {
+                        Ok(result) if result.is_object() => result,
+                        Ok(result) => serde_json::json!({ "result": result }),
+                        Err(error) => serde_json::json!({ "error": error }),
                     };
 
                     Some(GeminiStep::FunctionResult {
@@ -429,6 +430,7 @@ impl<T: HttpClient> AgenticClient for GeminiClient<T> {
 
 #[cfg(test)]
 mod tests {
+    use crate::events::AgentEvent;
     use std::sync::{Arc, Mutex};
 
     use arrow_array::Array;
@@ -530,9 +532,7 @@ mod tests {
             system_prompt: None,
             reasoning: None,
             tools: None,
-            on_tool_call: None,
-            on_text: None,
-            on_reasoning: None,
+            on_event: None,
             tool_iteration_limit: None,
         };
         let res = client.send_message(&request).await;
@@ -682,9 +682,7 @@ mod tests {
             system_prompt: None,
             reasoning: None,
             tools: None,
-            on_tool_call: None,
-            on_text: None,
-            on_reasoning: None,
+            on_event: None,
             tool_iteration_limit: None,
         };
         let res = client.send_message(&request).await;
@@ -707,9 +705,7 @@ mod tests {
             system_prompt: None,
             reasoning: None,
             tools: Some(&[Box::new(tool)]),
-            on_tool_call: None,
-            on_text: None,
-            on_reasoning: None,
+            on_event: None,
             tool_iteration_limit: None,
         };
 
@@ -902,13 +898,11 @@ mod tests {
             system_prompt: Some("Follow the system instructions.".into()),
             reasoning: None,
             tools: Some(&[Box::new(tool)]),
-            on_tool_call: Some(Arc::new(move |_| {
-                *tool_call_count_cb.lock().unwrap() += 1;
+            on_event: Some(Arc::new(move |event| match event {
+                AgentEvent::ToolCall { .. } => *tool_call_count_cb.lock().unwrap() += 1,
+                AgentEvent::Text(s) => text_segments_cb.lock().unwrap().push(s.clone()),
+                _ => {}
             })),
-            on_text: Some(Arc::new(move |s| {
-                text_segments_cb.lock().unwrap().push(s.to_string());
-            })),
-            on_reasoning: None,
             // The second turn is the last, which forbids tool calls.
             tool_iteration_limit: Some(2),
         };

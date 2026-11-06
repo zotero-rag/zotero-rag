@@ -202,7 +202,7 @@ On the final iteration, the loop keeps `tools` and sets a "no tool calls" choice
 #### Smaller changes
 
 - `ReasoningConfig` derives `Serialize`/`Deserialize`, since it is recorded per turn.
-- `ToolCallResponse` gains `is_error: bool` (`#[serde(default)]`). Adapters map it where the provider supports it; Anthropic, for example, has [`is_error`](https://platform.claude.com/docs/en/agents-and-tools/tool-use/handle-tool-calls).
+- `ToolCallResponse.result` is a `Result<Value, String>`, so a failed or unknown tool call keeps its failure. Adapters map `Err` to the provider's error form where it has one: Anthropic sets [`is_error`](https://platform.claude.com/docs/en/agents-and-tools/tool-use/handle-tool-calls), Gemini puts the message under `error`, and OpenAI sends it as the output string.
 - The OpenAI adapter sends `store: false` and `include: ["reasoning.encrypted_content"]`. The `include` is legacy under `store: false`, but it is harmless.
 - The Anthropic adapter enables [automatic prompt caching](https://platform.claude.com/docs/en/build-with-claude/prompt-caching) with a top-level `cache_control: {"type": "ephemeral"}`. This is a small start on #289 that pays off once requests are append-only.
 - On a prefix-mismatch 400, the Anthropic adapter retries once with `thinking.block_binding.prefix_mismatch_behavior: "drop_block"`, and records that choice on the thread. With a deterministic builder this should not happen, so it is only a safety net.

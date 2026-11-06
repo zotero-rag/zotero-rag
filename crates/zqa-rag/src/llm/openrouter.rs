@@ -476,6 +476,7 @@ impl<T: HttpClient> AgenticClient for OpenRouterClient<T> {
 
 #[cfg(test)]
 mod tests {
+    use crate::events::AgentEvent;
     use std::sync::{Arc, Mutex};
 
     use dotenv::dotenv;
@@ -517,9 +518,7 @@ mod tests {
             system_prompt: None,
             reasoning: None,
             tools: None,
-            on_tool_call: None,
-            on_text: None,
-            on_reasoning: None,
+            on_event: None,
             tool_iteration_limit: None,
         };
 
@@ -576,9 +575,7 @@ mod tests {
             system_prompt: None,
             reasoning: None,
             tools: None,
-            on_tool_call: None,
-            on_text: None,
-            on_reasoning: None,
+            on_event: None,
             tool_iteration_limit: None,
         };
 
@@ -605,12 +602,12 @@ mod tests {
                 ChatHistoryContent::ToolCallResponse(ToolCallResponse {
                     id: "call-1".into(),
                     tool_name: "mock_tool".into(),
-                    result: serde_json::json!({"answer": 1}),
+                    result: Ok(serde_json::json!({"answer": 1})),
                 }),
                 ChatHistoryContent::ToolCallResponse(ToolCallResponse {
                     id: "call-2".into(),
                     tool_name: "mock_tool".into(),
-                    result: serde_json::json!({"answer": 2}),
+                    result: Ok(serde_json::json!({"answer": 2})),
                 }),
             ],
         };
@@ -643,9 +640,7 @@ mod tests {
             system_prompt: None,
             reasoning: None,
             tools: Some(&[Box::new(tool)]),
-            on_tool_call: None,
-            on_text: None,
-            on_reasoning: None,
+            on_event: None,
             tool_iteration_limit: None,
         };
 
@@ -737,11 +732,10 @@ mod tests {
             max_tokens: Some(1024),
             message: "Test".into(),
             tools: Some(&[Box::new(tool)]),
-            on_tool_call: Some(Arc::new(move |_| {
-                *tool_call_count_cb.lock().unwrap() += 1;
-            })),
-            on_text: Some(Arc::new(move |s| {
-                text_segments_cb.lock().unwrap().push(s.to_string());
+            on_event: Some(Arc::new(move |event| match event {
+                AgentEvent::ToolCall { .. } => *tool_call_count_cb.lock().unwrap() += 1,
+                AgentEvent::Text(s) => text_segments_cb.lock().unwrap().push(s.clone()),
+                _ => {}
             })),
             ..ChatRequest::default()
         };
@@ -909,8 +903,10 @@ mod tests {
         let request = ChatRequest {
             message: "Test".into(),
             tools: Some(&[Box::new(tool)]),
-            on_reasoning: Some(Arc::new(move |text| {
-                segments.lock().unwrap().push(text.to_string());
+            on_event: Some(Arc::new(move |event| {
+                if let AgentEvent::Reasoning(text) = event {
+                    segments.lock().unwrap().push(text.clone());
+                }
             })),
             // The second request is the last turn, which forbids tool calls.
             tool_iteration_limit: Some(2),

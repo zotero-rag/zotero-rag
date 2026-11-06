@@ -12,9 +12,12 @@ use serde::Serialize;
 use serde::ser::SerializeMap;
 use serde_json::{Map, Value};
 
-use crate::llm::base::{
-    ChatHistoryContent, ChatHistoryItem, ContentType, MessageRole, ToolCallRequest,
-    ToolCallResponse, ToolUseStats,
+use crate::{
+    events::AgentEvent,
+    llm::base::{
+        ChatHistoryContent, ChatHistoryItem, ContentType, MessageRole, ToolCallRequest,
+        ToolCallResponse, ToolUseStats,
+    },
 };
 
 /// The key for the input schema for tools passed to Anthropic.
@@ -184,7 +187,10 @@ pub type CallbackFn<T> = dyn Fn(&T) + Send + Sync + 'static;
 /// # Returns
 ///
 /// The tool's unmodified result, or an error string for failed or unknown calls.
-async fn execute_tool_call(tool_call: &ToolCallRequest, tools: &[SerializedTool<'_>]) -> Value {
+async fn execute_tool_call(
+    tool_call: &ToolCallRequest,
+    tools: &[SerializedTool<'_>],
+) -> Result<Value, String> {
     let tool_call_id = &tool_call.id;
     let tool_name = &tool_call.tool_name;
     let start = std::time::Instant::now();
@@ -202,12 +208,12 @@ async fn execute_tool_call(tool_call: &ToolCallRequest, tools: &[SerializedTool<
             result.is_ok(),
             start.elapsed()
         );
-        result.unwrap_or_else(|e| {
+        result.map_err(|e| {
             log::debug!(
                 "Tool {tool_name} (id={tool_call_id}) error: {}",
                 crate::logging::preview(&e)
             );
-            Value::String(format!("Error calling tool: {e}"))
+            format!("Error calling tool: {e}")
         })
     } else {
         let available_tool_names = tools
@@ -225,7 +231,7 @@ async fn execute_tool_call(tool_call: &ToolCallRequest, tools: &[SerializedTool<
             "Model called unknown tool '{}'. Available tools: {available_tools}.",
             tool_call.tool_name
         );
-        Value::String(format!(
+        Err(format!(
             "Tool '{}' does not exist. Available tools: {available_tools}.",
             tool_call.tool_name
         ))
@@ -245,12 +251,10 @@ async fn execute_tool_call(tool_call: &ToolCallRequest, tools: &[SerializedTool<
 /// * `new_contents` - Accumulates user-facing `ContentType` items produced while processing.
 /// * `contents` - The model's latest message converted to `ChatHistoryContent` values.
 /// * `tools` - The available tools for invocation.
-/// * `on_tool_call` - Optional callback invoked after each tool call completes, receiving a
-///   reference to the [`ToolUseStats`] for that call.
-/// * `on_text` - Optional callback invoked for each text segment in the model's response,
-///   receiving the text as a string slice.
-/// * `on_reasoning` - Optional callback invoked for each reasoning block, receiving the reasoning
-///   as a string slice. Callbacks follow the order of content in the model's response.
+/// * `on_event` - Optional callback for the response's events. Text, reasoning and
+///   [`AgentEvent::ToolCall`] events are sent in response order before any tool runs. Each
+///   [`AgentEvent::ToolResponse`] is sent when its tool finishes, so responses arrive in completion
+///   order, which can differ from the order of the calls; match them to their calls by ID.
 ///
 /// # Returns
 ///
@@ -259,10 +263,25 @@ pub(crate) async fn process_tool_calls(
     new_contents: &mut Vec<ContentType>,
     contents: &[ChatHistoryContent],
     tools: &[SerializedTool<'_>],
-    on_tool_call: Option<&Arc<CallbackFn<ToolUseStats>>>,
-    on_text: Option<&Arc<CallbackFn<str>>>,
-    on_reasoning: Option<&Arc<CallbackFn<str>>>,
+    on_event: Option<&Arc<CallbackFn<AgentEvent>>>,
 ) -> Option<ChatHistoryItem> {
+    // Ensure text, reasoning, and tool calls are handled in order. These are "instant" and can be
+    // sent as events immediately, while the event for the tool response is sent later.
+    if let Some(cb) = on_event {
+        for content in contents {
+            match content {
+                ChatHistoryContent::Text(s) => cb(&AgentEvent::Text(s.clone())),
+                ChatHistoryContent::Reasoning(s) => cb(&AgentEvent::Reasoning(s.clone())),
+                ChatHistoryContent::ToolCallRequest(call) => cb(&AgentEvent::ToolCall {
+                    id: call.id.clone(),
+                    name: call.tool_name.clone(),
+                    args: call.args.clone(),
+                }),
+                ChatHistoryContent::ToolCallResponse(_) => {}
+            }
+        }
+    }
+
     let futures = contents.iter().map(|content| async move {
         match content {
             ChatHistoryContent::Text(s) => (Some(ContentType::Text(s.clone())), None),
@@ -280,6 +299,14 @@ pub(crate) async fn process_tool_calls(
             ChatHistoryContent::ToolCallRequest(tool_call) => {
                 let tool_call_id = tool_call.id.clone();
                 let tool_result = execute_tool_call(tool_call, tools).await;
+
+                if let Some(cb) = on_event {
+                    cb(&AgentEvent::ToolResponse {
+                        id: tool_call_id.clone(),
+                        name: tool_call.tool_name.clone(),
+                        response: tool_result.clone(),
+                    });
+                }
 
                 let tool_use_stats = ToolUseStats {
                     tool_call_id: tool_call_id.clone(),
@@ -307,23 +334,6 @@ pub(crate) async fn process_tool_calls(
     let mut tool_call_responses = Vec::new();
     for (content_opt, history_opt) in results {
         if let Some(content) = content_opt {
-            match &content {
-                ContentType::ToolCall(stats) => {
-                    if let Some(cb) = on_tool_call {
-                        cb(stats);
-                    }
-                }
-                ContentType::Text(s) => {
-                    if let Some(cb) = on_text {
-                        cb(s);
-                    }
-                }
-                ContentType::Reasoning(s) => {
-                    if let Some(cb) = on_reasoning {
-                        cb(s);
-                    }
-                }
-            }
             new_contents.push(content);
         }
         if let Some(history_content) = history_opt {
@@ -460,6 +470,7 @@ mod tests {
                 tool_name: "slow_tool".into(),
                 args: json!({}),
             }),
+            ChatHistoryContent::Text("Checking both.".into()),
             ChatHistoryContent::ToolCallRequest(ToolCallRequest {
                 id: "2".into(),
                 tool_name: "slow_tool".into(),
@@ -468,15 +479,26 @@ mod tests {
         ];
 
         let mut new_contents: Vec<ContentType> = vec![];
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let on_event: Arc<CallbackFn<AgentEvent>> = Arc::new({
+            let events = Arc::clone(&events);
+            move |event: &AgentEvent| {
+                let line = match event {
+                    AgentEvent::Text(text) => format!("text: {text}"),
+                    AgentEvent::Reasoning(text) => format!("reasoning: {text}"),
+                    AgentEvent::ToolCall { id, .. } => format!("call: {id}"),
+                    AgentEvent::ToolResponse { id, .. } => format!("response: {id}"),
+                };
+                events.lock().unwrap().push(line);
+            }
+        });
 
         let start = Instant::now();
         let tool_call_results = process_tool_calls(
             &mut new_contents,
             &contents,
             &serialized_tools,
-            None,
-            None,
-            None,
+            Some(&on_event),
         )
         .await;
         let duration = start.elapsed();
@@ -485,7 +507,15 @@ mod tests {
         assert!(duration.as_millis() < 1000);
         // Ensure that we processed two tool calls
         test_eq!(tool_call_results.unwrap().content.len(), 2);
-        test_eq!(new_contents.len(), 2);
+        test_eq!(new_contents.len(), 3);
+
+        // Calls and text go out in content order before any tool finishes. Both tools take the
+        // same time, so their responses may arrive in either order.
+        let mut events = events.lock().unwrap().clone();
+        let mut responses = events.split_off(3);
+        responses.sort();
+        assert_eq!(events, ["call: 1", "text: Checking both.", "call: 2"]);
+        assert_eq!(responses, ["response: 1", "response: 2"]);
     }
 
     #[tokio::test]
@@ -502,18 +532,10 @@ mod tests {
         })];
         let mut new_contents = Vec::new();
 
-        let tool_call_results = process_tool_calls(
-            &mut new_contents,
-            &contents,
-            &serialized_tools,
-            None,
-            None,
-            None,
-        )
-        .await;
-        let expected_result = Value::String(
-            "Tool 'imaginary_tool' does not exist. Available tools: mock_tool.".into(),
-        );
+        let tool_call_results =
+            process_tool_calls(&mut new_contents, &contents, &serialized_tools, None).await;
+        let expected_result: Result<Value, String> =
+            Err("Tool 'imaginary_tool' does not exist. Available tools: mock_tool.".into());
 
         assert_eq!(*call_count.lock().unwrap(), 0);
         assert_eq!(
