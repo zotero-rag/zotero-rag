@@ -5,9 +5,8 @@ use std::sync::{Arc, Mutex, atomic};
 use crate::cli::errors::CLIError;
 use crate::cli::handlers::conversation::save_current_conversation;
 use crate::common::Context;
-use crate::io::EngineEvent;
+use crate::io::{EngineEvent, StyledSpan, TextStyle};
 use crate::state::UsageMetadata;
-use crate::utils::terminal::{BOLD, RESET};
 
 /// Save the current conversation, if needed, and prepare to exit the CLI.
 ///
@@ -83,7 +82,50 @@ pub(crate) async fn handle_new_conversation_cmd(ctx: &mut Context) -> Result<(),
     Ok(())
 }
 
-/// Emit the CLI help text as a text event.
+/// The `/help` text, as pairs of a section heading and that section's body.
+const HELP_SECTIONS: &[(&str, &str)] = &[
+    (
+        "Basic usage:\n",
+        "- If you haven't already done so, you should run `/process` or `/batch create` to set up an embedding database.\n\
+         - Type in a question to ask your configured model, grounded in your Zotero library.\n\
+         - Use @ to include a PDF file in your current directory in the conversation.\n\n",
+    ),
+    (
+        "Available commands:\n",
+        "/help\t\t\tShow this help message\n\n",
+    ),
+    (
+        "Common commands:\n",
+        "/process\t\tPre-process Zotero library. Use this to update the database.\n\
+         /search\t\t\tSearch for papers without summarizing them. Usage: /search <query>\n\
+         /config\t\t\tShow the currently used configuration.\n\
+         /new\t\t\tSave the current conversation and switch to a new one.\n\
+         /resume\t\t\tResume a previous conversation.\n\
+         /index\t\t\tCreate or update indices.\n\
+         /quit\t\t\tExit the program. You can also use Ctrl+C or just type 'quit'.\n\n",
+    ),
+    (
+        "Batch API commands:\n",
+        "/batch create\t\tPre-process Zotero library, but use a batch embedding API instead.\n\
+         /batch check\t\tCheck on the status of a submitted batch.\n\
+         /batch cancel <id>\tCancel a pending batch.\n\n",
+    ),
+    (
+        "Session document commands:\n",
+        "/docs clear\t\tClear all documents in this session.\n\
+         /docs list\t\tList all documents in this session.\n\
+         /docs remove <key>\tRemove a document with a specified key from the session.\n\n",
+    ),
+    (
+        "Repair and troubleshooting commands:\n",
+        "/checkhealth\t\tRun health checks on your LanceDB.\n\
+         /doctor\t\t\tExplain issues spotted by /checkhealth and how to fix them.\n\
+         /stats\t\t\tShow table statistics.\n\
+         /dedup\t\t\tRemove duplicate items.\n\n",
+    ),
+];
+
+/// Emit the CLI help text as one styled text event, with each section heading as a `Heading` span.
 ///
 /// # Arguments
 ///
@@ -97,44 +139,23 @@ pub(crate) async fn handle_new_conversation_cmd(ctx: &mut Context) -> Result<(),
 ///
 /// * `CLIError::ChannelSendError` - If the event receiver is closed.
 pub(crate) async fn handle_help_cmd(ctx: &mut Context) -> Result<(), CLIError> {
-    ctx.emit(EngineEvent::Text {
-        message: format!(
-            "{BOLD}Basic usage:{RESET}\n\
-             - If you haven't already done so, you should run `/process` or `/batch create` to set up an embedding database.\n\
-             - Type in a question to ask your configured model, grounded in your Zotero library.\n\
-             - Use @ to include a PDF file in your current directory in the conversation.\n\
-             \n\
-             {BOLD}Available commands:\n{RESET}\n\
-             /help\t\t\tShow this help message\n\
-             \n\
-             {BOLD}Common commands:{RESET}\n\
-             /process\t\tPre-process Zotero library. Use this to update the database.\n\
-             /search\t\t\tSearch for papers without summarizing them. Usage: /search <query>\n\
-             /config\t\t\tShow the currently used configuration.\n\
-             /new\t\t\tSave the current conversation and switch to a new one.\n\
-             /resume\t\t\tResume a previous conversation.\n\
-             /index\t\t\tCreate or update indices.\n\
-             /quit\t\t\tExit the program. You can also use Ctrl+C or just type 'quit'.\n\
-             \n\
-             {BOLD}Batch API commands:{RESET}\n\
-             /batch create\t\tPre-process Zotero library, but use a batch embedding API instead.\n\
-             /batch check\t\tCheck on the status of a submitted batch.\n\
-             /batch cancel <id>\tCancel a pending batch.\n\
-             \n\
-             {BOLD}Session document commands:{RESET}\n\
-             /docs clear\t\tClear all documents in this session.\n\
-             /docs list\t\tList all documents in this session.\n\
-             /docs remove <key>\tRemove a document with a specified key from the session.\n\
-             \n\
-             {BOLD}Repair and troubleshooting commands:{RESET}\n\
-             /checkhealth\t\tRun health checks on your LanceDB.\n\
-             /doctor\t\t\tExplain issues spotted by /checkhealth and how to fix them.\n\
-             /stats\t\t\tShow table statistics.\n\
-             /dedup\t\t\tRemove duplicate items.\n\
-             \n"
-        ),
-    })
-    .await?;
+    let spans = HELP_SECTIONS
+        .iter()
+        .flat_map(|&(heading, body)| {
+            [
+                StyledSpan {
+                    text: heading.into(),
+                    style: TextStyle::Heading,
+                },
+                StyledSpan {
+                    text: body.into(),
+                    style: TextStyle::Plain,
+                },
+            ]
+        })
+        .collect();
+
+    ctx.emit(EngineEvent::StyledText { spans }).await?;
 
     Ok(())
 }
@@ -159,9 +180,12 @@ mod tests {
         let (tx, mut rx) = mpsc::channel(1);
         ctx.event_tx = Some(tx);
         handle_help_cmd(&mut ctx).await.unwrap();
-        let EngineEvent::Text { message: output } = rx.try_recv().unwrap() else {
-            panic!("help must emit a text event");
-        };
+        let event = rx.try_recv().unwrap();
+        assert!(
+            matches!(event, EngineEvent::StyledText { .. }),
+            "help must emit one styled text event"
+        );
+        let output = event.to_string();
         test_contains!(output, "Available commands:");
         test_contains!(output, "/help");
         test_contains!(output, "/checkhealth");

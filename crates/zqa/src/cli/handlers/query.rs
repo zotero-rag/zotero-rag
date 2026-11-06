@@ -3,8 +3,7 @@
 use std::iter;
 use std::path::Path;
 use std::pin::pin;
-use std::sync::Arc;
-use std::sync::atomic;
+use std::sync::{Arc, atomic};
 use std::time::Instant;
 
 use tokio::sync::mpsc::{self, UnboundedSender};
@@ -21,14 +20,12 @@ use crate::cli::prompts::{
     get_summarize_prompt, get_summarize_system_prompt, get_title_prompt, get_title_system_prompt,
 };
 use crate::common::Context;
-use crate::io::EngineEvent;
+use crate::io::{EngineEvent, StyledSpan, TextStyle};
 use crate::state::UsageMetadata;
 use crate::store::common::ZoteroStore;
 use crate::tools::mixins::ToolExt;
 use crate::tools::retrieval::RetrievalTool;
 use crate::tools::summarization::SummarizationTool;
-use crate::utils::rag::ModelResponse;
-use crate::utils::terminal::{DIM_TEXT, RESET};
 
 /// Reasoning and answer segments share one queue to preserve the provider's content order.
 enum ResponseSegment {
@@ -87,10 +84,11 @@ pub(crate) async fn handle_search_cmd(
         .await?;
     let vector_search_duration = vector_search_start.elapsed();
     ctx.emit_multiple(
-        iter::once(EngineEvent::StatusUpdate {
-            message: format!(
-                "{DIM_TEXT}Vector search completed in {vector_search_duration:.2?}{RESET}\n"
-            ),
+        iter::once(EngineEvent::StyledText {
+            spans: vec![StyledSpan {
+                text: format!("Vector search completed in {vector_search_duration:.2?}\n\n"),
+                style: TextStyle::Secondary,
+            }],
         })
         .chain(search_results.iter().map(|item| EngineEvent::Text {
             message: format!("{}\n", item.metadata.title),
@@ -145,8 +143,7 @@ async fn generate_title(
         }
     };
 
-    let title = ModelResponse::from(&response.content).to_string();
-    let title = title.trim().to_string();
+    let title = response.text().trim().to_string();
 
     let usage = UsageMetadata::from_rag_usage(&response.usage, client.get_provider(), &model).await;
     Some((title, usage))
@@ -241,14 +238,14 @@ pub(crate) async fn handle_query_cmd(query: String, ctx: &mut Context) -> Result
             Ok(p) => p,
             Err(e) => {
                 ctx.emit(EngineEvent::Error {
-                    message: format!("{DIM_TEXT}Failed to import {mention}: {e}{RESET}\n"),
+                    message: format!("Failed to import {mention}: {e}\n"),
                 })
                 .await?;
                 continue;
             }
         };
         ctx.emit(EngineEvent::StatusUpdate {
-            message: format!("{DIM_TEXT}Imported document: {path}{RESET}\n"),
+            message: format!("Imported document: {path}\n"),
         })
         .await?;
     }
@@ -369,10 +366,11 @@ pub(crate) async fn handle_query_cmd(query: String, ctx: &mut Context) -> Result
                 "Query completed in {final_draft_duration:.2?}: usage={:?}",
                 response.total_usage()
             );
-            ctx.emit(EngineEvent::StatusUpdate {
-                message: format!(
-                    "{DIM_TEXT}Final draft completed in {final_draft_duration:.2?}{RESET}\n"
-                ),
+            ctx.emit(EngineEvent::StyledText {
+                spans: vec![StyledSpan {
+                    text: format!("Final draft completed in {final_draft_duration:.2?}\n"),
+                    style: TextStyle::Secondary,
+                }],
             })
             .await?;
 
@@ -401,10 +399,11 @@ pub(crate) async fn handle_query_cmd(query: String, ctx: &mut Context) -> Result
                 zqa_rag::logging::preview(&e)
             );
             ctx.emit_multiple([
-                EngineEvent::StatusUpdate {
-                    message: format!(
-                        "{DIM_TEXT}Final draft failed in {final_draft_duration:.2?}{RESET}\n"
-                    ),
+                EngineEvent::StyledText {
+                    spans: vec![StyledSpan {
+                        text: format!("Final draft failed in {final_draft_duration:.2?}\n"),
+                        style: TextStyle::Secondary,
+                    }],
                 },
                 EngineEvent::Error {
                     message: format!(
