@@ -733,7 +733,12 @@ async fn prompt_and_fetch_batch_results(
                     fs::remove_file(log_file)?;
                 }
                 3 => {}
-                _ => unreachable!("read_char restricts to the valid set"),
+                _ => {
+                    ctx.emit(EngineEvent::Error {
+                        message: "Invalid selection.\n".into(),
+                    })
+                    .await?;
+                }
             }
         }
     }
@@ -845,8 +850,15 @@ async fn handle_batch_check_status_cmd(ctx: &mut Context) -> Result<(), CLIError
             })
             .await?;
 
-            let choice = rx.await?;
-            pending_batches.get(choice).unwrap()
+            let Some(batch) = pending_batches.get(rx.await?) else {
+                ctx.emit(EngineEvent::Error {
+                    message: "Invalid selection.\n".into(),
+                })
+                .await?;
+                return Ok(());
+            };
+
+            batch
         }
     };
 
@@ -1045,7 +1057,13 @@ async fn handle_batch_create_cmd(ctx: &mut Context) -> Result<(), CLIError> {
 
                     Ok(())
                 }
-                _ => unreachable!("read_char guarantees valid input"),
+                _ => {
+                    ctx.emit(EngineEvent::Error {
+                        message: "Invalid selection.\n".into(),
+                    })
+                    .await?;
+                    Ok(())
+                }
             }
         }
     }
@@ -1949,48 +1967,59 @@ mod tests {
             async {
                 let mut ctx = create_test_context(vec![]);
 
-                // K0 succeeded, K1 failed => partial success.
-                let batch = make_metadata_at(Utc::now() - Duration::seconds(5), 2);
-                let mock = MockBatchProvider {
-                    results: make_results(&["K0"], &["K1"]),
-                };
+                // An out-of-range reply must be handled like "Decide later".
+                for choice in [3, 4] {
+                    // K0 succeeded, K1 failed => partial success.
+                    let batch = make_metadata_at(Utc::now() - Duration::seconds(5), 2);
+                    let mock = MockBatchProvider {
+                        results: make_results(&["K0"], &["K1"]),
+                    };
 
-                let mut answers = [true].into_iter();
-                let mut choices = [3].into_iter();
-                let mut events = Vec::new();
-                let result = respond_to_events(
-                    &mut ctx,
-                    async |ctx| prompt_and_fetch_batch_results(ctx, mock, &batch).await,
-                    |event| match event {
-                        EngineEvent::Confirm { message, default, reply } => {
-                            test_eq!(message, "Fetch results now? ");
-                            assert!(default);
-                            reply.send(answers.next().expect("unexpected confirmation")).unwrap();
-                        }
-                        EngineEvent::Choose { message, options, default, reply } => {
-                            test_eq!(message, "What do you want to do?");
-                            test_eq!(default, 0);
-                            test_eq!(options.len(), 4);
-                            test_eq!(options[3], "Decide later, do nothing right now");
-                            reply.send(choices.next().expect("unexpected choice")).unwrap();
-                        }
-                        EngineEvent::Line { .. } | EngineEvent::Secret { .. } => {
-                            panic!("unexpected input request: {event:?}");
-                        }
-                        event => events.push(event),
-                    },
-                )
-                .await;
-                assert!(result.is_ok());
-                test_eq!(answers.next(), None);
-                test_eq!(choices.next(), None);
-                assert!(events.iter().any(|event| matches!(
-                    event,
-                    EngineEvent::StatusUpdate { message } if message.contains("1 of 2 items succeeded")
-                )));
+                    let mut answers = [true].into_iter();
+                    let mut choices = [choice].into_iter();
+                    let mut events = Vec::new();
+                    let result = respond_to_events(
+                        &mut ctx,
+                        async |ctx| prompt_and_fetch_batch_results(ctx, mock, &batch).await,
+                        |event| match event {
+                            EngineEvent::Confirm { message, default, reply } => {
+                                test_eq!(message, "Fetch results now? ");
+                                assert!(default);
+                                reply.send(answers.next().expect("unexpected confirmation")).unwrap();
+                            }
+                            EngineEvent::Choose { message, options, default, reply } => {
+                                test_eq!(message, "What do you want to do?");
+                                test_eq!(default, 0);
+                                test_eq!(options.len(), 4);
+                                test_eq!(options[3], "Decide later, do nothing right now");
+                                reply.send(choices.next().expect("unexpected choice")).unwrap();
+                            }
+                            EngineEvent::Line { .. } | EngineEvent::Secret { .. } => {
+                                panic!("unexpected input request: {event:?}");
+                            }
+                            event => events.push(event),
+                        },
+                    )
+                    .await;
+                    assert!(result.is_ok());
+                    test_eq!(answers.next(), None);
+                    test_eq!(choices.next(), None);
+                    assert!(events.iter().any(|event| matches!(
+                        event,
+                        EngineEvent::StatusUpdate { message } if message.contains("1 of 2 items succeeded")
+                    )));
 
-                // "Decide later" must touch nothing: the WAL entry stays put.
-                assert!(batch_dir.join("batch_1.log").exists());
+                    test_eq!(
+                        events.iter().any(|event| matches!(
+                            event,
+                            EngineEvent::Error { message } if message == "Invalid selection.\n"
+                        )),
+                        choice == 4
+                    );
+
+                    // "Decide later" must touch nothing: the WAL entry stays put.
+                    assert!(batch_dir.join("batch_1.log").exists());
+                }
             },
         )
         .await;
