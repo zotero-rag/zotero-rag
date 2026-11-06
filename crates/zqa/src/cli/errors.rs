@@ -2,10 +2,13 @@ use std::io;
 use std::sync::PoisonError;
 
 use thiserror::Error;
+use tokio::sync::mpsc::error::SendError;
+use tokio::sync::oneshot;
 use zqa_rag::llm::errors::LLMError;
 use zqa_rag::vector::backends::lance::LanceError;
 
 use crate::config::ConfigError;
+use crate::io::EngineEvent;
 use crate::state::StateError;
 use crate::utils;
 
@@ -13,6 +16,10 @@ use crate::utils;
 pub enum CLIError {
     #[error("Error parsing library: {0}")]
     ArrowError(String),
+    #[error("Channel send error: {0}")]
+    ChannelSendError(#[from] Box<SendError<EngineEvent>>),
+    #[error("Channel receive error: {0}")]
+    ChannelRecvError(String),
     #[error("Command error: {0}")]
     CommandError(String),
     #[error("Configuration error: {0}")]
@@ -31,6 +38,24 @@ pub enum CLIError {
     SerializationError(#[from] serde_json::Error),
     #[error("Error accessing state directory: {0}")]
     StateDirError(#[from] StateError),
+}
+
+impl From<oneshot::error::RecvError> for CLIError {
+    fn from(value: oneshot::error::RecvError) -> Self {
+        Self::ChannelRecvError(value.to_string())
+    }
+}
+
+impl From<SendError<EngineEvent>> for CLIError {
+    fn from(error: SendError<EngineEvent>) -> Self {
+        Self::ChannelSendError(Box::new(error))
+    }
+}
+
+impl From<oneshot::error::TryRecvError> for CLIError {
+    fn from(value: oneshot::error::TryRecvError) -> Self {
+        Self::ChannelRecvError(value.to_string())
+    }
 }
 
 impl From<ConfigError> for CLIError {

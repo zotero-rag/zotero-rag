@@ -1,24 +1,24 @@
 //! Command handlers for conversation-related operations.
 
-use std::io::{BufRead, Write};
 use std::sync::{Arc, Mutex, atomic};
 
 use chrono::Local;
+use tokio::sync::oneshot;
 
 use crate::cli::errors::CLIError;
 use crate::common::Context;
+use crate::io::EngineEvent;
 use crate::state::{SavedChatHistory, get_conversation_history, save_conversation};
 
 /// Resume a previous conversation selected by the user.
 ///
-/// Displays a numbered list of saved conversations, prompts for a selection from standard input,
-/// and loads the chosen conversation into the current session. If the current session is dirty,
-/// it is saved first.
+/// Sends the saved conversations as an [`EngineEvent::Choose`] prompt and loads the chosen
+/// conversation into the current session. If the current session is dirty, it is saved first. An
+/// invalid or missing reply is reported as an error event.
 ///
 /// # Arguments
 ///
-/// * `ctx` - A `Context` object that contains CLI state and objects that implement
-///   [`std::io::Write`] for `stdout` and `stderr`.
+/// * `ctx` - The application context, including conversation state and the event sender.
 ///
 /// # Returns
 ///
@@ -26,52 +26,66 @@ use crate::state::{SavedChatHistory, get_conversation_history, save_conversation
 ///
 /// # Errors
 ///
-/// * `CLIError::IOError` - If writing prompts or reading user input fails.
+/// * `CLIError::CommandError` - If the current conversation could not be saved.
+/// * `CLIError::ChannelSendError` - If the event receiver is closed.
 /// * `CLIError::LockPoisoningError` - If a lock on conversation state could not be obtained.
-pub(crate) fn handle_resume_cmd<O: Write, E: Write>(
-    ctx: &mut Context<O, E>,
-) -> Result<(), CLIError> {
+pub(crate) async fn handle_resume_cmd(ctx: &mut Context) -> Result<(), CLIError> {
     match get_conversation_history() {
         Err(e) => {
-            writeln!(&mut ctx.err, "Failed to load conversations: {e}")?;
+            ctx.emit(EngineEvent::Error {
+                message: format!("Failed to load conversations: {e}\n"),
+            })
+            .await?;
         }
         Ok(None) => {
-            writeln!(&mut ctx.out, "No saved conversations found.")?;
+            ctx.emit(EngineEvent::Text {
+                message: "No saved conversations found.\n".into(),
+            })
+            .await?;
         }
         Ok(Some(ref v)) if v.is_empty() => {
-            writeln!(&mut ctx.out, "No saved conversations found.")?;
+            ctx.emit(EngineEvent::Text {
+                message: "No saved conversations found.\n".into(),
+            })
+            .await?;
         }
         Ok(Some(histories)) => {
-            writeln!(&mut ctx.out)?;
-            writeln!(&mut ctx.out, "Saved conversations:")?;
-            for (i, h) in histories.iter().enumerate() {
-                let msg_count = h.history.len();
-                writeln!(
-                    &mut ctx.out,
-                    "  [{}] {} ({} message{})",
-                    i + 1,
-                    h.title,
-                    msg_count,
-                    if msg_count == 1 { "" } else { "s" }
-                )?;
-            }
-            writeln!(&mut ctx.out)?;
-            write!(&mut ctx.out, "Enter a number (1-{}): ", histories.len())?;
-            ctx.out.flush()?;
+            let (tx, rx) = oneshot::channel();
+            let choices = histories
+                .iter()
+                .map(|h| {
+                    let msg_count = h.history.len();
+                    format!(
+                        "{} ({} message{})",
+                        h.title,
+                        msg_count,
+                        if msg_count == 1 { "" } else { "s" }
+                    )
+                })
+                .collect::<Vec<_>>();
 
-            let mut input = String::new();
-            ctx.input.read_line(&mut input)?;
-            let input = input.trim();
+            ctx.emit(EngineEvent::Choose {
+                message: "Saved conversations:".into(),
+                options: choices,
+                reply: tx,
+                default: 0,
+            })
+            .await?;
 
-            match input.parse::<usize>() {
-                Ok(n) if n >= 1 && n <= histories.len() => {
-                    let selected = &histories[n - 1];
-                    resume_conversation(ctx, selected)?;
-                    writeln!(&mut ctx.out, "Resumed: {}", selected.title)?;
-                }
-                _ => {
-                    writeln!(&mut ctx.err, "Invalid selection.")?;
-                }
+            if let Ok(n) = rx.await
+                && n < histories.len()
+            {
+                let selected = &histories[n];
+                resume_conversation(ctx, selected).await?;
+                ctx.emit(EngineEvent::StatusUpdate {
+                    message: format!("Resumed: {}\n", selected.title),
+                })
+                .await?;
+            } else {
+                ctx.emit(EngineEvent::Error {
+                    message: "Invalid selection.\n".into(),
+                })
+                .await?;
             }
         }
     }
@@ -93,15 +107,11 @@ pub(crate) fn handle_resume_cmd<O: Write, E: Write>(
 ///
 /// Returns a [`CLIError`] if the current conversation cannot be saved or conversation state cannot
 /// be locked.
-pub(crate) fn resume_conversation<O, E>(
-    ctx: &mut Context<O, E>,
+pub(crate) async fn resume_conversation(
+    ctx: &mut Context,
     conversation: &SavedChatHistory,
-) -> Result<(), CLIError>
-where
-    O: Write,
-    E: Write,
-{
-    if !save_current_conversation(ctx)? {
+) -> Result<(), CLIError> {
+    if !save_current_conversation(ctx).await? {
         return Err(CLIError::CommandError(
             "could not save the current conversation; keeping it active".into(),
         ));
@@ -121,30 +131,24 @@ where
 ///
 /// # Arguments
 ///
-/// * `ctx` - A `Context` object that contains CLI state and objects that implement
-///   [`std::io::Write`] for `stdout` and `stderr`.
+/// * `ctx` - The application context, including conversation state and the event sender.
 ///
 /// # Returns
 ///
 /// Whether the conversation is safe to discard: `true` when there was nothing to
 /// save or the save succeeded, `false` when saving failed. On failure the cause is
-/// reported on stderr and the caller should keep the conversation alive.
+/// reported through an error event and the caller should keep the conversation alive.
 ///
 /// # Errors
 ///
-/// Returns a [`CLIError`] if a state lock could not be obtained or the failure
-/// could not be written to stderr.
-pub(crate) fn save_current_conversation<O, E>(ctx: &mut Context<O, E>) -> Result<bool, CLIError>
-where
-    O: Write,
-    E: Write,
-{
+/// Returns a [`CLIError`] if a state lock could not be obtained or the event receiver is closed.
+pub(crate) async fn save_current_conversation(ctx: &mut Context) -> Result<bool, CLIError> {
     if ctx.state.dirty.load(atomic::Ordering::Relaxed) {
         let chat_history = Arc::clone(&ctx.state.chat_history);
-        let history = chat_history.lock()?;
         let date = Local::now();
 
-        let conversation =
+        let conversation = {
+            let history = chat_history.lock()?;
             SavedChatHistory {
                 history: history.clone(),
                 date,
@@ -152,47 +156,55 @@ where
                     format!("Conversation on {}", date.format("%Y-%m-%d %H:%M"))
                 }),
                 usage: ctx.state.usage,
-            };
+            }
+        };
 
         if let Err(e) = save_conversation(&conversation) {
-            writeln!(&mut ctx.err, "Error saving conversation: {e}")?;
+            ctx.emit(EngineEvent::Error {
+                message: format!("Error saving conversation: {e}\n"),
+            })
+            .await?;
             return Ok(false);
         }
     }
+
     Ok(true)
 }
 
 #[cfg(test)]
 mod tests {
-    use std::io::Cursor;
     use std::sync::atomic::Ordering;
 
     use chrono::Local;
     use serial_test::serial;
     use temp_env;
+    use tokio::sync::mpsc;
     use zqa_macros::{test_contains, test_eq};
     use zqa_rag::llm::base::{ChatHistoryContent, ChatHistoryItem, MessageRole};
 
     use super::{handle_resume_cmd, resume_conversation};
-    use crate::common::test_support::create_test_context;
+    use crate::common::test_support::{create_test_context, respond_to_events};
+    use crate::io::EngineEvent;
     use crate::state::{SavedChatHistory, UsageMetadata, save_conversation};
 
-    #[test]
+    #[tokio::test]
     #[serial]
-    fn test_resume_no_conversations() {
+    async fn test_resume_no_conversations() {
         let temp_dir = tempfile::tempdir().unwrap();
-        temp_env::with_var("ZQA_STATE_DIR", Some(temp_dir.path()), || {
+        temp_env::async_with_vars([("ZQA_STATE_DIR", Some(temp_dir.path()))], async {
             let mut ctx = create_test_context(vec![]);
-            ctx.input = Box::new(Cursor::new(""));
-            handle_resume_cmd(&mut ctx).unwrap();
+            let (tx, mut rx) = mpsc::channel(1);
+            ctx.event_tx = Some(tx);
+            handle_resume_cmd(&mut ctx).await.unwrap();
 
-            let output = String::from_utf8(ctx.out.into_inner()).unwrap();
+            let output = rx.try_recv().unwrap().to_string();
             test_contains!(output, "No saved conversations found.");
-        });
+        })
+        .await;
     }
 
-    #[test]
-    fn resume_conversation_replaces_session_state() {
+    #[tokio::test]
+    async fn resume_conversation_replaces_session_state() {
         let history = vec![ChatHistoryItem {
             role: MessageRole::User,
             content: vec![ChatHistoryContent::Text("What is attention?".into())],
@@ -209,22 +221,22 @@ mod tests {
         };
 
         let mut ctx = create_test_context(vec![]);
-        resume_conversation(&mut ctx, &saved).unwrap();
+        resume_conversation(&mut ctx, &saved).await.unwrap();
 
-        assert_eq!(*ctx.state.chat_history.lock().unwrap(), history);
-        assert_eq!(
+        test_eq!(*ctx.state.chat_history.lock().unwrap(), history);
+        test_eq!(
             *ctx.state.title.lock().unwrap(),
             Some("Attention".to_string())
         );
-        assert_eq!(ctx.state.usage.input_tokens, 1000);
+        test_eq!(ctx.state.usage.input_tokens, 1000);
         assert!(!ctx.state.dirty.load(Ordering::Relaxed));
     }
 
-    #[test]
+    #[tokio::test]
     #[serial]
-    fn test_resume_loads_selected_conversation() {
+    async fn test_resume_loads_selected_conversation() {
         let temp_dir = tempfile::tempdir().unwrap();
-        temp_env::with_var("ZQA_STATE_DIR", Some(temp_dir.path()), || {
+        temp_env::async_with_vars([("ZQA_STATE_DIR", Some(temp_dir.path()))], async {
             let history_a = vec![
                 ChatHistoryItem {
                     role: MessageRole::User,
@@ -275,11 +287,30 @@ mod tests {
             .unwrap();
 
             let mut ctx = create_test_context(vec![]);
-            ctx.input = Box::new(Cursor::new("1\n"));
-            handle_resume_cmd(&mut ctx).unwrap();
-
-            let out = String::from_utf8(ctx.out.into_inner()).unwrap();
-            test_contains!(out, "Resumed:");
+            let mut events = Vec::new();
+            let mut choices = 0;
+            respond_to_events(&mut ctx, handle_resume_cmd, |event| match event {
+                EngineEvent::Choose {
+                    options,
+                    default,
+                    reply,
+                    ..
+                } => {
+                    choices += 1;
+                    test_eq!(options.len(), 2);
+                    test_eq!(default, 0);
+                    test_contains!(options[0], "Conversation B");
+                    reply.send(0).unwrap();
+                }
+                event => events.push(event),
+            })
+            .await
+            .unwrap();
+            test_eq!(choices, 1);
+            assert!(events.iter().any(|event| matches!(
+                event,
+                EngineEvent::StatusUpdate { message } if message.contains("Resumed:")
+            )));
 
             let loaded_history = ctx.state.chat_history.lock().unwrap();
             let loaded_usage = ctx.state.usage;
@@ -290,14 +321,15 @@ mod tests {
                 Some("Conversation B".to_string())
             );
             assert!(!ctx.state.dirty.load(std::sync::atomic::Ordering::Relaxed));
-        });
+        })
+        .await;
     }
 
-    #[test]
+    #[tokio::test]
     #[serial]
-    fn test_resume_invalid_selection() {
+    async fn test_resume_invalid_selection() {
         let temp_dir = tempfile::tempdir().unwrap();
-        temp_env::with_var("ZQA_STATE_DIR", Some(temp_dir.path()), || {
+        temp_env::async_with_vars([("ZQA_STATE_DIR", Some(temp_dir.path()))], async {
             save_conversation(&SavedChatHistory {
                 history: vec![ChatHistoryItem {
                     role: MessageRole::User,
@@ -310,11 +342,24 @@ mod tests {
             .unwrap();
 
             let mut ctx = create_test_context(vec![]);
-            ctx.input = Box::new(Cursor::new("99\n"));
-            handle_resume_cmd(&mut ctx).unwrap();
-
-            let err = String::from_utf8(ctx.err.into_inner()).unwrap();
-            test_contains!(err, "Invalid selection.");
-        });
+            let mut events = Vec::new();
+            let mut choices = 0;
+            respond_to_events(&mut ctx, handle_resume_cmd, |event| match event {
+                EngineEvent::Choose { options, reply, .. } => {
+                    choices += 1;
+                    test_eq!(options.len(), 1);
+                    reply.send(99).unwrap();
+                }
+                event => events.push(event),
+            })
+            .await
+            .unwrap();
+            test_eq!(choices, 1);
+            assert!(events.iter().any(|event| matches!(
+                event,
+                EngineEvent::Error { message } if message.contains("Invalid selection.")
+            )));
+        })
+        .await;
     }
 }

@@ -1,9 +1,11 @@
 use std::fs;
-use std::io::Write;
+use std::io::{BufRead, Write};
 use std::path::Path;
 use std::sync::Arc;
 
+use rpassword::read_password;
 use rustyline::error::ReadlineError;
+use tokio::sync::mpsc;
 
 use crate::cli::commands::{Command, parse_command};
 use crate::cli::errors::CLIError;
@@ -21,6 +23,7 @@ use crate::cli::handlers::query::{handle_query_cmd, handle_search_cmd};
 use crate::cli::placeholder::PlaceholderText;
 use crate::cli::readline::get_readline_config;
 use crate::common::Context;
+use crate::io::EngineEvent;
 use crate::state::get_state_dir;
 
 /// Handle a single command or query from the user.
@@ -28,59 +31,122 @@ use crate::state::get_state_dir;
 /// # Arguments
 ///
 /// * `command` - The command string entered by the user.
-/// * `ctx` - A `Context` object that contains CLI args and objects that implement
-///   [`std::io::Write`] for `stdout` and `stderr`.
+/// * `ctx` - A `Context` object that contains CLI args
 ///
 /// # Returns
 ///
 /// `Ok(true)` if the CLI should continue running, `Ok(false)` if it should exit.
-pub(crate) async fn dispatch_command<O: Write, E: Write>(
-    command: &str,
-    ctx: &mut Context<O, E>,
-) -> Result<bool, CLIError> {
+pub(crate) async fn dispatch_command(command: &str, ctx: &mut Context) -> Result<bool, CLIError> {
     let command =
         parse_command(command.trim()).map_err(|e| CLIError::CommandError(e.to_string()))?;
 
     match command {
         Command::Batch(subcmd) => handle_batch_cmd(subcmd, ctx).await,
         Command::CheckHealth => handle_checkhealth_cmd(ctx).await,
-        Command::Config => handle_config_cmd(ctx),
+        Command::Config => handle_config_cmd(ctx).await,
         Command::Dedup => handle_dedup_cmd(ctx).await,
-        Command::Docs(subcmd) => handle_docs_cmd(subcmd, ctx),
+        Command::Docs(subcmd) => handle_docs_cmd(subcmd, ctx).await,
         Command::Doctor => handle_doctor_cmd(ctx).await,
         Command::DoNothing => {
             return Ok(true);
         }
-        Command::Help => handle_help_cmd(ctx),
+        Command::Help => handle_help_cmd(ctx).await,
         Command::Index => handle_index_cmd(ctx).await,
-        Command::NewConversation => handle_new_conversation_cmd(ctx),
+        Command::NewConversation => handle_new_conversation_cmd(ctx).await,
         Command::Process => handle_process_cmd(ctx).await,
         Command::Quit => {
-            return handle_quit_cmd(ctx).and(Ok(false));
+            return handle_quit_cmd(ctx).await.and(Ok(false));
         }
         Command::Query { text } => handle_query_cmd(text, ctx).await,
-        Command::Resume => handle_resume_cmd(ctx),
+        Command::Resume => handle_resume_cmd(ctx).await,
         Command::Search { query } => handle_search_cmd(query, ctx).await,
         Command::Stats => handle_stats_cmd(ctx).await,
     }
     .and(Ok(true))
 }
 
+/// Run one REPL command, rendering its events while it runs.
+///
+/// Events are rendered as they arrive, so a prompt is answered from `input` while the command
+/// waits on it. Events still queued when the command finishes are rendered before this returns.
+/// If the command fails, its error is written to `err` and the REPL keeps running.
+///
+/// # Arguments
+///
+/// * `command` - The command string entered by the user.
+/// * `ctx` - Application state, configuration, storage, and the event sender.
+/// * `rx` - The receiver for events sent through `ctx`.
+/// * `input` - Input for event-prompt replies.
+/// * `output` - Output for model text, status updates, and prompts.
+/// * `err` - Output for warnings and errors.
+///
+/// # Returns
+///
+/// `Ok(true)` if the REPL should keep running, `Ok(false)` if the command asked it to exit.
+///
+/// # Errors
+///
+/// * `CLIError::IOError` - If rendering an event, writing the command's error, or reading a prompt
+///   reply fails.
+async fn run_command<R: BufRead, O: Write, E: Write>(
+    command: &str,
+    ctx: &mut Context,
+    rx: &mut mpsc::Receiver<EngineEvent>,
+    input: &mut R,
+    output: &mut O,
+    err: &mut E,
+) -> Result<bool, CLIError> {
+    let result = {
+        let dispatch = dispatch_command(command, ctx);
+        tokio::pin!(dispatch);
+
+        loop {
+            tokio::select! {
+                result = &mut dispatch => break result,
+                Some(event) = rx.recv() => {
+                    event.handle_event(input, output, err, read_password)?;
+                }
+            }
+        }
+    };
+
+    while let Ok(event) = rx.try_recv() {
+        event.handle_event(input, output, err, read_password)?;
+    }
+
+    match result {
+        Ok(keep_running) => Ok(keep_running),
+        Err(e) => {
+            writeln!(err, "{e}")?;
+            Ok(true)
+        }
+    }
+}
+
 /// The core CLI implementation that implements a REPL for user commands.
 ///
 /// # Arguments
 ///
-/// * `ctx` - A `Context` object that contains CLI args and objects that implement
-///   [`std::io::Write`] for `stdout` and `stderr`.
+/// * `ctx` - Application state, configuration, storage, and the event sender.
+/// * `rx` - A channel that receives `EngineEvent`s.
+/// * `input` - Input for event-prompt replies.
+/// * `output` - Output for model text, status updates, and prompts.
+/// * `err` - Output for warnings and errors.
 ///
 /// # Errors
 ///
 /// * `CLIError::ReadlineError` - If we could not get the history file path, a `readline` editor could not be created,
 ///   or the history could not be saved.
-/// * `CLIError::IOError` - If `writeln!` fails.
+/// * `CLIError::IOError` - If rendering an event, flushing output, or reading a prompt reply fails.
 /// * `CLIError::StateDirError` - If the state dir could not be obtained.
 #[allow(clippy::needless_continue)]
-pub(crate) async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<(), CLIError> {
+pub(crate) async fn cli<R: BufRead, O: Write, E: Write>(
+    mut ctx: Context,
+    mut rx: mpsc::Receiver<EngineEvent>,
+    mut input: R,
+    mut output: O,
+    mut err: E,
+) -> Result<(), CLIError> {
     // At startup, we should check if there are pending embedding batches and notify the user if so.
     // [`crate::cli::handlers::batch`] has more details about the semantics of interacting with
     // batch APIs. We don't do the check itself since we have two bad options:
@@ -103,7 +169,7 @@ pub(crate) async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<()
 
         if !batch_files.is_empty() {
             writeln!(
-                &mut ctx.out,
+                &mut output,
                 "You have {} embedding batch{} pending. Use /batch check to check their status.\n",
                 batch_files.len(),
                 if batch_files.len() > 1 { "es" } else { "" }
@@ -145,15 +211,17 @@ pub(crate) async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<()
                     log::debug!("Failed to write history entry: {e}");
                 }
 
-                match dispatch_command(&command, &mut ctx).await {
-                    Ok(true) => {}
-                    Ok(false) => break,
-                    Err(CLIError::CommandError(ref e)) => {
-                        if let Err(write_err) = writeln!(&mut ctx.err, "Error: {e}") {
-                            log::error!("Failed to write to stderr: {write_err}");
-                        }
-                    }
-                    Err(e) => return Err(e),
+                if !run_command(
+                    &command,
+                    &mut ctx,
+                    &mut rx,
+                    &mut input,
+                    &mut output,
+                    &mut err,
+                )
+                .await?
+                {
+                    break;
                 }
             }
             Err(ReadlineError::Signal(rustyline::error::Signal::Resize)) => {
@@ -162,7 +230,12 @@ pub(crate) async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<()
             }
             Err(ReadlineError::Interrupted) => {
                 // Handle SIGINT by saving the conversation if needed
-                save_current_conversation(&mut ctx)?;
+                save_current_conversation(&mut ctx).await?;
+
+                while let Ok(event) = rx.try_recv() {
+                    event.handle_event(&mut input, &mut output, &mut err, read_password)?;
+                }
+
                 break;
             }
             _ => break,
@@ -178,11 +251,13 @@ pub(crate) async fn cli<O: Write, E: Write>(mut ctx: Context<O, E>) -> Result<()
 #[cfg(test)]
 mod tests {
 
+    use std::io;
     use std::sync::{Arc, atomic};
 
     use serde_json::json;
     use serial_test::serial;
     use temp_env;
+    use tokio::sync::mpsc;
     use zqa_macros::{test_contains, test_eq, test_ok};
     use zqa_macros_proc::retry;
     use zqa_rag::constants::{
@@ -193,8 +268,10 @@ mod tests {
     use zqa_rag::llm::tools::Tool;
     use zqa_rag::reranking::common::RerankProviderConfig;
 
-    use super::dispatch_command;
-    use crate::common::test_support::{TestPaths, create_test_context};
+    use super::{dispatch_command, run_command};
+    use crate::common::test_support::{TestPaths, capture_events, create_test_context};
+    use crate::io::EngineEvent;
+    use crate::state::UsageMetadata;
     use crate::store::lance::LanceZoteroStore;
     use crate::tools::retrieval::RetrievalTool;
 
@@ -265,12 +342,85 @@ mod tests {
         temp_env::async_with_vars([("ZQA_STATE_DIR", Some(state_dir.as_str()))], async {
             let mut ctx = create_test_context(vec![]);
 
-            let result = dispatch_command("/resume", &mut ctx).await;
+            let (result, events) =
+                capture_events(&mut ctx, async |ctx| dispatch_command("/resume", ctx).await).await;
             test_ok!(result);
             assert!(result.unwrap());
+            assert!(events.iter().any(|event| matches!(
+                event,
+                EngineEvent::Text { message } if message.contains("No saved conversations found.")
+            )));
+        })
+        .await;
+    }
 
-            let output = String::from_utf8(ctx.out.into_inner()).unwrap();
-            test_contains!(output, "No saved conversations found.");
+    #[tokio::test]
+    #[serial]
+    async fn test_run_command_quit_then_resume_reloads_conversation() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let state_dir = temp_dir.path().to_str().unwrap().to_string();
+
+        temp_env::async_with_vars([("ZQA_STATE_DIR", Some(state_dir.as_str()))], async {
+            let history = vec![ChatHistoryItem {
+                role: MessageRole::User,
+                content: vec![ChatHistoryContent::Text("Summarize this paper".into())],
+            }];
+            let usage = UsageMetadata {
+                input_tokens: 1000,
+                output_tokens: 500,
+                estimated_cost: 12,
+                ..UsageMetadata::default()
+            };
+            let mut output = Vec::new();
+            let mut err = Vec::new();
+
+            let mut ctx = create_test_context(vec![]);
+            let (tx, mut rx) = mpsc::channel(256);
+            ctx.event_tx = Some(tx);
+            *ctx.state.title.lock().unwrap() = Some("Existing conversation".to_string());
+            *ctx.state.chat_history.lock().unwrap() = history.clone();
+            ctx.state.usage = usage;
+            ctx.state.dirty.store(true, atomic::Ordering::Relaxed);
+
+            let keep_running = run_command(
+                "/quit",
+                &mut ctx,
+                &mut rx,
+                &mut io::empty(),
+                &mut output,
+                &mut err,
+            )
+            .await;
+            test_ok!(keep_running);
+            assert!(!keep_running.unwrap());
+
+            // A fresh context stands in for the next process: nothing is loaded until `/resume`.
+            let mut ctx = create_test_context(vec![]);
+            let (tx, mut rx) = mpsc::channel(256);
+            ctx.event_tx = Some(tx);
+
+            let keep_running = run_command(
+                "/resume",
+                &mut ctx,
+                &mut rx,
+                &mut "1\n".as_bytes(),
+                &mut output,
+                &mut err,
+            )
+            .await;
+            test_ok!(keep_running);
+            assert!(keep_running.unwrap());
+
+            let output = String::from_utf8(output).unwrap();
+            test_contains!(output, "Existing conversation (1 message)");
+            test_contains!(output, "Resumed: Existing conversation");
+            test_eq!(String::from_utf8(err).unwrap(), "");
+            test_eq!(*ctx.state.chat_history.lock().unwrap(), history);
+            test_eq!(
+                *ctx.state.title.lock().unwrap(),
+                Some("Existing conversation".to_string())
+            );
+            test_eq!(ctx.state.usage, usage);
         })
         .await;
     }
@@ -287,12 +437,14 @@ mod tests {
         test_ok!(process_result);
         assert!(process_result.unwrap());
 
-        let dedup_result = dispatch_command("/dedup", &mut ctx).await;
+        let (dedup_result, events) =
+            capture_events(&mut ctx, async |ctx| dispatch_command("/dedup", ctx).await).await;
         test_ok!(dedup_result);
         assert!(dedup_result.unwrap());
-
-        let output = String::from_utf8(ctx.out.into_inner()).unwrap();
-        test_contains!(output, "Deduped ");
+        assert!(events.iter().any(|event| matches!(
+            event,
+            EngineEvent::Text { message } if message.contains("Deduped ")
+        )));
     }
 
     #[retry(3)]

@@ -1,18 +1,19 @@
 //! A minimal, embeddable driver for the zqa command handlers.
 //!
 //! [`Session`] owns a [`Context`] and forwards command strings to the same
-//! [`dispatch_command`](crate::cli::app) the REPL uses, but with caller-supplied
-//! output streams. It exists so out-of-crate front-ends (such as `zqa-gui`) can reuse
+//! [`dispatch_command`](crate::cli::app) the REPL uses, sending [`EngineEvent`]s to a
+//! caller-supplied channel. It exists so out-of-crate front-ends (such as `zqa-gui`) can reuse
 //! the full retrieval/generation pipeline without depending on the crate internals
 //! ([`Context`], [`State`], the handler functions) being `pub`.
 
-use std::io::{Cursor, Write};
+use tokio::sync::mpsc;
 
 use crate::cli::app::dispatch_command;
 use crate::cli::errors::CLIError;
 use crate::cli::handlers::conversation::resume_conversation;
 use crate::common::{Context, PathOptions, State};
 use crate::config::Config;
+use crate::io::EngineEvent;
 use crate::state::SavedChatHistory;
 use crate::store::lance::LanceZoteroStore;
 
@@ -20,42 +21,35 @@ use crate::store::lance::LanceZoteroStore;
 ///
 /// A `Session` holds the same [`Context`] the CLI builds, so it carries conversation
 /// state, config, and the vector store across successive [`dispatch`](Session::dispatch)
-/// calls. Command output is written to the `out`/`err` streams supplied at construction;
-/// front-ends typically pass channel-backed writers to stream results into a UI.
-///
-/// The type is deliberately not `Send`: the underlying [`Context`] holds non-`Send` state,
-/// so a `Session` is meant to live on a single owning thread that drives it (for example, a
-/// dedicated engine thread with its own async runtime).
-pub struct Session<O: Write, E: Write> {
-    ctx: Context<O, E>,
+/// calls. Commands emit events via the [`mpsc::Sender<EngineEvent>`] supplied during construction.
+pub struct Session {
+    ctx: Context,
 }
 
-impl<O: Write, E: Write> Session<O, E> {
-    /// Build a session from a config and a pair of output streams.
+impl Session {
+    /// Build a session from a config and an optional event sender.
     ///
     /// # Arguments
     ///
     /// * `config` - The loaded application configuration (see [`crate::load_config`]).
-    /// * `out` - The stream that command stdout is written to.
-    /// * `err` - The stream that command stderr (status lines, warnings) is written to.
+    /// * `event_tx` - Where commands send their events. `None` discards every event, and commands
+    ///   that prompt get no reply.
     ///
     /// # Errors
     ///
     /// Returns a [`CLIError`] if a vector store cannot be constructed from `config`
     /// (for example, if no embedding provider is configured).
-    pub fn new(config: Config, out: O, err: E) -> Result<Self, CLIError> {
+    pub fn new(
+        config: Config,
+        event_tx: Option<mpsc::Sender<EngineEvent>>,
+    ) -> Result<Self, CLIError> {
         let store = LanceZoteroStore::from_config(&config)?;
         let ctx = Context {
             state: State::default(),
-            event_tx: None, // TODO: thread through to the gui
+            event_tx,
             config,
             store,
             path_options: PathOptions::default(),
-            // The GUI never drives interactive prompts; feed EOF so any handler that
-            // reads input terminates instead of blocking.
-            input: Box::new(Cursor::new(Vec::new())),
-            out,
-            err,
         };
 
         Ok(Self { ctx })
@@ -64,10 +58,13 @@ impl<O: Write, E: Write> Session<O, E> {
     /// Dispatch a single command string (e.g. `"/help"` or a bare query) through the
     /// same pipeline as the REPL.
     ///
+    /// Keep receiving events while the returned future runs: the command waits whenever the
+    /// event channel is full or a prompt has not been answered.
+    ///
     /// # Arguments
     ///
-    /// * `command` - The command or query to run. Output is written to the session's
-    ///   `out`/`err` streams as it is produced.
+    /// * `command` - The command or query to run. Its events are sent to the session's event
+    ///   sender as they are produced.
     ///
     /// # Returns
     ///
@@ -78,8 +75,11 @@ impl<O: Write, E: Write> Session<O, E> {
     ///
     /// Returns a [`CLIError`] if the command cannot be parsed or a handler fails
     /// unrecoverably.
-    pub async fn dispatch(&mut self, command: &str) -> Result<bool, CLIError> {
-        dispatch_command(command, &mut self.ctx).await
+    pub fn dispatch(
+        &mut self,
+        command: &str,
+    ) -> impl Future<Output = Result<bool, CLIError>> + Send {
+        dispatch_command(command, &mut self.ctx)
     }
 
     /// Resume a saved conversation without interactive input.
@@ -95,7 +95,10 @@ impl<O: Write, E: Write> Session<O, E> {
     ///
     /// Returns a [`CLIError`] if the current conversation cannot be saved or conversation state
     /// cannot be locked.
-    pub fn resume_conversation(&mut self, conversation: &SavedChatHistory) -> Result<(), CLIError> {
+    pub fn resume_conversation(
+        &mut self,
+        conversation: &SavedChatHistory,
+    ) -> impl Future<Output = Result<(), CLIError>> + Send {
         resume_conversation(&mut self.ctx, conversation)
     }
 }

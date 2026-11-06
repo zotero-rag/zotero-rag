@@ -8,17 +8,17 @@ use tokio::sync::oneshot;
 use crate::state::UsageMetadata;
 use crate::utils::terminal::{BLUE, DIM_TEXT, ITALICS, RED, RESET, YELLOW};
 
-/// An enum of events that can be emitted by handlers called by
-/// [`crate::cli::app::dispatch_command`]. The contract here is that *every* event, including status
-/// updates and error messages will be passed as an event. In general, events carry text, and
-/// variants are a semantic layer on top. Structured payloads are used for data; the current
-/// exceptions are `ToolCall`, `ToolResponse`, and `TokenUsage`.
+/// An enum of events that can be emitted by handlers called by [`crate::cli::app::dispatch_command`].
+/// The contract here is that *every* event, including status updates and error messages will be passed
+/// as an event. In general, events carry text, and variants are a semantic layer on top. Structured
+/// payloads are used for data; the current exceptions are `ToolCall`, `ToolResponse`, and `TokenUsage`.
 ///
-/// You should use events to enable interactivity in your application. Events
-/// are not guaranteed to be a reliable mechanism to detect operation failure: you should rely on
-/// functions returning a `Result` type for this.
+/// You should use events to enable interactivity in your application. Events are not guaranteed to be a
+/// reliable mechanism to detect operation failure: you should rely on functions returning a `Result` type
+/// for this.
 ///
-/// This is the intended contract; handlers and CLI/GUI consumers are not connected yet.
+/// [`crate::utils::library::parse_library`] (used by `/process`) is the one exception: it still
+/// writes its progress spinners and failure summary straight to the terminal.
 ///
 /// ## Display
 ///
@@ -152,20 +152,7 @@ impl EngineEvent {
     /// * Returns `InvalidInput` for a choice request with no options, before writing or reading.
     /// * Returns `UnexpectedEof` when input ends before a confirmation, choice, or line reply.
     /// * Propagates read, write, flush, and secret-reader errors. The reply sender is dropped.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use zqa::io::EngineEvent;
-    ///
-    /// let (reply, mut answer) = tokio::sync::oneshot::channel();
-    /// EngineEvent::Confirm { message: "Continue?".into(), default: true, reply }
-    ///     .handle_event(&mut &b"\n"[..], &mut Vec::new(), &mut Vec::new(),
-    ///         rpassword::read_password)?;
-    /// assert!(answer.try_recv().unwrap());
-    /// # Ok::<(), std::io::Error>(())
-    /// ```
-    pub fn handle_event<R, O, E>(
+    pub(crate) fn handle_event<R, O, E>(
         mut self,
         input: &mut R,
         out: &mut O,
@@ -177,18 +164,16 @@ impl EngineEvent {
         O: Write + ?Sized,
         E: Write + ?Sized,
     {
-        if let Self::Choose {
-            options, default, ..
-        } = &mut self
+        if let Self::Choose { options, .. } = &mut self
+            && options.is_empty()
         {
-            *default = choice_default(options.len(), *default).ok_or_else(|| {
-                io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    "A choice requires at least one option",
-                )
-            })?;
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "A choice requires at least one option",
+            ));
         }
 
+        // Use `Display` impl
         match self {
             Self::RecoverableWarning { .. } | Self::TokenUsage { .. } => return Ok(()),
             Self::Warning { .. } | Self::Error { .. } => {
@@ -201,6 +186,7 @@ impl EngineEvent {
             }
         }
 
+        // Handle input variants
         match self {
             Self::Confirm { default, reply, .. } => {
                 let answer = read_answer(input, out, "Enter y or n.\n> ", |line| {
@@ -224,6 +210,7 @@ impl EngineEvent {
                 default,
                 ..
             } => {
+                let default = if default >= options.len() { 0 } else { default };
                 let answer = read_answer(
                     input,
                     out,
@@ -252,17 +239,6 @@ impl EngineEvent {
             _ => {}
         }
         Ok(())
-    }
-}
-
-/// Resolve the displayed and accepted default, or reject an empty option list.
-fn choice_default(option_count: usize, default: usize) -> Option<usize> {
-    if option_count == 0 {
-        None
-    } else if default < option_count {
-        Some(default)
-    } else {
-        Some(0)
     }
 }
 
@@ -324,9 +300,16 @@ impl Display for EngineEvent {
                 ..
             } => {
                 write!(f, "{message}\n\n")?;
-                let Some(default) = choice_default(options.len(), *default) else {
+                if options.is_empty() {
                     return writeln!(f, "(no options available)");
+                }
+
+                let default = if *default >= options.len() {
+                    0
+                } else {
+                    *default
                 };
+
                 for (i, opt) in options.iter().enumerate() {
                     if i == default {
                         writeln!(f, "[{}] {opt}", i + 1)?;

@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::io::{BufRead, Write};
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex, RwLock};
@@ -73,9 +72,8 @@ pub(crate) struct PathOptions {
     pub(crate) library_path: Option<PathBuf>,
 }
 
-/// A structure that holds the application context, including CLI arguments and writers
-/// for `stdout` and `stderr`.
-pub(crate) struct Context<OutStream: Write, ErrStream: Write> {
+/// Application state, configuration, storage, and an optional event sender.
+pub(crate) struct Context {
     /// Application state
     pub(crate) state: State,
     /// Optional channel for transmitting events. If `None`, no events are published.
@@ -86,18 +84,9 @@ pub(crate) struct Context<OutStream: Write, ErrStream: Write> {
     pub(crate) store: LanceZoteroStore,
     /// Runtime filesystem path overrides (library location, batch-iter file)
     pub(crate) path_options: PathOptions,
-    /// Abstraction for `stdin()`. Boxed rather than generic because, unlike `out`/`err` (which
-    /// tests substitute with an inspectable `Cursor` to assert on), input is only ever *supplied*:
-    /// no caller needs the concrete reader type. Boxing also keeps the input concern off every
-    /// handler signature.
-    pub(crate) input: Box<dyn BufRead>,
-    /// Abstraction for `stdout()`
-    pub(crate) out: OutStream,
-    /// Abstraction for `stderr()`
-    pub(crate) err: ErrStream,
 }
 
-impl<OutStream: Write, ErrStream: Write> Context<OutStream, ErrStream> {
+impl Context {
     /// Emit an event to the channel, if it exists.
     ///
     /// # Arguments
@@ -111,10 +100,6 @@ impl<OutStream: Write, ErrStream: Write> Context<OutStream, ErrStream> {
     /// # Errors
     ///
     /// * `SendError<EngineEvent>` - If the receiver is closed; the error retains the event.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "Event producers are not connected yet.")
-    )]
     pub(crate) async fn emit(&self, event: EngineEvent) -> Result<(), Box<SendError<EngineEvent>>> {
         let Some(tx) = &self.event_tx else {
             return Ok(());
@@ -154,9 +139,89 @@ pub fn setup_logger(log_level: LevelFilter) -> Result<(), log::SetLoggerError> {
 #[cfg(test)]
 mod tests {
     use tokio::sync::mpsc;
+    use zqa_macros::test_eq;
 
-    use super::test_support::create_test_context;
+    use super::test_support::{capture_events, create_test_context, respond_to_events};
     use crate::io::EngineEvent;
+
+    #[tokio::test]
+    async fn test_capture_events_drains_and_restores_sender() {
+        let mut ctx = create_test_context(vec![]);
+        let (tx, mut rx) = mpsc::channel(1);
+        ctx.event_tx = Some(tx);
+
+        let (result, events) = capture_events(&mut ctx, async |ctx| {
+            for index in 0..3 {
+                ctx.emit(EngineEvent::Text {
+                    message: index.to_string(),
+                })
+                .await
+                .unwrap();
+            }
+
+            42
+        })
+        .await;
+
+        test_eq!(result, 42);
+        test_eq!(events.len(), 3);
+
+        for (index, event) in events.into_iter().enumerate() {
+            let EngineEvent::Text { message } = event else {
+                panic!("expected a text event");
+            };
+
+            test_eq!(message, index.to_string());
+        }
+
+        assert!(rx.try_recv().is_err());
+        ctx.emit(EngineEvent::Text {
+            message: "restored".into(),
+        })
+        .await
+        .unwrap();
+        assert!(
+            matches!(rx.try_recv().unwrap(), EngineEvent::Text { message } if message == "restored")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_respond_to_events_answers_requests() {
+        let mut ctx = create_test_context(vec![]);
+        let result = respond_to_events(
+            &mut ctx,
+            async |ctx| {
+                let (reply, answer) = tokio::sync::oneshot::channel();
+                ctx.emit(EngineEvent::Confirm {
+                    message: "Continue?".into(),
+                    default: true,
+                    reply,
+                })
+                .await
+                .unwrap();
+                let confirmed = answer.await.unwrap();
+                let (reply, answer) = tokio::sync::oneshot::channel();
+                ctx.emit(EngineEvent::Choose {
+                    message: "Select an option".into(),
+                    options: vec!["First".into(), "Second".into()],
+                    default: 0,
+                    reply,
+                })
+                .await
+                .unwrap();
+                (confirmed, answer.await.unwrap())
+            },
+            |event| match event {
+                EngineEvent::Confirm { reply, .. } => reply.send(false).unwrap(),
+                EngineEvent::Choose { reply, .. } => reply.send(1).unwrap(),
+                _ => panic!("expected an input request"),
+            },
+        )
+        .await;
+
+        test_eq!(result, (false, 1));
+        assert!(ctx.event_tx.is_none());
+    }
 
     #[tokio::test]
     async fn test_emit_without_sender() {
@@ -212,10 +277,10 @@ mod tests {
 
 #[cfg(test)]
 pub(crate) mod test_support {
-    use std::io::Cursor;
     use std::path::PathBuf;
 
     use tempfile::TempDir;
+    use tokio::sync::mpsc;
     use zqa_rag::constants::{
         DEFAULT_VOYAGE_EMBEDDING_DIM, DEFAULT_VOYAGE_EMBEDDING_MODEL, DEFAULT_VOYAGE_RERANK_MODEL,
     };
@@ -224,6 +289,73 @@ pub(crate) mod test_support {
     use crate::LanceZoteroStore;
     use crate::common::State;
     use crate::config::{Config, MockConfig, VoyageAIConfig};
+    use crate::io::EngineEvent;
+
+    /// Run an output-only handler and collect the events it sends, in order.
+    ///
+    /// Events are drained while the handler runs, so a full channel won't block the test.
+    /// After the handler finishes, any queued events are collected and the previous sender is
+    /// restored. This helper doesn't answer input requests or wait for detached background tasks.
+    ///
+    /// # Arguments
+    ///
+    /// * `ctx` - The test context whose event sender will be temporarily replaced.
+    /// * `action` - The handler or async closure to run with that context.
+    ///
+    /// # Returns
+    ///
+    /// The handler's result and its captured events, including events sent before an error.
+    pub(crate) async fn capture_events<T>(
+        ctx: &mut Context,
+        action: impl AsyncFnOnce(&mut Context) -> T,
+    ) -> (T, Vec<EngineEvent>) {
+        let mut events = Vec::new();
+        let result = respond_to_events(ctx, action, |event| events.push(event)).await;
+        (result, events)
+    }
+
+    /// Run a handler while a test consumer handles its output and input requests.
+    ///
+    /// The consumer runs concurrently with the handler and receives queued events before this
+    /// function returns. Input events must be answered or their reply senders dropped by the
+    /// consumer. The previous context sender is restored when the handler finishes.
+    /// Detached background tasks are not awaited.
+    ///
+    /// # Arguments
+    ///
+    /// * `ctx` - The context whose event sender will be temporarily replaced.
+    /// * `action` - The handler or async closure to run.
+    /// * `on_event` - The consumer that receives each event in order.
+    ///
+    /// # Returns
+    ///
+    /// The handler's result, after all queued events have been consumed.
+    pub(crate) async fn respond_to_events<T>(
+        ctx: &mut Context,
+        action: impl AsyncFnOnce(&mut Context) -> T,
+        mut on_event: impl FnMut(EngineEvent),
+    ) -> T {
+        let (tx, mut rx) = mpsc::channel(1);
+        let previous_sender = ctx.event_tx.replace(tx);
+        let result = {
+            let action = action(ctx);
+            tokio::pin!(action);
+
+            loop {
+                tokio::select! {
+                    result = &mut action => break result,
+                    Some(event) = rx.recv() => on_event(event),
+                }
+            }
+        };
+
+        while let Ok(event) = rx.try_recv() {
+            on_event(event);
+        }
+
+        ctx.event_tx = previous_sender;
+        result
+    }
 
     /// Create a config with the mock LLM provider.
     pub(crate) fn get_config(mock_config: MockConfig) -> Config {
@@ -242,17 +374,9 @@ pub(crate) mod test_support {
         config
     }
 
-    /// Create a default `Context` object where the output and error streams are buffers that can
-    /// be written into. This allows for the output to be easily inspected in tests.
-    pub(crate) fn create_test_context(
-        llm_responses: Vec<String>,
-    ) -> Context<Cursor<Vec<u8>>, Cursor<Vec<u8>>> {
-        let out_buf: Vec<u8> = Vec::new();
-        let out = Cursor::new(out_buf);
-
-        let err_buf: Vec<u8> = Vec::new();
-        let err = Cursor::new(err_buf);
-
+    /// Create a context with mock LLM responses and no event sender.
+    /// Tests that inspect output can install an event sender on the returned context.
+    pub(crate) fn create_test_context(llm_responses: Vec<String>) -> Context {
         let schema = arrow_schema::Schema::new(vec![
             arrow_schema::Field::new("library_key", arrow_schema::DataType::Utf8, false),
             arrow_schema::Field::new("title", arrow_schema::DataType::Utf8, false),
@@ -272,10 +396,6 @@ pub(crate) mod test_support {
             store: LanceZoteroStore::from_schema(embedding_config, schema.into()),
             config,
             path_options: PathOptions::default(),
-            // Default to empty input (EOF); tests that drive prompts overwrite `ctx.input`.
-            input: Box::new(Cursor::new(Vec::new())),
-            out,
-            err,
         }
     }
 
@@ -318,10 +438,7 @@ pub(crate) mod test_support {
         /// Build a [`Context`] bound to these isolated paths, seeded with the given mock LLM
         /// responses. Reuses [`create_test_context`](create_test_context) for config/schema
         /// setup, then points the store at the temp database and installs the isolated [`PathOptions`].
-        pub(crate) fn context(
-            &self,
-            llm_responses: Vec<String>,
-        ) -> Context<Cursor<Vec<u8>>, Cursor<Vec<u8>>> {
+        pub(crate) fn context(&self, llm_responses: Vec<String>) -> Context {
             let mut ctx = create_test_context(llm_responses);
             ctx.store = ctx.store.with_uri(&self.db_uri);
             ctx.path_options = self.path_options.clone();
