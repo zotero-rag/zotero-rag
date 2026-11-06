@@ -130,9 +130,9 @@ impl EngineEvent {
     /// Handle an event in the CLI. As described in the docs for the enum, this first uses the
     /// enum's `Display` impl, and then handles input.
     ///
-    /// Prompts are flushed before reading. Line replies preserve their line ending; confirmation
-    /// and choice replies ignore surrounding whitespace. A dropped reply receiver is treated as
-    /// a cancelled request, so a failed reply send is ignored.
+    /// Prompts are flushed before reading. Line replies have their trailing line terminator stripped
+    /// but otherwise preserve whitespace; confirmation and choice replies ignore surrounding whitespace.
+    /// A dropped reply receiver is treated as a cancelled request, so a failed reply send is ignored.
     ///
     /// # Arguments
     ///
