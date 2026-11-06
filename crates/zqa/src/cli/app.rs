@@ -70,7 +70,8 @@ pub(crate) async fn dispatch_command(command: &str, ctx: &mut Context) -> Result
 /// Events are rendered as they arrive, so a prompt is answered from `input` while the command
 /// waits on it. Events still queued when the command finishes are rendered before this returns.
 /// Progress bars the command left unfinished are then cleared, so they can't draw over the error
-/// that may follow. If the command fails, its error is written to `err` and the REPL keeps running.
+/// that may follow. They are also cleared when rendering an event fails, before that error is
+/// returned. If the command fails, its error is written to `err` and the REPL keeps running.
 ///
 /// # Arguments
 ///
@@ -99,27 +100,30 @@ async fn run_command<R: BufRead, O: Write, E: Write>(
     err: &mut E,
     pbar_manager: &mut TerminalProgress,
 ) -> Result<bool, CLIError> {
-    let result = {
+    let rendered = async {
         let dispatch = dispatch_command(command, ctx);
         tokio::pin!(dispatch);
 
-        loop {
+        let result = loop {
             tokio::select! {
                 result = &mut dispatch => break result,
                 Some(event) = rx.recv() => {
                     event.handle_event(input, output, err, read_password, pbar_manager)?;
                 }
             }
-        }
-    };
+        };
 
-    while let Ok(event) = rx.try_recv() {
-        event.handle_event(input, output, err, read_password, pbar_manager)?;
+        while let Ok(event) = rx.try_recv() {
+            event.handle_event(input, output, err, read_password, pbar_manager)?;
+        }
+
+        Ok::<_, CLIError>(result)
     }
+    .await;
 
     pbar_manager.clear_all();
 
-    match result {
+    match rendered? {
         Ok(keep_running) => Ok(keep_running),
         Err(e) => {
             writeln!(err, "{e}")?;
@@ -427,6 +431,37 @@ mod tests {
             .await;
             test_ok!(keep_running);
             assert!(keep_running.unwrap());
+
+            // A prompt that fails to read still clears the bars left on screen.
+            let mut pbar_manager = TerminalProgress::new();
+            EngineEvent::ProgressStart {
+                id: "unfinished".into(),
+                label: "Parsing".into(),
+                total: None,
+            }
+            .handle_event(
+                &mut io::empty(),
+                &mut Vec::new(),
+                &mut Vec::new(),
+                super::read_password,
+                &mut pbar_manager,
+            )
+            .unwrap();
+            let unfinished = pbar_manager.pbar_map["unfinished"].clone();
+
+            let keep_running = run_command(
+                "/resume",
+                &mut ctx,
+                &mut rx,
+                &mut io::empty(),
+                &mut Vec::new(),
+                &mut Vec::new(),
+                &mut pbar_manager,
+            )
+            .await;
+            assert!(keep_running.is_err());
+            assert!(pbar_manager.pbar_map.is_empty());
+            assert!(unfinished.is_finished());
 
             let output = String::from_utf8(output).unwrap();
             test_contains!(output, "Existing conversation (1 message)");
