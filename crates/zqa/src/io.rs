@@ -9,7 +9,7 @@ use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use tokio::sync::oneshot;
 
 use crate::state::UsageMetadata;
-use crate::utils::terminal::{BLUE, BOLD, DIM_TEXT, ITALICS, RED, RESET, YELLOW};
+use crate::utils::terminal::{BLUE, BOLD, DIM_TEXT, GREEN, ITALICS, RED, RESET, YELLOW};
 
 const PBAR_TEMPLATE: &str = "{bar} {msg} ({percent}%)";
 
@@ -58,11 +58,22 @@ pub enum TextStyle {
     /// Secondary text in a visual hierarchy, recommended to display dimmed. The [`Display`] impl
     /// for [`EngineEvent`] renders this dimmed.
     Secondary,
+    /// A positive outcome, such as a passed check. The [`Display`] impl for [`EngineEvent`] renders
+    /// this in green.
+    Success,
+    /// A caveat or a skipped step. The [`Display`] impl for [`EngineEvent`] renders this in yellow.
+    Warning,
+    /// A failure. The [`Display`] impl for [`EngineEvent`] renders this in red.
+    Error,
 }
 
 /// A single styled span of text as part of a longer logical block of text. This is meant to be used
 /// as part of [`EngineEvent::StyledText`]. In the [`Display`] impl, spans do not supply their own
 /// newlines, so if you want them, you should add them to `text`.
+///
+/// A tab separates columns. The CLI relies on terminal tab stops, so senders may use several tabs
+/// to line columns up there. Frontends without tab stops treat a line's first run of tabs as one
+/// column break; the GUI draws the text before it in a fixed-width first column.
 #[derive(Clone, Debug)]
 pub struct StyledSpan {
     /// The text to render.
@@ -429,6 +440,9 @@ impl Display for EngineEvent {
                         TextStyle::Plain => write!(f, "{}", span.text)?,
                         TextStyle::Heading => write!(f, "{BOLD}{}{RESET}", span.text)?,
                         TextStyle::Secondary => write!(f, "{DIM_TEXT}{}{RESET}", span.text)?,
+                        TextStyle::Success => write!(f, "{GREEN}{}{RESET}", span.text)?,
+                        TextStyle::Warning => write!(f, "{YELLOW}{}{RESET}", span.text)?,
+                        TextStyle::Error => write!(f, "{RED}{}{RESET}", span.text)?,
                     }
                 }
 
@@ -561,6 +575,26 @@ mod tests {
                     ],
                 },
                 format!("{BOLD}Usage:\n{RESET}/help"),
+                false,
+            ),
+            (
+                EngineEvent::StyledText {
+                    spans: vec![
+                        StyledSpan {
+                            text: "pass ".into(),
+                            style: TextStyle::Success,
+                        },
+                        StyledSpan {
+                            text: "warn ".into(),
+                            style: TextStyle::Warning,
+                        },
+                        StyledSpan {
+                            text: "fail".into(),
+                            style: TextStyle::Error,
+                        },
+                    ],
+                },
+                format!("{GREEN}pass {RESET}{YELLOW}warn {RESET}{RED}fail{RESET}"),
                 false,
             ),
             (

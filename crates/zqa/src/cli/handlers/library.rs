@@ -3,11 +3,12 @@
 use std::fmt::Write;
 
 use tokio::sync::oneshot;
+use zqa_rag::vector::checkhealth::HealthCheckStatus;
 use zqa_rag::vector::doctor::doctor as rag_doctor;
 
 use crate::cli::errors::CLIError;
 use crate::common::Context;
-use crate::io::EngineEvent;
+use crate::io::{EngineEvent, StyledSpan, TextStyle};
 use crate::store::common::ZoteroStore;
 use crate::utils::arrow::{ArrowError, library_to_arrow};
 use crate::utils::library::{get_new_library_items, parse_library, parse_library_metadata};
@@ -235,8 +236,23 @@ pub(crate) async fn handle_index_cmd(ctx: &mut Context) -> Result<(), CLIError> 
 ///
 /// * `CLIError::ChannelSendError` - If the event receiver is closed.
 pub(crate) async fn handle_checkhealth_cmd(ctx: &mut Context) -> Result<(), CLIError> {
-    ctx.emit(EngineEvent::Text {
-        message: format!("{}\n", ctx.store.health_check().await),
+    let report = ctx.store.health_check().await.report();
+    let title = StyledSpan {
+        text: "Vector Store Health Check Results\n".into(),
+        style: TextStyle::Heading,
+    };
+    let lines = report.into_iter().map(|line| StyledSpan {
+        text: format!("{}\n", line.text),
+        style: match line.status {
+            HealthCheckStatus::Pass => TextStyle::Success,
+            HealthCheckStatus::Info => TextStyle::Plain,
+            HealthCheckStatus::Warn => TextStyle::Warning,
+            HealthCheckStatus::Fail => TextStyle::Error,
+        },
+    });
+
+    ctx.emit(EngineEvent::StyledText {
+        spans: std::iter::once(title).chain(lines).collect(),
     })
     .await?;
 
@@ -258,22 +274,45 @@ pub(crate) async fn handle_checkhealth_cmd(ctx: &mut Context) -> Result<(), CLIE
 /// Returns a [`CLIError`] if the event receiver is closed.
 /// Diagnostic failures are reported as error events.
 pub(crate) async fn handle_doctor_cmd(ctx: &mut Context) -> Result<(), CLIError> {
-    let mut output = Vec::new();
-    let result = rag_doctor(ctx.store.backend(), &mut output).await;
+    let diagnoses = match rag_doctor(ctx.store.backend()).await {
+        Ok(diagnoses) => diagnoses,
+        Err(e) => {
+            ctx.emit(EngineEvent::Error {
+                message: format!("{e}\n"),
+            })
+            .await?;
 
-    if !output.is_empty() {
-        ctx.emit(EngineEvent::Text {
-            message: String::from_utf8_lossy(&output).into_owned(),
-        })
-        .await?;
+            return Ok(());
+        }
+    };
+
+    let label = |label: &str, style, message: String| {
+        [
+            StyledSpan {
+                text: label.into(),
+                style,
+            },
+            StyledSpan {
+                text: format!(" {message}\n"),
+                style: TextStyle::Plain,
+            },
+        ]
+    };
+    let mut spans = Vec::new();
+
+    for diagnosis in diagnoses {
+        spans.extend(label("symptom:", TextStyle::Warning, diagnosis.symptom));
+
+        if let Some(help) = diagnosis.help {
+            spans.extend(label("help:", TextStyle::Success, help));
+        }
     }
 
-    if let Err(e) = result {
-        ctx.emit(EngineEvent::Error {
-            message: format!("{e}\n"),
-        })
-        .await?;
-    }
+    spans.push(StyledSpan {
+        text: "Analysis completed.\n".into(),
+        style: TextStyle::Plain,
+    });
+    ctx.emit(EngineEvent::StyledText { spans }).await?;
 
     Ok(())
 }
@@ -324,7 +363,7 @@ mod tests {
 
         assert!(events.iter().any(|event| matches!(
             event,
-            EngineEvent::Text { message } if message.contains("storage does not exist")
+            EngineEvent::StyledText { .. } if event.to_string().contains("storage does not exist")
         )));
     }
 
@@ -344,19 +383,19 @@ mod tests {
 
         assert!(events.iter().any(|event| matches!(
             event,
-            EngineEvent::Text { message } if message.contains("Vector Store Health Check Results")
+            EngineEvent::StyledText { .. } if event.to_string().contains("Vector Store Health Check Results")
         )));
         assert!(events.iter().any(|event| matches!(
             event,
-            EngineEvent::Text { message } if message.contains("storage exists")
+            EngineEvent::StyledText { .. } if event.to_string().contains("storage exists")
         )));
         assert!(events.iter().any(|event| matches!(
             event,
-            EngineEvent::Text { message } if message.contains("Table is accessible")
+            EngineEvent::StyledText { .. } if event.to_string().contains("Table is accessible")
         )));
         assert!(events.iter().any(|event| matches!(
             event,
-            EngineEvent::Text { message } if message.contains("Table has")
+            EngineEvent::StyledText { .. } if event.to_string().contains("Table has")
         )));
     }
 }

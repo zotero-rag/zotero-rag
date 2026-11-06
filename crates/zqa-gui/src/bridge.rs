@@ -1,13 +1,10 @@
 //! The runtime bridge between GPUI (which owns the main thread and its own executor)
 //! and the tokio-based zqa pipeline.
 //!
-//! [`spawn_engine`] dedicates one OS thread that owns a tokio runtime and the
-//! [`Session`]: it receives commands over a `tokio::sync::mpsc`
-//! channel and runs each one on that runtime. Each dispatch is raced against a separate
-//! cancel channel with `tokio::select!`, so a user can stop an in-flight command: the
-//! cancel branch drops the dispatch future, which aborts the request in progress
-//! (async Rust is cancel-on-drop). Output produced by the handlers is streamed back to
-//! the GPUI side as [`UiEvent`]s through a `futures::mpsc` channel.
+//! [`spawn_engine`] dedicates one OS thread to a tokio runtime and [`Session`]. It receives
+//! commands sequentially and forwards typed engine events to GPUI. Dispatch can be cancelled
+//! by dropping its future; shutdown itself cannot be cancelled and acknowledges a successful
+//! save before exiting. A failed save leaves the engine available for retry.
 
 use std::sync::Arc;
 use std::thread;
@@ -25,46 +22,49 @@ pub enum EngineCommand {
     Dispatch(String),
     /// Resume a saved conversation without an interactive prompt.
     ResumeConversation(Arc<SavedChatHistory>),
+    /// Save the conversation and stop the engine only if saving succeeds.
+    Shutdown,
 }
 
 /// A single piece of output streamed from the engine thread to the UI.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub enum UiEvent {
-    /// A chunk of command stdout (typically answer text).
-    Stdout(String),
-    /// A chunk of command stderr (status lines, warnings, timings).
-    Stderr(String),
+    /// An event from the agent engine.
+    Engine(EngineEvent),
     /// A command finished. Carries the dispatch result: `Ok(keep_running)` or an
     /// error message.
     Done(Result<bool, String>),
-    /// A saved conversation resume attempt finished.
+    /// A saved conversation resume attempt finished, either from the sidebar or from a typed
+    /// `/resume` that switched conversations. For a typed `/resume`, this is sent in place of
+    /// [`UiEvent::Done`].
     ConversationResumed(Result<Arc<SavedChatHistory>, String>),
     /// The in-flight command was cancelled by the user before it finished.
     Cancelled,
+    /// Shutdown finished saving, or failed with the engine still available for retry.
+    ShutdownComplete(Result<(), String>),
 }
 
-/// Remove ANSI SGR escape sequences (`ESC [ ... m` and friends) from `input`.
-///
-/// This is a deliberately small stripper: it drops `ESC [` up to and including the first
-/// alphabetic terminator, which covers every sequence the handlers emit (see
-/// `zqa::utils::terminal`). It is not a general-purpose ANSI parser.
-fn strip_ansi(input: &str) -> String {
-    let mut out = String::with_capacity(input.len());
-    let mut chars = input.chars();
-
-    while let Some(c) = chars.next() {
-        if c == '\x1b' {
-            if chars.next() == Some('[') {
-                while let Some(next) = chars.next()
-                    && !next.is_ascii_alphabetic()
-                {}
-            }
-            continue;
-        }
-        out.push(c);
+impl From<EngineEvent> for UiEvent {
+    fn from(event: EngineEvent) -> Self {
+        UiEvent::Engine(event)
     }
+}
 
-    out
+/// Decide whether a command switched conversations, given snapshots from before and after it.
+///
+/// A `/resume` can finish without switching: there may be no saved conversations, or the picked
+/// one may be the conversation that is already open. Only a different history or title counts, so
+/// the UI keeps its transcript, including rows the engine doesn't store such as status lines, when
+/// nothing changed.
+///
+/// # Returns
+///
+/// `after` if the conversation changed, otherwise `None`.
+fn switched_conversation(
+    before: &SavedChatHistory,
+    after: SavedChatHistory,
+) -> Option<SavedChatHistory> {
+    (before.history != after.history || before.title != after.title).then_some(after)
 }
 
 /// Spawn the engine thread.
@@ -119,13 +119,32 @@ pub fn spawn_engine(
             };
 
             runtime.block_on(async move {
-                while let Some(command) = cmd_rx.recv().await {
-                    // Drop any cancel signals that arrived while idle, so a late click on a
-                    // previous command can't abort this fresh one.
+                let mut pending_command = None;
+
+                loop {
+                    let command = match pending_command.take() {
+                        Some(command) => command,
+                        None => match cmd_rx.recv().await {
+                            Some(command) => command,
+                            None => break,
+                        },
+                    };
+                    let shutting_down = matches!(command, EngineCommand::Shutdown);
+
+                    // A late stop click must not cancel the next command.
                     while cancel_rx.try_recv().is_ok() {}
 
                     match command {
-                        EngineCommand::Dispatch(command) => {
+                        command @ (EngineCommand::Dispatch(_) | EngineCommand::Shutdown) => {
+                            let command = match command {
+                                EngineCommand::Dispatch(command) => command,
+                                _ => "/quit".into(),
+                            };
+                            // A typed `/resume` swaps the conversation inside the engine, so the
+                            // UI only learns of it by comparing snapshots after it finishes.
+                            let before_resume = (command == "/resume")
+                                .then(|| session.conversation().ok())
+                                .flatten();
                             // `None` means the dispatch was cancelled; dropping the future here
                             // aborts the request in flight.
                             //
@@ -134,24 +153,64 @@ pub fn spawn_engine(
                             // `handle_query_cmd`) are not cancelled and run to completion. Fully
                             // cancelling them needs the core loop's cancellation support tracked
                             // in ZOT-219.
-                            let result: Option<Result<bool, String>> = tokio::select! {
-                                result = session.dispatch(&command) => {
-                                    Some(result.map_err(|e| e.to_string()))
-                                }
-                                Some(evt) = engine_rx.recv() => {
-                                    let text = strip_ansi(&evt.to_string());
-                                    let event = match evt {
-                                        EngineEvent::StatusUpdate { .. }
-                                        | EngineEvent::Warning { .. }
-                                        | EngineEvent::Error { .. } => UiEvent::Stderr(text),
-                                        _ => UiEvent::Stdout(text),
-                                    };
+                            let result: Option<Result<bool, String>> = {
+                                let dispatch = session.dispatch(&command);
+                                tokio::pin!(dispatch);
 
-                                    Some(event_tx.unbounded_send(event)
-                                        .map_or_else(|e| Err(e.to_string()), |_| Ok(true)))
+                                loop {
+                                    tokio::select! {
+                                        // Dismissing a prompt also drops its reply sender. Prefer the
+                                        // cancel signal to the resulting receive error from dispatch.
+                                        biased;
+                                        Some(()) = cancel_rx.recv(), if !shutting_down => {
+                                            break None;
+                                        }
+                                        Some(command) = cmd_rx.recv(), if !shutting_down && pending_command.is_none() => {
+                                            let shutdown_requested = matches!(command, EngineCommand::Shutdown);
+                                            pending_command = Some(command);
+
+                                            if shutdown_requested {
+                                                break None;
+                                            }
+                                        }
+                                        result = &mut dispatch => {
+                                            break Some(result.map_err(|e| e.to_string()));
+                                        }
+                                        event = engine_rx.recv() => {
+                                            match event {
+                                                Some(event) => {
+                                                    if event_tx.unbounded_send(UiEvent::Engine(event)).is_err() {
+                                                        // The UI has gone away; stop the driver
+                                                        return;
+                                                    }
+                                                }
+                                                None => {
+                                                    break Some(Err("The engine event channel closed".into()));
+                                                }
+                                            }
+                                        },
+                                    }
                                 }
-                                _ = cancel_rx.recv() => None,
                             };
+
+                            // Forward queued output before announcing completion or cancellation.
+                            while let Ok(event) = engine_rx.try_recv() {
+                                if event_tx.unbounded_send(UiEvent::Engine(event)).is_err() {
+                                    return;
+                                }
+                            }
+
+                            if shutting_down {
+                                let result = result.expect("shutdown cannot be cancelled").map(|_| ());
+                                let saved = result.is_ok();
+                                let _ = event_tx.unbounded_send(UiEvent::ShutdownComplete(result));
+
+                                if saved {
+                                    break;
+                                }
+
+                                continue;
+                            }
 
                             match result {
                                 Some(result) => {
@@ -160,7 +219,16 @@ pub fn spawn_engine(
                                     // stays usable; exiting on errors would strand the window with
                                     // a dead channel and a permanently "running" state.
                                     let should_exit = matches!(result, Ok(false));
-                                    let _ = event_tx.unbounded_send(UiEvent::Done(result));
+                                    let resumed = before_resume
+                                        .filter(|_| result.is_ok())
+                                        .zip(session.conversation().ok())
+                                        .and_then(|(before, after)| switched_conversation(&before, after));
+                                    let _ = event_tx.unbounded_send(match resumed {
+                                        Some(conversation) => {
+                                            UiEvent::ConversationResumed(Ok(Arc::new(conversation)))
+                                        }
+                                        None => UiEvent::Done(result),
+                                    });
                                     if should_exit {
                                         break;
                                     }
@@ -171,11 +239,29 @@ pub fn spawn_engine(
                             }
                         }
                         EngineCommand::ResumeConversation(conversation) => {
-                            let result = session
-                                .resume_conversation(&conversation)
-                                .await
-                                .map(|()| conversation)
-                                .map_err(|error| error.to_string());
+                            let result = {
+                                let resume = session.resume_conversation(&conversation);
+                                tokio::pin!(resume);
+
+                                loop {
+                                    tokio::select! {
+                                        result = &mut resume => break result,
+                                        Some(event) = engine_rx.recv() => {
+                                            if event_tx.unbounded_send(UiEvent::Engine(event)).is_err() {
+                                                return;
+                                            }
+                                        }
+                                    }
+                                }
+                            };
+
+                            while let Ok(event) = engine_rx.try_recv() {
+                                if event_tx.unbounded_send(UiEvent::Engine(event)).is_err() {
+                                    return;
+                                }
+                            }
+
+                            let result = result.map(|()| conversation).map_err(|error| error.to_string());
                             let _ = event_tx.unbounded_send(UiEvent::ConversationResumed(result));
                         }
                     }
@@ -187,27 +273,24 @@ pub fn spawn_engine(
 
 #[cfg(test)]
 mod tests {
-    use super::strip_ansi;
+    use zqa::state::SavedChatHistory;
 
-    #[test]
-    fn leaves_plain_text_untouched() {
-        assert_eq!(strip_ansi("hello world"), "hello world");
+    use super::switched_conversation;
+
+    fn snapshot(title: &str) -> SavedChatHistory {
+        serde_json::from_value(serde_json::json!({
+            "history": [],
+            "date": "2026-10-29T12:00:00+00:00",
+            "title": title,
+        }))
+        .unwrap()
     }
 
     #[test]
-    fn strips_sgr_sequences() {
-        // Dim + reset (the handlers' most common colorization).
-        assert_eq!(strip_ansi("\x1b[2mdim\x1b[0m"), "dim");
-        // Multi-parameter sequence with surrounding text preserved.
-        assert_eq!(
-            strip_ansi("\x1b[31;1mred bold\x1b[0m done"),
-            "red bold done"
-        );
-    }
+    fn only_a_changed_conversation_counts_as_a_switch() {
+        assert!(switched_conversation(&snapshot("Attention"), snapshot("Attention")).is_none());
 
-    #[test]
-    fn handles_trailing_escape() {
-        // A lone trailing ESC with no sequence body is dropped without panicking.
-        assert_eq!(strip_ansi("text\x1b"), "text");
+        let switched = switched_conversation(&snapshot("Attention"), snapshot("Transformers"));
+        assert_eq!(switched.map(|c| c.title), Some("Transformers".into()));
     }
 }
