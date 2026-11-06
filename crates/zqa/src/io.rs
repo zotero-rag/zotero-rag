@@ -1,24 +1,58 @@
 //! I/O primitives for working with the agent in `zqa`.
 
+use std::collections::HashMap;
 use std::fmt::Display;
 use std::io::{self, BufRead, Write};
+use std::time::Duration;
 
+use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use tokio::sync::oneshot;
 
 use crate::state::UsageMetadata;
 use crate::utils::terminal::{BLUE, DIM_TEXT, ITALICS, RED, RESET, YELLOW};
 
+const PBAR_TEMPLATE: &str = "{bar} {msg} ({percent}%)";
+
+/// A manager for [`indicatif`] progress bars used by the CLI renderer and used by
+/// [`EngineEvent::handle_event`] to update progress bars on events.
+pub(crate) struct TerminalProgress {
+    pub(crate) mbar: MultiProgress,
+    pub(crate) pbar_map: HashMap<String, ProgressBar>,
+}
+
+impl TerminalProgress {
+    pub(crate) fn new() -> Self {
+        Self {
+            mbar: MultiProgress::new(),
+            pbar_map: HashMap::new(),
+        }
+    }
+
+    /// Clear the bar tracked under `id` from the terminal and stop tracking it. Does nothing if no
+    /// bar has that ID.
+    pub(crate) fn remove(&mut self, id: &str) {
+        if let Some(pbar) = self.pbar_map.remove(id) {
+            pbar.finish_and_clear();
+            self.mbar.remove(&pbar);
+        }
+    }
+
+    /// Clear all progress bars from the terminal and stop tracking them.
+    pub(crate) fn clear_all(&mut self) {
+        for (_, pbar) in self.pbar_map.drain() {
+            pbar.finish_and_clear();
+            self.mbar.remove(&pbar);
+        }
+    }
+}
+
 /// An enum of events that can be emitted by handlers called by [`crate::cli::app::dispatch_command`].
 /// The contract here is that *every* event, including status updates and error messages will be passed
-/// as an event. In general, events carry text, and variants are a semantic layer on top. Structured
-/// payloads are used for data; the current exceptions are `ToolCall`, `ToolResponse`, and `TokenUsage`.
+/// as an event. In general, events carry text, and variants are a semantic layer on top.
 ///
 /// You should use events to enable interactivity in your application. Events are not guaranteed to be a
 /// reliable mechanism to detect operation failure: you should rely on functions returning a `Result` type
 /// for this.
-///
-/// [`crate::utils::library::parse_library`] (used by `/process`) is the one exception: it still
-/// writes its progress spinners and failure summary straight to the terminal.
 ///
 /// ## Display
 ///
@@ -47,10 +81,12 @@ use crate::utils::terminal::{BLUE, DIM_TEXT, ITALICS, RED, RESET, YELLOW};
 /// * [`EngineEvent::Line`] renders the message if it is not `None`, then prints two newlines and
 ///   finally prints "> ". The latter actions occur regardless of the value of `message`.
 ///   [`EngineEvent::Secret`] has the same behavior.
-/// * [`EngineEvent::RecoverableWarning`] and [`EngineEvent::TokenUsage`] are ignored.
+/// * [`EngineEvent::TokenUsage`] is ignored.
 /// * [`EngineEvent::StatusUpdate`] is printed in light blue.
 /// * [`EngineEvent::Warning`] and [`EngineEvent::Error`] are printed in yellow and red
 ///   respectively.
+/// * [`EngineEvent::ProgressStart`], [`EngineEvent::ProgressUpdate`], and
+///   [`EngineEvent::ProgressComplete`] do not display anything.
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum EngineEvent {
@@ -112,11 +148,6 @@ pub enum EngineEvent {
     StatusUpdate { message: String },
     /// A general ERROR level status update.
     Error { message: String },
-    /// Distinct from `Warning`, this is a lower-severity message and indicates that something was
-    /// not quite as expected, but that it is unlikely to be an issue. For example, if we encounter
-    /// a file that is not a PDF in the user's Zotero library, we emit this. The `Display` implementation
-    /// ignores these.
-    RecoverableWarning { message: String },
     /// A WARN level update that signifies that something is not as expected and may cause future
     /// failures. It is possible for a session to proceed normally having emitted this, and is not
     /// fatal. Users should likely be shown these.
@@ -124,9 +155,48 @@ pub enum EngineEvent {
     /// An update on token usage. This is not an aggregate and consumers are responsible for
     /// accumulating these. Ignored by the `Display` implementation.
     TokenUsage { usage: UsageMetadata },
+    /// A notification that some task, possibly long-running, has started. Consumers should use this
+    /// to display a progress bar or spinner.
+    ProgressStart {
+        /// A unique ID for this task.
+        id: String,
+        /// A label to display in UIs.
+        label: String,
+        /// A "total" for progress bars. `None` means the amount of work is indeterminate, so a
+        /// spinner or similar may be preferable here.
+        total: Option<u64>,
+    },
+    /// An update on the progress of a task.
+    ProgressUpdate {
+        /// The ID for which this progress update is supplied.
+        id: String,
+        /// The cumulative work completed. Senders of this event guarantee that the progress will
+        /// never go "backwards".
+        completed: u64,
+    },
+    /// A completion signal for a task. May be used to display completion or remove a UI progress element.
+    ProgressComplete { id: String },
 }
 
 impl EngineEvent {
+    /// Attempt to send this event over a [`tokio::sync::mpsc`] channel, treating a failure as
+    /// acceptable. This is desirable in cases where failure of an event's transmission is not fatal
+    /// to the operation itself. As [`EngineEvent`]'s doc clarifies, events themselves hold no
+    /// guarantees for whether the underlying operation succeeded, and callers should instead rely
+    /// on `Result` types being returned to detect failure.
+    ///
+    /// If `event_tx` is `None`, the event is discarded.
+    pub(crate) async fn maybe_send(
+        self,
+        event_tx: Option<&tokio::sync::mpsc::Sender<EngineEvent>>,
+    ) {
+        let Some(event_tx) = event_tx else {
+            return;
+        };
+
+        let _ = event_tx.send(self).await;
+    }
+
     /// Handle an event in the CLI. As described in the docs for the enum, this first uses the
     /// enum's `Display` impl, and then handles input.
     ///
@@ -152,12 +222,14 @@ impl EngineEvent {
     /// * Returns `InvalidInput` for a choice request with no options, before writing or reading.
     /// * Returns `UnexpectedEof` when input ends before a confirmation, choice, or line reply.
     /// * Propagates read, write, flush, and secret-reader errors. The reply sender is dropped.
+    #[allow(clippy::too_many_lines)]
     pub(crate) fn handle_event<R, O, E>(
         mut self,
         input: &mut R,
         out: &mut O,
         err: &mut E,
         read_secret: impl FnOnce() -> io::Result<String>,
+        pbar_manager: &mut TerminalProgress,
     ) -> io::Result<()>
     where
         R: BufRead + ?Sized,
@@ -173,71 +245,121 @@ impl EngineEvent {
             ));
         }
 
-        // Use `Display` impl
+        // Handle progress events and early-exit
         match self {
-            Self::RecoverableWarning { .. } | Self::TokenUsage { .. } => return Ok(()),
-            Self::Warning { .. } | Self::Error { .. } => {
-                write!(err, "{self}")?;
-                err.flush()?;
-            }
-            _ => {
-                write!(out, "{self}")?;
-                out.flush()?;
-            }
-        }
+            Self::ProgressStart { id, label, total } => {
+                // A reused ID replaces its bar, so clear the old one before it is lost.
+                pbar_manager.remove(&id);
 
-        // Handle input variants
-        match self {
-            Self::Confirm { default, reply, .. } => {
-                let answer = read_answer(input, out, "Enter y or n.\n> ", |line| {
-                    if line.is_empty() {
-                        return Some(default);
-                    }
-                    if ["y", "yes"].iter().any(|s| line.eq_ignore_ascii_case(s)) {
-                        return Some(true);
-                    }
-                    if ["n", "no"].iter().any(|s| line.eq_ignore_ascii_case(s)) {
-                        return Some(false);
-                    }
+                let pbar = if let Some(total) = total {
+                    pbar_manager.mbar.add(
+                        ProgressBar::new(total)
+                            .with_style(ProgressStyle::with_template(PBAR_TEMPLATE).unwrap()),
+                    )
+                } else {
+                    let pbar = pbar_manager.mbar.add(ProgressBar::new_spinner());
+                    pbar.enable_steady_tick(Duration::from_millis(100));
 
-                    None
-                })?;
-                let _ = reply.send(answer);
+                    pbar
+                };
+                pbar.set_message(label);
+
+                pbar_manager.pbar_map.insert(id, pbar);
+
+                return Ok(());
             }
-            Self::Choose {
-                options,
-                reply,
-                default,
-                ..
-            } => {
-                let default = if default >= options.len() { 0 } else { default };
-                let answer = read_answer(
-                    input,
-                    out,
-                    "Enter one of the numbered options.\n> ",
-                    |line| {
-                        if line.is_empty() {
-                            return Some(default);
-                        }
-                        line.parse::<usize>()
-                            .ok()
-                            .filter(|choice| (1..=options.len()).contains(choice))
-                            .map(|choice| choice - 1)
-                    },
-                )?;
-                let _ = reply.send(answer);
+            Self::ProgressUpdate { id, completed } => {
+                if let Some(pbar) = pbar_manager.pbar_map.get(&id) {
+                    pbar.set_position(completed);
+                }
+
+                return Ok(());
             }
-            Self::Line { reply, .. } => {
-                let mut line = read_input_line(input)?;
-                let len = line.trim_end_matches(['\r', '\n']).len();
-                line.truncate(len);
-                let _ = reply.send(line);
-            }
-            Self::Secret { reply, .. } => {
-                let _ = reply.send(read_secret()?);
+            Self::ProgressComplete { id } => {
+                pbar_manager.remove(&id);
+                return Ok(());
             }
             _ => {}
         }
+
+        // Events ignored by the CLI
+        if matches!(self, Self::TokenUsage { .. }) {
+            return Ok(());
+        }
+
+        // Handle events, suspending the progress bars during handling
+        pbar_manager.mbar.suspend(|| -> io::Result<()> {
+            // Use the `Display` impl
+            if matches!(self, Self::Warning { .. } | Self::Error { .. }) {
+                write!(err, "{self}")?;
+                err.flush()?;
+            } else {
+                write!(out, "{self}")?;
+                out.flush()?;
+            }
+
+            // Handle input variants
+            match self {
+                Self::Confirm { default, reply, .. } => {
+                    let answer = read_answer(input, out, "Enter y or n.\n> ", |line| {
+                        if line.is_empty() {
+                            return Some(default);
+                        }
+                        if ["y", "yes"].iter().any(|s| line.eq_ignore_ascii_case(s)) {
+                            return Some(true);
+                        }
+                        if ["n", "no"].iter().any(|s| line.eq_ignore_ascii_case(s)) {
+                            return Some(false);
+                        }
+
+                        None
+                    })?;
+                    let _ = reply.send(answer);
+
+                    Ok(())
+                }
+                Self::Choose {
+                    options,
+                    reply,
+                    default,
+                    ..
+                } => {
+                    let default = if default >= options.len() { 0 } else { default };
+                    let answer = read_answer(
+                        input,
+                        out,
+                        "Enter one of the numbered options.\n> ",
+                        |line| {
+                            if line.is_empty() {
+                                return Some(default);
+                            }
+                            line.parse::<usize>()
+                                .ok()
+                                .filter(|choice| (1..=options.len()).contains(choice))
+                                .map(|choice| choice - 1)
+                        },
+                    )?;
+                    let _ = reply.send(answer);
+
+                    Ok(())
+                }
+                Self::Line { reply, .. } => {
+                    let mut line = read_input_line(input)?;
+                    let len = line.trim_end_matches(['\r', '\n']).len();
+                    line.truncate(len);
+                    let _ = reply.send(line);
+
+                    Ok(())
+                }
+                Self::Secret { reply, .. } => {
+                    let _ = reply.send(read_secret()?);
+
+                    Ok(())
+                }
+                _ => Ok(()),
+            }
+        })?;
+
         Ok(())
     }
 }
@@ -320,7 +442,6 @@ impl Display for EngineEvent {
 
                 write!(f, "\n(1 - {}, default: {}) > ", options.len(), default + 1)
             }
-            EngineEvent::RecoverableWarning { .. } | EngineEvent::TokenUsage { .. } => Ok(()),
             EngineEvent::Line {
                 message: Some(message),
                 ..
@@ -334,6 +455,10 @@ impl Display for EngineEvent {
             }
             EngineEvent::Warning { message } => write!(f, "{YELLOW}{message}{RESET}"),
             EngineEvent::Error { message } => write!(f, "{RED}{message}{RESET}"),
+            EngineEvent::ProgressStart { .. }
+            | EngineEvent::ProgressUpdate { .. }
+            | EngineEvent::TokenUsage { .. }
+            | EngineEvent::ProgressComplete { .. } => Ok(()),
         }
     }
 }
@@ -435,13 +560,6 @@ mod tests {
                 true,
             ),
             (
-                EngineEvent::RecoverableWarning {
-                    message: "hidden".into(),
-                },
-                String::new(),
-                true,
-            ),
-            (
                 EngineEvent::TokenUsage {
                     usage: UsageMetadata::default(),
                 },
@@ -453,7 +571,13 @@ mod tests {
             test_eq!(event.to_string(), expected);
             let (mut out, mut err) = (Vec::new(), Vec::new());
             event
-                .handle_event(&mut io::empty(), &mut out, &mut err, no_secret)
+                .handle_event(
+                    &mut io::empty(),
+                    &mut out,
+                    &mut err,
+                    no_secret,
+                    &mut TerminalProgress::new(),
+                )
                 .unwrap();
             let (actual, unused) = if is_error { (err, out) } else { (out, err) };
             test_eq!(actual, expected.as_bytes());
@@ -481,7 +605,13 @@ mod tests {
             let prompt = format!("Continue? ({}): ", if default { "[y]/n" } else { "y/[n]" });
             test_eq!(event.to_string(), prompt);
             event
-                .handle_event(&mut input, &mut out, &mut Vec::new(), no_secret)
+                .handle_event(
+                    &mut input,
+                    &mut out,
+                    &mut Vec::new(),
+                    no_secret,
+                    &mut TerminalProgress::new(),
+                )
                 .unwrap();
             test_eq!(answer.try_recv().unwrap(), expected);
             test_eq!(
@@ -510,7 +640,13 @@ mod tests {
             test_eq!(event.to_string(), prompt);
             let mut out = Vec::new();
             event
-                .handle_event(&mut &b"\n"[..], &mut out, &mut Vec::new(), no_secret)
+                .handle_event(
+                    &mut &b"\n"[..],
+                    &mut out,
+                    &mut Vec::new(),
+                    no_secret,
+                    &mut TerminalProgress::new(),
+                )
                 .unwrap();
             test_eq!(answer.try_recv().unwrap(), expected);
             test_eq!(out, prompt.as_bytes());
@@ -538,6 +674,7 @@ mod tests {
                 &mut out,
                 &mut Vec::new(),
                 no_secret,
+                &mut TerminalProgress::new(),
             )
             .unwrap();
         test_eq!(answer.try_recv().unwrap(), 1);
@@ -562,7 +699,13 @@ mod tests {
         let mut input = &b"1\n"[..];
         let (mut out, mut err) = (Vec::new(), Vec::new());
         let error = event
-            .handle_event(&mut input, &mut out, &mut err, no_secret)
+            .handle_event(
+                &mut input,
+                &mut out,
+                &mut err,
+                no_secret,
+                &mut TerminalProgress::new(),
+            )
             .unwrap_err();
         test_eq!(error.kind(), io::ErrorKind::InvalidInput);
         test_eq!(input, b"1\n");
@@ -585,6 +728,7 @@ mod tests {
                     &mut out,
                     &mut Vec::new(),
                     no_secret,
+                    &mut TerminalProgress::new(),
                 )
                 .unwrap();
             test_eq!(answer.try_recv().unwrap(), " answer ");
@@ -606,10 +750,16 @@ mod tests {
         };
         test_eq!(event.to_string(), "API key\n\n> ");
         event
-            .handle_event(&mut io::empty(), &mut out, &mut Vec::new(), || {
-                test_eq!(flushes.get(), 1);
-                Ok("secret".into())
-            })
+            .handle_event(
+                &mut io::empty(),
+                &mut out,
+                &mut Vec::new(),
+                || {
+                    test_eq!(flushes.get(), 1);
+                    Ok("secret".into())
+                },
+                &mut TerminalProgress::new(),
+            )
             .unwrap();
         test_eq!(answer.try_recv().unwrap(), "secret");
         test_eq!(out.bytes, b"API key\n\n> ");
@@ -623,12 +773,18 @@ mod tests {
             reply,
         };
         let error = event
-            .handle_event(&mut io::empty(), &mut Vec::new(), &mut Vec::new(), || {
-                Err(io::Error::new(
-                    io::ErrorKind::PermissionDenied,
-                    "terminal unavailable",
-                ))
-            })
+            .handle_event(
+                &mut io::empty(),
+                &mut Vec::new(),
+                &mut Vec::new(),
+                || {
+                    Err(io::Error::new(
+                        io::ErrorKind::PermissionDenied,
+                        "terminal unavailable",
+                    ))
+                },
+                &mut TerminalProgress::new(),
+            )
             .unwrap_err();
         test_eq!(error.kind(), io::ErrorKind::PermissionDenied);
         test_eq!(answer.try_recv(), Err(oneshot::error::TryRecvError::Closed));
@@ -646,7 +802,13 @@ mod tests {
                 reply,
             };
             let error = event
-                .handle_event(&mut input, &mut Vec::new(), &mut Vec::new(), no_secret)
+                .handle_event(
+                    &mut input,
+                    &mut Vec::new(),
+                    &mut Vec::new(),
+                    no_secret,
+                    &mut TerminalProgress::new(),
+                )
                 .unwrap_err();
             test_eq!(error.kind(), expected);
             test_eq!(answer.try_recv(), Err(oneshot::error::TryRecvError::Closed));
@@ -677,6 +839,7 @@ mod tests {
                     &mut Vec::new(),
                     &mut Vec::new(),
                     no_secret,
+                    &mut TerminalProgress::new(),
                 )
                 .unwrap_err();
             test_eq!(error.kind(), io::ErrorKind::UnexpectedEof);
@@ -700,7 +863,13 @@ mod tests {
         };
         let mut out = &mut [][..];
         let error = event
-            .handle_event(&mut io::empty(), &mut out, &mut Vec::new(), no_secret)
+            .handle_event(
+                &mut io::empty(),
+                &mut out,
+                &mut Vec::new(),
+                no_secret,
+                &mut TerminalProgress::new(),
+            )
             .unwrap_err();
         test_eq!(error.kind(), io::ErrorKind::WriteZero);
         test_eq!(answer.try_recv(), Err(oneshot::error::TryRecvError::Closed));
@@ -731,6 +900,7 @@ mod tests {
                 &mut FlushError,
                 &mut Vec::new(),
                 no_secret,
+                &mut TerminalProgress::new(),
             )
             .unwrap_err();
         test_eq!(error.kind(), io::ErrorKind::Other);
@@ -750,7 +920,47 @@ mod tests {
             &mut Vec::new(),
             &mut Vec::new(),
             no_secret,
+            &mut TerminalProgress::new(),
         )
         .unwrap();
+    }
+
+    #[test]
+    fn pbar_template_is_valid() {
+        assert!(ProgressStyle::with_template(PBAR_TEMPLATE).is_ok());
+    }
+
+    #[test]
+    fn progress_bars_are_cleared_when_replaced_or_left_unfinished() {
+        fn start(id: &str, pbar_manager: &mut TerminalProgress) {
+            EngineEvent::ProgressStart {
+                id: id.into(),
+                label: "Parsing".into(),
+                total: Some(10),
+            }
+            .handle_event(
+                &mut &b""[..],
+                &mut Vec::new(),
+                &mut Vec::new(),
+                no_secret,
+                pbar_manager,
+            )
+            .unwrap();
+        }
+
+        let mut pbar_manager = TerminalProgress::new();
+        start("a", &mut pbar_manager);
+        let replaced = pbar_manager.pbar_map["a"].clone();
+
+        // Starting the same ID again clears the first bar instead of leaving it on screen.
+        start("a", &mut pbar_manager);
+        start("b", &mut pbar_manager);
+        assert!(replaced.is_finished());
+        test_eq!(pbar_manager.pbar_map.len(), 2);
+
+        let unfinished: Vec<_> = pbar_manager.pbar_map.values().cloned().collect();
+        pbar_manager.clear_all();
+        assert!(pbar_manager.pbar_map.is_empty());
+        assert!(unfinished.iter().all(ProgressBar::is_finished));
     }
 }
