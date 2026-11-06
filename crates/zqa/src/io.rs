@@ -204,12 +204,17 @@ impl EngineEvent {
         match self {
             Self::Confirm { default, reply, .. } => {
                 let answer = read_answer(input, out, "Enter y or n.\n> ", |line| {
-                    match line.to_ascii_lowercase().trim() {
-                        "" => Some(default),
-                        "y" | "yes" => Some(true),
-                        "n" | "no" => Some(false),
-                        _ => None,
+                    if line.is_empty() {
+                        return Some(default);
                     }
+                    if ["y", "yes"].iter().any(|s| line.eq_ignore_ascii_case(s)) {
+                        return Some(true);
+                    }
+                    if ["n", "no"].iter().any(|s| line.eq_ignore_ascii_case(s)) {
+                        return Some(false);
+                    }
+
+                    None
                 })?;
                 let _ = reply.send(answer);
             }
@@ -599,7 +604,7 @@ mod tests {
                     no_secret,
                 )
                 .unwrap();
-            test_eq!(answer.try_recv().unwrap(), " answer \r\n");
+            test_eq!(answer.try_recv().unwrap(), " answer ");
             test_eq!(out, prompt.as_bytes());
         }
     }
