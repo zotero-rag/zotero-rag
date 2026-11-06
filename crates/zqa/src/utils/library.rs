@@ -582,8 +582,13 @@ enum ParseOutcome {
     NotPdf,
     /// The item's metadata had an invalid path.
     InvalidPath,
-    /// The PDF extraction failed, with the attached error string from the `zqa_pdftools` crate.
-    FailedExtraction(String),
+    /// The PDF extraction failed.
+    FailedExtraction {
+        /// The title of the item whose PDF failed to parse.
+        title: String,
+        /// The error string from the `zqa_pdftools` crate.
+        error: String,
+    },
     /// The PDF extraction thread panicked.
     Panic,
 }
@@ -699,7 +704,10 @@ pub async fn parse_library<T: ZoteroStore>(
                                     path_str,
                                     e
                                 );
-                                ParseOutcome::FailedExtraction(e.to_string())
+                                ParseOutcome::FailedExtraction {
+                                    title: task.title,
+                                    error: e.to_string(),
+                                }
                             }
                         }
                     }))
@@ -748,9 +756,9 @@ pub async fn parse_library<T: ZoteroStore>(
             ParseOutcome::NotPdf => not_pdf += 1,
             ParseOutcome::InvalidPath => invalid_path += 1,
             ParseOutcome::Panic => panicked_thread += 1,
-            ParseOutcome::FailedExtraction(e) => {
+            ParseOutcome::FailedExtraction { title, error } => {
                 if extraction_failure_samples.len() < FAILED_EXTRACTION_SAMPLE_COUNT {
-                    extraction_failure_samples.push(format!("\t\t{e}"));
+                    extraction_failure_samples.push(format!("\t\t{title}: {error}"));
                 }
 
                 failed_extraction += 1;
@@ -1110,7 +1118,7 @@ mod tests {
         )
         .unwrap();
 
-        let items = parse_library(
+        let no_pdf_items = parse_library(
             Some(&event_tx),
             &store,
             Some(&no_pdfs_path),
@@ -1118,8 +1126,8 @@ mod tests {
             Some(7),
         )
         .await;
-        test_ok!(items);
-        assert!(items.unwrap().is_empty());
+        test_ok!(no_pdf_items);
+        assert!(no_pdf_items.unwrap().is_empty());
 
         let warnings: Vec<_> = std::iter::from_fn(|| event_rx.try_recv().ok())
             .filter_map(|event| match event {
@@ -1135,5 +1143,15 @@ mod tests {
                 .contains("7 failed because they had PDFs whose content couldn't be extracted.")
         );
         test_eq!(warnings[0].matches("\n\t\t").count(), 5);
+
+        // Each sampled error names the item it came from.
+        for sample in warnings[0].split("\n\t\t").skip(1) {
+            assert!(
+                items
+                    .iter()
+                    .any(|item| sample.starts_with(&format!("{}: ", item.metadata.title))),
+                "sample does not start with an item title: {sample}"
+            );
+        }
     }
 }
