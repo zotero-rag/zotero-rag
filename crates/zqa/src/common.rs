@@ -4,8 +4,6 @@ use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex, RwLock};
 
 use clap::Parser;
-use fern;
-use humantime;
 use log::LevelFilter;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::SendError;
