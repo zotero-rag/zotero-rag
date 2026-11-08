@@ -387,6 +387,10 @@ async fn call_subagent(
 ///
 /// * `DocumentError::ApiError` if either the embedding or reranker provider could not be
 ///   obtained, or if the embeddings or reranked chunks could not be computed.
+#[allow(
+    clippy::too_many_lines,
+    reason = "one retrieval pipeline: embed, report usage, score, and rerank, which reads best in order"
+)]
 async fn embedding_retrieval(
     query: &str,
     contents: &ExtractedContent,
