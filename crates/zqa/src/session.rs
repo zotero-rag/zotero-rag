@@ -18,9 +18,8 @@ use crate::cli::handlers::conversation::resume_conversation;
 use crate::common::{Context, PathOptions, State};
 use crate::config::Config;
 use crate::io::EngineEvent;
-use crate::start;
 use crate::state::SavedChatHistory;
-use crate::store::lance::LanceZoteroStore;
+use crate::{start, store_or_placeholder};
 
 /// An embeddable driver around the zqa command handlers.
 ///
@@ -55,15 +54,12 @@ impl Session {
     /// * `event_tx` - Where commands send their events. `None` discards every event, and commands
     ///   that prompt get no reply.
     ///
-    /// # Errors
-    ///
-    /// * Returns a [`CLIError`] if a vector store cannot be constructed from `config` (for example,
-    ///   if no embedding provider is configured).
-    pub fn new(
-        config: Config,
-        event_tx: Option<mpsc::Sender<EngineEvent>>,
-    ) -> Result<Self, CLIError> {
-        let store = LanceZoteroStore::from_config(&config)?;
+    /// `config` may lack a section for its embedding provider, since first-run setup can add one.
+    /// Call [`Self::start`] before dispatching commands: it builds the store, and fails if `config`
+    /// still can't.
+    #[must_use]
+    pub fn new(config: Config, event_tx: Option<mpsc::Sender<EngineEvent>>) -> Self {
+        let store = store_or_placeholder(&config);
         let ctx = Context {
             state: State::default(),
             event_tx,
@@ -72,7 +68,7 @@ impl Session {
             path_options: PathOptions::default(),
         };
 
-        Ok(Self { ctx })
+        Self { ctx }
     }
 
     /// Run the startup steps that come before the first command.
@@ -93,6 +89,8 @@ impl Session {
     ///
     /// * Returns a [`CLIError`] if an event can't be sent, a prompt is dropped without a reply, or
     ///   the pending batches can't be counted.
+    /// * Returns [`CLIError::ConfigError`] if the config still has no section for its embedding
+    ///   provider after setup. The session has no usable store then, so it should not run commands.
     pub async fn start(&mut self) -> Result<bool, CLIError> {
         start(&mut self.ctx, true).await
     }

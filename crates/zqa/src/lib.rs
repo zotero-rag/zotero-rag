@@ -40,8 +40,8 @@ use crate::utils::terminal::{RESET, YELLOW, YELLOW_BOLD};
 /// Run first-run setup, then load the config it wrote into `ctx`.
 ///
 /// Setup asks its questions as prompt events on `ctx`, so the caller must render events and reply
-/// while this runs. The new config can change the embedding provider, so the store is rebuilt from
-/// it too. If the user declines setup, nothing is written and the config is reloaded unchanged.
+/// while this runs. If the user declines setup, nothing is written and the config is reloaded
+/// unchanged. The store is left as it is; [`start`] builds it from the new config afterwards.
 ///
 /// # Arguments
 ///
@@ -49,14 +49,12 @@ use crate::utils::terminal::{RESET, YELLOW, YELLOW_BOLD};
 ///
 /// # Errors
 ///
-/// * Returns a [`CLIError`] if setup fails, or if the new config can't be loaded or doesn't yield a
-///   store. `ctx` keeps its previous config and store in that case.
+/// * Returns a [`CLIError`] if setup fails or the new config can't be loaded. `ctx` keeps its
+///   previous config in that case.
 pub(crate) async fn run_setup(ctx: &mut Context) -> Result<(), CLIError> {
     oobe(ctx).await?;
 
-    let config = load_config()?;
-    ctx.store = LanceZoteroStore::from_config(&config)?;
-    ctx.config = config;
+    ctx.config = load_config()?;
 
     Ok(())
 }
@@ -216,6 +214,29 @@ fn pending_batch_count() -> Result<usize, CLIError> {
     Ok(count)
 }
 
+/// Build the store for `config`, or a placeholder if `config` can't build one yet.
+///
+/// First-run setup can complete a config that has no section for its embedding provider, so a store
+/// is only required once [`start`] has finished, and `start` builds the real one. Startup itself
+/// doesn't use the store, and until then the context holds an Ollama one, which needs no API key to
+/// build. Admittedly, not the slickest way to do this, but oh well.
+///
+/// # Arguments
+///
+/// * `config` - The config loaded before startup.
+///
+/// # Returns
+///
+/// The store for `config`, or the Ollama placeholder if `config` has no section for its embedding
+/// provider.
+pub(crate) fn store_or_placeholder(config: &Config) -> LanceZoteroStore {
+    LanceZoteroStore::from_config(config).unwrap_or_else(|_| {
+        LanceZoteroStore::from_embedding_config(EmbeddingProviderConfig::Ollama(
+            OllamaConfig::default(),
+        ))
+    })
+}
+
 /// Run the startup steps every frontend needs before its first command.
 ///
 /// In order, this:
@@ -227,6 +248,8 @@ fn pending_batch_count() -> Result<usize, CLIError> {
 /// 3. Reports each missing API key as a `Warning` or `Error` event. This comes after setup so a
 ///    first run isn't warned about keys it is about to ask for.
 /// 4. Reports pending embedding batches as a `StatusUpdate`.
+/// 5. Builds the store from the config, which setup may have changed. Frontends build their
+///    context with [`store_or_placeholder`], so this replaces any placeholder.
 ///
 /// When `interactive` is `false`, steps 1 and 2 are skipped. Nothing marks the first run as done
 /// then, so setup is still offered the next time an interactive frontend starts.
@@ -248,6 +271,8 @@ fn pending_batch_count() -> Result<usize, CLIError> {
 ///
 /// * Returns a [`CLIError`] if an event can't be sent, a prompt is dropped without a reply, or the
 ///   batch directory can't be read.
+/// * Returns [`CLIError::ConfigError`] if the config still has no section for its embedding
+///   provider, so no store can be built.
 pub(crate) async fn start(ctx: &mut Context, interactive: bool) -> Result<bool, CLIError> {
     let is_first_run = interactive
         && loop {
@@ -306,6 +331,9 @@ pub(crate) async fn start(ctx: &mut Context, interactive: bool) -> Result<bool, 
         .await?;
     }
 
+    // The context may still hold the placeholder from `store_or_placeholder`.
+    ctx.store = LanceZoteroStore::from_config(&ctx.config)?;
+
     Ok(true)
 }
 
@@ -356,17 +384,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         config.tool_iteration_limit
     );
 
-    // First-run setup can complete a config that has no section for its embedding provider yet,
-    // so a store is only required once startup has finished. Startup itself doesn't use the store, and
-    // until then the context holds an Ollama one, which needs no API key to build. Admittedly, not
-    // the slickest way to do this, but oh well.
-    let store = LanceZoteroStore::from_config(&config);
-    let store_pending = store.is_err();
-    let store = store.unwrap_or_else(|_| {
-        LanceZoteroStore::from_embedding_config(EmbeddingProviderConfig::Ollama(
-            OllamaConfig::default(),
-        ))
-    });
+    let store = store_or_placeholder(&config);
 
     let (event_tx, mut event_rx) = mpsc::channel(256);
     let mut context = Context {
@@ -391,10 +409,6 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         std::process::exit(1);
     }
 
-    if store_pending {
-        context.store = LanceZoteroStore::from_config(&context.config)?;
-    }
-
     cli(
         context,
         event_rx,
@@ -412,6 +426,7 @@ mod tests {
     use zqa_rag::capabilities::ModelProvider;
 
     use super::start;
+    use crate::cli::errors::CLIError;
     use crate::common::test_support::{capture_events, create_test_context};
     use crate::io::EngineEvent;
 
@@ -440,6 +455,11 @@ mod tests {
 
             // The first run stays pending, so the next interactive start still offers setup.
             assert!(!temp_dir.path().join("first_run").exists());
+
+            // Without a section for the embedding provider, startup can't build the store.
+            ctx.config.voyageai = None;
+            let (result, _) = capture_events(&mut ctx, async |ctx| start(ctx, false).await).await;
+            assert!(matches!(result, Err(CLIError::ConfigError(_))));
         })
         .await;
     }
