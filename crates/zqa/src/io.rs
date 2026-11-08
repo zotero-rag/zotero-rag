@@ -28,8 +28,9 @@ use crate::utils::terminal::{BLUE, DIM_TEXT, ITALICS, RED, RESET, YELLOW};
 /// numbered options starting from 1. In all cases with options, we follow general CLI standards of
 /// presenting the default within [square brackets] and other options in (parentheses).
 ///
-/// By design, the `Display` impl does not add trailing newlines, except the `Choose`, `Line`, and
-/// `Secret` variants. This is so emitters can decide on and add their own spacing as desired.
+/// By design, the `Display` impl does not add trailing newlines, so emitters can decide on and add
+/// their own spacing. `Choose`, `Line`, and `Secret` include newlines inside their prompt layout,
+/// but still end with `"> "`.
 ///
 /// The enum has a [`Self::handle_event`] function that uses the `Display` impl, handles input, and sends
 /// the user response via the channel.
