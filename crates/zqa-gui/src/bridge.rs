@@ -38,6 +38,9 @@ pub enum UiEvent {
     /// `/resume` that switched conversations. For a typed `/resume`, this is sent in place of
     /// [`UiEvent::Done`].
     ConversationResumed(Result<Arc<SavedChatHistory>, String>),
+    /// The startup checks, including any first-run setup, finished. A failure arrives as an error
+    /// event before this.
+    Started,
     /// The in-flight command was cancelled by the user before it finished.
     Cancelled,
     /// Shutdown finished saving, or failed with the engine still available for retry.
@@ -142,8 +145,8 @@ pub fn spawn_engine(
             };
 
             runtime.block_on(async move {
-                // Startup isn't a command the UI sent, so it ends without a `Done`. A failure shows
-                // as an error row and the engine continues with the config it has.
+                // Startup isn't a command the UI sent, so it ends with `Started`, not `Done`. A
+                // failure shows as an error row and the engine continues with the config it has.
                 let start = session.start();
                 match forward_events(start, &mut engine_rx, &event_tx).await {
                     None => return,
@@ -158,6 +161,8 @@ pub fn spawn_engine(
                         let _ = event_tx.unbounded_send(UiEvent::Engine(EngineEvent::Error { message }));
                     }
                 }
+
+                let _ = event_tx.unbounded_send(UiEvent::Started);
 
                 let mut pending_command = None;
 

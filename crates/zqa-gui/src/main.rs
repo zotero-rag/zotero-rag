@@ -198,6 +198,8 @@ impl From<&SavedChatHistory> for ChatRows {
 /// What the engine is doing right now, mirrored into the header.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Phase {
+    /// The engine is running its startup checks, which may prompt for first-run setup.
+    Starting,
     Ready,
     Running,
     Resuming,
@@ -317,6 +319,15 @@ impl ZqaApp {
                                 Self::focus_input(&app.input_state, window, cx);
                             }
                         },
+                        UiEvent::Started => {
+                            app.clear_prompts();
+                            app.progress.clear();
+                            Self::focus_input(&app.input_state, window, cx);
+
+                            if app.phase == Phase::Starting {
+                                app.phase = Phase::Ready;
+                            }
+                        }
                         UiEvent::Done(result) => {
                             app.clear_prompts();
                             app.progress.clear();
@@ -396,7 +407,7 @@ impl ZqaApp {
             prompt_subscription: None,
             rows: Vec::new(),
             conversation_history,
-            phase: Phase::Ready,
+            phase: Phase::Starting,
             exit_confirmation_open: false,
             pending_reset: false,
             usage: UsageMetadata::default(),
@@ -471,7 +482,7 @@ impl ZqaApp {
 
     /// Keep input requests in arrival order without blocking the GUI event consumer.
     fn queue_prompt(&mut self, event: EngineEvent, window: &mut Window, cx: &mut Context<Self>) {
-        if self.phase != Phase::Running {
+        if !matches!(self.phase, Phase::Running | Phase::Starting) {
             return;
         }
 
@@ -796,13 +807,20 @@ impl ZqaApp {
     /// `phase` moves to `Stopping` immediately so further clicks and submissions are rejected, and returns
     /// to `Ready` only when the engine confirms with [`UiEvent::Cancelled`] (or [`UiEvent::Done`] if the
     /// command finished first).
+    ///
+    /// Startup can't be cancelled, but dropping its prompts' reply senders ends any first-run setup
+    /// with an error, and startup then finishes with [`UiEvent::Started`].
     fn request_stop(&mut self, cx: &mut Context<Self>) {
-        if self.phase != Phase::Running {
-            return;
+        match self.phase {
+            Phase::Starting => self.clear_prompts(),
+            Phase::Running => {
+                let _ = self.cancel_tx.send(());
+                self.phase = Phase::Stopping;
+                self.clear_prompts();
+            }
+            _ => return,
         }
-        let _ = self.cancel_tx.send(());
-        self.phase = Phase::Stopping;
-        self.clear_prompts();
+
         cx.notify();
     }
 
@@ -1256,6 +1274,7 @@ impl ZqaApp {
                 .into_any_element()
         } else {
             let (dot, label) = match self.phase {
+                Phase::Starting => (cx.theme().info, "Starting"),
                 Phase::Ready => (cx.theme().success, "Ready"),
                 Phase::Running => (cx.theme().info, "Working"),
                 Phase::Resuming => (cx.theme().info, "Resuming"),
@@ -1319,7 +1338,11 @@ impl ZqaApp {
     fn render_transcript(&self, cx: &Context<Self>) -> AnyElement {
         let busy = matches!(
             self.phase,
-            Phase::Running | Phase::Resuming | Phase::Stopping | Phase::ShuttingDown
+            Phase::Starting
+                | Phase::Running
+                | Phase::Resuming
+                | Phase::Stopping
+                | Phase::ShuttingDown
         );
 
         let scroll = || {
@@ -1372,6 +1395,7 @@ impl ZqaApp {
                                 .text_size(px(13.))
                                 .text_color(cx.theme().muted_foreground)
                                 .child(match self.phase {
+                                    Phase::Starting => "Starting...",
                                     Phase::Resuming => "Resuming...",
                                     Phase::Stopping => "Stopping...",
                                     Phase::ShuttingDown => "Saving before exit...",
@@ -2002,7 +2026,17 @@ mod tests {
     }
 
     impl GuiHarness {
+        /// Build the app with its startup checks finished, ready for commands.
         fn new(cx: &mut TestAppContext) -> (Self, &mut VisualTestContext) {
+            let (harness, cx) = Self::starting(cx);
+            harness.events.unbounded_send(UiEvent::Started).unwrap();
+            cx.run_until_parked();
+
+            (harness, cx)
+        }
+
+        /// Build the app while its startup checks are still running.
+        fn starting(cx: &mut TestAppContext) -> (Self, &mut VisualTestContext) {
             cx.update(gpui_kit::init);
             let (cmd_tx, commands) = mpsc::unbounded_channel();
             let (cancel_tx, cancellations) = mpsc::unbounded_channel();
@@ -2029,6 +2063,40 @@ mod tests {
                 cx,
             )
         }
+    }
+
+    #[gpui_kit::test]
+    fn gui_shows_startup_prompts_before_accepting_commands(cx: &mut TestAppContext) {
+        let (mut harness, cx) = GuiHarness::starting(cx);
+        let (reply, mut answer) = oneshot::channel();
+        harness
+            .events
+            .unbounded_send(UiEvent::Engine(EngineEvent::Confirm {
+                message: "Run first-time setup?".into(),
+                default: true,
+                reply,
+            }))
+            .unwrap();
+        cx.run_until_parked();
+
+        // The setup prompt is shown, and commands wait until startup finishes.
+        harness.app.read_with(cx, |app, _| {
+            test_eq!(app.phase, Phase::Starting);
+            assert!(app.active_prompt.is_some());
+        });
+        test_eq!(answer.try_recv(), Err(oneshot::error::TryRecvError::Empty));
+        cx.update(|window, cx| {
+            window.input("/help", cx);
+            window.press("enter", cx);
+        });
+        assert!(harness.commands.try_recv().is_err());
+
+        harness.events.unbounded_send(UiEvent::Started).unwrap();
+        cx.run_until_parked();
+        harness.app.read_with(cx, |app, _| {
+            test_eq!(app.phase, Phase::Ready);
+            assert!(app.active_prompt.is_none());
+        });
     }
 
     #[gpui_kit::test]
