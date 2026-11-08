@@ -206,6 +206,31 @@ fn build_query_tools(
     Ok(tools)
 }
 
+/// Add `usage` to the conversation's total and report it to frontends as a `TokenUsage` delta.
+///
+/// Each priced call is recorded as it reports its usage, so a query that is cancelled or fails part
+/// way still counts the calls that finished. Usage that is all zero is skipped.
+///
+/// # Arguments
+///
+/// * `ctx` - The application context whose conversation total is updated and marked unsaved.
+/// * `usage` - The usage of one priced call.
+///
+/// # Errors
+///
+/// * Returns a [`CLIError`] if the event receiver is closed.
+async fn record_usage(ctx: &mut Context, usage: UsageMetadata) -> Result<(), CLIError> {
+    if usage == UsageMetadata::default() {
+        return Ok(());
+    }
+
+    ctx.state.usage += usage;
+    ctx.state.dirty.store(true, atomic::Ordering::Relaxed);
+    ctx.emit(EngineEvent::TokenUsage { usage }).await?;
+
+    Ok(())
+}
+
 /// Answer a user query using retrieval and generation over the user's Zotero library.
 ///
 /// # Arguments
@@ -307,7 +332,6 @@ pub(crate) async fn handle_query_cmd(query: String, ctx: &mut Context) -> Result
 
     let final_draft_start = Instant::now();
     let chat_history = Arc::clone(&ctx.state.chat_history);
-    let mut query_usage = UsageMetadata::default();
     let result = {
         let tools = build_query_tools(
             llm_client.clone(),
@@ -345,7 +369,7 @@ pub(crate) async fn handle_query_cmd(query: String, ctx: &mut Context) -> Result
             tokio::select! {
                 Some(segment) = response_rx.recv() => ctx.emit(segment.into()).await?,
                 Some(event) = status_rx.recv() => ctx.emit(event).await?,
-                Some(usage) = cost_rx.recv() => query_usage += usage,
+                Some(usage) = cost_rx.recv() => record_usage(ctx, usage).await?,
                 result = &mut send_message => break result,
             }
         }
@@ -361,7 +385,7 @@ pub(crate) async fn handle_query_cmd(query: String, ctx: &mut Context) -> Result
         ctx.emit(event).await?;
     }
     while let Some(usage) = cost_rx.recv().await {
-        query_usage += usage;
+        record_usage(ctx, usage).await?;
     }
 
     let final_draft_duration = final_draft_start.elapsed();
@@ -379,12 +403,13 @@ pub(crate) async fn handle_query_cmd(query: String, ctx: &mut Context) -> Result
             })
             .await?;
 
-            query_usage += UsageMetadata::from_rag_usage(
+            let response_usage = UsageMetadata::from_rag_usage(
                 &response.usage,
                 ctx.config.model_provider,
                 &ctx.config.get_generation_model_name().unwrap_or_default(),
             )
             .await;
+            record_usage(ctx, response_usage).await?;
 
             // Update state - re-acquire lock
             let mut history = chat_history
@@ -419,13 +444,6 @@ pub(crate) async fn handle_query_cmd(query: String, ctx: &mut Context) -> Result
         }
     }
 
-    if query_usage != UsageMetadata::default() {
-        ctx.state.dirty.store(true, atomic::Ordering::Relaxed);
-    }
-    ctx.state.usage += query_usage;
-    ctx.emit(EngineEvent::TokenUsage { usage: query_usage })
-        .await?;
-
     Ok(())
 }
 
@@ -434,10 +452,13 @@ mod tests {
     use zqa_macros::{test_eq, test_ok};
     use zqa_macros_proc::retry;
 
-    use super::{ResponseSegment, handle_query_cmd, handle_search_cmd};
+    use std::sync::atomic;
+
+    use super::{ResponseSegment, handle_query_cmd, handle_search_cmd, record_usage};
     use crate::cli::handlers::library::handle_process_cmd;
-    use crate::common::test_support::{TestPaths, capture_events};
+    use crate::common::test_support::{TestPaths, capture_events, create_test_context};
     use crate::io::EngineEvent;
+    use crate::state::UsageMetadata;
 
     /// Reasoning and answers retain distinct event types and trailing newlines.
     #[test]
@@ -527,12 +548,45 @@ mod tests {
 
         test_ok!(result);
         assert!(result.is_ok());
+
+        // The mock client reports no usage, and usage that is all zero isn't sent.
         test_eq!(
             events
                 .iter()
                 .filter(|event| matches!(event, EngineEvent::TokenUsage { .. }))
                 .count(),
-            1
+            0
         );
+    }
+
+    #[tokio::test]
+    async fn record_usage_updates_the_conversation_as_usage_arrives() {
+        let usage = UsageMetadata {
+            input_tokens: 10,
+            output_tokens: 2,
+            estimated_cost: 30,
+            ..UsageMetadata::default()
+        };
+        let mut ctx = create_test_context(vec![]);
+
+        let (result, events) = capture_events(&mut ctx, async |ctx| {
+            record_usage(ctx, UsageMetadata::default()).await?;
+            record_usage(ctx, usage).await
+        })
+        .await;
+
+        test_ok!(result);
+        test_eq!(ctx.state.usage, usage);
+        assert!(ctx.state.dirty.load(atomic::Ordering::Relaxed));
+
+        // Zero usage is skipped, so only the real call is reported.
+        let deltas: Vec<_> = events
+            .iter()
+            .filter_map(|event| match event {
+                EngineEvent::TokenUsage { usage } => Some(*usage),
+                _ => None,
+            })
+            .collect();
+        test_eq!(deltas, [usage]);
     }
 }
