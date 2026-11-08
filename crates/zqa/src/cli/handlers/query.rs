@@ -416,6 +416,9 @@ pub(crate) async fn handle_query_cmd(query: String, ctx: &mut Context) -> Result
         }
     }
 
+    if query_usage != UsageMetadata::default() {
+        ctx.state.dirty.store(true, atomic::Ordering::Relaxed);
+    }
     ctx.state.usage += query_usage;
     ctx.emit(EngineEvent::TokenUsage { usage: query_usage })
         .await?;
