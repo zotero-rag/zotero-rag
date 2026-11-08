@@ -94,7 +94,7 @@ impl Session {
     /// * Returns a [`CLIError`] if an event can't be sent, a prompt is dropped without a reply, or
     ///   the pending batches can't be counted.
     pub async fn start(&mut self) -> Result<bool, CLIError> {
-        start(&mut self.ctx).await
+        start(&mut self.ctx, true).await
     }
 
     /// Dispatch a single command string (e.g. `"/help"` or a bare query) through the
