@@ -443,8 +443,8 @@ async fn choose<T: Copy>(
 ///
 /// # Panics
 ///
-/// If the config section for `provider` is `None`. [`Config::default`] fills every section, so
-/// this can't happen for the config [`oobe`] builds.
+/// * If the config section for `provider` is `None`. [`Config::default`] fills every section, so
+///   this can't happen for the config [`oobe`] builds.
 fn api_key_slot(config: &mut Config, provider: ProviderId) -> Option<&mut Option<String>> {
     let api_key = match provider {
         ProviderId::Anthropic => config.anthropic.as_mut().map(|c| &mut c.api_key),
