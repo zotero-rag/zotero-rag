@@ -4,7 +4,7 @@
 #![allow(clippy::cast_possible_wrap)]
 
 use std::fs;
-use std::io::{stderr, stdout};
+use std::io::{IsTerminal, stderr, stdout};
 use std::path::Path;
 
 use clap::Parser;
@@ -228,6 +228,9 @@ fn pending_batch_count() -> Result<usize, CLIError> {
 ///    first run isn't warned about keys it is about to ask for.
 /// 4. Reports pending embedding batches as a `StatusUpdate`.
 ///
+/// When `interactive` is `false`, steps 1 and 2 are skipped. Nothing marks the first run as done
+/// then, so setup is still offered the next time an interactive frontend starts.
+///
 /// Every message and prompt is an event on `ctx`, so the caller must render events and reply while
 /// this runs.
 ///
@@ -235,6 +238,7 @@ fn pending_batch_count() -> Result<usize, CLIError> {
 ///
 /// * `ctx` - The context whose event sender carries the notices and prompts. Setup replaces its
 ///   config and store.
+/// * `interactive` - Whether someone can answer prompts, such as the CLI reading from a terminal.
 ///
 /// # Returns
 ///
@@ -244,41 +248,42 @@ fn pending_batch_count() -> Result<usize, CLIError> {
 ///
 /// * Returns a [`CLIError`] if an event can't be sent, a prompt is dropped without a reply, or the
 ///   batch directory can't be read.
-pub(crate) async fn start(ctx: &mut Context) -> Result<bool, CLIError> {
-    let is_first_run = loop {
-        let error = match check_or_create_first_run_file() {
-            Ok(is_first_run) => break is_first_run,
-            Err(error) => error,
-        };
+pub(crate) async fn start(ctx: &mut Context, interactive: bool) -> Result<bool, CLIError> {
+    let is_first_run = interactive
+        && loop {
+            let error = match check_or_create_first_run_file() {
+                Ok(is_first_run) => break is_first_run,
+                Err(error) => error,
+            };
 
-        let (reply, answer) = oneshot::channel();
-        ctx.emit(EngineEvent::Choose {
-            message: format!("Error setting up: {error}."),
-            options: vec![
-                "Retry".into(),
-                "Ignore".into(),
-                "Show error and ignore".into(),
-                "Quit".into(),
-            ],
-            reply,
-            default: 0,
-        })
-        .await?;
+            let (reply, answer) = oneshot::channel();
+            ctx.emit(EngineEvent::Choose {
+                message: format!("Error setting up: {error}."),
+                options: vec![
+                    "Retry".into(),
+                    "Ignore".into(),
+                    "Show error and ignore".into(),
+                    "Quit".into(),
+                ],
+                reply,
+                default: 0,
+            })
+            .await?;
 
-        // Every choice except retrying continues as if this isn't a first run.
-        match answer.await.map_err(StateError::from)? {
-            0 => {}
-            1 => break false,
-            2 => {
-                ctx.emit(EngineEvent::Error {
-                    message: format!("{error:?}\n"),
-                })
-                .await?;
-                break false;
+            // Every choice except retrying continues as if this isn't a first run.
+            match answer.await.map_err(StateError::from)? {
+                0 => {}
+                1 => break false,
+                2 => {
+                    ctx.emit(EngineEvent::Error {
+                        message: format!("{error:?}\n"),
+                    })
+                    .await?;
+                    break false;
+                }
+                _ => return Ok(false),
             }
-            _ => return Ok(false),
-        }
-    };
+        };
 
     if is_first_run && let Err(e) = run_setup(ctx).await {
         ctx.emit(EngineEvent::Error {
@@ -373,7 +378,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let (keep_running, _) = render_while(
-        start(&mut context),
+        start(&mut context, std::io::stdin().is_terminal()),
         &mut event_rx,
         &mut std::io::stdin().lock(),
         &mut stdout(),
@@ -399,4 +404,43 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     )
     .await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use serial_test::serial;
+    use zqa_rag::capabilities::ModelProvider;
+
+    use super::start;
+    use crate::common::test_support::{capture_events, create_test_context};
+    use crate::io::EngineEvent;
+
+    #[tokio::test]
+    #[serial]
+    async fn start_skips_setup_without_a_terminal() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let state_dir = temp_dir.path().to_str().unwrap().to_string();
+
+        temp_env::async_with_vars([("ZQA_STATE_DIR", Some(state_dir.as_str()))], async {
+            // The startup key check doesn't know the mock provider, so use a real one.
+            let mut ctx = create_test_context(vec![]);
+            ctx.config.model_provider = ModelProvider::Anthropic;
+
+            let (result, events) =
+                capture_events(&mut ctx, async |ctx| start(ctx, false).await).await;
+
+            assert!(result.unwrap());
+            assert!(!events.iter().any(|event| matches!(
+                event,
+                EngineEvent::Confirm { .. }
+                    | EngineEvent::Choose { .. }
+                    | EngineEvent::Line { .. }
+                    | EngineEvent::Secret { .. }
+            )));
+
+            // The first run stays pending, so the next interactive start still offers setup.
+            assert!(!temp_dir.path().join("first_run").exists());
+        })
+        .await;
+    }
 }
