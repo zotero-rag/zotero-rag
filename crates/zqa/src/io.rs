@@ -95,9 +95,6 @@ impl TerminalProgress {
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum EngineEvent {
-    /// A message to be displayed at a lower visual hierarchy. It is recommended to display this in
-    /// a dim or gray font.
-    DimmedText { message: String },
     /// Text from the model.
     Text { message: String },
     /// A tool call. This event is emitted before the tool is executed, but after it is parsed and
@@ -403,7 +400,6 @@ fn read_answer<T>(
 impl Display for EngineEvent {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            EngineEvent::DimmedText { message } => write!(f, "{DIM_TEXT}{message}{RESET}"),
             EngineEvent::Text { message } => f.write_str(message),
             EngineEvent::ToolCall { name, args, .. } => write!(f, "{DIM_TEXT}{name} {args}{RESET}"),
             EngineEvent::ToolResponse { name, response, .. } => {
@@ -506,13 +502,6 @@ mod tests {
     #[test]
     fn formats_and_routes_output_events() {
         let cases = [
-            (
-                EngineEvent::DimmedText {
-                    message: "recap".into(),
-                },
-                format!("{DIM_TEXT}recap{RESET}"),
-                false,
-            ),
             (
                 EngineEvent::Text {
                     message: "answer".into(),
