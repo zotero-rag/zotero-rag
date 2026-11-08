@@ -180,7 +180,8 @@ pub(super) fn import_document(ctx: &mut Context, path: &Path) -> Result<String, 
 ///
 /// # Errors
 ///
-/// Returns a [`CLIError`] if document state could not be accessed or the event receiver is closed.
+/// * Returns a [`CLIError`] if document state could not be accessed or the event receiver is
+///   closed.
 pub(crate) async fn handle_docs_cmd(
     subcmd: DocsCommand,
     ctx: &mut Context,

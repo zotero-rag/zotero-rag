@@ -58,8 +58,8 @@ pub(crate) async fn handle_stats_cmd(ctx: &mut Context) -> Result<(), CLIError> 
 ///
 /// # Errors
 ///
-/// Returns a [`CLIError`] if configuration is invalid, parsing / insertion setup fails,
-/// or the event receiver is closed.
+/// * Returns a [`CLIError`] if configuration is invalid, parsing / insertion setup fails, or the
+///   event receiver is closed.
 pub(crate) async fn handle_process_cmd(ctx: &mut Context) -> Result<(), CLIError> {
     const WARNING_THRESHOLD: usize = 100;
 
@@ -243,7 +243,8 @@ pub(crate) async fn handle_checkhealth_cmd(ctx: &mut Context) -> Result<(), CLIE
 ///
 /// # Errors
 ///
-/// Returns a [`CLIError`] if the event receiver is closed.
+/// * Returns a [`CLIError`] if the event receiver is closed.
+///
 /// Diagnostic failures are reported as error events.
 pub(crate) async fn handle_doctor_cmd(ctx: &mut Context) -> Result<(), CLIError> {
     let mut output = Vec::new();
