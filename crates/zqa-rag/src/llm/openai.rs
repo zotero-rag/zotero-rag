@@ -848,7 +848,10 @@ mod tests {
     }
 
     #[tokio::test]
-    #[allow(clippy::too_many_lines)]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one end-to-end scenario: two mocked turns, then checks on the events, usage, and both requests"
+    )]
     async fn test_callbacks_fire_and_reasoning_is_replayed() {
         let tool_call_response = mock_response(
             "resp-1",
@@ -876,12 +879,15 @@ mod tests {
                 text_output("Done!"),
             ],
         );
+
         let call_count = Arc::new(Mutex::new(0_usize));
         let tool = MockTool {
             call_count: Arc::clone(&call_count),
         };
+
         let tool_call_count = Arc::new(Mutex::new(0_usize));
         let text_segments = Arc::new(Mutex::new(Vec::new()));
+
         let request = ChatRequest {
             message: "Test".into(),
             reasoning: Some(ReasoningConfig {
@@ -903,6 +909,7 @@ mod tests {
             tool_iteration_limit: Some(2),
             ..ChatRequest::default()
         };
+
         let http_client =
             RecordingSequentialMockHttpClient::new([tool_call_response, text_response]);
         let mock_client = OpenAIClient {
@@ -918,11 +925,13 @@ mod tests {
         let res = mock_client.send_message(&request).await;
         test_ok!(res);
         let res = res.unwrap();
+
         test_eq!(res.total_usage().input_tokens, 30);
         test_eq!(res.total_usage().output_tokens, 13);
         test_eq!(*call_count.lock().unwrap(), 1_usize);
         test_eq!(*tool_call_count.lock().unwrap(), 1_usize);
         assert_eq!(*text_segments.lock().unwrap(), ["Done!"]);
+
         let reasoning: Vec<_> = res.content.iter().filter_map(as_reasoning_text).collect();
         assert_eq!(
             reasoning,
