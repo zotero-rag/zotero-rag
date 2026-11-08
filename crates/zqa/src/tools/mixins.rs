@@ -6,7 +6,8 @@ use zqa_rag::llm::tools::Tool;
 
 use crate::io::{EngineEvent, StyledSpan, TextStyle};
 
-/// `Tool` wrapper that reports how long the wrapped tool took to run on a status channel
+/// `Tool` wrapper that reports how long the wrapped tool took to run on a status channel,
+/// which the query handler forwards as an [`EngineEvent`].
 pub struct Timed<T: Tool> {
     inner: T,
     status_tx: UnboundedSender<EngineEvent>,
