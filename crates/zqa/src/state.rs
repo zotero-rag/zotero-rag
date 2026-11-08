@@ -109,17 +109,9 @@ pub(crate) async fn get_model_usage(provider_name: &str, model: &str, chars: u64
         ..Default::default()
     };
 
-    let cache_options = if let Ok(state_dir) = get_state_dir() {
-        let cache_path = state_dir.join("price_cache.json");
-
-        Some(PricingCacheOptions {
-            cache_path,
-            ttl: Some(60 * 60 * 24 as usize),
-        })
-    } else {
-        None
-    };
-    if let Some(ref p) = get_model_pricing(provider_name, model, cache_options).await {
+    if let Some(ref p) =
+        get_model_pricing(provider_name, model, get_price_cache_options().await).await
+    {
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let cost = (p.estimate_cost(usage.into()) * 100.0) as u32;
         usage.estimated_cost += cost;
@@ -178,26 +170,26 @@ impl AddAssign<UsageMetadata> for UsageMetadata {
     }
 }
 
+async fn get_price_cache_options() -> Option<PricingCacheOptions> {
+    match get_state_dir() {
+        Ok(dir) if dir.exists() || tokio::fs::create_dir_all(&dir).await.is_ok() => {
+            Some(PricingCacheOptions {
+                cache_path: dir.join("pricing_cache.json"),
+                ttl: Some(60 * 60 * 24), // 1 day
+            })
+        }
+        _ => None,
+    }
+}
+
 impl UsageMetadata {
     pub(crate) async fn from_rag_usage(
         usage: &[ModelUsage],
         provider: ModelProvider,
         model: &str,
     ) -> Self {
-        let model_pricing = match get_state_dir() {
-            Ok(dir) if dir.exists() || tokio::fs::create_dir_all(&dir).await.is_ok() => {
-                get_model_pricing(
-                    provider.as_str(),
-                    model,
-                    Some(PricingCacheOptions {
-                        cache_path: dir.join("pricing_cache.json"),
-                        ttl: Some(60 * 60 * 24), // 1 day
-                    }),
-                )
-                .await
-            }
-            _ => None,
-        };
+        let model_pricing =
+            get_model_pricing(provider.as_str(), model, get_price_cache_options().await).await;
 
         // Prompt-size pricing tiers apply per request, so each request is priced on its own.
         let estimated_cost = model_pricing.map_or(0.0, |p| {
