@@ -49,8 +49,8 @@ use crate::utils::terminal::{RESET, YELLOW, YELLOW_BOLD};
 ///
 /// # Errors
 ///
-/// Returns a [`CLIError`] if setup fails, or if the new config can't be loaded or doesn't yield a
-/// store. `ctx` keeps its previous config and store in that case.
+/// * Returns a [`CLIError`] if setup fails, or if the new config can't be loaded or doesn't yield a
+///   store. `ctx` keeps its previous config and store in that case.
 pub(crate) async fn run_setup(ctx: &mut Context) -> Result<(), CLIError> {
     oobe(ctx).await?;
 
@@ -195,8 +195,8 @@ fn missing_api_key_events(config: &Config) -> Vec<EngineEvent> {
 ///
 /// # Errors
 ///
-/// Returns a [`CLIError`] if the state directory can't be found or the batch directory can't be
-/// read.
+/// * Returns a [`CLIError`] if the state directory can't be found or the batch directory can't be
+///   read.
 fn pending_batch_count() -> Result<usize, CLIError> {
     let batch_dir = state::get_state_dir()?.join("batches");
     if !batch_dir.exists() {
@@ -242,8 +242,8 @@ fn pending_batch_count() -> Result<usize, CLIError> {
 ///
 /// # Errors
 ///
-/// Returns a [`CLIError`] if an event can't be sent, a prompt is dropped without a reply, or the
-/// batch directory can't be read.
+/// * Returns a [`CLIError`] if an event can't be sent, a prompt is dropped without a reply, or the
+///   batch directory can't be read.
 pub(crate) async fn start(ctx: &mut Context) -> Result<bool, CLIError> {
     let is_first_run = loop {
         let error = match check_or_create_first_run_file() {
