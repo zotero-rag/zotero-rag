@@ -466,11 +466,11 @@ const TOOL_RESPONSE_KEEP: usize = 5;
 fn truncate_json(value: &Value, keep: usize) -> Value {
     match value {
         Value::String(s) => {
-            let words: Vec<&str> = s.split_whitespace().collect();
-            if words.len() <= 2 * keep {
+            if s.split_whitespace().nth(2 * keep).is_none() {
                 return value.clone();
             }
 
+            let words: Vec<&str> = s.split_whitespace().collect();
             Value::String(format!(
                 "{} ... {}",
                 words[..keep].join(" "),
