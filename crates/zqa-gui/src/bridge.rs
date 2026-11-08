@@ -11,6 +11,7 @@ use std::thread;
 
 use futures::channel::mpsc::UnboundedSender;
 use tokio::sync::mpsc::{self, UnboundedReceiver};
+use zqa::cli::errors::CLIError;
 use zqa::io::EngineEvent;
 use zqa::session::Session;
 use zqa::state::SavedChatHistory;
@@ -135,14 +136,7 @@ pub fn spawn_engine(
             };
 
             let (engine_tx, mut engine_rx) = mpsc::channel(256);
-            let mut session = match Session::new(config, Some(engine_tx)) {
-                Ok(session) => session,
-                Err(e) => {
-                    let _ =
-                        event_tx.unbounded_send(UiEvent::Done(Err(format!("session error: {e}"))));
-                    return;
-                }
-            };
+            let mut session = Session::new(config, Some(engine_tx));
 
             runtime.block_on(async move {
                 let mut pending_command = None;
@@ -185,6 +179,12 @@ pub fn spawn_engine(
                     Some(Some(Err(e))) => {
                         let message = format!("Startup failed: {e}\n");
                         let _ = event_tx.unbounded_send(UiEvent::Engine(EngineEvent::Error { message }));
+
+                        // Without a store, commands would run against the placeholder, so stop the
+                        // engine, as the CLI exits.
+                        if matches!(e, CLIError::ConfigError(_)) {
+                            return;
+                        }
                     }
                 }
 
