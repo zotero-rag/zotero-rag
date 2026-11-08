@@ -408,7 +408,6 @@ mod tests {
     use std::future::Future;
     use std::pin::Pin;
     use std::sync::{Arc, Mutex};
-    use std::time::Instant;
 
     use schemars::{JsonSchema, schema_for};
     use serde::Deserialize;
@@ -422,9 +421,10 @@ mod tests {
     };
     use crate::llm::tools::test_utils::MockTool;
 
+    /// A tool that answers immediately, or waits for `gate` when called with `{"gated": true}`.
     #[derive(Debug)]
     pub(crate) struct SlowTool {
-        pub delay: std::time::Duration,
+        pub gate: Arc<tokio::sync::Notify>,
     }
 
     #[derive(Deserialize, JsonSchema)]
@@ -443,13 +443,16 @@ mod tests {
             schema_for!(SlowToolInput)
         }
 
-        fn call(
-            &self,
-            _args: Value,
-        ) -> Pin<Box<dyn Future<Output = Result<Value, String>> + Send>> {
-            let delay = self.delay;
+        fn call(&self, args: Value) -> Pin<Box<dyn Future<Output = Result<Value, String>> + Send>> {
+            let gate = args["gated"]
+                .as_bool()
+                .unwrap_or(false)
+                .then(|| Arc::clone(&self.gate));
             Box::pin(async move {
-                tokio::time::sleep(delay).await;
+                if let Some(gate) = gate {
+                    gate.notified().await;
+                }
+
                 Ok(Value::String("Done".to_string()))
             })
         }
@@ -457,8 +460,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_concurrent_execution() {
+        let gate = Arc::new(tokio::sync::Notify::new());
         let tool = SlowTool {
-            delay: std::time::Duration::from_millis(500),
+            gate: Arc::clone(&gate),
         };
         let boxed_tool: Box<dyn Tool> = Box::new(tool);
         let tools = vec![boxed_tool];
@@ -468,7 +472,7 @@ mod tests {
             ChatHistoryContent::ToolCallRequest(ToolCallRequest {
                 id: "1".into(),
                 tool_name: "slow_tool".into(),
-                args: json!({}),
+                args: json!({"gated": true}),
             }),
             ChatHistoryContent::Text("Checking both.".into()),
             ChatHistoryContent::ToolCallRequest(ToolCallRequest {
@@ -493,29 +497,56 @@ mod tests {
             }
         });
 
-        let start = Instant::now();
-        let tool_call_results = process_tool_calls(
-            &mut new_contents,
-            &contents,
-            &serialized_tools,
-            Some(&on_event),
-        )
-        .await;
-        let duration = start.elapsed();
+        let tool_call_results = {
+            let processing = process_tool_calls(
+                &mut new_contents,
+                &contents,
+                &serialized_tools,
+                Some(&on_event),
+            );
+            tokio::pin!(processing);
 
-        // Expect ~500ms for concurrent execution
-        assert!(duration.as_millis() < 1000);
+            // The fast call's response must arrive while the gated call is still running, so tools
+            // run concurrently and each response is sent as soon as its tool finishes.
+            let fast_response = async {
+                while !events
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .any(|line| line == "response: 2")
+                {
+                    tokio::task::yield_now().await;
+                }
+            };
+            tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                tokio::select! {
+                    _ = &mut processing => panic!("processing finished while call 1 was gated"),
+                    () = fast_response => {}
+                }
+            })
+            .await
+            .expect("call 2 should respond before call 1 is released");
+
+            gate.notify_one();
+            processing.await
+        };
+
         // Ensure that we processed two tool calls
         test_eq!(tool_call_results.unwrap().content.len(), 2);
         test_eq!(new_contents.len(), 3);
 
-        // Calls and text go out in content order before any tool finishes. Both tools take the
-        // same time, so their responses may arrive in either order.
-        let mut events = events.lock().unwrap().clone();
-        let mut responses = events.split_off(3);
-        responses.sort();
-        assert_eq!(events, ["call: 1", "text: Checking both.", "call: 2"]);
-        assert_eq!(responses, ["response: 1", "response: 2"]);
+        // Calls and text go out in content order before any tool finishes, and each response
+        // follows when its tool does.
+        assert_eq!(
+            *events.lock().unwrap(),
+            [
+                "call: 1",
+                "text: Checking both.",
+                "call: 2",
+                "response: 2",
+                "response: 1"
+            ]
+        );
     }
 
     #[tokio::test]
