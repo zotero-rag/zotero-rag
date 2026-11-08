@@ -12503,6 +12503,7 @@ dependencies = [
  "objc2-app-kit 0.3.2",
  "raw-window-handle",
  "serde_json",
+ "thiserror 2.0.20",
  "tokio",
  "zqa",
  "zqa-macros",

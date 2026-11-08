@@ -56,8 +56,8 @@ impl Session {
     ///
     /// # Errors
     ///
-    /// Returns a [`CLIError`] if a vector store cannot be constructed from `config`
-    /// (for example, if no embedding provider is configured).
+    /// * Returns a [`CLIError`] if a vector store cannot be constructed from `config` (for example,
+    ///   if no embedding provider is configured).
     pub fn new(
         config: Config,
         event_tx: Option<mpsc::Sender<EngineEvent>>,
@@ -92,8 +92,7 @@ impl Session {
     ///
     /// # Errors
     ///
-    /// Returns a [`CLIError`] if the command cannot be parsed or a handler fails
-    /// unrecoverably.
+    /// * Returns a [`CLIError`] if the command cannot be parsed or a handler fails unrecoverably.
     pub fn dispatch(
         &mut self,
         command: &str,
@@ -112,8 +111,8 @@ impl Session {
     ///
     /// # Errors
     ///
-    /// Returns a [`CLIError`] if the current conversation cannot be saved or conversation state
-    /// cannot be locked.
+    /// * Returns a [`CLIError`] if the current conversation cannot be saved or conversation state
+    ///   cannot be locked.
     pub fn resume_conversation(
         &mut self,
         conversation: &SavedChatHistory,
@@ -141,7 +140,7 @@ impl Session {
     ///
     /// # Errors
     ///
-    /// Returns a [`CLIError`] if the conversation state cannot be locked.
+    /// * Returns a [`CLIError`] if the conversation state cannot be locked.
     pub fn conversation(&self) -> Result<SavedChatHistory, CLIError> {
         Ok(SavedChatHistory {
             history: self.ctx.state.chat_history.lock()?.clone(),

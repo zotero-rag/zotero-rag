@@ -454,8 +454,8 @@ impl ZqaApp {
 
         match PromptRequest::from_event(event) {
             Ok(request) => self.pending_prompts.push_back(request),
-            Err(message) => {
-                self.rows.push(ChatRow::Failed(message.into()));
+            Err(error) => {
+                self.rows.push(ChatRow::Failed(error.to_string().into()));
                 self.request_stop(cx);
                 return;
             }
@@ -1847,6 +1847,9 @@ impl ZqaApp {
 }
 
 /// Format a count with comma thousands separators, such as `12,345`.
+///
+/// NOTE: `format_number` in `zqa`'s `cli/app.rs` formats counts the same way for the CLI usage
+/// footer. Maintainers should keep the two in sync.
 fn format_count(count: u64) -> String {
     let digits = count.to_string();
     let mut formatted = String::with_capacity(digits.len() + digits.len() / 3);

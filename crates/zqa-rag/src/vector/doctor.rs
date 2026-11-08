@@ -50,8 +50,8 @@ impl Diagnosis {
 ///
 /// # Errors
 ///
-/// Returns [`HealthCheckError::InvalidState`] if the health check result is in a state it should
-/// never be in, which likely means a bug in the backend's health check.
+/// * Returns [`HealthCheckError::InvalidState`] if the health check result is in a state it should
+///   never be in, which likely means a bug in the backend's health check.
 pub async fn doctor<T: HealthCheckable>(backend: &T) -> Result<Vec<Diagnosis>, HealthCheckError> {
     let healthcheck_results = backend.health_check().await;
 

@@ -76,6 +76,9 @@ pub(crate) async fn dispatch_command(command: &str, ctx: &mut Context) -> Result
 /// # Returns
 ///
 /// The thousands-separated string
+///
+/// NOTE: `format_count` in `zqa-gui`'s `main.rs` formats counts the same way for the GUI usage
+/// line. Maintainers should keep the two in sync.
 fn format_number(num: u32) -> String {
     num.to_string()
         .as_bytes()
