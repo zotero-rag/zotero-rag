@@ -113,7 +113,7 @@ pub(crate) async fn get_model_usage(provider_name: &str, model: &str, chars: u64
         get_model_pricing(provider_name, model, get_price_cache_options().await).await
     {
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let cost = (p.estimate_cost(usage.into()) * 100.0) as u32;
+        let cost = (p.estimate_cost(usage.into()) * 1_000_000.0).round() as u64;
         usage.estimated_cost += cost;
     }
 
@@ -133,8 +133,8 @@ pub struct UsageMetadata {
     pub output_tokens: u32,
     /// Reasoning tokens used
     pub reasoning_tokens: u32,
-    /// Estimated cost so far, in U.S. cents
-    pub estimated_cost: u32,
+    /// Estimated cost so far, in U.S. microdollars (1 USD = 1,000,000)
+    pub estimated_cost: u64,
 }
 
 impl From<UsageMetadata> for ModelUsage {
@@ -204,7 +204,7 @@ impl UsageMetadata {
             output_tokens: total.output_tokens,
             reasoning_tokens: total.reasoning_tokens,
             #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-            estimated_cost: (estimated_cost * 100.0) as u32,
+            estimated_cost: (estimated_cost * 1_000_000.0).round() as u64,
         }
     }
 }

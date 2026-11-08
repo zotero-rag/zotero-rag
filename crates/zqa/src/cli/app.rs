@@ -116,8 +116,13 @@ async fn write_usage_footer(
         format_number(usage.output_tokens)
     )?;
 
-    let cost = f64::from(ctx.state.usage.estimated_cost) / 100.0;
-    if cost > 0.0 {
+    if ctx.state.usage.estimated_cost > 0 {
+        #[allow(
+            clippy::cast_precision_loss,
+            reason = "exact below 2^53 microdollars, about $9B"
+        )]
+        let cost = ctx.state.usage.estimated_cost as f64 / 1_000_000.0;
+
         let rate = *ctx
             .state
             .exchange_rate
