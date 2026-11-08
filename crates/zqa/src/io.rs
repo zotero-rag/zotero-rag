@@ -538,7 +538,10 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::too_many_lines)]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "Keeps output variants in one table to share the same routing checks."
+    )]
     fn formats_and_routes_output_events() {
         let cases = [
             (
