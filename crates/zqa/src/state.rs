@@ -101,20 +101,23 @@ pub(crate) fn get_state_dir() -> Result<PathBuf, StateError> {
 ///
 /// # Returns
 ///
-/// A [`UsageMetadata`] with estimated cost if the model was found.
+/// A [`UsageMetadata`] with estimated cost set if the model was found. Token count estimates aren't
+/// updated.
 pub(crate) async fn get_model_usage(provider_name: &str, model: &str, chars: u64) -> UsageMetadata {
-    let mut usage = UsageMetadata {
-        #[allow(clippy::cast_possible_truncation)]
-        input_tokens: (chars / 4) as u32,
-        ..Default::default()
-    };
+    let mut usage = UsageMetadata::default();
 
     if let Some(ref p) =
         get_model_pricing(provider_name, model, get_price_cache_options().await).await
     {
+        let estimate = UsageMetadata {
+            #[allow(clippy::cast_possible_truncation)]
+            input_tokens: (chars / 4) as u32,
+            ..Default::default()
+        };
+
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let cost = (p.estimate_cost(usage.into()) * 1_000_000.0).round() as u64;
-        usage.estimated_cost += cost;
+        let cost = (p.estimate_cost(estimate.into()) * 1_000_000.0).round() as u64;
+        usage.estimated_cost = cost;
     }
 
     usage
