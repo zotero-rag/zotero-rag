@@ -81,8 +81,8 @@ fn format_number(num: u32) -> String {
 ///
 /// # Errors
 ///
-/// Returns a [`CLIError`] if provider configuration is invalid, vector search fails,
-/// or the event receiver is closed.
+/// * Returns a [`CLIError`] if provider configuration is invalid, vector search fails, or the event
+///   receiver is closed.
 pub(crate) async fn handle_search_cmd(
     search_term: String,
     ctx: &mut Context,
@@ -140,8 +140,8 @@ pub(crate) async fn handle_search_cmd(
 ///
 /// # Errors
 ///
-/// Returns a [`CLIError`] if configuration is invalid, document import fails,
-/// provider calls fail before final response handling, or the event receiver is closed.
+/// * Returns a [`CLIError`] if configuration is invalid, document import fails, provider calls fail
+///   before final response handling, or the event receiver is closed.
 #[allow(clippy::too_many_lines)]
 pub(crate) async fn handle_query_cmd(query: String, ctx: &mut Context) -> Result<(), CLIError> {
     ctx.emit(EngineEvent::Text {

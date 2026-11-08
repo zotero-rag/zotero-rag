@@ -141,7 +141,7 @@ pub(crate) async fn resume_conversation(
 ///
 /// # Errors
 ///
-/// Returns a [`CLIError`] if a state lock could not be obtained or the event receiver is closed.
+/// * Returns a [`CLIError`] if a state lock could not be obtained or the event receiver is closed.
 pub(crate) async fn save_current_conversation(ctx: &mut Context) -> Result<bool, CLIError> {
     if ctx.state.dirty.load(atomic::Ordering::Relaxed) {
         let chat_history = Arc::clone(&ctx.state.chat_history);
