@@ -284,8 +284,8 @@ pub(crate) async fn handle_query_cmd(query: String, ctx: &mut Context) -> Result
             "Failed to get LLM generation config in `run_query`".into(),
         ))?;
 
-    // `build_query_tools` needs this config too. Checking here fails the query before the title
-    // task is spawned and its tokens are spent.
+    // Validated here, before the title task is spawned and its tokens are spent, and passed to
+    // `build_query_tools`.
     let embedding_config = ctx
         .config
         .get_embedding_config()
