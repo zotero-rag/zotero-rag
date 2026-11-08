@@ -97,7 +97,7 @@ fn format_number(num: u32) -> String {
 ///
 /// # Errors
 ///
-/// [`CLIError::IOError`] if any writes fail.
+/// * [`CLIError::IOError`] if any writes fail.
 async fn write_usage_footer(
     output: &mut impl Write,
     usage: &UsageMetadata,
