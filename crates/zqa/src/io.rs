@@ -592,7 +592,7 @@ mod tests {
     }
 
     #[test]
-    fn line_requests_strip_trailing_space_and_render_one_prompt() {
+    fn line_requests_strip_terminator_and_render_one_prompt() {
         for message in [None, Some("Question".to_string())] {
             let (reply, mut answer) = oneshot::channel();
             let prompt = format!("{}\n\n> ", message.as_deref().unwrap_or_default());
