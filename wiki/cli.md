@@ -11,7 +11,9 @@ timestamp: 2026-08-26T01:32:28-04:00
 `crates/zqa/src/main.rs` loads `.env` and starts the Tokio runtime. `zqa::run` sets a
 state-directory LanceDB location when `LANCEDB_URI` is not already set, loads
 [runtime configuration](/configuration.md), performs first-run setup when
-needed, creates a `LanceZoteroStore`, and enters the interactive CLI.
+needed, creates a `LanceZoteroStore`, and enters the interactive CLI. When a
+subcommand such as `zqa search <query>` is given, it skips first-run setup
+(which prompts on stdin), runs that one command, and exits.
 
 The REPL uses `rustyline` with history in `~/.zqa_history`. It keeps the
 current chat history, title, imported documents, and session state in the
@@ -44,8 +46,10 @@ PDF text.
 # Query execution
 
 `/search` retrieves up to ten results through the local store and optionally
-reranks them. A natural-language query constructs an LLM request with retrieval
-and summarization tools, plus tools for any session-imported PDFs. The request
+reranks them. `zqa search <query>` runs the same handler without the REPL,
+printing one title per line to stdout and the timing line to stderr. A
+natural-language query constructs an LLM request with retrieval and
+summarization tools, plus tools for any session-imported PDFs. The request
 applies the configured [tool iteration limit](/configuration.md) from
 [zqa-rag](/rag.md). The CLI streams model text, reasoning summaries (rendered
 dimmed), and tool status to the terminal, then accumulates the turn's token usage (including cached-input and
