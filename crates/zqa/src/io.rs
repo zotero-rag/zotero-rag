@@ -114,9 +114,8 @@ pub struct StyledSpan {
 ///   JSON args, and a newline at the end.
 /// * [`EngineEvent::ToolResponse`] is rendered in a dimmed text with two leading spaces, followed
 ///   by `->`, followed by the tool name in parentheses, and finally the pretty-printed JSON
-///   response with long strings and arrays shortened, or the error message if the tool failed. A
-///   newline is printed at the end. If a tool call fails, a red "failed: " prefix followed by the
-///   error is written instead.
+///   response with long strings and arrays shortened, or, if the tool failed, a red "failed: "
+///   prefix followed by the error message. A newline is printed at the end.
 /// * [`EngineEvent::Reasoning`] renders as dimmed, italics text.
 /// * [`EngineEvent::Confirm`] renders the message, followed by either "([y]/n): " or "(y/[n]): ",
 ///   so it assumes users are presented a yes/no question. For other binary-response questions, use
@@ -141,10 +140,8 @@ pub enum EngineEvent {
     /// Plain, unstyled text.
     Text { message: String },
     /// A tool call. This event is emitted before the tool is executed. When the command runs to
-    /// completion, every emitted `ToolCall` is usually followed (but not necessarily immediately)
-    /// by a `ToolResponse` event with the same `id`. If a command is cancelled, or fails mid-tool, a
-    /// `ToolResponse` is not emitted. If the command ends and a `ToolCall` is still pending this way, it
-    /// should be treated as having been interrupted. A call to a tool that does not exist, such as a
+    /// completion, every emitted `ToolCall` is followed (but not necessarily immediately) by a
+    /// `ToolResponse` event with the same `id`. A call to a tool that does not exist, such as a
     /// hallucinated tool name, still emits a `ToolCall`, and its `ToolResponse` carries an `Err`.
     ///
     /// If the command is cancelled or fails while a tool runs, that call gets no `ToolResponse`.
