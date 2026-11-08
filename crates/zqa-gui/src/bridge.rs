@@ -50,23 +50,6 @@ impl From<EngineEvent> for UiEvent {
     }
 }
 
-/// Decide whether a command switched conversations, given snapshots from before and after it.
-///
-/// A `/resume` can finish without switching: there may be no saved conversations, or the picked
-/// one may be the conversation that is already open. Only a different history or title counts, so
-/// the UI keeps its transcript, including rows the engine doesn't store such as status lines, when
-/// nothing changed.
-///
-/// # Returns
-///
-/// `after` if the conversation changed, otherwise `None`.
-fn switched_conversation(
-    before: &SavedChatHistory,
-    after: SavedChatHistory,
-) -> Option<SavedChatHistory> {
-    (before.history != after.history || before.title != after.title).then_some(after)
-}
-
 /// Spawn the engine thread.
 ///
 /// The thread builds a [`Session`] from the loaded config and then loops, dispatching each
@@ -141,10 +124,10 @@ pub fn spawn_engine(
                                 _ => "/quit".into(),
                             };
                             // A typed `/resume` swaps the conversation inside the engine, so the
-                            // UI only learns of it by comparing snapshots after it finishes.
-                            let before_resume = (command == "/resume")
-                                .then(|| session.conversation().ok())
-                                .flatten();
+                            // UI only learns of it by comparing conversation IDs after it finishes.
+                            // It can also finish without switching, for example when there are no
+                            // saved conversations, and then the UI keeps its transcript.
+                            let before_resume = (command == "/resume").then(|| session.conversation_id());
                             // `None` means the dispatch was cancelled; dropping the future here
                             // aborts the request in flight.
                             //
@@ -220,9 +203,8 @@ pub fn spawn_engine(
                                     // a dead channel and a permanently "running" state.
                                     let should_exit = matches!(result, Ok(false));
                                     let resumed = before_resume
-                                        .filter(|_| result.is_ok())
-                                        .zip(session.conversation().ok())
-                                        .and_then(|(before, after)| switched_conversation(&before, after));
+                                        .filter(|before| result.is_ok() && *before != session.conversation_id())
+                                        .and_then(|_| session.conversation().ok());
                                     let _ = event_tx.unbounded_send(match resumed {
                                         Some(conversation) => {
                                             UiEvent::ConversationResumed(Ok(Arc::new(conversation)))
@@ -269,28 +251,4 @@ pub fn spawn_engine(
             });
         })
         .expect("failed to spawn zqa engine thread");
-}
-
-#[cfg(test)]
-mod tests {
-    use zqa::state::SavedChatHistory;
-
-    use super::switched_conversation;
-
-    fn snapshot(title: &str) -> SavedChatHistory {
-        serde_json::from_value(serde_json::json!({
-            "history": [],
-            "date": "2026-10-29T12:00:00+00:00",
-            "title": title,
-        }))
-        .unwrap()
-    }
-
-    #[test]
-    fn only_a_changed_conversation_counts_as_a_switch() {
-        assert!(switched_conversation(&snapshot("Attention"), snapshot("Attention")).is_none());
-
-        let switched = switched_conversation(&snapshot("Attention"), snapshot("Transformers"));
-        assert_eq!(switched.map(|c| c.title), Some("Transformers".into()));
-    }
 }
