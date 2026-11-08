@@ -265,7 +265,8 @@ impl SavedChatHistory {
 /// due to permissions errors), returns a `StateError`.
 ///
 /// In all other cases, returns `Ok(Some(history))`, where `history` contains reverse
-/// chronologically ordered conversation histories.
+/// chronologically ordered conversation histories. Files that don't parse, such as conversations
+/// saved in an older format, are skipped with a logged warning.
 ///
 /// # Errors
 ///
@@ -284,8 +285,19 @@ pub fn get_conversation_history() -> Result<Option<Vec<SavedChatHistory>>, State
         .read_dir()?
         .filter_map(std::result::Result::ok)
         .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "json"))
-        .filter_map(|entry| fs::read_to_string(entry.path()).ok())
-        .filter_map(|s| serde_json::from_str::<SavedChatHistory>(&s).ok())
+        .filter_map(|entry| {
+            let path = entry.path();
+            let contents = fs::read_to_string(&path).ok()?;
+
+            serde_json::from_str::<SavedChatHistory>(&contents)
+                .inspect_err(|e| {
+                    log::warn!(
+                        "Skipping unreadable saved conversation {}: {e}",
+                        path.display()
+                    );
+                })
+                .ok()
+        })
         .collect::<Vec<_>>();
     histories.sort_by_key(|history| Reverse(history.date));
 
