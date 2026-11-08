@@ -235,6 +235,38 @@ impl PricingCacheOptions {
     }
 }
 
+/// Find the LiteLLM catalog entry for `model` from `provider`.
+///
+/// LiteLLM keys most models by their bare name and some by `{prefix}/{model}`, where the prefix
+/// can differ from our provider ID (`voyage` for Voyage AI). OpenRouter model IDs are
+/// `vendor/model`, and LiteLLM lists the underlying model under its bare name, whose rates
+/// OpenRouter passes through. The keys are tried in that order.
+///
+/// # Arguments
+///
+/// * `catalog` - The parsed LiteLLM pricing catalog.
+/// * `provider` - Our provider ID, as in [`get_model_pricing`].
+/// * `model` - The model name as sent to the provider.
+///
+/// # Returns
+///
+/// The matching entry, or `None` if no key matches.
+fn find_catalog_entry<'a>(
+    catalog: &'a serde_json::Value,
+    provider: &str,
+    model: &str,
+) -> Option<&'a serde_json::Value> {
+    let litellm_prefix = match provider {
+        "voyageai" => "voyage",
+        other => other,
+    };
+
+    catalog
+        .get(model)
+        .or_else(|| catalog.get(format!("{litellm_prefix}/{model}")))
+        .or_else(|| catalog.get(model.split_once('/')?.1))
+}
+
 /// Look up pricing for a `(provider, model)` pair.
 ///
 /// # Arguments
@@ -304,10 +336,7 @@ pub async fn get_model_pricing(
         .await
         .ok()?;
 
-    // LiteLLM keys are `model` for most models; fall back to `provider/name`, which is the case
-    // for OpenRouter.
-    let fallback_key = format!("{provider}/{model}");
-    let entry = json.get(model).or_else(|| json.get(&fallback_key))?;
+    let entry = find_catalog_entry(json, provider, model)?;
 
     let rate = |key: &str, fallback: f64| {
         entry
@@ -643,6 +672,10 @@ mod tests {
         "openrouter/mistral-7b": {
             "input_cost_per_token": 0.0000001,
             "output_cost_per_token": 0.0000002
+        },
+        "voyage/voyage-4-large": {
+            "input_cost_per_token": 0.00000012,
+            "output_cost_per_token": 0.0
         }
     }"#;
 
@@ -748,6 +781,20 @@ mod tests {
             (p.rates.output_cost_per_token - expected_output_cost).abs()
                 < expected_output_cost * f64::EPSILON * 10.0
         );
+
+        // LiteLLM prefixes Voyage models with `voyage`, not our `voyageai` provider ID.
+        let (_f, opts) = make_cache(SAMPLE_JSON);
+        let p = get_model_pricing("voyageai", "voyage-4-large", Some(opts))
+            .await
+            .unwrap();
+        assert!((p.rates.input_cost_per_token - 0.000_000_12).abs() < 1e-18);
+
+        // An OpenRouter `vendor/model` ID falls back to the model's bare name.
+        let (_f, opts) = make_cache(SAMPLE_JSON);
+        let p = get_model_pricing("openrouter", "openai/gpt-5.4", Some(opts))
+            .await
+            .unwrap();
+        assert!((p.rates.input_cost_per_token - 0.000_002_5).abs() < 1e-18);
     }
 
     #[tokio::test]

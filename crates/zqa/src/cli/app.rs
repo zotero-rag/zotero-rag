@@ -665,8 +665,8 @@ mod tests {
             .try_recv()
             .expect("the search should report its usage");
         assert!(
-            usage.input_tokens > 0,
-            "Expected nonzero input tokens, got: {usage:?}"
+            usage.estimated_cost > 0,
+            "Expected a nonzero estimated cost, got: {usage:?}"
         );
         assert!(
             cost_rx.try_recv().is_err(),
