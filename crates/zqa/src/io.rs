@@ -137,10 +137,13 @@ pub enum EngineEvent {
     StyledText { spans: Vec<StyledSpan> },
     /// Plain, unstyled text.
     Text { message: String },
-    /// A tool call. This event is emitted before the tool is executed. Every emitted `ToolCall` is
-    /// followed (but not necessarily immediately) by a `ToolResponse` event with the same `id`. A
-    /// call to a tool that does not exist, such as a hallucinated tool name, still emits a
-    /// `ToolCall`, and its `ToolResponse` carries an `Err`.
+    /// A tool call. This event is emitted before the tool is executed. When the command runs to
+    /// completion, every emitted `ToolCall` is followed (but not necessarily immediately) by a
+    /// `ToolResponse` event with the same `id`. A call to a tool that does not exist, such as a
+    /// hallucinated tool name, still emits a `ToolCall`, and its `ToolResponse` carries an `Err`.
+    ///
+    /// If the command is cancelled or fails while a tool runs, that call gets no `ToolResponse`.
+    /// Consumers should treat calls still pending when the command ends as interrupted.
     ToolCall {
         name: String,
         id: String,
