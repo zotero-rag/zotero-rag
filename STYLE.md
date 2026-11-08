@@ -29,7 +29,7 @@
   - `# Arguments`,  `# Panics`, and `# Errors` are always bulleted lists, even with a single item.
   - `# Returns` is a sentence for a single value; use bullets only if returning multiple values (e.g., tuples).
   - Add `# Panics` when the function can panic (e.g., uses `unwrap()`).
-  - Add `# Safety` for any `unsafe` usage.
+  - Add `# Safety` to an `unsafe fn`, stating what callers must uphold. An `unsafe` block inside a safe function gets a `// SAFETY:` comment on the block instead.
 
 - `# Arguments` bullet items should follow the format: 
 ```rs
