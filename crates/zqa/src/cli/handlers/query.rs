@@ -8,6 +8,7 @@ use std::sync::atomic;
 use std::time::Instant;
 
 use tokio::sync::mpsc::{self, UnboundedSender};
+use zqa_rag::embedding::common::EmbeddingProviderConfig;
 use zqa_rag::llm::base::{ChatHistoryContent, ChatHistoryItem, ChatRequest, MessageRole};
 use zqa_rag::llm::factory::{LLMClient, get_client_with_config};
 use zqa_rag::llm::tools::{CallbackFn, Tool};
@@ -157,6 +158,7 @@ async fn generate_title(
 /// # Arguments
 ///
 /// * `llm_client` - The client the summarization tool uses.
+/// * `embedding_config` - A validated embedding config.
 /// * `ctx` - The application context, for the store, configuration and imported documents.
 /// * `status_tx` - The channel the tool wrappers send their status events on.
 /// * `cost_tx` - The channel to send priced usage over.
@@ -170,16 +172,11 @@ async fn generate_title(
 /// Returns a [`CLIError`] if the document tools can't be built (see [`get_user_document_tools`]).
 fn build_query_tools(
     llm_client: LLMClient,
+    embedding_config: EmbeddingProviderConfig,
     ctx: &mut Context,
     status_tx: UnboundedSender<EngineEvent>,
     cost_tx: UnboundedSender<UsageMetadata>,
 ) -> Result<Vec<Box<dyn Tool>>, CLIError> {
-    let Some(embedding_config) = ctx.config.get_embedding_config() else {
-        return Err(CLIError::ConfigError(
-            "Embedding config is required before queries can be run.".into(),
-        ));
-    };
-
     let store = Arc::new(ctx.store.clone());
     let retrieval_tool = RetrievalTool::new(
         Arc::clone(&store),
@@ -264,11 +261,11 @@ pub(crate) async fn handle_query_cmd(query: String, ctx: &mut Context) -> Result
 
     // `build_query_tools` needs this config too. Checking here fails the query before the title
     // task is spawned and its tokens are spent.
-    let _embedding_config = ctx
+    let embedding_config = ctx
         .config
         .get_embedding_config()
         .ok_or(CLIError::ConfigError(
-            "Could not get embedding config".into(),
+            "Embedding config is required before queries can be run.".into(),
         ))?;
 
     // Set up channels to communicate cost
@@ -312,7 +309,13 @@ pub(crate) async fn handle_query_cmd(query: String, ctx: &mut Context) -> Result
     let chat_history = Arc::clone(&ctx.state.chat_history);
     let mut query_usage = UsageMetadata::default();
     let result = {
-        let tools = build_query_tools(llm_client.clone(), ctx, status_tx, cost_tx.clone())?;
+        let tools = build_query_tools(
+            llm_client.clone(),
+            embedding_config,
+            ctx,
+            status_tx,
+            cost_tx.clone(),
+        )?;
 
         let request = {
             let history = chat_history
