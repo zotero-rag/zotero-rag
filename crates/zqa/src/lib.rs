@@ -27,7 +27,7 @@ use state::{check_or_create_first_run_file, oobe};
 pub use store::lance::LanceZoteroStore;
 use tokio::sync::{mpsc, oneshot};
 pub use utils::arrow::full_library_to_arrow;
-use zqa_rag::config::LLMClientConfig;
+use zqa_rag::config::{LLMClientConfig, OllamaConfig};
 use zqa_rag::embedding::common::EmbeddingProviderConfig;
 use zqa_rag::reranking::common::RerankProviderConfig;
 
@@ -351,7 +351,18 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         config.tool_iteration_limit
     );
 
-    let store = LanceZoteroStore::from_config(&config)?;
+    // First-run setup can complete a config that has no section for its embedding provider yet,
+    // so a store is only required once startup has finished. Startup itself doesn't use the store, and
+    // until then the context holds an Ollama one, which needs no API key to build. Admittedly, not
+    // the slickest way to do this, but oh well.
+    let store = LanceZoteroStore::from_config(&config);
+    let store_pending = store.is_err();
+    let store = store.unwrap_or_else(|_| {
+        LanceZoteroStore::from_embedding_config(EmbeddingProviderConfig::Ollama(
+            OllamaConfig::default(),
+        ))
+    });
+
     let (event_tx, mut event_rx) = mpsc::channel(256);
     let mut context = Context {
         state: State::default(),
@@ -373,6 +384,10 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     if !keep_running? {
         std::process::exit(1);
+    }
+
+    if store_pending {
+        context.store = LanceZoteroStore::from_config(&context.config)?;
     }
 
     cli(
