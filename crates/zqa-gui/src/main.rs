@@ -531,8 +531,17 @@ impl ZqaApp {
             EngineEvent::StyledText { spans } => {
                 Self::fold_styled(&mut self.rows, &spans);
             }
-            EngineEvent::StatusUpdate { message } | EngineEvent::Warning { message } => {
-                self.rows.push(ChatRow::Status(message));
+            EngineEvent::StatusUpdate { message } => {
+                Self::fold_stderr(&mut self.rows, &message);
+            }
+            EngineEvent::Warning { message } => {
+                Self::fold_styled(
+                    &mut self.rows,
+                    &[StyledSpan {
+                        text: message,
+                        style: TextStyle::Warning,
+                    }],
+                );
             }
             EngineEvent::Error { message } => {
                 self.rows.push(ChatRow::Failed(message.into()));
