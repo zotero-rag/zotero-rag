@@ -488,7 +488,7 @@ mod tests {
                 let usage = UsageMetadata {
                     input_tokens: 1000,
                     output_tokens: 500,
-                    estimated_cost: 12,
+                    estimated_cost: 1_234_500,
                     ..UsageMetadata::default()
                 };
                 let mut output = Vec::new();
@@ -532,6 +532,40 @@ mod tests {
                 .await;
                 test_ok!(keep_running);
                 assert!(keep_running.unwrap());
+
+                // A command's `TokenUsage` events produce one footer with the turn's tokens and the
+                // conversation's saved cost.
+                ctx.state.exchange_rate.set(None).unwrap();
+                let turn_usage = UsageMetadata {
+                    input_tokens: 42,
+                    output_tokens: 7,
+                    ..UsageMetadata::default()
+                };
+                ctx.event_tx
+                    .as_ref()
+                    .unwrap()
+                    .send(EngineEvent::TokenUsage { usage: turn_usage })
+                    .await
+                    .unwrap();
+
+                let mut footer_output = Vec::new();
+                let keep_running = run_command(
+                    "/help",
+                    &mut ctx,
+                    &mut rx,
+                    &mut io::empty(),
+                    &mut footer_output,
+                    &mut Vec::new(),
+                    &mut TerminalProgress::new(),
+                )
+                .await;
+                test_ok!(keep_running);
+
+                let footer_output = String::from_utf8(footer_output).unwrap();
+                test_eq!(footer_output.matches("Turn's token usage:").count(), 1);
+                test_contains!(footer_output, "Input tokens: 42\n");
+                test_contains!(footer_output, "Output tokens: 7\n");
+                test_contains!(footer_output, "Session cost: 1.2345 USD");
 
                 // A prompt that fails to read still clears the bars left on screen.
                 let mut pbar_manager = TerminalProgress::new();
