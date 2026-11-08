@@ -6,8 +6,11 @@
 //! the full retrieval/generation pipeline without depending on the crate internals
 //! ([`Context`], [`State`], the handler functions) being `pub`.
 
+use std::sync::{Arc, Mutex, Weak};
+
 use chrono::Local;
 use tokio::sync::mpsc;
+use zqa_rag::llm::base::ChatHistoryItem;
 
 use crate::cli::app::dispatch_command;
 use crate::cli::errors::CLIError;
@@ -26,6 +29,21 @@ use crate::store::lance::LanceZoteroStore;
 pub struct Session {
     ctx: Context,
 }
+
+/// An opaque identity for a session's current conversation, from [`Session::conversation_id`].
+///
+/// Two IDs are equal only if they were taken while the same conversation was active. Holding an ID
+/// keeps a small allocation reserved, so a conversation started later never compares equal to it.
+#[derive(Clone, Debug)]
+pub struct ConversationId(Weak<Mutex<Vec<ChatHistoryItem>>>);
+
+impl PartialEq for ConversationId {
+    fn eq(&self, other: &Self) -> bool {
+        Weak::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl Eq for ConversationId {}
 
 impl Session {
     /// Build a session from a config and an optional event sender.
@@ -103,12 +121,23 @@ impl Session {
         resume_conversation(&mut self.ctx, conversation)
     }
 
+    /// Identify the current conversation.
+    ///
+    /// The ID changes whenever the session switches conversations, as `/resume` and `/new` do, even
+    /// when `/resume` picks the conversation that is already open. Commands that only add to the
+    /// current conversation, including a title generated in the background, keep it. A front-end
+    /// can compare IDs from before and after a command to learn whether it switched conversations,
+    /// without copying the history.
+    #[must_use]
+    pub fn conversation_id(&self) -> ConversationId {
+        ConversationId(Arc::downgrade(&self.ctx.state.chat_history))
+    }
+
     /// Take a snapshot of the current conversation: its history, title and total usage.
     ///
-    /// The snapshot is a copy, so later commands don't change it. A front-end can compare snapshots
-    /// from before and after a command, such as a typed `/resume`, to learn whether the command
-    /// switched conversations. The snapshot's `date` is the time it was taken, since the session
-    /// does not track when a conversation started, and its `title` is empty until one is generated.
+    /// The snapshot is a copy, so later commands don't change it. The snapshot's `date` is the time
+    /// it was taken, since the session does not track when a conversation started, and its `title`
+    /// is empty until one is generated.
     ///
     /// # Errors
     ///
@@ -120,5 +149,35 @@ impl Session {
             title: self.ctx.state.title.lock()?.clone().unwrap_or_default(),
             usage: self.ctx.state.usage,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::Local;
+
+    use super::Session;
+    use crate::common::test_support::create_test_context;
+    use crate::state::{SavedChatHistory, UsageMetadata};
+
+    #[tokio::test]
+    async fn conversation_id_changes_only_when_switching() {
+        let mut session = Session {
+            ctx: create_test_context(vec![]),
+        };
+        let before = session.conversation_id();
+
+        session.dispatch("/help").await.unwrap();
+        assert_eq!(session.conversation_id(), before);
+
+        // Resuming changes the ID even though the saved conversation matches the open one.
+        let current = SavedChatHistory {
+            history: Vec::new(),
+            date: Local::now(),
+            title: String::new(),
+            usage: UsageMetadata::default(),
+        };
+        session.resume_conversation(&current).await.unwrap();
+        assert_ne!(session.conversation_id(), before);
     }
 }
