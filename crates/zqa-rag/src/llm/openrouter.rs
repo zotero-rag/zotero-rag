@@ -148,10 +148,7 @@ fn convert_to_openrouter_messages(item: &ChatHistoryItem) -> Vec<OpenRouterMessa
                 // Tool responses in OpenRouter are sent as a separate message with role "tool"
                 messages.push(OpenRouterMessage {
                     role: OpenRouterMessageRole::Tool,
-                    content: Some(match &res.result {
-                        Ok(serde_json::Value::String(text)) | Err(text) => text.clone(),
-                        Ok(result) => result.to_string(),
-                    }),
+                    content: Some(res.content_text()),
                     tool_calls: None,
                     tool_call_id: Some(res.id.clone()),
                     reasoning_details: None,

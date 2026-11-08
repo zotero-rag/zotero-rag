@@ -363,10 +363,7 @@ pub(crate) struct AnthropicToolUseResult {
 impl From<ToolCallResponse> for AnthropicToolUseResult {
     fn from(value: ToolCallResponse) -> Self {
         let is_error = value.result.is_err();
-        let content = match value.result {
-            Ok(serde_json::Value::String(s)) | Err(s) => s,
-            Ok(other) => other.to_string(),
-        };
+        let content = value.content_text();
 
         Self {
             r#type: "tool_result".into(),
