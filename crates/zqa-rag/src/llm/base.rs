@@ -57,6 +57,19 @@ pub struct ToolCallResponse {
     pub result: Result<serde_json::Value, String>,
 }
 
+impl ToolCallResponse {
+    /// The tool result as the text sent back to a provider.
+    ///
+    /// A string result or an error message is sent as-is, without JSON quotes, and any other result
+    /// as compact JSON. Every provider uses this, so they all show the model the same text.
+    pub(crate) fn content_text(&self) -> String {
+        match &self.result {
+            Ok(serde_json::Value::String(text)) | Err(text) => text.clone(),
+            Ok(result) => result.to_string(),
+        }
+    }
+}
+
 /// This enum specifies the main kinds of content that is passed between the servers and us,
 /// the client. It records a single piece of content in the *chat history*, so it includes
 /// an enum variant for tool call results as well. The type that is passed as a single *response*
