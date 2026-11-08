@@ -3,6 +3,17 @@
 use tokio::sync::oneshot;
 use zqa::io::EngineEvent;
 
+/// Why an engine event could not become a [`PromptRequest`].
+#[derive(Debug, PartialEq, Eq, thiserror::Error)]
+pub(crate) enum PromptRequestError {
+    /// A `Choose` event had no options to pick from.
+    #[error("A choice requires at least one option")]
+    NoChoices,
+    /// The event is output, not a request for input.
+    #[error("Event does not request input")]
+    NotAnInputRequest,
+}
+
 /// A pending prompt, deliberately neither cloneable nor debug-printable.
 pub(crate) struct PromptRequest {
     message: String,
@@ -39,8 +50,11 @@ impl PromptRequest {
     ///
     /// # Errors
     ///
-    /// * Rejects non-input events and empty choices, dropping their payloads and senders.
-    pub(crate) fn from_event(event: EngineEvent) -> Result<Self, &'static str> {
+    /// * [`PromptRequestError::NotAnInputRequest`] for an event that does not request input.
+    /// * [`PromptRequestError::NoChoices`] for a `Choose` event with no options.
+    ///
+    /// Either way, the event's payload and reply sender are dropped.
+    pub(crate) fn from_event(event: EngineEvent) -> Result<Self, PromptRequestError> {
         let (message, input) = match event {
             EngineEvent::Confirm {
                 message,
@@ -61,7 +75,7 @@ impl PromptRequest {
                 reply,
             } => {
                 if options.is_empty() {
-                    return Err("A choice requires at least one option");
+                    return Err(PromptRequestError::NoChoices);
                 }
 
                 let selected = if default < options.len() { default } else { 0 };
@@ -88,7 +102,7 @@ impl PromptRequest {
                     reply,
                 },
             ),
-            _ => return Err("Event does not request input"),
+            _ => return Err(PromptRequestError::NotAnInputRequest),
         };
 
         Ok(Self { message, input })
@@ -263,14 +277,14 @@ mod tests {
             default: 0,
             reply,
         });
-        test_eq!(result.is_err(), true);
+        test_eq!(result.err(), Some(PromptRequestError::NoChoices));
         test_eq!(answer.try_recv(), Err(TryRecvError::Closed));
         test_eq!(
             PromptRequest::from_event(EngineEvent::Text {
                 message: "Output".into()
             })
-            .is_err(),
-            true
+            .err(),
+            Some(PromptRequestError::NotAnInputRequest)
         );
     }
 

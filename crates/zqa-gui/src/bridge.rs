@@ -112,114 +112,13 @@ pub fn spawn_engine(
                             None => break,
                         },
                     };
-                    let shutting_down = matches!(command, EngineCommand::Shutdown);
 
                     // A late stop click must not cancel the next command.
                     while cancel_rx.try_recv().is_ok() {}
 
-                    match command {
-                        command @ (EngineCommand::Dispatch(_) | EngineCommand::Shutdown) => {
-                            let command = match command {
-                                EngineCommand::Dispatch(command) => command,
-                                _ => "/quit".into(),
-                            };
-                            // A typed `/resume` swaps the conversation inside the engine, so the
-                            // UI only learns of it by comparing conversation IDs after it finishes.
-                            // It can also finish without switching, for example when there are no
-                            // saved conversations, and then the UI keeps its transcript.
-                            let before_resume = (command == "/resume").then(|| session.conversation_id());
-                            // `None` means the dispatch was cancelled; dropping the future here
-                            // aborts the request in flight.
-                            //
-                            // TODO(ZOT-219): cancellation only drops this future. Detached tasks
-                            // the handlers spawn (e.g. background title generation in
-                            // `handle_query_cmd`) are not cancelled and run to completion. Fully
-                            // cancelling them needs the core loop's cancellation support tracked
-                            // in ZOT-219.
-                            let result: Option<Result<bool, String>> = {
-                                let dispatch = session.dispatch(&command);
-                                tokio::pin!(dispatch);
-
-                                loop {
-                                    tokio::select! {
-                                        // Dismissing a prompt also drops its reply sender. Prefer the
-                                        // cancel signal to the resulting receive error from dispatch.
-                                        biased;
-                                        Some(()) = cancel_rx.recv(), if !shutting_down => {
-                                            break None;
-                                        }
-                                        Some(command) = cmd_rx.recv(), if !shutting_down && pending_command.is_none() => {
-                                            let shutdown_requested = matches!(command, EngineCommand::Shutdown);
-                                            pending_command = Some(command);
-
-                                            if shutdown_requested {
-                                                break None;
-                                            }
-                                        }
-                                        result = &mut dispatch => {
-                                            break Some(result.map_err(|e| e.to_string()));
-                                        }
-                                        event = engine_rx.recv() => {
-                                            match event {
-                                                Some(event) => {
-                                                    if event_tx.unbounded_send(UiEvent::Engine(event)).is_err() {
-                                                        // The UI has gone away; stop the driver
-                                                        return;
-                                                    }
-                                                }
-                                                None => {
-                                                    break Some(Err("The engine event channel closed".into()));
-                                                }
-                                            }
-                                        },
-                                    }
-                                }
-                            };
-
-                            // Forward queued output before announcing completion or cancellation.
-                            while let Ok(event) = engine_rx.try_recv() {
-                                if event_tx.unbounded_send(UiEvent::Engine(event)).is_err() {
-                                    return;
-                                }
-                            }
-
-                            if shutting_down {
-                                let result = result.expect("shutdown cannot be cancelled").map(|_| ());
-                                let saved = result.is_ok();
-                                let _ = event_tx.unbounded_send(UiEvent::ShutdownComplete(result));
-
-                                if saved {
-                                    break;
-                                }
-
-                                continue;
-                            }
-
-                            match result {
-                                Some(result) => {
-                                    // Only a deliberate exit (`/quit` returns `Ok(false)`) stops
-                                    // the engine. A command error keeps the engine alive so the UI
-                                    // stays usable; exiting on errors would strand the window with
-                                    // a dead channel and a permanently "running" state.
-                                    let should_exit = matches!(result, Ok(false));
-                                    let resumed = before_resume
-                                        .filter(|before| result.is_ok() && *before != session.conversation_id())
-                                        .and_then(|_| session.conversation().ok());
-                                    let _ = event_tx.unbounded_send(match resumed {
-                                        Some(conversation) => {
-                                            UiEvent::ConversationResumed(Ok(Arc::new(conversation)))
-                                        }
-                                        None => UiEvent::Done(result),
-                                    });
-                                    if should_exit {
-                                        break;
-                                    }
-                                }
-                                None => {
-                                    let _ = event_tx.unbounded_send(UiEvent::Cancelled);
-                                }
-                            }
-                        }
+                    let (command, shutting_down) = match command {
+                        EngineCommand::Dispatch(command) => (command, false),
+                        EngineCommand::Shutdown => ("/quit".to_string(), true),
                         EngineCommand::ResumeConversation(conversation) => {
                             let result = {
                                 let resume = session.resume_conversation(&conversation);
@@ -245,6 +144,105 @@ pub fn spawn_engine(
 
                             let result = result.map(|()| conversation).map_err(|error| error.to_string());
                             let _ = event_tx.unbounded_send(UiEvent::ConversationResumed(result));
+
+                            continue;
+                        }
+                    };
+
+                    // A typed `/resume` swaps the conversation inside the engine, so the
+                    // UI only learns of it by comparing conversation IDs after it finishes.
+                    // It can also finish without switching, for example when there are no
+                    // saved conversations, and then the UI keeps its transcript.
+                    let before_resume = (command == "/resume").then(|| session.conversation_id());
+                    // `None` means the dispatch was cancelled; dropping the future here
+                    // aborts the request in flight.
+                    //
+                    // TODO(ZOT-219): cancellation only drops this future. Detached tasks
+                    // the handlers spawn (e.g. background title generation in
+                    // `handle_query_cmd`) are not cancelled and run to completion. Fully
+                    // cancelling them needs the core loop's cancellation support tracked
+                    // in ZOT-219.
+                    let result: Option<Result<bool, String>> = {
+                        let dispatch = session.dispatch(&command);
+                        tokio::pin!(dispatch);
+
+                        loop {
+                            tokio::select! {
+                                // Dismissing a prompt also drops its reply sender. Prefer the
+                                // cancel signal to the resulting receive error from dispatch.
+                                biased;
+                                Some(()) = cancel_rx.recv(), if !shutting_down => {
+                                    break None;
+                                }
+                                Some(command) = cmd_rx.recv(), if !shutting_down && pending_command.is_none() => {
+                                    let shutdown_requested = matches!(command, EngineCommand::Shutdown);
+                                    pending_command = Some(command);
+
+                                    if shutdown_requested {
+                                        break None;
+                                    }
+                                }
+                                result = &mut dispatch => {
+                                    break Some(result.map_err(|e| e.to_string()));
+                                }
+                                event = engine_rx.recv() => {
+                                    match event {
+                                        Some(event) => {
+                                            if event_tx.unbounded_send(UiEvent::Engine(event)).is_err() {
+                                                // The UI has gone away; stop the driver
+                                                return;
+                                            }
+                                        }
+                                        None => {
+                                            break Some(Err("The engine event channel closed".into()));
+                                        }
+                                    }
+                                },
+                            }
+                        }
+                    };
+
+                    // Forward queued output before announcing completion or cancellation.
+                    while let Ok(event) = engine_rx.try_recv() {
+                        if event_tx.unbounded_send(UiEvent::Engine(event)).is_err() {
+                            return;
+                        }
+                    }
+
+                    if shutting_down {
+                        let result = result.expect("shutdown cannot be cancelled").map(|_| ());
+                        let saved = result.is_ok();
+                        let _ = event_tx.unbounded_send(UiEvent::ShutdownComplete(result));
+
+                        if saved {
+                            break;
+                        }
+
+                        continue;
+                    }
+
+                    match result {
+                        Some(result) => {
+                            // Only a deliberate exit (`/quit` returns `Ok(false)`) stops
+                            // the engine. A command error keeps the engine alive so the UI
+                            // stays usable; exiting on errors would strand the window with
+                            // a dead channel and a permanently "running" state.
+                            let should_exit = matches!(result, Ok(false));
+                            let resumed = before_resume
+                                .filter(|before| result.is_ok() && *before != session.conversation_id())
+                                .and_then(|_| session.conversation().ok());
+                            let _ = event_tx.unbounded_send(match resumed {
+                                Some(conversation) => {
+                                    UiEvent::ConversationResumed(Ok(Arc::new(conversation)))
+                                }
+                                None => UiEvent::Done(result),
+                            });
+                            if should_exit {
+                                break;
+                            }
+                        }
+                        None => {
+                            let _ = event_tx.unbounded_send(UiEvent::Cancelled);
                         }
                     }
                 }
