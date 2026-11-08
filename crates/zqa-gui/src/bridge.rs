@@ -145,26 +145,50 @@ pub fn spawn_engine(
             };
 
             runtime.block_on(async move {
+                let mut pending_command = None;
+
                 // Startup isn't a command the UI sent, so it ends with `Started`, not `Done`. A
                 // failure shows as an error row and the engine continues with the config it has.
-                let start = session.start();
-                match forward_events(start, &mut engine_rx, &event_tx).await {
-                    None => return,
-                    Some(Ok(true)) => {}
-                    Some(Ok(false)) => {
+                //
+                // The UI blocks commands until `Started`, so only a shutdown can arrive here. It
+                // ends startup early, since closing the window also drops any open startup prompt,
+                // and startup would otherwise fail on the missing reply.
+                let started = {
+                    let start = forward_events(session.start(), &mut engine_rx, &event_tx);
+                    tokio::pin!(start);
+
+                    loop {
+                        tokio::select! {
+                            // The UI sends `Shutdown` before dropping the prompt, so check it first.
+                            biased;
+                            Some(command) = cmd_rx.recv(), if pending_command.is_none() => {
+                                let shutdown_requested = matches!(command, EngineCommand::Shutdown);
+                                pending_command = Some(command);
+
+                                if shutdown_requested {
+                                    break None;
+                                }
+                            }
+                            started = &mut start => break Some(started),
+                        }
+                    }
+                };
+
+                match started {
+                    None | Some(Some(Ok(true))) => {}
+                    Some(None) => return,
+                    Some(Some(Ok(false))) => {
                         // The user chose to quit, and there is nothing to save yet.
                         let _ = event_tx.unbounded_send(UiEvent::ShutdownComplete(Ok(())));
                         return;
                     }
-                    Some(Err(e)) => {
+                    Some(Some(Err(e))) => {
                         let message = format!("Startup failed: {e}\n");
                         let _ = event_tx.unbounded_send(UiEvent::Engine(EngineEvent::Error { message }));
                     }
                 }
 
                 let _ = event_tx.unbounded_send(UiEvent::Started);
-
-                let mut pending_command = None;
 
                 loop {
                     let command = match pending_command.take() {
