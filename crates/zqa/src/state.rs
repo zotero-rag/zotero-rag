@@ -173,6 +173,12 @@ impl AddAssign<UsageMetadata> for UsageMetadata {
     }
 }
 
+/// Get pricing cache options if the state dir exists.
+///
+/// # Returns
+///
+/// The pricing cache options with a TTL of 1 day. If the state dir cannot be obtained, or it did not
+/// exist and creating it failed, `None` is returned.
 async fn get_price_cache_options() -> Option<PricingCacheOptions> {
     match get_state_dir() {
         Ok(dir) if dir.exists() || tokio::fs::create_dir_all(&dir).await.is_ok() => {
