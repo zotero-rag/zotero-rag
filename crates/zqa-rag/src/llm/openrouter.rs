@@ -150,7 +150,7 @@ fn convert_to_openrouter_messages(item: &ChatHistoryItem) -> Vec<OpenRouterMessa
                     role: OpenRouterMessageRole::Tool,
                     content: Some(match &res.result {
                         Ok(serde_json::Value::String(text)) | Err(text) => text.clone(),
-                        Ok(result) => serde_json::to_string(result).unwrap_or_default(),
+                        Ok(result) => result.to_string(),
                     }),
                     tool_calls: None,
                     tool_call_id: Some(res.id.clone()),
