@@ -412,14 +412,22 @@ async fn embedding_retrieval(
     let provider = get_embedding_provider_with_config(embedding_config)?;
     let chunk_embeddings = get_embeddings(&chunk_text_refs, &provider)?;
 
-    let query_embeddings = get_embeddings(&[query], &provider)?;
-    let dim = query_embeddings.len();
-
-    let embedded_chars = chunk_texts.iter().map(String::len).sum::<usize>() + query.len();
+    let embedded_chars = chunk_texts.iter().map(String::len).sum::<usize>();
     let usage = get_model_usage(
         embedding_config.provider_name(),
         embedding_config.model_name(),
         embedded_chars as u64,
+    )
+    .await;
+    let _ = cost_tx.send(usage);
+
+    let query_embeddings = get_embeddings(&[query], &provider)?;
+    let dim = query_embeddings.len();
+
+    let usage = get_model_usage(
+        embedding_config.provider_name(),
+        embedding_config.model_name(),
+        query.len() as u64,
     )
     .await;
     let _ = cost_tx.send(usage);
