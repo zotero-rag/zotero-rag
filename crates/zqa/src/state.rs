@@ -109,7 +109,17 @@ pub(crate) async fn get_model_usage(provider_name: &str, model: &str, chars: u64
         ..Default::default()
     };
 
-    if let Some(ref p) = get_model_pricing(provider_name, model, None).await {
+    let cache_options = if let Ok(state_dir) = get_state_dir() {
+        let cache_path = state_dir.join("price_cache.json");
+
+        Some(PricingCacheOptions {
+            cache_path,
+            ttl: Some(60 * 60 * 24 as usize),
+        })
+    } else {
+        None
+    };
+    if let Some(ref p) = get_model_pricing(provider_name, model, cache_options).await {
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let cost = (p.estimate_cost(usage.into()) * 100.0) as u32;
         usage.estimated_cost += cost;
