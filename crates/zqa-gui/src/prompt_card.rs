@@ -56,11 +56,17 @@ impl PromptCard {
         }
     }
 
+    /// Whether the card can send its reply now.
+    ///
+    /// A blank line reply is allowed, since a prompt may treat it as "keep the default" as the CLI
+    /// does. A blank secret is not.
     fn can_submit(&self, cx: &App) -> bool {
-        self.request
-            .as_ref()
-            .is_some_and(|request| !request.is_closed())
-            && self
+        let Some(request) = self.request.as_ref().filter(|request| !request.is_closed()) else {
+            return false;
+        };
+
+        !request.is_secret()
+            || self
                 .input
                 .as_ref()
                 .is_none_or(|input| !input.read(cx).value().is_empty())
@@ -321,6 +327,22 @@ mod tests {
         });
 
         test_eq!(answer.try_recv().unwrap(), "A typed response");
+
+        // A blank line reply is sent as-is.
+        let (reply, mut answer) = oneshot::channel();
+        let request = PromptRequest::from_event(EngineEvent::Line {
+            message: None,
+            reply,
+        })
+        .unwrap();
+        let (card, cx) = cx.add_window_view(|window, cx| PromptCard::new(request, window, cx));
+
+        cx.update(|window, cx| {
+            window.focus(&card.read(cx).focus_handle(cx), cx);
+            window.click("send-prompt", cx);
+        });
+
+        test_eq!(answer.try_recv().unwrap(), "");
     }
 
     #[gpui_kit::test]
