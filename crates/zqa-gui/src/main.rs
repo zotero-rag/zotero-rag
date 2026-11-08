@@ -980,7 +980,9 @@ impl ZqaApp {
                         .small()
                         .compact()
                         .icon(IconName::Close)
-                        .on_click(|_, window, _| window.remove_window()),
+                        .on_click(|_, window, cx| {
+                            window.dispatch_action(Box::new(CloseWindow), cx);
+                        }),
                 )
             })
     }
