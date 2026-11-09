@@ -573,7 +573,6 @@ impl<T: HttpClient + Default + Debug> EmbeddingFunction for OpenAIClient<T> {
 
 #[cfg(test)]
 mod tests {
-    use crate::events::AgentEvent;
     use std::sync::{Arc, Mutex};
 
     use arrow_array::Array;
@@ -587,6 +586,7 @@ mod tests {
     };
     use crate::config::OpenAIConfig;
     use crate::constants::{DEFAULT_OPENAI_EMBEDDING_DIM, DEFAULT_OPENAI_MAX_TOKENS};
+    use crate::events::AgentEvent;
     use crate::http_client::{MockHttpClient, RecordingSequentialMockHttpClient, ReqwestClient};
     use crate::llm::base::{
         AgenticClient, ChatHistoryContent, ChatHistoryItem, ChatRequest, ContentType, MessageRole,

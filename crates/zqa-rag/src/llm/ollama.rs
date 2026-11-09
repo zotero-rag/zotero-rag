@@ -115,7 +115,6 @@ impl<T: HttpClient> AgenticClient for OllamaClient<T> {
 
 #[cfg(test)]
 mod tests {
-    use crate::events::AgentEvent;
     use std::sync::{Arc, Mutex};
 
     use dotenv::dotenv;
@@ -124,6 +123,7 @@ mod tests {
     use super::*;
     use crate::clients::ollama::OllamaClient;
     use crate::config::OllamaConfig;
+    use crate::events::AgentEvent;
     use crate::http_client::{RecordingSequentialMockHttpClient, ReqwestClient};
     use crate::llm::anthropic::{
         AnthropicOutputTokensDetails, AnthropicResponseContent, AnthropicTextResponseContent,

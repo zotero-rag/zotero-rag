@@ -430,7 +430,6 @@ impl<T: HttpClient> AgenticClient for GeminiClient<T> {
 
 #[cfg(test)]
 mod tests {
-    use crate::events::AgentEvent;
     use std::sync::{Arc, Mutex};
 
     use arrow_array::Array;
@@ -442,6 +441,7 @@ mod tests {
     use crate::clients::gemini::GeminiClient;
     use crate::config::GeminiConfig;
     use crate::constants::DEFAULT_GEMINI_EMBEDDING_DIM;
+    use crate::events::AgentEvent;
     use crate::http_client::{MockHttpClient, RecordingSequentialMockHttpClient, ReqwestClient};
     use crate::llm::base::{AgenticClient, ChatHistoryItem, ChatRequest, ContentType};
     use crate::llm::tools::test_utils::MockTool;

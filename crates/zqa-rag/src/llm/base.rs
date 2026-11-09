@@ -536,7 +536,6 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::events::AgentEvent;
     use std::collections::VecDeque;
     use std::future::{Future, ready};
     use std::sync::{Arc, Mutex};
@@ -544,6 +543,7 @@ mod tests {
     use zqa_macros::test_eq;
 
     use super::*;
+    use crate::events::AgentEvent;
     use crate::llm::tools::test_utils::MockTool;
 
     struct TestHistoryItem;

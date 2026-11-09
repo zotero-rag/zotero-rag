@@ -1,10 +1,9 @@
 //!  NOTE: This is not state management! The `state` module is actually a way to interact with `XDG_STATE_HOME`.
 
 use std::cmp::Reverse;
-use std::fs;
-use std::io;
 use std::ops::{Add, AddAssign};
 use std::path::PathBuf;
+use std::{fs, io};
 
 use chrono::{DateTime, Local};
 use serde::{Deserialize, Serialize};

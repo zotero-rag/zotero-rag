@@ -12,12 +12,10 @@ use serde::Serialize;
 use serde::ser::SerializeMap;
 use serde_json::{Map, Value};
 
-use crate::{
-    events::AgentEvent,
-    llm::base::{
-        ChatHistoryContent, ChatHistoryItem, ContentType, MessageRole, ToolCallRequest,
-        ToolCallResponse, ToolUseStats,
-    },
+use crate::events::AgentEvent;
+use crate::llm::base::{
+    ChatHistoryContent, ChatHistoryItem, ContentType, MessageRole, ToolCallRequest,
+    ToolCallResponse, ToolUseStats,
 };
 
 /// The key for the input schema for tools passed to Anthropic.

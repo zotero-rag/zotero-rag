@@ -607,7 +607,6 @@ impl<T: HttpClient> AgenticClient for AnthropicClient<T> {
 
 #[cfg(test)]
 mod tests {
-    use crate::events::AgentEvent;
     use std::sync::{Arc, Mutex};
 
     use dotenv::dotenv;
@@ -621,6 +620,7 @@ mod tests {
     };
     use crate::config::AnthropicConfig;
     use crate::constants::DEFAULT_MAX_RETRIES;
+    use crate::events::AgentEvent;
     use crate::http_client::{RecordingSequentialMockHttpClient, ReqwestClient};
     use crate::llm::anthropic::{
         AnthropicOutputTokensDetails, AnthropicTextResponseContent, DEFAULT_CLAUDE_MODEL,

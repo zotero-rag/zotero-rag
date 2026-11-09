@@ -415,11 +415,10 @@ pub(crate) async fn handle_query_cmd(query: String, ctx: &mut Context) -> Result
 
 #[cfg(test)]
 mod tests {
-    use zqa_macros::{test_eq, test_ok};
-    use zqa_macros_proc::retry;
-
     use std::sync::atomic;
 
+    use zqa_macros::{test_eq, test_ok};
+    use zqa_macros_proc::retry;
     use zqa_rag::events::AgentEvent;
 
     use super::{handle_query_cmd, handle_search_cmd, record_usage};

@@ -476,7 +476,6 @@ impl<T: HttpClient> AgenticClient for OpenRouterClient<T> {
 
 #[cfg(test)]
 mod tests {
-    use crate::events::AgentEvent;
     use std::sync::{Arc, Mutex};
 
     use dotenv::dotenv;
@@ -484,6 +483,7 @@ mod tests {
 
     use super::*;
     use crate::clients::openrouter::OpenRouterClient;
+    use crate::events::AgentEvent;
     use crate::http_client::{
         MockHttpClient, RecordingSequentialMockHttpClient, ReqwestClient, SequentialMockHttpClient,
     };
