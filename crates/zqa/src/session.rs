@@ -19,6 +19,7 @@ use crate::common::{Context, PathOptions, State};
 use crate::config::Config;
 use crate::io::EngineEvent;
 use crate::state::SavedChatHistory;
+use crate::store::lance::LanceZoteroStore;
 use crate::{start, store_or_placeholder};
 
 /// An embeddable driver around the zqa command handlers.
@@ -80,6 +81,10 @@ impl Session {
     /// returned future runs, as with [`Self::dispatch`]. After setup, the session uses the config it
     /// wrote.
     ///
+    /// Unless the user chose to quit, the store is then built from the final config, even if a
+    /// startup step failed. A startup error other than [`CLIError::ConfigError`] therefore leaves
+    /// the session ready for commands.
+    ///
     /// # Returns
     ///
     /// `Ok(true)` to continue, or `Ok(false)` if the user chose to quit when the first-run check
@@ -92,7 +97,15 @@ impl Session {
     /// * Returns [`CLIError::ConfigError`] if the config still has no section for its embedding
     ///   provider after setup. The session has no usable store then, so it should not run commands.
     pub async fn start(&mut self) -> Result<bool, CLIError> {
-        start(&mut self.ctx, true).await
+        let started = start(&mut self.ctx, true).await;
+        if matches!(started, Ok(false)) {
+            return started;
+        }
+
+        // Replace the placeholder from `store_or_placeholder` with the store for the final config.
+        self.ctx.store = LanceZoteroStore::from_config(&self.ctx.config)?;
+
+        started
     }
 
     /// Dispatch a single command string (e.g. `"/help"` or a bare query) through the
@@ -175,10 +188,36 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use chrono::Local;
+    use serial_test::serial;
+    use zqa_rag::capabilities::ModelProvider;
 
     use super::Session;
+    use crate::cli::errors::CLIError;
     use crate::common::test_support::create_test_context;
     use crate::state::{SavedChatHistory, UsageMetadata};
+
+    #[tokio::test]
+    #[serial]
+    async fn start_fails_when_the_final_config_cannot_build_a_store() {
+        // An existing first-run marker skips setup, so startup sends no prompts.
+        let temp_dir = tempfile::tempdir().unwrap();
+        std::fs::write(temp_dir.path().join("first_run"), "").unwrap();
+        let state_dir = temp_dir.path().to_str().unwrap().to_string();
+
+        temp_env::async_with_vars([("ZQA_STATE_DIR", Some(state_dir.as_str()))], async {
+            // The startup key check doesn't know the mock provider, so use a real one.
+            let mut ctx = create_test_context(vec![]);
+            ctx.config.model_provider = ModelProvider::Anthropic;
+            ctx.config.voyageai = None;
+            let mut session = Session { ctx };
+
+            assert!(matches!(
+                session.start().await,
+                Err(CLIError::ConfigError(_))
+            ));
+        })
+        .await;
+    }
 
     #[tokio::test]
     async fn conversation_id_changes_only_when_switching() {

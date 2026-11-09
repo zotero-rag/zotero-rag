@@ -217,9 +217,10 @@ fn pending_batch_count() -> Result<usize, CLIError> {
 /// Build the store for `config`, or a placeholder if `config` can't build one yet.
 ///
 /// First-run setup can complete a config that has no section for its embedding provider, so a store
-/// is only required once [`start`] has finished, and `start` builds the real one. Startup itself
-/// doesn't use the store, and until then the context holds an Ollama one, which needs no API key to
-/// build. Admittedly, not the slickest way to do this, but oh well.
+/// is only required once [`start`] has finished. Startup itself doesn't use the store, and until
+/// then the context holds an Ollama one, which needs no API key to build. Frontends build the real
+/// store from the final config after `start` returns, even if it returned an error. Admittedly, not
+/// the slickest way to do this, but oh well.
 ///
 /// # Arguments
 ///
@@ -248,8 +249,6 @@ pub(crate) fn store_or_placeholder(config: &Config) -> LanceZoteroStore {
 /// 3. Reports each missing API key as a `Warning` or `Error` event. This comes after setup so a
 ///    first run isn't warned about keys it is about to ask for.
 /// 4. Reports pending embedding batches as a `StatusUpdate`.
-/// 5. Builds the store from the config, which setup may have changed. Frontends build their
-///    context with [`store_or_placeholder`], so this replaces any placeholder.
 ///
 /// When `interactive` is `false`, steps 1 and 2 are skipped. Nothing marks the first run as done
 /// then, so setup is still offered the next time an interactive frontend starts.
@@ -271,8 +270,6 @@ pub(crate) fn store_or_placeholder(config: &Config) -> LanceZoteroStore {
 ///
 /// * Returns a [`CLIError`] if an event can't be sent, a prompt is dropped without a reply, or the
 ///   batch directory can't be read.
-/// * Returns [`CLIError::ConfigError`] if the config still has no section for its embedding
-///   provider, so no store can be built.
 pub(crate) async fn start(ctx: &mut Context, interactive: bool) -> Result<bool, CLIError> {
     let is_first_run = interactive
         && loop {
@@ -330,9 +327,6 @@ pub(crate) async fn start(ctx: &mut Context, interactive: bool) -> Result<bool, 
         })
         .await?;
     }
-
-    // The context may still hold the placeholder from `store_or_placeholder`.
-    ctx.store = LanceZoteroStore::from_config(&ctx.config)?;
 
     Ok(true)
 }
@@ -409,6 +403,9 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         std::process::exit(1);
     }
 
+    // Replace the placeholder from `store_or_placeholder` with the store for the final config.
+    context.store = LanceZoteroStore::from_config(&context.config)?;
+
     cli(
         context,
         event_rx,
@@ -426,7 +423,6 @@ mod tests {
     use zqa_rag::capabilities::ModelProvider;
 
     use super::start;
-    use crate::cli::errors::CLIError;
     use crate::common::test_support::{capture_events, create_test_context};
     use crate::io::EngineEvent;
 
@@ -455,11 +451,6 @@ mod tests {
 
             // The first run stays pending, so the next interactive start still offers setup.
             assert!(!temp_dir.path().join("first_run").exists());
-
-            // Without a section for the embedding provider, startup can't build the store.
-            ctx.config.voyageai = None;
-            let (result, _) = capture_events(&mut ctx, async |ctx| start(ctx, false).await).await;
-            assert!(matches!(result, Err(CLIError::ConfigError(_))));
         })
         .await;
     }
