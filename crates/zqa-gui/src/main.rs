@@ -1361,6 +1361,7 @@ impl ZqaApp {
                 .size_full()
                 .overflow_y_scroll()
                 .track_scroll(&self.scroll_handle)
+                .lock_scroll_axis()
         };
         // Kit's `Scrollable` would own its scroll handle, but the transcript keeps
         // `scroll_handle` to follow new output, so bounce and scrollbar are composed here.
