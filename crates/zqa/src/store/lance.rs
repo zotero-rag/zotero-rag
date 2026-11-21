@@ -380,6 +380,24 @@ impl ZoteroStore for LanceZoteroStore {
         Ok(ZoteroItemSet::from(batches).into())
     }
 
+    /// Return the library key of every row in the data table, including rows that
+    /// [`ZoteroStore::existing_item_metadata`] leaves out to be parsed again.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`CLIError`] if the rows cannot be fetched.
+    async fn library_keys(&self) -> Result<Vec<String>, CLIError> {
+        let batches = self
+            .backend
+            .get_items(&[DbFields::LibraryKey.into()])
+            .await?;
+
+        Ok(batches
+            .iter()
+            .flat_map(|batch| crate::utils::library::get_column_from_batch(batch, 0))
+            .collect())
+    }
+
     /// Deletes the items with the given keys from the store.
     ///
     /// # Arguments
