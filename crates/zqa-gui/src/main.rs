@@ -19,10 +19,11 @@ use bridge::{EngineCommand, UiEvent, spawn_engine};
 use futures::StreamExt;
 use futures::channel::mpsc::UnboundedReceiver;
 use gpui_kit::assets::Assets;
-use gpui_kit::base::TextSelection;
+use gpui_kit::base::{ScrollBounce, TextSelection};
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{InputEvent, Textarea, TextareaState};
 use gpui_kit::component::progress::Progress;
+use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::{
     ActiveTheme as _, GlobalState, Icon, IconName, InteractiveElementExt as _, Root, Sizable as _,
@@ -1137,7 +1138,7 @@ impl ZqaApp {
                 .id("conversation-history")
                 .flex_1()
                 .min_h_0()
-                .overflow_y_scroll()
+                .overflow_y_scrollbar()
                 .child(v_flex().gap_1().children(history.iter().enumerate().map(
                     |(index, conversation)| {
                         Self::conversation_history_item(index, conversation, cx)
@@ -1357,18 +1358,38 @@ impl ZqaApp {
         let scroll = || {
             div()
                 .id("transcript")
-                .flex_1()
+                .size_full()
                 .overflow_y_scroll()
                 .track_scroll(&self.scroll_handle)
         };
+        // Kit's `Scrollable` would own its scroll handle, but the transcript keeps
+        // `scroll_handle` to follow new output, so bounce and scrollbar are composed here.
+        // The scrollbar stays outside `ScrollBounce` so it does not stretch with the content.
+        let frame = |scroll: Stateful<Div>| {
+            div()
+                .id("transcript-frame")
+                .flex_1()
+                .min_h_0()
+                .relative()
+                .flex()
+                .flex_col()
+                .child(ScrollBounce::new(
+                    "transcript-bounce",
+                    &self.scroll_handle,
+                    scroll,
+                ))
+                .vertical_scrollbar(&self.scroll_handle)
+                .into_any_element()
+        };
 
         if self.rows.is_empty() && !busy {
-            return scroll()
-                .flex()
-                .items_center()
-                .justify_center()
-                .child(self.render_welcome(cx))
-                .into_any_element();
+            return frame(
+                scroll()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(self.render_welcome(cx)),
+            );
         }
 
         // TODO(ZOT-220): the full row list is re-cloned and re-laid-out on every repaint,
@@ -1414,9 +1435,7 @@ impl ZqaApp {
                 )
             });
 
-        scroll()
-            .child(div().w_full().flex().justify_center().child(column))
-            .into_any_element()
+        frame(scroll().child(div().w_full().flex().justify_center().child(column)))
     }
 
     /// Render a running task: a spinner and its label when the amount of work is unknown, or its
