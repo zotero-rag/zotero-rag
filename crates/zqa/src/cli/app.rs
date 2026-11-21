@@ -720,7 +720,7 @@ mod tests {
         )
         .await;
         assert!(matches!(result, Err(CLIError::CommandError(_))));
-        assert!(out.is_empty());
+        assert_eq!(String::from_utf8(out).unwrap(), "");
     }
 
     #[retry(3)]
