@@ -41,35 +41,6 @@ ignore = [
     # https://rustsec.org/advisories/RUSTSEC-2021-0141
     { id = "RUSTSEC-2021-0141", reason = "dotenv unmaintained; used only to load a local .env in dev, no security impact" },
 
-    # paste: unmaintained (author archived the repo). Pulled in transitively
-    # by datafusion-common via the lance / lancedb stack; widespread in the
-    # arrow ecosystem with no drop-in replacement.
-    # https://rustsec.org/advisories/RUSTSEC-2024-0436
-    { id = "RUSTSEC-2024-0436", reason = "transitive via datafusion/lance; awaiting ecosystem migration" },
-
-    # ttf-parser: unmaintained
-    { id = "RUSTSEC-2026-0192", reason = "transitive via lopdf" },
-
-    # instant: unmaintained. Pulled in by gpui and notify-types in the gpui
-    # stack; migrating to web-time is upstream's call.
-    # https://rustsec.org/advisories/RUSTSEC-2024-0384
-    { id = "RUSTSEC-2024-0384", reason = "transitive via gpui/notify-types; awaiting upstream migration to web-time" },
-
-    # rustybuzz: unmaintained. Pulled in by usvg in the gpui stack. No
-    # actionable replacement on our side; gpui would need to move to harfrust.
-    # https://rustsec.org/advisories/RUSTSEC-2026-0206
-    { id = "RUSTSEC-2026-0206", reason = "transitive via usvg/gpui; awaiting upstream migration" },
-
-    # zvariant, zvariant_derive, zbus_names: unmaintained. Pulled in by zbus
-    # (accesskit_unix, atspi, ashpd, oo7) in gpui-kit's Linux stack. No safe
-    # upgrade exists; replacing them is upstream's call.
-    # https://rustsec.org/advisories/RUSTSEC-2026-0370
-    # https://rustsec.org/advisories/RUSTSEC-2026-0371
-    # https://rustsec.org/advisories/RUSTSEC-2026-0372
-    { id = "RUSTSEC-2026-0370", reason = "zvariant; transitive via zbus in gpui-kit's Linux stack" },
-    { id = "RUSTSEC-2026-0371", reason = "zbus_names; transitive via zbus in gpui-kit's Linux stack" },
-    { id = "RUSTSEC-2026-0372", reason = "zvariant_derive; transitive via zbus in gpui-kit's Linux stack" },
-
     # zstd 0.13 and zstd-safe 7: fixed only in zstd 0.14.3 and zstd-safe 8.2.0.
     # Both come in through arrow-ipc 57, lance-encoding 4.0 and tantivy-sstable
     # 0.5, which lancedb 0.27 pins. The real fix is upgrading lancedb (0.41 moves
@@ -80,7 +51,17 @@ ignore = [
     # https://rustsec.org/advisories/RUSTSEC-2026-0403
     { id = "RUSTSEC-2026-0391", reason = "zstd 0.13 via lancedb's arrow/lance; needs an encoder abandoned mid-stream and its context reused, at worst corrupting local index data" },
     { id = "RUSTSEC-2026-0398", reason = "zstd-safe 7 via lancedb's arrow/lance; needs the `seekable` feature, which nothing in the tree enables" },
-    { id = "RUSTSEC-2026-0403", reason = "zstd-safe 7 via lancedb's arrow/lance; needs a corrupt legacy frame, and zqa only decompresses Lance/Arrow files it wrote" }
+    { id = "RUSTSEC-2026-0403", reason = "zstd-safe 7 via lancedb's arrow/lance; needs a corrupt legacy frame, and zqa only decompresses Lance/Arrow files it wrote" },
+
+    # chrono / chrono-tz / humantime: marked unmaintained (informational, no
+    # vulnerability). Used directly in zqa, and pulled in transitively across
+    # the arrow/datafusion/lancedb/object_store stack, gpui-kit/gpui-pre, and
+    # lopdf; cannot be removed until upstream ecosystems migrate (e.g. to jiff).
+    # https://rustsec.org/advisories/RUSTSEC-2026-0542
+    # https://rustsec.org/advisories/RUSTSEC-2026-0543
+    # https://rustsec.org/advisories/RUSTSEC-2026-0555
+    { id = "RUSTSEC-2026-0542", reason = "humantime unmaintained (info only); pulled in transitively by lance and object_store via lancedb (as well as zqa)" },
+    { id = "RUSTSEC-2026-0543", reason = "chrono unmaintained (info only); pulled in transitively by arrow/datafusion/lancedb, gpui-kit, and lopdf (as well as zqa)" },
 ]
 
 [licenses]
