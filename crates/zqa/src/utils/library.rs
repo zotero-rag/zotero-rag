@@ -389,6 +389,64 @@ pub async fn get_new_library_items<T: ZoteroStore>(
     Ok(new_items)
 }
 
+/// Delete rows from `store` whose Zotero attachment no longer appears in the library, for example
+/// because the item was deleted or its PDF was replaced by a new attachment.
+///
+/// An item counts as present when [`parse_library_metadata`] returns its library key, so items whose
+/// type that query no longer accepts are removed too. When the library query returns no items at
+/// all, nothing is deleted: an empty result more likely means the library path points somewhere
+/// unexpected than that the user removed every paper, and deleting the whole index would be costly
+/// to undo.
+///
+/// # Arguments
+///
+/// * `store` - The vector store to remove stale rows from.
+/// * `library_path` - An optional override for the Zotero library directory. When `None`, the path
+///   is resolved from the environment (see [`get_lib_path`]).
+///
+/// # Returns
+///
+/// The number of rows deleted.
+///
+/// # Errors
+///
+/// * `LibraryParsingError::SqliteError` if the Zotero library could not be read.
+/// * `LibraryParsingError::LanceDBError` if reading the stored keys or deleting rows fails. Nothing is
+///   deleted when reading fails.
+pub async fn remove_stale_library_items<T: ZoteroStore>(
+    store: &T,
+    library_path: Option<&Path>,
+) -> Result<usize, LibraryParsingError> {
+    let library_items = parse_library_metadata(library_path, None, None)?;
+    if library_items.is_empty() {
+        return Ok(0);
+    }
+
+    let library_keys: HashSet<&str> = library_items
+        .iter()
+        .map(|item| item.library_key.as_str())
+        .collect();
+    let stale_keys: Vec<String> = store
+        .library_keys()
+        .await
+        .map_err(|e| LibraryParsingError::LanceDBError(e.to_string()))?
+        .into_iter()
+        .filter(|key| !library_keys.contains(key.as_str()))
+        .collect();
+
+    if stale_keys.is_empty() {
+        return Ok(0);
+    }
+
+    store
+        .delete_by_library_keys(&stale_keys)
+        .await
+        .map_err(|e| LibraryParsingError::LanceDBError(e.to_string()))?;
+    log::debug!("Removed {} stale items: {stale_keys:?}", stale_keys.len());
+
+    Ok(stale_keys.len())
+}
+
 /// Parses the Zotero library metadata. If successful, returns a list of metadata for each item.
 ///
 /// # Arguments

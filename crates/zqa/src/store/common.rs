@@ -28,6 +28,9 @@ pub trait ZoteroStore: Send + Sync {
     /// such as set differences (e.g., finding newly-added items). Implementations may leave out
     /// stored items that should be parsed again.
     async fn existing_item_metadata(&self) -> Result<Vec<ZoteroItemMetadata>, Self::StoreError>;
+    /// Returns the library key of every item in the store, including the items that
+    /// [`ZoteroStore::existing_item_metadata`] leaves out.
+    async fn library_keys(&self) -> Result<Vec<String>, Self::StoreError>;
     /// Performs a vector search on the store, returning the top `limit` results.
     async fn vector_search(
         &self,

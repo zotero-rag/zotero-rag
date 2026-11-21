@@ -11,7 +11,9 @@ use crate::common::Context;
 use crate::io::{EngineEvent, StyledSpan, TextStyle};
 use crate::store::common::ZoteroStore;
 use crate::utils::arrow::{ArrowError, library_to_arrow};
-use crate::utils::library::{get_new_library_items, parse_library, parse_library_metadata};
+use crate::utils::library::{
+    get_new_library_items, parse_library, parse_library_metadata, remove_stale_library_items,
+};
 
 /// Emit table statistics for the current LanceDB database.
 ///
@@ -49,7 +51,9 @@ pub(crate) async fn handle_stats_cmd(ctx: &mut Context) -> Result<(), CLIError> 
 ///
 /// This parses the library, extracts text from each file, generates embeddings, and stores the
 /// records in LanceDB. Items that could not be embedded are not stored, so the next `/process`
-/// picks them up again.
+/// picks them up again. Before parsing, rows whose attachment is no longer in the Zotero library are
+/// deleted (see [`remove_stale_library_items`]); if that fails, a warning is emitted and processing
+/// continues.
 ///
 /// # Arguments
 ///
@@ -67,7 +71,31 @@ pub(crate) async fn handle_process_cmd(ctx: &mut Context) -> Result<(), CLIError
     const WARNING_THRESHOLD: usize = 100;
 
     let library_path = ctx.path_options.library_path.as_deref();
-    let item_metadata = if ctx.store.exists().await {
+    let store_exists = ctx.store.exists().await;
+
+    if store_exists {
+        match remove_stale_library_items(&ctx.store, library_path).await {
+            Ok(0) => {}
+            Ok(removed) => {
+                ctx.emit(EngineEvent::StatusUpdate {
+                    message: format!(
+                        "Removed {removed} items that are no longer in your Zotero library.\n"
+                    ),
+                })
+                .await?;
+            }
+            Err(e) => {
+                ctx.emit(EngineEvent::Warning {
+                    message: format!(
+                        "Could not remove items deleted from your Zotero library: {e}\n"
+                    ),
+                })
+                .await?;
+            }
+        }
+    }
+
+    let item_metadata = if store_exists {
         get_new_library_items(&ctx.store, library_path).await
     } else {
         parse_library_metadata(library_path, None, None)
@@ -326,6 +354,8 @@ mod tests {
     use super::{handle_checkhealth_cmd, handle_process_cmd, handle_stats_cmd};
     use crate::common::test_support::{TestPaths, capture_events};
     use crate::io::EngineEvent;
+    use crate::store::common::ZoteroStore;
+    use crate::utils::arrow::library_to_arrow_with_embeddings;
 
     #[retry(3)]
     #[tokio::test(flavor = "multi_thread")]
@@ -351,6 +381,26 @@ mod tests {
             EngineEvent::Text { message }
                 if message.contains("LanceDB metadata:") && message.contains("Number of rows: 8")
         )));
+
+        let embedding_config = ctx.store.get_embedding_config();
+        let stale_row = library_to_arrow_with_embeddings(
+            &["STALEKEY"],
+            &["Deleted paper"],
+            &["/nonexistent.pdf"],
+            &["text"],
+            vec![vec![0.1; embedding_config.dims()]],
+            &embedding_config,
+        )
+        .unwrap();
+        ctx.store.upsert_batches(vec![stale_row]).await.unwrap();
+
+        let (result, events) = capture_events(&mut ctx, handle_process_cmd).await;
+        test_ok!(result);
+        assert!(events.iter().any(|event| matches!(
+            event,
+            EngineEvent::StatusUpdate { message } if message.contains("Removed 1 items")
+        )));
+        assert_eq!(ctx.store.library_keys().await.unwrap().len(), 8);
     }
 
     #[tokio::test]
