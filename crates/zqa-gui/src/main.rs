@@ -19,19 +19,20 @@ use bridge::{EngineCommand, UiEvent, spawn_engine};
 use futures::StreamExt;
 use futures::channel::mpsc::UnboundedReceiver;
 use gpui_kit::assets::Assets;
+use gpui_kit::base::TextSelection;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{InputEvent, Textarea, TextareaState};
 use gpui_kit::component::progress::Progress;
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::{
-    ActiveTheme as _, Icon, IconName, InteractiveElementExt as _, Root, Sizable as _,
+    ActiveTheme as _, GlobalState, Icon, IconName, InteractiveElementExt as _, Root, Sizable as _,
     TITLE_BAR_HEIGHT, Theme, ThemeMode, TitleBar, h_flex, v_flex,
 };
 use gpui_kit::prelude::*;
 use gpui_kit::{
     AnyElement, App, Context, Decorations, Div, Entity, Focusable as _, FontWeight, HighlightStyle,
-    IntoElement, KeyBinding, MouseButton, Pixels, PromptButton, PromptLevel, Rems, Render,
-    ScrollHandle, SharedString, Stateful, StyledText, Subscription, Window,
+    IntoElement, KeyBinding, MouseButton, MouseMoveEvent, Pixels, PromptButton, PromptLevel, Rems,
+    Render, ScrollHandle, SharedString, Stateful, StyledText, Subscription, Window,
     WindowBackgroundAppearance, WindowBounds, actions, div, px, rems, size, transparent_black,
 };
 use prompt_card::{PromptCard, PromptEvent};
@@ -889,8 +890,11 @@ impl ZqaApp {
         surface
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(|this, _, _, cx| {
-                    this.drag_armed = true;
+                cx.listener(|this, _, window, cx| {
+                    // A control that took the press, such as a `Button`, prevents the default; its
+                    // click must not become a window move on the smallest motion.
+                    this.drag_armed = !window.default_prevented();
+                    GlobalState::suppress_text_selection(cx);
                     cx.stop_propagation();
                 }),
             )
@@ -900,9 +904,16 @@ impl ZqaApp {
                     this.drag_armed = false;
                 }),
             )
-            .on_mouse_move(cx.listener(|this, _, window, _cx| {
+            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
+                // The release can land outside the strip; a later hover must not move the window.
+                if event.pressed_button != Some(MouseButton::Left) {
+                    this.drag_armed = false;
+                    return;
+                }
                 if this.drag_armed {
                     this.drag_armed = false;
+                    TextSelection::end(window, cx);
+                    cx.stop_active_drag(window);
                     window.start_window_move();
                 }
             }))
