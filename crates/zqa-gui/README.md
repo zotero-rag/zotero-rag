@@ -30,7 +30,7 @@ The `prompt` test filter runs the prompt model and card interaction tests. GPUI'
 
 Xcode command line tools (`xcode-select --install`). No other system libraries are required.
 
-The sidebar uses a translucent tint over GPUI's native blurred window. `src/macos.rs` selects AppKit's `Sidebar` material for the existing backdrop: on macOS 27, GPUI's `Selection` material can remain transparent without blurring. The hook uses public AppKit APIs and does not replace GPUI's view or modify its layers.
+The sidebar uses a translucent tint over GPUI's native blurred window.
 
 ### Linux
 
