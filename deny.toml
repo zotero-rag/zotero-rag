@@ -127,10 +127,9 @@ deny = [
         "gpui-pre-http-client",
         "gpui-pre-linux",
         "gpui-pre-macos",
-        "gpui-pre-media",
+        "gpui-pre-platform",
         "gpui-pre-util",
         "gpui-pre-wgpu",
-        "gpui-pre-zlog",
         "gpui-kit-assets"
     ], reason = "prefer thiserror for typed errors; anyhow only tolerated transitively via third-party deps we don't control" },
 ]
