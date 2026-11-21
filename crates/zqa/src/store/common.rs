@@ -5,10 +5,11 @@ use crate::utils::library::{ZoteroItem, ZoteroItemMetadata};
 
 /// Token statistics from a vector search call, used for cost estimation.
 pub struct VectorSearchStats {
-    /// Number of tokens in the query string that was embedded
-    pub(crate) embedding_tokens: usize,
-    /// Total tokens of documents + query sent to the reranker
-    pub(crate) rerank_tokens: usize,
+    /// Input tokens for embedding the query: reported by the embedding provider, or estimated
+    /// from the query's length if the provider does not report usage
+    pub(crate) embedding_tokens: u32,
+    /// Estimated input tokens of the documents and query sent to the reranker
+    pub(crate) rerank_tokens: u32,
 }
 
 /// An application-level trait for Zotero store implementations.
@@ -37,13 +38,14 @@ pub trait ZoteroStore: Send + Sync {
     ) -> Result<(Vec<ZoteroItem>, VectorSearchStats), Self::StoreError>;
     /// Upserts the given items into the store.
     async fn upsert_items(&self, items: Vec<ZoteroItem>) -> Result<(), Self::StoreError>;
-    /// Searches the store for items matching the given query, returning the top `limit` results.
+    /// Searches the store for items matching the given query, returning the top `limit` results
+    /// and the input tokens the embedding provider reported for the query, if it reports usage.
     /// This variant does not perform reranking.
     async fn vector_search_raw(
         &self,
         query: &str,
         limit: usize,
-    ) -> Result<Vec<ZoteroItem>, Self::StoreError>;
+    ) -> Result<(Vec<ZoteroItem>, Option<u32>), Self::StoreError>;
     /// Returns the items with the given keys from the store. This is useful for retrieving
     /// items by their library keys without performing a full text search.
     async fn get_items_by_keys(&self, keys: &[String])

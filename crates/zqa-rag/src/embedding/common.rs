@@ -1,6 +1,7 @@
 //! Structs, functions, and traits shared by embedding clients and other embedding-related code in
 //! this crate.
 
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -9,6 +10,7 @@ use arrow_schema::{DataType, Field};
 use futures::{StreamExt, TryStreamExt, stream};
 use lancedb::embeddings::EmbeddingFunction;
 use reqwest::header::HeaderMap;
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
 use crate::capabilities::EmbeddingProvider;
@@ -48,6 +50,36 @@ impl std::fmt::Display for FailedTexts {
     }
 }
 
+/// The embedding of one search query, with the usage the provider reported for it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct QueryEmbedding {
+    /// The query's embedding vector.
+    pub embedding: Vec<f32>,
+    /// Input tokens the provider reported for the request, or `None` if the provider does not
+    /// report usage.
+    pub input_tokens: Option<u32>,
+}
+
+/// An embedding provider that can embed a search query without going through Arrow arrays, so
+/// that it can return the usage the provider reports. LanceDB's [`EmbeddingFunction`] is
+/// synchronous and Arrow-in, Arrow-out, so it has no way to return usage; it remains the path for
+/// indexing.
+pub trait Embed: EmbeddingFunction {
+    /// Embed a search query, using the provider's query-specific input type where it has one.
+    ///
+    /// # Arguments
+    ///
+    /// * `query` - The query to embed.
+    ///
+    /// # Returns
+    ///
+    /// The query's embedding and the usage the provider reported for it.
+    fn embed_query<'a>(
+        &'a self,
+        query: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<QueryEmbedding, LLMError>> + Send + 'a>>;
+}
+
 /// Gets an embedding provider with configuration
 ///
 /// # Arguments
@@ -56,14 +88,14 @@ impl std::fmt::Display for FailedTexts {
 ///
 /// # Returns
 ///
-/// A thread-safe object that can compute query embeddings
+/// A thread-safe object that can compute document and query embeddings
 ///
 /// # Errors
 ///
 /// Returns an error if provider configuration is invalid or initialization fails.
 pub fn get_embedding_provider_with_config(
     config: &EmbeddingProviderConfig,
-) -> Result<Arc<dyn EmbeddingFunction>, LLMError> {
+) -> Result<Arc<dyn Embed>, LLMError> {
     provider_registry().create_embedding(config)
 }
 
@@ -155,6 +187,99 @@ pub trait EmbeddingApiResponse {
 
     /// Returns the error message from the API, or `None` if it was successful.
     fn get_error_message(self) -> Option<String>;
+
+    /// Returns the input tokens the provider reported for the request, or `None` if the request
+    /// was unsuccessful or the provider did not report usage.
+    fn get_input_tokens(&self) -> Option<u32>;
+}
+
+/// Build the headers for a request to an embedding provider that authenticates with a bearer
+/// token.
+///
+/// # Arguments
+///
+/// * `api_key` - The API key for the service.
+///
+/// # Returns
+///
+/// Headers with the bearer token and JSON content type.
+///
+/// # Errors
+///
+/// * `LLMError::InvalidHeaderError` - If the API key is not a valid header value
+fn embedding_request_headers(api_key: &str) -> Result<HeaderMap, LLMError> {
+    let mut headers = HeaderMap::new();
+    headers.insert("Authorization", format!("Bearer {api_key}").parse()?);
+    headers.insert("Content-Type", "application/json".parse()?);
+    headers.insert("Accept", "application/json".parse()?);
+
+    Ok(headers)
+}
+
+/// Embed one search query in a single request, for providers whose responses implement
+/// [`EmbeddingApiResponse`]. Unlike [`compute_embeddings_async`], this neither batches nor masks
+/// empty texts, and an unsuccessful response is an error, since a search cannot go on without the
+/// query vector.
+///
+/// # Arguments
+///
+/// * `api_url` - The embedding API endpoint.
+/// * `api_key` - The API key for the service.
+/// * `api_client` - The `HttpClient` implementation to use.
+/// * `request` - The provider-specific request containing only the query.
+/// * `max_retries` - The maximum number of retries for a request that fails in a retryable way.
+///
+/// # Returns
+///
+/// The query's embedding and the input tokens the provider reported.
+///
+/// # Errors
+///
+/// * `LLMError::TimeoutError` - If the HTTP request times out
+/// * `LLMError::NetworkError` - If a network connectivity error occurs
+/// * `LLMError::CredentialError` - If the API returns 401 or 403
+/// * `LLMError::HttpStatusError` - If the API returns another unsuccessful status
+/// * `LLMError::InvalidHeaderError` - If header values cannot be parsed
+/// * `LLMError::DeserializationError` - If the response cannot be parsed
+/// * `LLMError::GenericLLMError` - If the provider reports an error or returns no vector
+pub(crate) async fn embed_query_async<T, U>(
+    api_url: &str,
+    api_key: &str,
+    api_client: &impl HttpClient,
+    request: &T,
+    max_retries: usize,
+) -> Result<QueryEmbedding, LLMError>
+where
+    T: Serialize + Send + Sync,
+    U: EmbeddingApiResponse + DeserializeOwned,
+{
+    let headers = embedding_request_headers(api_key)?;
+    let response =
+        request_with_backoff(api_client, api_url, &headers, request, max_retries).await?;
+    let body = response.text().await?;
+    let api_response: U = serde_json::from_str(&body)?;
+
+    if !api_response.is_success() {
+        let message = api_response
+            .get_error_message()
+            .unwrap_or_else(|| String::from("No error found."));
+        return Err(LLMError::GenericLLMError(format!(
+            "Could not embed the query: {message}"
+        )));
+    }
+
+    let input_tokens = api_response.get_input_tokens();
+    let embedding = api_response
+        .get_embeddings()
+        .and_then(|embeddings| embeddings.into_iter().next())
+        .ok_or_else(|| {
+            LLMError::GenericLLMError("The provider returned no query embedding".into())
+        })?;
+
+    Ok(QueryEmbedding {
+        embedding,
+        input_tokens,
+    })
 }
 
 /// A generic version of a function that sends a request to an embedding provider. This allows you
@@ -276,10 +401,7 @@ where
                 return Ok::<BatchResult, LLMError>((embeddings, 0, vec![], mask.len()));
             }
 
-            let mut headers = HeaderMap::new();
-            headers.insert("Authorization", format!("Bearer {api_key}").parse()?);
-            headers.insert("Content-Type", "application/json".parse()?);
-            headers.insert("Accept", "application/json".parse()?);
+            let headers = embedding_request_headers(&api_key)?;
 
             let start_time = Instant::now();
             let request = make_request(cur_texts);

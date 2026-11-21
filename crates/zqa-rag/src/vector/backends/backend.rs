@@ -107,12 +107,16 @@ pub trait VectorBackend: Send + Sync {
     ///
     /// # Returns
     ///
-    /// A vector of items that match the query.
+    /// A tuple containing:
+    ///
+    /// * The items that match the query.
+    /// * The input tokens the embedding provider reported for the query, or `None` if it does not
+    ///   report usage.
     async fn vector_search(
         &self,
         query: String,
         limit: usize,
-    ) -> Result<Vec<Self::Record>, Self::Error>;
+    ) -> Result<(Vec<Self::Record>, Option<u32>), Self::Error>;
 
     /// Search for an item in the database by its key.
     ///

@@ -3,13 +3,14 @@
 
 use std::borrow::Cow;
 use std::env;
+use std::pin::Pin;
 use std::sync::Arc;
 
 use arrow_schema::{DataType, Field};
 use lancedb::embeddings::EmbeddingFunction;
 use serde::{Deserialize, Serialize};
 
-use super::common::EmbeddingApiResponse;
+use super::common::{Embed, EmbeddingApiResponse, QueryEmbedding, embed_query_async};
 use crate::capabilities::EmbeddingProvider;
 use crate::constants::{
     DEFAULT_COHERE_EMBEDDING_DIM, DEFAULT_COHERE_EMBEDDING_MODEL, DEFAULT_MAX_CONCURRENT_REQUESTS,
@@ -59,17 +60,14 @@ where
 }
 
 impl<T: HttpClient + Clone> CohereClient<T> {
-    fn compute_embeddings_internal(
-        &self,
-        source: Arc<dyn arrow_array::Array>,
-        input_type: &'static str,
-    ) -> Result<Arc<dyn arrow_array::Array>, LLMError> {
-        // For a non-trial API key, Cohere's RPM is 2000 and the Embed model has a 128k context
-        // window. It does not appear that there is a TPM limit. In theory, we could therefore send
-        // 2000 requests spread over 1 minute (so 30 requests/second), each with one input.
-        const BATCH_SIZE: usize = 30;
-        const WAIT_AFTER_REQUEST_S: u64 = 0;
-
+    /// Resolve the API key, model, output dimension, concurrency and retry settings from the
+    /// configuration, falling back to the environment and defaults.
+    ///
+    /// # Errors
+    ///
+    /// * `LLMError::EnvError` - If there is no configuration and COHERE_API_KEY is not set
+    /// * `LLMError::GenericLLMError` - If a fixed-width model is configured with other dimensions
+    fn request_settings(&self) -> Result<CohereRequestSettings<'_>, LLMError> {
         let api_key = self.config.as_ref().map_or_else(
             || env::var("COHERE_API_KEY"),
             |config| Ok(config.api_key.clone()),
@@ -113,6 +111,29 @@ impl<T: HttpClient + Clone> CohereClient<T> {
             .as_ref()
             .map_or(DEFAULT_MAX_RETRIES, |c| c.max_retries);
 
+        Ok(CohereRequestSettings {
+            api_key,
+            model,
+            embedding_dims,
+            output_dimension,
+            max_concurrent,
+            max_retries,
+        })
+    }
+
+    fn compute_embeddings_internal(
+        &self,
+        source: Arc<dyn arrow_array::Array>,
+        input_type: &'static str,
+    ) -> Result<Arc<dyn arrow_array::Array>, LLMError> {
+        // For a non-trial API key, Cohere's RPM is 2000 and the Embed model has a 128k context
+        // window. It does not appear that there is a TPM limit. In theory, we could therefore send
+        // 2000 requests spread over 1 minute (so 30 requests/second), each with one input.
+        const BATCH_SIZE: usize = 30;
+        const WAIT_AFTER_REQUEST_S: u64 = 0;
+
+        let settings = self.request_settings()?;
+
         tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(compute_embeddings_async::<
                 CohereEmbedRequest,
@@ -120,26 +141,55 @@ impl<T: HttpClient + Clone> CohereClient<T> {
                 _,
             >(
                 source,
-                "https://api.cohere.com/v2/embed",
-                &api_key,
+                COHERE_EMBEDDING_URL,
+                &settings.api_key,
                 self.client.clone(),
-                |texts| CohereEmbedRequest {
-                    texts,
-                    model: model.to_string(),
-                    input_type: input_type.into(),
-                    output_dimension,
-                    // Requesting float vectors explicitly for newer APIs; ignored by older
-                    embedding_types: Some(vec!["float".into()]),
-                },
+                |texts| CohereEmbedRequest::new(texts, &settings, input_type),
                 EmbeddingProvider::Cohere.as_str().to_string(),
                 BATCH_SIZE,
                 WAIT_AFTER_REQUEST_S,
-                embedding_dims as usize,
-                max_concurrent,
-                max_retries,
+                settings.embedding_dims as usize,
+                settings.max_concurrent,
+                settings.max_retries,
             ))
         })
     }
+}
+
+impl<T: HttpClient + Clone + std::fmt::Debug> Embed for CohereClient<T> {
+    fn embed_query<'a>(
+        &'a self,
+        query: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<QueryEmbedding, LLMError>> + Send + 'a>> {
+        Box::pin(async move {
+            let settings = self.request_settings()?;
+            let request =
+                CohereEmbedRequest::new(vec![query.to_owned()], &settings, "search_query");
+
+            embed_query_async::<_, CohereAIResponse>(
+                COHERE_EMBEDDING_URL,
+                &settings.api_key,
+                &self.client,
+                &request,
+                settings.max_retries,
+            )
+            .await
+        })
+    }
+}
+
+/// The Cohere embeddings endpoint.
+const COHERE_EMBEDDING_URL: &str = "https://api.cohere.com/v2/embed";
+
+/// Settings for embedding requests, resolved from the client configuration or the environment.
+struct CohereRequestSettings<'a> {
+    api_key: String,
+    model: &'a str,
+    embedding_dims: u32,
+    /// `None` for models with a fixed width, which reject `output_dimension`.
+    output_dimension: Option<u32>,
+    max_concurrent: usize,
+    max_retries: usize,
 }
 
 /// A request to the Cohere embeddings API.
@@ -154,6 +204,30 @@ struct CohereEmbedRequest {
     embedding_types: Option<Vec<String>>,
 }
 
+impl CohereEmbedRequest {
+    /// Build a request for `texts` with the resolved settings.
+    ///
+    /// # Arguments
+    ///
+    /// * `texts` - The texts to embed.
+    /// * `settings` - The model and output dimension to request.
+    /// * `input_type` - The Cohere `input_type` ("search_query" or "search_document").
+    ///
+    /// # Returns
+    ///
+    /// A request for float embeddings.
+    fn new(texts: Vec<String>, settings: &CohereRequestSettings<'_>, input_type: &str) -> Self {
+        Self {
+            texts,
+            model: settings.model.to_string(),
+            input_type: input_type.into(),
+            output_dimension: settings.output_dimension,
+            // Requesting float vectors explicitly for newer APIs; ignored by older
+            embedding_types: Some(vec!["float".into()]),
+        }
+    }
+}
+
 /// The embeddings returned by the Cohere API.
 #[derive(Serialize, Deserialize, Debug)]
 pub(crate) struct CohereAIEmbeddings {
@@ -161,10 +235,24 @@ pub(crate) struct CohereAIEmbeddings {
     float: Vec<Vec<f32>>,
 }
 
+/// The units Cohere billed for a request.
+#[derive(Serialize, Deserialize, Debug)]
+pub(crate) struct CohereBilledUnits {
+    /// Input tokens billed. The API types this as a number, not an integer.
+    input_tokens: Option<f64>,
+}
+
+/// Request metadata returned by the Cohere API.
+#[derive(Serialize, Deserialize, Debug)]
+pub(crate) struct CohereMeta {
+    billed_units: Option<CohereBilledUnits>,
+}
+
 /// Represents a successful response from the Cohere embeddings API.
 #[derive(Serialize, Deserialize, Debug)]
 pub(crate) struct CohereAISuccess {
     embeddings: CohereAIEmbeddings,
+    meta: Option<CohereMeta>,
 }
 
 /// Represents an error response from the Cohere embeddings API.
@@ -200,6 +288,16 @@ impl EmbeddingApiResponse for CohereAIResponse {
             CohereAIResponse::Error(err) => Some(err.message),
             CohereAIResponse::Success(_) => None,
         }
+    }
+
+    fn get_input_tokens(&self) -> Option<u32> {
+        let CohereAIResponse::Success(res) = self else {
+            return None;
+        };
+        let tokens = res.meta.as_ref()?.billed_units.as_ref()?.input_tokens?;
+
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        Some(tokens.round() as u32)
     }
 }
 
@@ -265,6 +363,7 @@ mod tests {
 
     use super::{CohereClient, DEFAULT_COHERE_EMBEDDING_DIM};
     use crate::config::CohereConfig;
+    use crate::embedding::common::Embed;
     use crate::http_client::{
         ConcurrencyTrackingMockHttpClient, RecordingSequentialMockHttpClient, ReqwestClient,
     };
@@ -354,7 +453,15 @@ mod tests {
                 max_retries: crate::constants::DEFAULT_MAX_RETRIES,
             };
             let response = json!({"embeddings": {"float": [vec![0.5; config.embedding_dims]]}});
-            let http_client = RecordingSequentialMockHttpClient::new([response.clone(), response]);
+            let query_response = json!({
+                "embeddings": {"float": [vec![0.5; config.embedding_dims]]},
+                "meta": {"billed_units": {"input_tokens": 3}}
+            });
+            let http_client = RecordingSequentialMockHttpClient::new([
+                response.clone(),
+                response,
+                query_response,
+            ]);
             let client = CohereClient {
                 client: http_client.clone(),
                 config: Some(config.clone()),
@@ -378,10 +485,18 @@ mod tests {
                 test_eq!(embeddings.data_type(), dest_type.as_ref());
             }
 
-            let requests = http_client.requests();
-            test_eq!(requests.len(), 2);
+            let query_embedding = client.embed_query("configured input").await.unwrap();
+            test_eq!(query_embedding.embedding.len(), config.embedding_dims);
+            test_eq!(query_embedding.input_tokens, Some(3));
 
-            for (request, input_type) in requests.iter().zip(["search_document", "search_query"]) {
+            let requests = http_client.requests();
+            test_eq!(requests.len(), 3);
+
+            for (request, input_type) in
+                requests
+                    .iter()
+                    .zip(["search_document", "search_query", "search_query"])
+            {
                 test_eq!(request["model"], config.embedding_model);
                 test_eq!(request.get("output_dimension"), output_dimension.as_ref());
                 test_eq!(request["input_type"], input_type);

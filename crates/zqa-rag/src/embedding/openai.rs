@@ -3,6 +3,7 @@
 //! `llm`.
 
 use std::env;
+use std::pin::Pin;
 use std::sync::Arc;
 
 use arrow_array;
@@ -16,6 +17,7 @@ use crate::constants::{
     DEFAULT_MAX_CONCURRENT_REQUESTS, DEFAULT_MAX_RETRIES, DEFAULT_OPENAI_EMBEDDING_DIM,
     DEFAULT_OPENAI_EMBEDDING_MODEL,
 };
+use crate::embedding::common::{Embed, QueryEmbedding};
 use crate::http_client::HttpClient;
 use crate::llm::errors::LLMError;
 use crate::requests::request_with_backoff;
@@ -57,6 +59,87 @@ where
     }
 }
 
+impl<T> Embed for OpenAIClient<T>
+where
+    T: HttpClient + Default + std::fmt::Debug,
+{
+    fn embed_query<'a>(
+        &'a self,
+        query: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<QueryEmbedding, LLMError>> + Send + 'a>> {
+        Box::pin(async move {
+            let settings = OpenAIEmbeddingSettings::resolve(self.config.as_ref())?;
+            let (embeddings, input_tokens) = get_openai_embeddings(
+                &self.client,
+                vec![query.to_owned()],
+                settings.api_key,
+                settings.model,
+                settings.dims,
+                settings.max_retries,
+            )
+            .await?;
+            let embedding = embeddings.into_iter().next().ok_or_else(|| {
+                LLMError::GenericLLMError("OpenAI returned no query embedding".into())
+            })?;
+
+            Ok(QueryEmbedding {
+                embedding,
+                input_tokens: Some(input_tokens),
+            })
+        })
+    }
+}
+
+/// Settings for embedding requests, resolved from the client configuration or the environment.
+struct OpenAIEmbeddingSettings {
+    api_key: String,
+    model: String,
+    dims: usize,
+    max_retries: usize,
+    max_concurrent: usize,
+}
+
+impl OpenAIEmbeddingSettings {
+    /// Resolve the settings from `config`, or from the environment and defaults without one.
+    ///
+    /// # Arguments
+    ///
+    /// * `config` - The client's configuration, if it has one.
+    ///
+    /// # Returns
+    ///
+    /// The resolved settings.
+    ///
+    /// # Errors
+    ///
+    /// * `LLMError::EnvError` - If there is no configuration and OPENAI_API_KEY is not set
+    fn resolve(config: Option<&crate::config::OpenAIConfig>) -> Result<Self, LLMError> {
+        let settings = if let Some(config) = config {
+            Self {
+                api_key: config.api_key.clone(),
+                model: config.embedding_model.clone(),
+                dims: config.embedding_dims,
+                max_retries: config.max_retries,
+                max_concurrent: config.max_concurrent_requests,
+            }
+        } else {
+            Self {
+                api_key: env::var("OPENAI_API_KEY")?,
+                model: env::var("OPENAI_EMBEDDING_MODEL")
+                    .unwrap_or(DEFAULT_OPENAI_EMBEDDING_MODEL.to_string()),
+                dims: env::var("OPENAI_EMBEDDING_DIMS")
+                    .ok()
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(DEFAULT_OPENAI_EMBEDDING_DIM as usize),
+                max_retries: DEFAULT_MAX_RETRIES,
+                max_concurrent: DEFAULT_MAX_CONCURRENT_REQUESTS,
+            }
+        };
+
+        Ok(settings)
+    }
+}
+
 /// Process the actual embedding request with the OpenAI API.
 ///
 /// This function solely interacts with the OpenAI API; as such, it is not intended to be used
@@ -73,7 +156,10 @@ where
 ///
 /// # Returns
 ///
-/// If successful, a `Vec<Vec<f32>>` containing the embeddings in the same order as input.
+/// If successful, a tuple containing:
+///
+/// * The embeddings, in the same order as the input.
+/// * The input tokens OpenAI reported for the request.
 async fn get_openai_embeddings(
     client: &impl HttpClient,
     texts: Vec<String>,
@@ -81,7 +167,7 @@ async fn get_openai_embeddings(
     model: String,
     dims: usize,
     max_retries: usize,
-) -> Result<Vec<Vec<f32>>, LLMError> {
+) -> Result<(Vec<Vec<f32>>, u32), LLMError> {
     #[derive(Serialize)]
     struct EmbeddingRequest {
         model: String,
@@ -150,7 +236,10 @@ async fn get_openai_embeddings(
     let mut data = response.data;
     data.sort_by_key(|d| d.index);
 
-    Ok(data.into_iter().map(|d| d.embedding).collect())
+    Ok((
+        data.into_iter().map(|d| d.embedding).collect(),
+        response.usage.prompt_tokens,
+    ))
 }
 
 /// Shared embedding computation logic for OpenAI embeddings
@@ -176,27 +265,13 @@ pub(crate) async fn compute_openai_embeddings_async(
         .filter_map(|s| Some(s?.to_owned()))
         .collect();
 
-    let (api_key, model, dims, max_retries, max_concurrent) = if let Some(config) = config {
-        (
-            config.api_key.clone(),
-            config.embedding_model.clone(),
-            config.embedding_dims,
-            config.max_retries,
-            config.max_concurrent_requests,
-        )
-    } else {
-        (
-            env::var("OPENAI_API_KEY")?,
-            env::var("OPENAI_EMBEDDING_MODEL")
-                .unwrap_or(DEFAULT_OPENAI_EMBEDDING_MODEL.to_string()),
-            env::var("OPENAI_EMBEDDING_DIMS")
-                .ok()
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(DEFAULT_OPENAI_EMBEDDING_DIM as usize),
-            DEFAULT_MAX_RETRIES,
-            DEFAULT_MAX_CONCURRENT_REQUESTS,
-        )
-    };
+    let OpenAIEmbeddingSettings {
+        api_key,
+        model,
+        dims,
+        max_retries,
+        max_concurrent,
+    } = OpenAIEmbeddingSettings::resolve(config)?;
 
     // Create a stream of futures
     // Batch size of 100 to respect API limits and efficiency
@@ -222,7 +297,7 @@ pub(crate) async fn compute_openai_embeddings_async(
     let mut embeddings: Vec<Vec<f32>> = Vec::with_capacity(texts.len());
     for result in results {
         match result {
-            Ok(batch_embeddings) => embeddings.extend(batch_embeddings),
+            Ok((batch_embeddings, _)) => embeddings.extend(batch_embeddings),
             Err(e) => return Err(e),
         }
     }

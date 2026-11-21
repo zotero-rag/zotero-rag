@@ -1,11 +1,9 @@
 //! Cohere provider implementation
 use std::sync::Arc;
 
-use lancedb::embeddings::EmbeddingFunction;
-
 use crate::capabilities::{EmbeddingFactory, RerankFactory};
 use crate::embedding::cohere::CohereClient;
-use crate::embedding::common::EmbeddingProviderConfig;
+use crate::embedding::common::{Embed, EmbeddingProviderConfig};
 use crate::http_client::ReqwestClient;
 use crate::llm::errors::LLMError;
 use crate::providers::provider_id::ProviderId;
@@ -24,7 +22,7 @@ impl EmbeddingFactory for CohereProvider {
     fn create_embedding(
         &self,
         config: &EmbeddingProviderConfig,
-    ) -> Result<Arc<dyn EmbeddingFunction>, LLMError> {
+    ) -> Result<Arc<dyn Embed>, LLMError> {
         let EmbeddingProviderConfig::Cohere(cfg) = config else {
             return Err(LLMError::InvalidProviderError("cohere".into()));
         };
