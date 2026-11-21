@@ -8,8 +8,6 @@
 //! on macOS) with session and library commands, and an opaque main pane holding the conversation. There is
 //! no system title bar; the top strip of each pane drags the window instead.
 mod bridge;
-#[cfg(target_os = "macos")]
-mod macos;
 mod prompt_card;
 mod prompts;
 
@@ -1980,11 +1978,6 @@ fn main() {
 
         cx.spawn(async move |cx| {
             cx.open_window(window_options, |window, cx| {
-                #[cfg(target_os = "macos")]
-                if !macos::use_sidebar_material(window) {
-                    eprintln!("Could not configure the native sidebar blur material.");
-                }
-
                 let history = ZqaApp::load_conversation_history();
                 let view = cx.new(|cx| {
                     ZqaApp::new(cmd_tx, cancel_tx, event_rx, dark_theme, history, window, cx)
