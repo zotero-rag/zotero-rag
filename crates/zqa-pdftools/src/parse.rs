@@ -29,6 +29,13 @@ pub const DEFAULT_TABLE_EUCLIDEAN_THRESHOLD: f32 = 40.0;
 /// The default number of `Td`s within a `BT` after which the `BT..ET` block is declared to be a
 /// paragraph as opposed to a table.
 pub const DEFAULT_TBL_TD_THRESHOLD: usize = 5;
+/// The minimum number of line breaks in a `BT..ET` block for it to be declared a paragraph as
+/// opposed to part of a table.
+const MIN_PARAGRAPH_LINE_BREAKS: usize = 3;
+/// The minimum average number of characters between `Td` moves in a `BT..ET` block for it to be
+/// declared a paragraph as opposed to part of a table. Measured on arXiv papers, paragraphs
+/// (including ones with display math) average at least about 4.7, and tables at most about 3.5.
+const MIN_PARAGRAPH_CHARS_PER_MOVE: f32 = 4.5;
 
 /// A wrapper for all PDF parsing errors
 #[derive(Debug, thiserror::Error)]
@@ -771,6 +778,11 @@ impl PdfParser {
     /// - If the current BT block has no `Td` operators, we cannot form a reference position.
     /// - If the current BT block has more than `self.thresholds.tbl_td` `Td` operators, it is
     ///   likely a paragraph rather than a table cell, and we return `None`.
+    /// - If a matched block has at least [`MIN_PARAGRAPH_LINE_BREAKS`] line breaks and averages at
+    ///   least [`MIN_PARAGRAPH_CHARS_PER_MOVE`] characters per `Td` move, it is a paragraph that
+    ///   happens to start near the reference position, such as the text after a radical or a
+    ///   fraction bar. The table ends at that block's `BT`, or we return `None` if it was the only
+    ///   matched block.
     ///
     /// We do not need to keep a running track of where we are by adding the `Td` movements across
     /// `BT`..`ET` blocks: from the PDF Reference Manual, Section 7.2.3:
@@ -788,9 +800,10 @@ impl PdfParser {
     ///
     /// * `Some((start_idx, end_idx))`, where `start_idx` is the token index of the last `Td`
     ///   inside the current BT block (i.e., where the table content begins), and `end_idx` is the
-    ///   token index of the `BT` that starts the first non-matching block after the table (i.e.,
-    ///   where the caller should resume processing).
-    /// * `None` if no table is detected.
+    ///   token index of the `BT` that starts the first block after the table (i.e., where the
+    ///   caller should resume processing). That block is either one that does not match, or a
+    ///   matched block that is a paragraph.
+    /// * `None` if no table is detected, including when the only matched block is a paragraph.
     fn get_table_bounds(
         &self,
         tokens: &[Token<'_>],
@@ -837,24 +850,66 @@ impl PdfParser {
 
         let mut cur_bt_pos: Option<usize> = None;
 
+        // The `BT` of the last block counted as part of the table, and the line breaks (`Td`s
+        // with a vertical movement), cell moves (`Td`s with only a horizontal movement), and
+        // approximate number of characters seen in that block so far.
+        let mut matched_bt_pos: Option<usize> = None;
+        let mut line_breaks = 0;
+        let mut cell_moves = 0;
+        let mut chars = 0;
+
+        // A block that wraps across several lines, with long runs of text between moves, is a
+        // paragraph rather than part of a table, whose cells are short. This happens after math
+        // that draws a rule, such as a radical or a fraction bar: the text after the rule starts
+        // close to it, so it looks like a table cell.
+        let is_paragraph = |line_breaks: usize, cell_moves: usize, chars: usize| {
+            line_breaks >= MIN_PARAGRAPH_LINE_BREAKS
+                && chars as f32 >= MIN_PARAGRAPH_CHARS_PER_MOVE * (line_breaks + cell_moves) as f32
+        };
+
         while i < tokens.len() {
             match tokens[i] {
                 Token::Op(b"BT") => {
+                    if let Some(matched_bt_pos) = matched_bt_pos
+                        && is_paragraph(line_breaks, cell_moves, chars)
+                    {
+                        return (bt_count > 1).then_some((first_acc_td_idx + 1, matched_bt_pos));
+                    }
+
                     cur_bt_pos = Some(i);
                 }
+                Token::Literal(text) => chars += text.len(),
+                // Hex strings are almost always in CID-keyed fonts, with four hex digits per glyph.
+                Token::Hex(hex) => {
+                    chars += hex.iter().filter(|b| b.is_ascii_hexdigit()).count() / 4;
+                }
                 Token::Op(b"Td") => {
-                    if cur_bt_pos.is_some()
-                        && i > 1
+                    if i > 1
                         && let Token::Number(_) = tokens[i - 2]
                         && let Token::Number(_) = tokens[i - 1]
                     {
                         let cur_x: f32 = tokens[i - 2].parse()?;
                         let cur_y: f32 = tokens[i - 1].parse()?;
 
+                        if cur_bt_pos.is_none() {
+                            if cur_y != 0.0 {
+                                line_breaks += 1;
+                            } else if cur_x != 0.0 {
+                                cell_moves += 1;
+                            }
+
+                            i += 1;
+                            continue;
+                        }
+
                         let distance =
                             ((cur_x - first_x).powi(2) + (cur_y - first_y).powi(2)).sqrt();
                         if distance < self.thresholds.table_alignment {
                             bt_count += 1;
+                            matched_bt_pos = cur_bt_pos;
+                            line_breaks = 0;
+                            cell_moves = 0;
+                            chars = 0;
                             cur_bt_pos = None; // consume this BT; wait for next one
                         } else if bt_count > 0 {
                             // We've found the end of the table
@@ -868,6 +923,12 @@ impl PdfParser {
             }
 
             i += 1;
+        }
+
+        if let Some(matched_bt_pos) = matched_bt_pos
+            && is_paragraph(line_breaks, cell_moves, chars)
+        {
+            return (bt_count > 1).then_some((first_acc_td_idx + 1, matched_bt_pos));
         }
 
         if bt_count > 0 {
@@ -970,10 +1031,13 @@ impl PdfParser {
                         PdfParser::get_params_from_tokens(&tokens, token_idx)
                         && let Ok(font_id) = std::str::from_utf8(font_id_bytes)
                         && let Ok(font_size_str) = std::str::from_utf8(font_size_bytes)
-                        && let Ok(font_name) = get_font_name(doc, page_id, font_id)
                         && let Ok(font_size) = font_size_str.parse::<f32>()
                     {
-                        self.cur_font = font_name.into();
+                        // Type 3 fonts have no `BaseFont`. Switch fonts anyway, so that their text
+                        // is not decoded with the previous font's encoding or math transform.
+                        self.cur_font = get_font_name(doc, page_id, font_id)
+                            .unwrap_or_default()
+                            .into();
                         self.cur_font_id = font_id.into();
                         self.cur_font_size = font_size;
 
@@ -1566,6 +1630,28 @@ mod tests {
             dbg!(&text);
             assert!(!content.contains(text));
         }
+    }
+
+    #[test]
+    fn test_text_after_math_rules_is_kept() {
+        // Radicals and fraction bars draw rules, and the text after them starts close to the rule.
+        // That text must not be mistaken for a table cell.
+        check_pdf_contains(
+            "math_paragraphs.pdf",
+            &[
+                "The words after the inline radical must be kept.",
+                "The paragraph after the display equation must be kept as well.",
+            ],
+        );
+    }
+
+    #[test]
+    fn test_type3_font_text_is_extracted() {
+        // Type 3 fonts have no `BaseFont`, which must not leave the previous font active.
+        check_pdf_contains(
+            "type3_font.pdf",
+            &["Text set in a bitmap font after", "some math is readable."],
+        );
     }
 
     #[test]
