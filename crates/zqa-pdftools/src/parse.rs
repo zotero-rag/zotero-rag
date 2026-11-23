@@ -1654,6 +1654,66 @@ mod tests {
         );
     }
 
+    /// Parse a single page with one simple Type1 font and return its text.
+    fn parse_simple_content(content: &[u8]) -> String {
+        let (doc, page_id) = doc_with_simple_type1_font(content);
+        PdfParser::default()
+            .parse_content(&doc, page_id, 0, false)
+            .expect("Parsing a well-formed content stream should not be an error")
+            .content
+    }
+
+    #[test]
+    fn test_script_markers_in_latex() {
+        // Every script here sits on the line's baseline. The y moves alternate between
+        // scripts and the baseline, and the markers must not shift onto the prose between
+        // them. Case C and D stack a subscript and a superscript on one base, which pdflatex
+        // draws as three moves: up to the superscript, down to the subscript, and back.
+        check_pdf_contains(
+            "script_markers.pdf",
+            &[
+                "\\alpha _{i} y _{j} defined for",
+                "\\mathbb{R} ^{n} and the sum",
+                "dimension d _{k} and the values have dimension d _{v} here",
+                "x ^{2} _{i} for every index",
+                "W ^{Q} _{i} maps queries",
+            ],
+        );
+    }
+
+    #[test]
+    fn test_consecutive_subscripts_are_marked() {
+        // Two subscripts in a row: baseline, down, baseline, down, baseline. The moves are
+        // exact in `f32`, so this only exercises how the moves are paired.
+        let content = parse_simple_content(
+            b"BT /F1 10 Tf 72 700 Td [(a)] TJ 0 -1.5 Td [(i)] TJ 0 1.5 Td [(b)] TJ \
+              0 -1.5 Td [(j)] TJ 0 1.5 Td [(c)] TJ ET",
+        );
+
+        assert_eq!(content.trim_end(), "a _{i} b _{j} c");
+    }
+
+    #[test]
+    fn test_superscript_return_matches_baseline_despite_rounding() {
+        // The baseline is reached after 18 line breaks of 11.955, at 504.80972 in `f32`.
+        // Adding 4.028 and then subtracting it again does not give back the same `f32`, so an
+        // exact comparison misses the return to the baseline. The same superscript at a
+        // baseline of 700 rounds cleanly and is marked correctly.
+        let line_breaks = "[(line)] TJ 0 -11.955 Td ".repeat(18);
+        let script = "[(x)] TJ 0 4.028 Td [(2)] TJ 0 -4.028 Td [(rest)] TJ";
+
+        let drifting = parse_simple_content(
+            format!("BT /F1 10 Tf 72 720 Td {line_breaks}{script} ET").as_bytes(),
+        );
+        let exact = parse_simple_content(format!("BT /F1 10 Tf 72 700 Td {script} ET").as_bytes());
+
+        assert_eq!(exact.trim_end(), "x ^{2} rest");
+        assert!(
+            drifting.trim_end().ends_with("x ^{2} rest"),
+            "Expected the superscript to be marked, got {drifting:?}"
+        );
+    }
+
     #[test]
     fn test_subtables_are_ignored() {
         let path = PathBuf::from("assets").join("subtables.pdf");
