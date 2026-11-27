@@ -12,7 +12,8 @@ use crate::io::{EngineEvent, StyledSpan, TextStyle};
 use crate::store::common::ZoteroStore;
 use crate::utils::arrow::{ArrowError, library_to_arrow};
 use crate::utils::library::{
-    get_new_library_items, parse_library, parse_library_metadata, remove_stale_library_items,
+    filter_new_library_items, parse_library_items, parse_library_metadata,
+    remove_stale_library_items,
 };
 
 /// Emit table statistics for the current LanceDB database.
@@ -67,14 +68,27 @@ pub(crate) async fn handle_stats_cmd(ctx: &mut Context) -> Result<(), CLIError> 
 ///
 /// * Returns a [`CLIError`] if configuration is invalid, parsing / insertion setup fails, or the
 ///   event receiver is closed.
+#[allow(
+    clippy::too_many_lines,
+    reason = "linear pipeline of processing steps and event emissions"
+)]
 pub(crate) async fn handle_process_cmd(ctx: &mut Context) -> Result<(), CLIError> {
     const WARNING_THRESHOLD: usize = 100;
 
     let library_path = ctx.path_options.library_path.as_deref();
-    let store_exists = ctx.store.exists().await;
+    let library_items = match parse_library_metadata(library_path, None, None) {
+        Ok(items) => items,
+        Err(parse_err) => {
+            ctx.emit(EngineEvent::Error {
+                message: format!("Could not parse library metadata: {parse_err}\n"),
+            })
+            .await?;
+            return Ok(());
+        }
+    };
 
-    if store_exists {
-        match remove_stale_library_items(&ctx.store, library_path).await {
+    let item_metadata = if ctx.store.exists().await {
+        match remove_stale_library_items(&ctx.store, &library_items).await {
             Ok(0) => {}
             Ok(removed) => {
                 ctx.emit(EngineEvent::StatusUpdate {
@@ -93,23 +107,21 @@ pub(crate) async fn handle_process_cmd(ctx: &mut Context) -> Result<(), CLIError
                 .await?;
             }
         }
-    }
 
-    let item_metadata = if store_exists {
-        get_new_library_items(&ctx.store, library_path).await
+        match filter_new_library_items(&ctx.store, library_items).await {
+            Ok(items) => items,
+            Err(parse_err) => {
+                ctx.emit(EngineEvent::Error {
+                    message: format!("Could not parse library metadata: {parse_err}\n"),
+                })
+                .await?;
+                return Ok(());
+            }
+        }
     } else {
-        parse_library_metadata(library_path, None, None)
+        library_items
     };
 
-    if let Err(parse_err) = item_metadata {
-        ctx.emit(EngineEvent::Error {
-            message: format!("Could not parse library metadata: {parse_err}\n"),
-        })
-        .await?;
-        return Ok(());
-    }
-
-    let item_metadata = item_metadata.unwrap();
     let metadata_length = item_metadata.len();
     if metadata_length >= WARNING_THRESHOLD {
         let (tx, rx) = oneshot::channel();
@@ -127,7 +139,7 @@ pub(crate) async fn handle_process_cmd(ctx: &mut Context) -> Result<(), CLIError
         }
     }
 
-    let items = parse_library(ctx.event_tx.as_ref(), &ctx.store, library_path, None, None)
+    let items = parse_library_items(ctx.event_tx.as_ref(), item_metadata)
         .await
         .map_err(ArrowError::from)?;
     log::info!("Finished parsing library items.");

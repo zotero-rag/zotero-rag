@@ -346,35 +346,30 @@ pub(crate) fn get_column_from_batch(batch: &RecordBatch, column: usize) -> Vec<S
         .collect()
 }
 
-/// Assuming an existing `LanceDB` database exists, returns a list of items present in the Zotero
-/// library but not in the database. The primary use case for this is to update the DB with new
-/// items. Note that this does not take into account removed items.
+/// Filter `library_items` down to items that are not already present in `store`.
 ///
-/// # Arguments:
+/// # Arguments
 ///
-/// * `embedding_config` - The embedding provider configuration for the configured `LanceDB` embedding.
+/// * `store` - The vector store to compare against.
+/// * `library_items` - Candidate Zotero library items (from [`parse_library_metadata`]).
 ///
 /// # Returns
 ///
-/// If successful, a list of `ZoteroItemMetadata` objects corresponding to new items.
+/// The subset of `library_items` not yet present in `store`.
 ///
 /// # Errors
 ///
-/// * `LibraryParsingError::SqliteError` if the library path was not found, the query could not be prepared, or
-///   columns from the result set could not be parsed, or `query_map` fails.
-/// * `LibraryParsingError::LanceDBError` if fetching the rows from LanceDB fails.
-pub async fn get_new_library_items<T: ZoteroStore>(
+/// * [`LibraryParsingError::LanceDBError`] if fetching existing item metadata from `store` fails.
+pub(crate) async fn filter_new_library_items<T: ZoteroStore>(
     store: &T,
-    library_path: Option<&Path>,
+    library_items: Vec<ZoteroItemMetadata>,
 ) -> Result<Vec<ZoteroItemMetadata>, LibraryParsingError> {
     let metadata_vecs = store
         .existing_item_metadata()
         .await
         .map_err(|e| LibraryParsingError::LanceDBError(e.to_string()))?;
 
-    let library_items = parse_library_metadata(library_path, None, None)?;
     let library_count = library_items.len();
-
     let db_items_set: HashSet<_> = metadata_vecs.iter().collect();
 
     let new_items = library_items
@@ -389,20 +384,45 @@ pub async fn get_new_library_items<T: ZoteroStore>(
     Ok(new_items)
 }
 
-/// Delete rows from `store` whose Zotero attachment no longer appears in the library, for example
-/// because the item was deleted or its PDF was replaced by a new attachment.
+/// Assuming an existing `LanceDB` database exists, returns a list of items present in the Zotero
+/// library but not in the database. The primary use case for this is to update the DB with new
+/// items. Note that this does not take into account removed items.
 ///
-/// An item counts as present when [`parse_library_metadata`] returns its library key, so items whose
-/// type that query no longer accepts are removed too. When the library query returns no items at
-/// all, nothing is deleted: an empty result more likely means the library path points somewhere
-/// unexpected than that the user removed every paper, and deleting the whole index would be costly
-/// to undo.
+/// # Arguments
+///
+/// * `store` - The vector store to compare against.
+/// * `library_path` - An optional override for the Zotero library directory. When `None`, the path
+///   is resolved from the environment (see [`get_lib_path`]).
+///
+/// # Returns
+///
+/// If successful, a list of `ZoteroItemMetadata` objects corresponding to new items.
+///
+/// # Errors
+///
+/// * [`LibraryParsingError::SqlError`] if the library path was not found, the query could not be
+///   prepared, columns from the result set could not be parsed, or `query_map` fails.
+/// * [`LibraryParsingError::LanceDBError`] if fetching the rows from LanceDB fails.
+pub async fn get_new_library_items<T: ZoteroStore>(
+    store: &T,
+    library_path: Option<&Path>,
+) -> Result<Vec<ZoteroItemMetadata>, LibraryParsingError> {
+    let library_items = parse_library_metadata(library_path, None, None)?;
+    filter_new_library_items(store, library_items).await
+}
+
+/// Delete rows from `store` whose Zotero attachment no longer appears in `library_items`, for
+/// example because the item was deleted or its PDF was replaced by a new attachment.
+///
+/// Callers should pass the full result of [`parse_library_metadata`] (without pagination), so items
+/// whose type that query no longer accepts are removed too. When `library_items` is empty, nothing
+/// is deleted: an empty result more likely means the library path points somewhere unexpected than
+/// that the user removed every paper, and deleting the whole index would be costly to undo.
 ///
 /// # Arguments
 ///
 /// * `store` - The vector store to remove stale rows from.
-/// * `library_path` - An optional override for the Zotero library directory. When `None`, the path
-///   is resolved from the environment (see [`get_lib_path`]).
+/// * `library_items` - Current Zotero library items (from [`parse_library_metadata`]).
 ///
 /// # Returns
 ///
@@ -410,14 +430,12 @@ pub async fn get_new_library_items<T: ZoteroStore>(
 ///
 /// # Errors
 ///
-/// * `LibraryParsingError::SqliteError` if the Zotero library could not be read.
-/// * `LibraryParsingError::LanceDBError` if reading the stored keys or deleting rows fails. Nothing is
-///   deleted when reading fails.
+/// * [`LibraryParsingError::LanceDBError`] if reading the stored keys or deleting rows fails.
+///   Nothing is deleted when reading fails.
 pub async fn remove_stale_library_items<T: ZoteroStore>(
     store: &T,
-    library_path: Option<&Path>,
+    library_items: &[ZoteroItemMetadata],
 ) -> Result<usize, LibraryParsingError> {
-    let library_items = parse_library_metadata(library_path, None, None)?;
     if library_items.is_empty() {
         return Ok(0);
     }
@@ -670,9 +688,9 @@ enum ParseOutcome {
 ///
 /// # Errors
 ///
-/// * `LibraryParsingError::LanceDBError` if fetching library metadata fails.
-/// * `LibraryParsingError::PdfParsingError` if sending tasks to the worker threads fails.
-#[allow(clippy::too_many_lines)]
+/// * [`LibraryParsingError::SqlError`] if reading the Zotero SQLite database fails.
+/// * [`LibraryParsingError::LanceDBError`] if fetching existing items from the store fails.
+/// * [`LibraryParsingError::PdfParsingError`] if sending tasks to the worker threads fails.
 pub async fn parse_library<T: ZoteroStore>(
     event_tx: Option<&mpsc::Sender<EngineEvent>>,
     store: &T,
@@ -680,11 +698,6 @@ pub async fn parse_library<T: ZoteroStore>(
     start_from: Option<usize>,
     limit: Option<usize>,
 ) -> Result<Vec<ZoteroItem>, LibraryParsingError> {
-    // `parse_library` is `pub`, so calls can overlap. Numbering keeps each call's progress IDs unique.
-    static NEXT_PARSE_ID: AtomicUsize = AtomicUsize::new(0);
-
-    let start_time = Instant::now();
-
     let store_exists = store.exists().await;
     log::debug!("Library parsing: existing_store={store_exists}");
     let metadata = if store_exists {
@@ -692,6 +705,35 @@ pub async fn parse_library<T: ZoteroStore>(
     } else {
         parse_library_metadata(library_path, start_from, limit)?
     };
+
+    parse_library_items(event_tx, metadata).await
+}
+
+/// Extract PDF text in parallel for each item in `metadata`, emitting progress and any extraction
+/// failure summary through `event_tx`.
+///
+/// # Arguments
+///
+/// * `event_tx` - An optional channel for [`EngineEvent`]s used for progress updates and sending a
+///   summary of parsing outcomes.
+/// * `metadata` - The library items to extract PDF text from.
+///
+/// # Returns
+///
+/// Successfully parsed [`ZoteroItem`]s.
+///
+/// # Errors
+///
+/// * [`LibraryParsingError::PdfParsingError`] if sending tasks to the worker threads fails.
+#[allow(clippy::too_many_lines)]
+pub(crate) async fn parse_library_items(
+    event_tx: Option<&mpsc::Sender<EngineEvent>>,
+    metadata: Vec<ZoteroItemMetadata>,
+) -> Result<Vec<ZoteroItem>, LibraryParsingError> {
+    // `parse_library` is `pub`, so calls can overlap. Numbering keeps each call's progress IDs unique.
+    static NEXT_PARSE_ID: AtomicUsize = AtomicUsize::new(0);
+
+    let start_time = Instant::now();
 
     if metadata.is_empty() {
         log::warn!("The library seems to be empty.");
