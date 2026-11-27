@@ -1,4 +1,4 @@
-use std::io::{BufRead, Write};
+use std::io::{self, BufRead, Write};
 use std::sync::Arc;
 
 use rpassword::read_password;
@@ -18,10 +18,10 @@ use crate::cli::handlers::library::{
     handle_checkhealth_cmd, handle_dedup_cmd, handle_doctor_cmd, handle_index_cmd,
     handle_process_cmd, handle_stats_cmd,
 };
-use crate::cli::handlers::query::{handle_query_cmd, handle_search_cmd};
+use crate::cli::handlers::query::{handle_query_cmd, handle_search_cmd, search_titles};
 use crate::cli::placeholder::PlaceholderText;
 use crate::cli::readline::get_readline_config;
-use crate::common::Context;
+use crate::common::{CliCommand, Context};
 use crate::io::{EngineEvent, TerminalProgress};
 use crate::state::UsageMetadata;
 use crate::utils::terminal::{DIM_TEXT, RESET};
@@ -59,7 +59,14 @@ pub(crate) async fn dispatch_command(command: &str, ctx: &mut Context) -> Result
         }
         Command::Query { text } => handle_query_cmd(text, ctx).await,
         Command::Resume => handle_resume_cmd(ctx).await,
-        Command::Search { query } => handle_search_cmd(query, ctx).await,
+        Command::Search { query } => {
+            handle_search_cmd(query, ctx).await?;
+            ctx.emit(EngineEvent::Text {
+                message: "\n".into(),
+            })
+            .await?;
+            Ok(())
+        }
         Command::Stats => handle_stats_cmd(ctx).await,
     }
     .and(Ok(true))
@@ -275,6 +282,46 @@ pub(crate) async fn render_while<T, R: BufRead, O: Write, E: Write>(
     Ok((rendered?, usage))
 }
 
+/// Run a single command given on the command line, without starting the REPL.
+///
+/// The command's result goes to `out`, one item per line. Everything else it reports, such as
+/// timing and warnings, is sent as events on `ctx`, so the caller must render those while this
+/// runs. The `zqa search` path renders them to `stderr`, which keeps `out` scriptable.
+///
+/// # Arguments
+///
+/// * `command` - The subcommand parsed from the command-line arguments.
+/// * `ctx` - Application state, configuration, storage, and the event sender.
+/// * `out` - Output for the command's result.
+///
+/// # Errors
+///
+/// * Returns a [`CLIError`] if the command fails or writing to `out` fails.
+pub(crate) async fn run_subcommand<O: Write>(
+    command: CliCommand,
+    ctx: &mut Context,
+    out: &mut O,
+) -> Result<(), CLIError> {
+    match command {
+        CliCommand::Search { query } => {
+            let titles = search_titles(&query.join(" "), ctx).await?;
+            let written = titles
+                .iter()
+                .try_for_each(|title| writeln!(out, "{title}"))
+                .and_then(|()| out.flush());
+
+            match written {
+                // A reader that stops early, as in `zqa search foo | head -3`, closes the pipe
+                // once it has all the output it wants.
+                Err(e) if e.kind() == io::ErrorKind::BrokenPipe => {}
+                result => result?,
+            }
+        }
+    }
+
+    Ok(())
+}
+
 /// The core CLI implementation that implements a REPL for user commands.
 ///
 /// # Arguments
@@ -400,7 +447,9 @@ mod tests {
     use zqa_rag::llm::tools::Tool;
     use zqa_rag::reranking::common::RerankProviderConfig;
 
-    use super::{dispatch_command, run_command};
+    use super::{dispatch_command, run_command, run_subcommand};
+    use crate::cli::errors::CLIError;
+    use crate::common::CliCommand;
     use crate::common::test_support::{TestPaths, capture_events, create_test_context};
     use crate::io::{EngineEvent, TerminalProgress};
     use crate::state::UsageMetadata;
@@ -631,6 +680,19 @@ mod tests {
         .await;
     }
 
+    /// A writer whose reader has closed the pipe, as `head` does once it has read enough lines.
+    struct ClosedPipe;
+
+    impl io::Write for ClosedPipe {
+        fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+            Err(io::ErrorKind::BrokenPipe.into())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Err(io::ErrorKind::BrokenPipe.into())
+        }
+    }
+
     #[retry(3)]
     #[tokio::test(flavor = "multi_thread")]
     async fn test_dispatch_dedup_command() {
@@ -651,6 +713,43 @@ mod tests {
             event,
             EngineEvent::Text { message } if message.contains("Deduped ")
         )));
+
+        let (search_result, events) = capture_events(&mut ctx, async |ctx| {
+            dispatch_command("/search machine learning", ctx).await
+        })
+        .await;
+        test_ok!(search_result);
+        assert!(search_result.unwrap());
+        // The REPL keeps a blank line after the results.
+        assert!(matches!(
+            events.last(),
+            Some(EngineEvent::Text { message }) if message == "\n"
+        ));
+
+        // A reader that closes the pipe early ends the output without an error.
+        let (subcommand_result, _) = capture_events(&mut ctx, async |ctx| {
+            let query = vec!["machine".into(), "learning".into()];
+            run_subcommand(CliCommand::Search { query }, ctx, &mut ClosedPipe).await
+        })
+        .await;
+        test_ok!(subcommand_result);
+    }
+
+    #[tokio::test]
+    async fn test_run_subcommand_rejects_blank_search() {
+        let mut ctx = create_test_context(vec![]);
+        let mut out = Vec::new();
+
+        let result = run_subcommand(
+            CliCommand::Search {
+                query: vec!["  ".into()],
+            },
+            &mut ctx,
+            &mut out,
+        )
+        .await;
+        assert!(matches!(result, Err(CLIError::CommandError(_))));
+        assert_eq!(String::from_utf8(out).unwrap(), "");
     }
 
     #[retry(3)]

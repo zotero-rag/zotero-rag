@@ -4,7 +4,7 @@
 #![allow(clippy::cast_possible_wrap)]
 
 use std::fs;
-use std::io::{IsTerminal, stderr, stdout};
+use std::io::{IsTerminal, Write, stderr, stdout};
 use std::path::Path;
 
 use clap::Parser;
@@ -20,7 +20,7 @@ pub mod tools;
 pub mod utils;
 
 // Re-export commonly used items
-use cli::app::{cli, render_while};
+use cli::app::{cli, render_while, run_subcommand};
 use common::{Args, Context, setup_logger};
 use config::Config;
 use state::{check_or_create_first_run_file, oobe};
@@ -333,7 +333,9 @@ pub(crate) async fn start(ctx: &mut Context, interactive: bool) -> Result<bool, 
 
 /// Main entry point for the zqa application.
 ///
-/// This function handles configuration loading, first-run setup, and launches the CLI.
+/// This function handles configuration loading, first-run setup, and launches the CLI. When a
+/// subcommand such as `search` is given, it skips first-run setup, runs that command, and exits.
+/// The command's result goes to `stdout` and everything else it reports goes to `stderr`.
 ///
 /// # Errors
 ///
@@ -389,11 +391,19 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         path_options: PathOptions::default(),
     };
 
+    // First-run setup prompts on stdin, so only the interactive prompt runs it. A subcommand's
+    // `stdout` carries only its result, so its startup notices go to `stderr`.
+    let interactive = args.command.is_none() && std::io::stdin().is_terminal();
+    let mut startup_out: Box<dyn Write> = if args.command.is_none() {
+        Box::new(stdout())
+    } else {
+        Box::new(stderr())
+    };
     let (keep_running, _) = render_while(
-        start(&mut context, std::io::stdin().is_terminal()),
+        start(&mut context, interactive),
         &mut event_rx,
         &mut std::io::stdin().lock(),
-        &mut stdout(),
+        &mut startup_out,
         &mut stderr(),
         &mut TerminalProgress::new(),
     )
@@ -405,6 +415,22 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     // Replace the placeholder from `store_or_placeholder` with the store for the final config.
     context.store = LanceZoteroStore::from_config(&context.config)?;
+
+    if let Some(command) = args.command {
+        // Render the command's events to `stderr`, so `stdout` carries only its result.
+        let (result, _) = render_while(
+            run_subcommand(command, &mut context, &mut stdout()),
+            &mut event_rx,
+            &mut std::io::stdin().lock(),
+            &mut stderr(),
+            &mut stderr(),
+            &mut TerminalProgress::new(),
+        )
+        .await?;
+        result?;
+
+        return Ok(());
+    }
 
     cli(
         context,
