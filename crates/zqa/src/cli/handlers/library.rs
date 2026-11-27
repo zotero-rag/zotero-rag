@@ -66,8 +66,9 @@ pub(crate) async fn handle_stats_cmd(ctx: &mut Context) -> Result<(), CLIError> 
 ///
 /// # Errors
 ///
-/// * Returns a [`CLIError`] if configuration is invalid, parsing / insertion setup fails, or the
-///   event receiver is closed.
+/// * [`CLIError::ChannelSendError`] if the event receiver is closed.
+/// * [`CLIError::ChannelRecvError`] if the confirmation prompt reply channel is dropped.
+/// * [`CLIError::ArrowError`] if PDF parsing fails with a worker-channel error.
 #[allow(
     clippy::too_many_lines,
     reason = "linear pipeline of processing steps and event emissions"
