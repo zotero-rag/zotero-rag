@@ -26,7 +26,8 @@
   - `# Arguments`, `# Returns`, `# Errors`, `# Panics`, `# Safety` sections as appropriate.
 - Section formatting:
   - Insert a blank `///` line after each section header (`# Arguments`, `# Returns`, `# Errors`, `# Panics`, `# Safety`).
-  - `# Arguments`,  `# Panics`, and `# Errors` are always bulleted lists, even with a single item.
+  - `# Arguments`, `# Panics`, and `# Errors` are always bulleted lists, even with a single item.
+  - Each `# Errors` bullet must specify the error enum variant returned for that failure case (e.g., `CLIError::LanceError`), not just the top-level error type.
   - `# Returns` is a sentence for a single value; use bullets only if returning multiple values (e.g., tuples).
   - Add `# Panics` when the function can panic (e.g., uses `unwrap()`).
   - Add `# Safety` to an `unsafe fn`, stating what callers must uphold. An `unsafe` block inside a safe function gets a `// SAFETY:` comment on the block instead.
