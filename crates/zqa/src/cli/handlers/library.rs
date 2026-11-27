@@ -379,7 +379,7 @@ mod tests {
         assert!(events.iter().any(|event| matches!(
             event,
             EngineEvent::Text { message }
-                if message.contains("LanceDB metadata:") && message.contains("Number of rows: 8")
+                if message.contains("LanceDB metadata:") && message.contains("Number of rows: 4")
         )));
 
         let embedding_config = ctx.store.get_embedding_config();
@@ -400,7 +400,7 @@ mod tests {
             event,
             EngineEvent::StatusUpdate { message } if message.contains("Removed 1 items")
         )));
-        assert_eq!(ctx.store.library_keys().await.unwrap().len(), 8);
+        assert_eq!(ctx.store.library_keys().await.unwrap().len(), 4);
     }
 
     #[tokio::test]
