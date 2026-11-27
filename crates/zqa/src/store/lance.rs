@@ -385,7 +385,7 @@ impl ZoteroStore for LanceZoteroStore {
     ///
     /// # Errors
     ///
-    /// Returns a [`CLIError`] if the rows cannot be fetched.
+    /// * [`CLIError::LanceError`] if the rows cannot be fetched from LanceDB.
     async fn library_keys(&self) -> Result<Vec<String>, CLIError> {
         let batches = self
             .backend
