@@ -91,12 +91,12 @@ pub(crate) async fn handle_process_cmd(ctx: &mut Context) -> Result<(), CLIError
         match remove_stale_library_items(&ctx.store, &library_items).await {
             Ok(0) => {}
             Ok(removed) => {
-                ctx.emit(EngineEvent::StatusUpdate {
-                    message: format!(
-                        "Removed {removed} items that are no longer in your Zotero library.\n"
-                    ),
-                })
-                .await?;
+                let message = if removed == 1 {
+                    "Removed 1 item that is no longer in your Zotero library.\n".into()
+                } else {
+                    format!("Removed {removed} items that are no longer in your Zotero library.\n")
+                };
+                ctx.emit(EngineEvent::StatusUpdate { message }).await?;
             }
             Err(e) => {
                 ctx.emit(EngineEvent::Warning {
@@ -410,7 +410,31 @@ mod tests {
         test_ok!(result);
         assert!(events.iter().any(|event| matches!(
             event,
-            EngineEvent::StatusUpdate { message } if message.contains("Removed 1 items")
+            EngineEvent::StatusUpdate { message }
+                if message.contains("Removed 1 item that is no longer in your Zotero library.")
+        )));
+        assert_eq!(ctx.store.library_keys().await.unwrap().len(), 4);
+
+        let stale_rows = library_to_arrow_with_embeddings(
+            &["STALEKEY1", "STALEKEY2"],
+            &["Deleted paper 1", "Deleted paper 2"],
+            &["/nonexistent1.pdf", "/nonexistent2.pdf"],
+            &["text 1", "text 2"],
+            vec![
+                vec![0.1; embedding_config.dims()],
+                vec![0.2; embedding_config.dims()],
+            ],
+            &embedding_config,
+        )
+        .unwrap();
+        ctx.store.upsert_batches(vec![stale_rows]).await.unwrap();
+
+        let (result, events) = capture_events(&mut ctx, handle_process_cmd).await;
+        test_ok!(result);
+        assert!(events.iter().any(|event| matches!(
+            event,
+            EngineEvent::StatusUpdate { message }
+                if message.contains("Removed 2 items that are no longer in your Zotero library.")
         )));
         assert_eq!(ctx.store.library_keys().await.unwrap().len(), 4);
     }
