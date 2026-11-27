@@ -46,8 +46,10 @@ use crate::tools::summarization::SummarizationTool;
 ///
 /// # Errors
 ///
-/// * Returns a [`CLIError`] if the search term is blank, provider configuration is invalid, vector
-///   search fails, or the event receiver is closed.
+/// * `CLIError::CommandError` - If `search_term` is blank.
+/// * `CLIError::LanceError` - If the query cannot be embedded or the table cannot be searched.
+/// * `CLIError::LLMError` - If the configured reranker cannot be created or reranking fails.
+/// * `CLIError::ChannelSendError` - If the event receiver is closed.
 pub(crate) async fn search_titles(
     search_term: &str,
     ctx: &mut Context,
@@ -96,8 +98,10 @@ pub(crate) async fn search_titles(
 ///
 /// # Errors
 ///
-/// * Returns a [`CLIError`] if the search term is blank, provider configuration is invalid, vector
-///   search fails, or the event receiver is closed.
+/// * `CLIError::CommandError` - If `search_term` is blank.
+/// * `CLIError::LanceError` - If the query cannot be embedded or the table cannot be searched.
+/// * `CLIError::LLMError` - If the configured reranker cannot be created or reranking fails.
+/// * `CLIError::ChannelSendError` - If the event receiver is closed.
 pub(crate) async fn handle_search_cmd(
     search_term: String,
     ctx: &mut Context,

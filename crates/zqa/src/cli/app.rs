@@ -296,7 +296,11 @@ pub(crate) async fn render_while<T, R: BufRead, O: Write, E: Write>(
 ///
 /// # Errors
 ///
-/// * Returns a [`CLIError`] if the command fails or writing to `out` fails.
+/// * `CLIError::CommandError` - If a search query is blank.
+/// * `CLIError::LanceError` - If the query cannot be embedded or the table cannot be searched.
+/// * `CLIError::LLMError` - If the configured reranker cannot be created or reranking fails.
+/// * `CLIError::ChannelSendError` - If the event receiver is closed.
+/// * `CLIError::IOError` - If writing to `out` fails for any reason other than a closed pipe.
 pub(crate) async fn run_subcommand<O: Write>(
     command: CliCommand,
     ctx: &mut Context,
