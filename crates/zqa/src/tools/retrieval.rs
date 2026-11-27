@@ -120,7 +120,7 @@ where
             let mut usage = get_model_usage(
                 self.embedding_config.provider_name(),
                 self.embedding_config.model_name(),
-                stats.embedding_tokens as u64,
+                stats.embedding_tokens,
             )
             .await;
             if let Some(reranker) = &reranker_config
@@ -129,7 +129,7 @@ where
                 usage += get_model_usage(
                     reranker.provider_name(),
                     reranker.model_name(),
-                    stats.rerank_tokens as u64,
+                    stats.rerank_tokens,
                 )
                 .await;
             }

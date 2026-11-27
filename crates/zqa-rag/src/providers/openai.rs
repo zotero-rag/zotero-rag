@@ -1,12 +1,10 @@
 //! OpenAI provider implementation
 use std::sync::Arc;
 
-use lancedb::embeddings::EmbeddingFunction;
-
 use crate::capabilities::{EmbeddingFactory, LlmFactory};
 use crate::clients::openai::OpenAIClient;
 use crate::config::LLMClientConfig;
-use crate::embedding::common::EmbeddingProviderConfig;
+use crate::embedding::common::{Embed, EmbeddingProviderConfig};
 use crate::http_client::ReqwestClient;
 use crate::llm::errors::LLMError;
 use crate::llm::factory::LLMClient;
@@ -39,7 +37,7 @@ impl EmbeddingFactory for OpenAIProvider {
     fn create_embedding(
         &self,
         config: &EmbeddingProviderConfig,
-    ) -> Result<Arc<dyn EmbeddingFunction>, LLMError> {
+    ) -> Result<Arc<dyn Embed>, LLMError> {
         let EmbeddingProviderConfig::OpenAI(cfg) = config else {
             return Err(LLMError::InvalidProviderError("openai".into()));
         };
