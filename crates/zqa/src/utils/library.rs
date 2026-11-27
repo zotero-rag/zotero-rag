@@ -447,7 +447,8 @@ pub async fn remove_stale_library_items<T: ZoteroStore>(
     Ok(stale_keys.len())
 }
 
-/// Parses the Zotero library metadata. If successful, returns a list of metadata for each item.
+/// Parses the Zotero library metadata, excluding items whose parent or attachment is in Zotero's
+/// trash (`deletedItems`). If successful, returns a list of metadata for each item.
 ///
 /// # Arguments
 ///
@@ -459,8 +460,8 @@ pub async fn remove_stale_library_items<T: ZoteroStore>(
 ///
 /// # Errors
 ///
-/// * `LibraryParsingError::SqliteError` if the library path was not found, the query could not be prepared, or
-///   columns from the result set could not be parsed, or `query_map` fails.
+/// * `LibraryParsingError::SqlError` if the library path was not found, the query could not be
+///   prepared, columns from the result set could not be parsed, or `query_map` fails.
 pub fn parse_library_metadata(
     library_path: Option<&Path>,
     start_from: Option<usize>,
@@ -484,7 +485,9 @@ pub fn parse_library_metadata(
             JOIN items i2 ON ia.itemID = i2.itemID
             WHERE f.fieldName = 'title'
             AND ia.contentType = 'application/pdf'
-            AND it.typeName IN ('conferencePaper', 'journalArticle', 'preprint') "
+            AND it.typeName IN ('conferencePaper', 'journalArticle', 'preprint')
+            AND NOT EXISTS (SELECT 1 FROM deletedItems d WHERE d.itemID = i.itemID)
+            AND NOT EXISTS (SELECT 1 FROM deletedItems d WHERE d.itemID = i2.itemID) "
             .to_string();
 
         // Useful for debugging
@@ -917,7 +920,36 @@ mod tests {
 
         test_ok!(library_items);
         let items = library_items.unwrap();
-        assert_ne!(items, [] as [ZoteroItemMetadata; 0]);
+        // The toy library has 8 PDF items, 4 of which have trashed parents in `deletedItems`.
+        test_eq!(items.len(), 4);
+        for trashed_key in ["7R5XZ5PX", "8X6T78H3", "CHGD46GY", "NMMHW8DU"] {
+            assert!(
+                !items.iter().any(|item| item.library_key == trashed_key),
+                "Trashed parent item {trashed_key} should be excluded"
+            );
+        }
+
+        // Trashing an attachment directly should also exclude it from metadata results.
+        let tmp = tempfile::tempdir().unwrap();
+        let copy_path = tmp.path().join("zotero.sqlite");
+        std::fs::copy(library_path.join("zotero.sqlite"), &copy_path).unwrap();
+        let conn = Connection::open(&copy_path).unwrap();
+        let trashed_attachment = &items[0].library_key;
+        conn.execute(
+            "INSERT INTO deletedItems (itemID) SELECT itemID FROM items WHERE key = ?1",
+            [trashed_attachment],
+        )
+        .unwrap();
+        drop(conn);
+
+        let after_trashing = parse_library_metadata(Some(tmp.path()), None, None).unwrap();
+        test_eq!(after_trashing.len(), 3);
+        assert!(
+            !after_trashing
+                .iter()
+                .any(|item| item.library_key == *trashed_attachment),
+            "Trashed attachment {trashed_attachment} should be excluded"
+        );
     }
 
     #[test]
@@ -1043,19 +1075,17 @@ mod tests {
     async fn test_parse_library() {
         // Check the titles/authors are in the expected order and pairs.
         // The parsing might change; we only care about keywords
-        const EXPECTED_TITLES: [&str; 5] = [
-            "An expert system",
-            "Online Learning Rate Adaptation",
-            "Mono2Micro",
-            "Anomaly Detection",
+        const EXPECTED_TITLES: [&str; 4] = [
             "Learning Rate Curriculum",
+            "Online Learning Rate Adaptation",
+            "Learning by Doing Something Else",
+            "ART 2A",
         ];
         let expected_authors = [
-            vec!["Yedida", "Krishna", "Kalia", "Menzies", "Xiao", "Vukovic"],
-            vec!["Baydin", "Cornish", "Rubio", "Schmidt", "Wood"],
-            vec!["Krishna", "Xiao", "Vukovic", "Kalia", "Sinha", "Banerjee"],
-            vec!["Yedida", "Mehendale", "Challa", "Danda", "Sarkar", "Saha"],
             vec!["Croitoru", "Ristea", "Ionescu", "Sebe"],
+            vec!["Baydin", "Cornish", "Rubio", "Schmidt", "Wood"],
+            vec!["Schilling", "Vidal", "Ployhart", "Marangoni"],
+            vec!["Carpenter", "Grossberg", "Rosen"],
         ];
 
         dotenv().ok();
@@ -1106,16 +1136,16 @@ mod tests {
 
         let mut items = items.unwrap();
         assert!(!items.is_empty());
-        test_eq!(items.len(), 7);
+        test_eq!(items.len(), 4);
 
         let Ok(EngineEvent::ProgressStart {
-            id, total: Some(7), ..
+            id, total: Some(4), ..
         }) = event_rx.try_recv()
         else {
-            panic!("parsing should start a progress bar for 7 items");
+            panic!("parsing should start a progress bar for 4 items");
         };
 
-        for expected in 1..=7 {
+        for expected in 1..=4 {
             let Ok(EngineEvent::ProgressUpdate {
                 id: update_id,
                 completed,
@@ -1164,10 +1194,10 @@ mod tests {
             }
         }
 
-        test_eq!(found_bits, 0b11111);
+        test_eq!(found_bits, 0b1111);
 
-        // Without the `storage` directory every PDF is missing, so each item fails extraction. The
-        // summary counts all 7 failures but lists only the first five errors.
+        // Without the `storage` directory every PDF is missing, so each item fails extraction.
+        // Restore trashed items in the copy so 7 items fail and exercise the 5-sample cap.
         let no_pdfs_path = tmp.path().join("Zotero");
         std::fs::create_dir(&no_pdfs_path).unwrap();
         std::fs::copy(
@@ -1175,6 +1205,16 @@ mod tests {
             no_pdfs_path.join("zotero.sqlite"),
         )
         .unwrap();
+        Connection::open(no_pdfs_path.join("zotero.sqlite"))
+            .unwrap()
+            .execute("DELETE FROM deletedItems", [])
+            .unwrap();
+        let expected_failed_titles: Vec<String> =
+            parse_library_metadata(Some(&no_pdfs_path), Some(0), Some(7))
+                .unwrap()
+                .into_iter()
+                .map(|item| item.title)
+                .collect();
 
         let no_pdf_items = parse_library(
             Some(&event_tx),
@@ -1205,9 +1245,9 @@ mod tests {
         // Each sampled error names the item it came from.
         for sample in warnings[0].split("\n\t\t").skip(1) {
             assert!(
-                items
+                expected_failed_titles
                     .iter()
-                    .any(|item| sample.starts_with(&format!("{}: ", item.metadata.title))),
+                    .any(|title| sample.starts_with(&format!("{title}: "))),
                 "sample does not start with an item title: {sample}"
             );
         }
