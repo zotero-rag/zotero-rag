@@ -17,9 +17,7 @@ use crate::cli::errors::CLIError;
 use crate::cli::handlers::documents::{
     get_document_mentions, get_user_document_tools, import_document,
 };
-use crate::cli::prompts::{
-    get_summarize_prompt, get_summarize_system_prompt, get_title_prompt, get_title_system_prompt,
-};
+use crate::cli::prompts::{get_summarize_system_prompt, get_title_prompt, get_title_system_prompt};
 use crate::common::Context;
 use crate::io::{EngineEvent, StyledSpan, TextStyle};
 use crate::state::UsageMetadata;
@@ -344,7 +342,7 @@ pub(crate) async fn handle_query_cmd(query: String, ctx: &mut Context) -> Result
             ChatRequest {
                 chat_history: history.clone(),
                 max_tokens: None,
-                message: get_summarize_prompt(&query),
+                message: query.clone(),
                 system_prompt: Some(get_summarize_system_prompt()),
                 reasoning: llm_client.get_reasoning_config(),
                 tools: Some(&tools),

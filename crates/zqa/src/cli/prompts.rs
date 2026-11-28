@@ -152,31 +152,15 @@ on the side of *inclusion*. It is better to erroneously include a paper than to 
     )
 }
 
-/// Get the "summarization" prompt, which directs the LLM to retrieve evidence from the user's
-/// Zotero library before generating a researched answer to the user query.
-///
-/// # Arguments
-///
-/// * `query` - The user query to answer
-///
-/// # Returns
-///
-/// * `prompt` - The prompt for answering the user query
-#[must_use]
-pub fn get_summarize_prompt(query: &str) -> String {
-    format!("Here is the user query: <user_query>{query}</user_query>.")
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{get_summarize_prompt, get_summarize_system_prompt, get_title_prompt};
+    use super::{get_summarize_system_prompt, get_title_prompt};
     use crate::tools::retrieval::RETRIEVAL_TOOL_NAME;
     use crate::tools::summarization::SUMMARIZATION_TOOL_NAME;
 
     #[test]
     fn summarize_prompt_requires_retrieval_before_answering() {
         let system_prompt = get_summarize_system_prompt();
-        let prompt = get_summarize_prompt("How does retrieval-augmented generation work?");
         let retrieval_instruction = format!("Start by calling `{RETRIEVAL_TOOL_NAME}`");
         let summarization_instruction = format!("Then call `{SUMMARIZATION_TOOL_NAME}`");
         let retrieval_position = system_prompt
@@ -190,10 +174,6 @@ mod tests {
         assert!(system_prompt.contains("No excerpts are provided"));
         assert!(retrieval_position < summarization_position);
         assert!(system_prompt.contains("do not keep searching."));
-        assert!(
-            prompt
-                .contains("<user_query>How does retrieval-augmented generation work?</user_query>")
-        );
     }
 
     #[test]
