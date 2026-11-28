@@ -8,6 +8,7 @@ use std::sync::{Arc, LazyLock};
 use http::HeaderMap;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+use xxhash_rust::xxh3::{Xxh3, xxh3_64};
 
 use super::errors::LLMError;
 use crate::constants::DEFAULT_MAX_TOOL_ITERATIONS;
@@ -15,6 +16,7 @@ use crate::events::AgentEvent;
 use crate::http_client::HttpClient;
 use crate::llm::tools::{CallbackFn, SerializedTool, Tool, get_owned_tools, process_tool_calls};
 use crate::pricing::ModelUsage;
+use crate::providers::ProviderId;
 use crate::requests::request_with_backoff;
 
 /// Roles for messages
@@ -90,6 +92,231 @@ pub enum ChatHistoryContent {
     ToolCallResponse(ToolCallResponse),
 }
 
+/// Wire API flavor that produced a [`NativePayload`].
+///
+/// Distinguishes endpoints within one provider and separates providers that share a
+/// wire-compatible format (such as Anthropic and Ollama), so stored payloads are only replayed
+/// natively by an adapter speaking the same API.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
+pub enum ApiFlavor {
+    /// Anthropic Messages API (`POST /v1/messages`).
+    #[serde(rename = "anthropic.messages")]
+    AnthropicMessages,
+    /// OpenAI Responses API (`POST /v1/responses`).
+    #[serde(rename = "openai.responses")]
+    OpenAIResponses,
+    /// Gemini Interactions API (`POST /v1beta/interactions`).
+    #[serde(rename = "gemini.interactions")]
+    GeminiInteractions,
+    /// OpenRouter Chat Completions API (`POST /api/v1/chat/completions`).
+    #[serde(rename = "openrouter.chat_completions")]
+    OpenRouterChatCompletions,
+    /// Ollama Anthropic-compatible Messages API (`POST /v1/messages`).
+    #[serde(rename = "ollama.anthropic_messages")]
+    OllamaAnthropicMessages,
+    /// Mock API flavor, used for testing (enabled by the `mock` feature).
+    #[cfg(any(test, feature = "mock"))]
+    #[serde(rename = "mock")]
+    Mock,
+}
+
+impl ApiFlavor {
+    /// Return the canonical wire identifier for this API flavor.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::AnthropicMessages => "anthropic.messages",
+            Self::OpenAIResponses => "openai.responses",
+            Self::GeminiInteractions => "gemini.interactions",
+            Self::OpenRouterChatCompletions => "openrouter.chat_completions",
+            Self::OllamaAnthropicMessages => "ollama.anthropic_messages",
+            #[cfg(any(test, feature = "mock"))]
+            Self::Mock => "mock",
+        }
+    }
+}
+
+impl Display for ApiFlavor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Identifies the provider, wire API flavor, and serving model that produced a response.
+///
+/// `api` distinguishes endpoints within one provider (such as [`ApiFlavor::AnthropicMessages`] vs.
+/// [`ApiFlavor::OllamaAnthropicMessages`], or [`ApiFlavor::GeminiInteractions`]), so stored
+/// payloads are not misread if an adapter later switches APIs. `model` records the serving model
+/// reported in the response when available.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct ModelRef {
+    /// The provider that served the response.
+    pub provider: ProviderId,
+    /// The wire API flavor that served the response.
+    pub api: ApiFlavor,
+    /// The serving model identifier reported by the provider.
+    pub model: String,
+}
+
+/// A deterministic `xxh3` digest of the provider-agnostic request frame (`system_prompt` and tool
+/// specifications).
+///
+/// The digest hashes `(system_prompt, [{ name, description, parameters }])` without
+/// provider-specific schema keys, so adapters can tell when the request prefix changed (for
+/// example, to strip Anthropic thinking blocks bound to an older frame).
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct FrameHash(pub String);
+
+impl FrameHash {
+    /// Compute the canonical `xxh3` hash for `system_prompt` and `tools`.
+    ///
+    /// Both `None` and `Some(&[])` for `tools` hash identically since neither sends tool
+    /// declarations. JSON object keys inside tool parameter schemas are sorted before hashing so
+    /// the digest is independent of map iteration order.
+    ///
+    /// # Arguments
+    ///
+    /// * `system_prompt` - The system prompt active for the request, if any.
+    /// * `tools` - The tools exposed to the model, if any.
+    ///
+    /// # Returns
+    ///
+    /// A 32-character lowercase hexadecimal `xxh3_128` digest.
+    #[must_use]
+    pub(crate) fn compute(
+        system_prompt: Option<&str>,
+        tools: Option<&[SerializedTool<'_>]>,
+    ) -> Self {
+        let tool_specs: Vec<serde_json::Value> = tools
+            .unwrap_or_default()
+            .iter()
+            .map(|serialized| {
+                serde_json::json!({
+                    "name": serialized.tool.name(),
+                    "description": serialized.tool.description(),
+                    "parameters": serde_json::Value::from(serialized.tool.parameters()),
+                })
+            })
+            .collect();
+        let canonical = serde_json::json!({
+            "system_prompt": system_prompt,
+            "tools": tool_specs,
+        });
+
+        let mut hasher = Xxh3::new();
+        hash_canonical_json(&mut hasher, &canonical);
+
+        Self(format!("{:032x}", hasher.digest128()))
+    }
+}
+
+/// Feed a `serde_json::Value` into `hasher` with object keys sorted lexicographically.
+fn hash_canonical_json(hasher: &mut Xxh3, value: &serde_json::Value) {
+    match value {
+        serde_json::Value::Null => hasher.update(b"null"),
+        serde_json::Value::Bool(b) => hasher.update(if *b { b"true" } else { b"false" }),
+        serde_json::Value::Number(n) => hasher.update(n.to_string().as_bytes()),
+        serde_json::Value::String(s) => {
+            hasher.update(serde_json::to_string(s).unwrap_or_default().as_bytes());
+        }
+        serde_json::Value::Array(items) => {
+            hasher.update(b"[");
+
+            for (idx, item) in items.iter().enumerate() {
+                if idx > 0 {
+                    hasher.update(b",");
+                }
+                hash_canonical_json(hasher, item);
+            }
+
+            hasher.update(b"]");
+        }
+        serde_json::Value::Object(map) => {
+            let mut entries: Vec<(&str, &serde_json::Value)> =
+                map.iter().map(|(k, v)| (k.as_str(), v)).collect();
+            entries.sort_unstable_by_key(|(k, _)| *k);
+
+            hasher.update(b"{");
+
+            for (idx, (k, v)) in entries.into_iter().enumerate() {
+                if idx > 0 {
+                    hasher.update(b",");
+                }
+                hasher.update(serde_json::to_string(k).unwrap_or_default().as_bytes());
+                hasher.update(b":");
+                hash_canonical_json(hasher, v);
+            }
+
+            hasher.update(b"}");
+        }
+    }
+}
+
+/// Deterministically sanitize a tool call ID to satisfy Anthropic's `^[a-zA-Z0-9_-]{1,64}$`
+/// constraint.
+///
+/// IDs that already satisfy the constraint are returned unchanged. Any other ID (empty, longer
+/// than 64 bytes, or containing disallowed characters such as OpenAI's `|` or `:`) is mapped to a
+/// sanitized prefix plus a 16-hex-character `xxh3_64` suffix so tool requests and their matching
+/// tool results stay paired without collisions.
+///
+/// # Arguments
+///
+/// * `id` - The raw tool call identifier from the history item.
+///
+/// # Returns
+///
+/// A valid Anthropic tool-use identifier of length `1..=64`.
+#[must_use]
+pub(crate) fn sanitize_anthropic_tool_id(id: &str) -> String {
+    const MAX_LEN: usize = 64;
+    const SUFFIX_LEN: usize = 17; // '_' + 16 hex chars
+    const MAX_PREFIX_LEN: usize = MAX_LEN - SUFFIX_LEN;
+
+    let is_valid = !id.is_empty()
+        && id.len() <= MAX_LEN
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-');
+    if is_valid {
+        return id.to_owned();
+    }
+
+    let hash = xxh3_64(id.as_bytes());
+    let mut prefix: String = id
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .take(MAX_PREFIX_LEN)
+        .collect();
+    if prefix.is_empty() {
+        prefix.push_str("tool");
+    }
+
+    format!("{prefix}_{hash:016x}")
+}
+
+/// Provider-native response captured verbatim alongside canonical [`ChatHistoryContent`].
+///
+/// Storing the raw response JSON lets each adapter replay provider-opaque state (such as Anthropic
+/// thinking signatures and redacted thinking, OpenAI encrypted reasoning, Gemini thought and
+/// function-call signatures, and OpenRouter `reasoning_details`) across turns and disk reloads.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct NativePayload {
+    /// Provider, API flavor, and serving model that produced `response`.
+    pub origin: ModelRef,
+    /// Digest of the request frame (`system_prompt` and tools) active when `response` was produced.
+    pub frame: FrameHash,
+    /// The response body exactly as returned by the provider.
+    pub response: serde_json::Value,
+}
+
 /// An element of the chat history. This records all previous chat interactions, including tool
 /// requests from the model and the results of those tool calls. This is a user-facing struct: this
 /// is internally converted to provider-specific implementations.
@@ -101,10 +328,14 @@ pub struct ChatHistoryItem {
     /// The contents of this item. This is a `Vec` because some APIs expect tool call requests to
     /// be bundled together with the text preceding it.
     pub content: Vec<ChatHistoryContent>,
+    /// Provider-native response payload for assistant turns, when available. Absent on user and
+    /// tool-result items and on conversations saved before native capture existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native: Option<NativePayload>,
 }
 
 /// Provider-agnostic reasoning configuration
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReasoningConfig {
     /// Token budget for thinking.
     pub max_tokens: Option<u32>,
@@ -326,10 +557,19 @@ impl CompletionApiResponse {
     }
 }
 
+/// Raw provider response and origin captured by one [`AgenticClient::send_once`] call.
+pub(crate) struct RawProviderResponse {
+    /// Provider, API flavor, and serving model reported by the response.
+    pub(crate) origin: ModelRef,
+    /// The exact JSON response body returned by the provider.
+    pub(crate) body: serde_json::Value,
+}
+
 /// An abstraction over one model turn.
-pub(crate) struct ProviderTurn<H> {
-    /// The model's output in the provider-native format.
-    pub(crate) native_items: Vec<H>,
+pub(crate) struct ProviderTurn {
+    /// Raw response body and origin metadata, attached to the assistant [`ChatHistoryItem`] as
+    /// [`NativePayload`]. Every real provider populates this; only mock loop tests omit it.
+    pub(crate) raw: Option<RawProviderResponse>,
     /// Provider-agnostic view of the same output, for tool dispatch and final-text extraction.
     pub(crate) contents: Vec<ChatHistoryContent>,
     /// Token usage of each provider request in this turn. Usually one, but retried requests add
@@ -337,20 +577,55 @@ pub(crate) struct ProviderTurn<H> {
     pub(crate) usage: Vec<ModelUsage>,
 }
 
+impl ProviderTurn {
+    /// Split this turn into its recorded usage and an assistant [`ChatHistoryItem`] stamped with
+    /// `frame`, or `None` if neither canonical contents nor a raw response were produced.
+    fn into_history_and_usage(
+        self,
+        frame: &FrameHash,
+    ) -> (Option<ChatHistoryItem>, Vec<ModelUsage>) {
+        let native = self.raw.map(|raw| NativePayload {
+            origin: raw.origin,
+            frame: frame.clone(),
+            response: raw.body,
+        });
+        let item = (!self.contents.is_empty() || native.is_some()).then_some(ChatHistoryItem {
+            role: MessageRole::Assistant,
+            content: self.contents,
+            native,
+        });
+
+        (item, self.usage)
+    }
+}
+
 /// Internal contract for provider-specific generation adapters.
-pub(crate) trait AgenticClient
-where
-    ChatHistoryItem: Into<Vec<Self::HistoryItem>>,
-{
+pub(crate) trait AgenticClient {
     type HistoryItem;
     const SCHEMA_KEY: &'static str;
+    const API_FLAVOR: ApiFlavor;
+
+    /// Project one history item into provider-native request items for `current_frame`.
+    ///
+    /// Both [`Self::build_initial_history`] and the in-loop continuation inside
+    /// [`Self::send_message`] call this method, so in-loop replay and post-reload replay produce
+    /// identical request items.
+    fn project_history_item(
+        &self,
+        item: &ChatHistoryItem,
+        current_frame: &FrameHash,
+    ) -> Vec<Self::HistoryItem>;
 
     /// Build the initial conversation history in the provider-native format given a
-    /// [`ChatRequest`].
-    fn build_initial_history(&self, request: &ChatRequest<'_>) -> Vec<Self::HistoryItem>;
+    /// [`ChatRequest`] and the active `current_frame`.
+    fn build_initial_history(
+        &self,
+        request: &ChatRequest<'_>,
+        current_frame: &FrameHash,
+    ) -> Vec<Self::HistoryItem>;
 
-    /// Perform one provider request-response round trip and convert the response into native and
-    /// provider-agnostic history items.
+    /// Perform one provider request-response round trip and convert the response into raw and
+    /// provider-agnostic history data.
     ///
     /// `tools` is the same on every turn of a tool loop; `allow_tool_calls` is `false` on the last
     /// turn. Providers that can forbid tool calls (e.g. a `tool_choice` of "none") should keep
@@ -365,7 +640,7 @@ where
         allow_tool_calls: bool,
         reasoning: Option<&ReasoningConfig>,
         max_tokens: Option<u32>,
-    ) -> Result<ProviderTurn<Self::HistoryItem>, LLMError>;
+    ) -> Result<ProviderTurn, LLMError>;
 
     /// Send a chat request, executing requested tools until the provider returns a final response.
     ///
@@ -388,16 +663,18 @@ where
     where
         Self: Sized,
     {
-        let mut provider_history = self.build_initial_history(request);
         let tools = get_owned_tools(request.tools, Self::SCHEMA_KEY);
+        let iteration_limit = request
+            .tool_iteration_limit
+            .unwrap_or(DEFAULT_MAX_TOOL_ITERATIONS);
+        let initial_tools = tools.as_deref().filter(|_| iteration_limit > 1);
+        let frame_hash = FrameHash::compute(request.system_prompt.as_deref(), initial_tools);
+        let mut provider_history = self.build_initial_history(request, &frame_hash);
         let mut usage = Vec::new();
         let mut contents = Vec::<ContentType>::new();
         let mut history_additions = Vec::new();
 
         let mut round_trips = 0;
-        let iteration_limit = request
-            .tool_iteration_limit
-            .unwrap_or(DEFAULT_MAX_TOOL_ITERATIONS);
         while round_trips < iteration_limit {
             // On the last trip, disallow tool calls
             let is_last_turn = round_trips == iteration_limit.saturating_sub(1);
@@ -440,12 +717,19 @@ where
                 turn.contents.len(),
                 turn.usage
             );
-            usage.extend(turn.usage);
-            provider_history.extend(turn.native_items);
+            let (assistant_item, turn_usage) = turn.into_history_and_usage(&frame_hash);
+            usage.extend(turn_usage);
+            let turn_contents = assistant_item
+                .as_ref()
+                .map_or(&[][..], |item| item.content.as_slice());
+
+            if let Some(item) = &assistant_item {
+                provider_history.extend(self.project_history_item(item, &frame_hash));
+            }
 
             let tool_call_results = process_tool_calls(
                 &mut contents,
-                &turn.contents,
+                turn_contents,
                 if is_last_turn {
                     &[]
                 } else {
@@ -455,11 +739,8 @@ where
             )
             .await;
 
-            if !turn.contents.is_empty() {
-                history_additions.push(ChatHistoryItem {
-                    role: MessageRole::Assistant,
-                    content: turn.contents,
-                });
+            if let Some(item) = assistant_item {
+                history_additions.push(item);
             }
 
             let Some(tool_call_results) = tool_call_results else {
@@ -477,9 +758,7 @@ where
                 );
             }
 
-            let provider_tool_call_results: Vec<Self::HistoryItem> =
-                tool_call_results.clone().into();
-            provider_history.extend(provider_tool_call_results);
+            provider_history.extend(self.project_history_item(&tool_call_results, &frame_hash));
             history_additions.push(tool_call_results);
             round_trips += 1;
         }
@@ -506,7 +785,7 @@ pub(crate) async fn send_generation_request<R, S>(
     headers: &HeaderMap,
     api_url: &str,
     max_retries: usize,
-) -> Result<S, LLMError>
+) -> Result<(S, serde_json::Value), LLMError>
 where
     R: Serialize + Send + Sync,
     S: DeserializeOwned,
@@ -522,7 +801,7 @@ where
         );
         LLMError::DeserializationError(body.clone())
     })?;
-    let response: S = serde_json::from_value(json).map_err(|err| {
+    let response: S = serde_json::from_value(json.clone()).map_err(|err| {
         log::error!(
             "Failed to deserialize response into target type: {}. Body: {}",
             crate::logging::preview(&err),
@@ -531,7 +810,7 @@ where
         LLMError::DeserializationError(body)
     })?;
 
-    Ok(response)
+    Ok((response, json))
 }
 
 #[cfg(test)]
@@ -548,17 +827,11 @@ mod tests {
 
     struct TestHistoryItem;
 
-    impl From<ChatHistoryItem> for Vec<TestHistoryItem> {
-        fn from(_: ChatHistoryItem) -> Self {
-            Vec::new()
-        }
-    }
-
     /// The number of tools sent on a turn, and whether tool calls were allowed.
     type ToolsSeen = (Option<usize>, bool);
 
     struct TestClient {
-        turns: Mutex<VecDeque<ProviderTurn<TestHistoryItem>>>,
+        turns: Mutex<VecDeque<ProviderTurn>>,
         system_prompts_seen: Arc<Mutex<Vec<Option<String>>>>,
         tools_seen: Arc<Mutex<Vec<ToolsSeen>>>,
     }
@@ -566,8 +839,21 @@ mod tests {
     impl AgenticClient for TestClient {
         type HistoryItem = TestHistoryItem;
         const SCHEMA_KEY: &'static str = "parameters";
+        const API_FLAVOR: ApiFlavor = ApiFlavor::Mock;
 
-        fn build_initial_history(&self, _: &ChatRequest<'_>) -> Vec<Self::HistoryItem> {
+        fn project_history_item(
+            &self,
+            _: &ChatHistoryItem,
+            _: &FrameHash,
+        ) -> Vec<Self::HistoryItem> {
+            Vec::new()
+        }
+
+        fn build_initial_history(
+            &self,
+            _: &ChatRequest<'_>,
+            _: &FrameHash,
+        ) -> Vec<Self::HistoryItem> {
             Vec::new()
         }
 
@@ -579,7 +865,7 @@ mod tests {
             allow_tool_calls: bool,
             _: Option<&ReasoningConfig>,
             _: Option<u32>,
-        ) -> impl Future<Output = Result<ProviderTurn<Self::HistoryItem>, LLMError>> {
+        ) -> impl Future<Output = Result<ProviderTurn, LLMError>> {
             self.system_prompts_seen
                 .lock()
                 .unwrap()
@@ -592,9 +878,9 @@ mod tests {
         }
     }
 
-    fn tool_call_turn(calls: &[(&str, &str)], usage: ModelUsage) -> ProviderTurn<TestHistoryItem> {
+    fn tool_call_turn(calls: &[(&str, &str)], usage: ModelUsage) -> ProviderTurn {
         ProviderTurn {
-            native_items: Vec::new(),
+            raw: None,
             contents: calls
                 .iter()
                 .map(|&(id, name)| tool_call_request(id, name))
@@ -629,6 +915,7 @@ mod tests {
                         args: serde_json::json!({"name": "Bob"}),
                     }),
                 ],
+                native: None,
             },
             ChatHistoryItem {
                 role: MessageRole::User,
@@ -644,6 +931,7 @@ mod tests {
                         result: Ok(serde_json::json!("Hello, Bob!")),
                     }),
                 ],
+                native: None,
             },
             ChatHistoryItem {
                 role: MessageRole::Assistant,
@@ -652,6 +940,7 @@ mod tests {
                     tool_name: "mock_tool".into(),
                     args: serde_json::json!({"name": "Carol"}),
                 })],
+                native: None,
             },
             ChatHistoryItem {
                 role: MessageRole::User,
@@ -660,10 +949,12 @@ mod tests {
                     tool_name: "mock_tool".into(),
                     result: Ok(serde_json::json!("Hello, Carol!")),
                 })],
+                native: None,
             },
             ChatHistoryItem {
                 role: MessageRole::Assistant,
                 content: vec![ChatHistoryContent::Text("done".into())],
+                native: None,
             },
         ]
     }
@@ -672,7 +963,7 @@ mod tests {
     async fn send_message_preserves_tool_turns_and_accumulates_usage() {
         let tools_seen = Arc::new(Mutex::new(Vec::new()));
         let first_turn = ProviderTurn {
-            native_items: Vec::new(),
+            raw: None,
             contents: vec![
                 ChatHistoryContent::Reasoning("Need information from both tools.".into()),
                 ChatHistoryContent::Text("I will check both sources.".into()),
@@ -692,7 +983,7 @@ mod tests {
                 first_turn,
                 tool_call_turn(&[("call-3", "Carol")], ModelUsage::default()),
                 ProviderTurn {
-                    native_items: Vec::new(),
+                    raw: None,
                     contents: vec![ChatHistoryContent::Text("done".into())],
                     usage: vec![ModelUsage {
                         input_tokens: 20,
@@ -761,7 +1052,7 @@ mod tests {
         let client = TestClient {
             turns: Mutex::new(VecDeque::from([
                 ProviderTurn {
-                    native_items: Vec::new(),
+                    raw: None,
                     contents: vec![
                         ChatHistoryContent::Reasoning("Check the source.".into()),
                         ChatHistoryContent::Text("Looking it up.".into()),
@@ -770,7 +1061,7 @@ mod tests {
                     usage: vec![ModelUsage::default()],
                 },
                 ProviderTurn {
-                    native_items: Vec::new(),
+                    raw: None,
                     contents: vec![
                         ChatHistoryContent::Reasoning("The source agrees.".into()),
                         ChatHistoryContent::Text("Done.".into()),
@@ -820,7 +1111,7 @@ mod tests {
     async fn send_message_without_reasoning_only_sends_text_events() {
         let client = TestClient {
             turns: Mutex::new(VecDeque::from([ProviderTurn {
-                native_items: Vec::new(),
+                raw: None,
                 contents: vec![ChatHistoryContent::Text("done".into())],
                 usage: vec![ModelUsage::default()],
             }])),
@@ -864,7 +1155,7 @@ mod tests {
         let tools_seen = Arc::new(Mutex::new(Vec::new()));
         let client = TestClient {
             turns: Mutex::new(VecDeque::from([ProviderTurn {
-                native_items: Vec::new(),
+                raw: None,
                 contents: vec![ChatHistoryContent::Text("done".into())],
                 usage: vec![ModelUsage::default()],
             }])),
@@ -919,5 +1210,316 @@ mod tests {
     #[test]
     fn test_effort_token_maps_have_same_length() {
         test_eq!(EFFORT_TO_TOKENS.len(), TOKENS_TO_EFFORT.len());
+    }
+
+    #[test]
+    fn frame_hash_is_provider_agnostic_and_tracks_changes() {
+        let tools: Vec<Box<dyn Tool>> = vec![Box::new(MockTool {
+            call_count: Arc::default(),
+        })];
+        let anthropic_tools = get_owned_tools(Some(&tools), "input_schema");
+        let openai_tools = get_owned_tools(Some(&tools), "parameters");
+
+        let a = FrameHash::compute(Some("Be concise."), anthropic_tools.as_deref());
+        let b = FrameHash::compute(Some("Be concise."), openai_tools.as_deref());
+        let different_prompt = FrameHash::compute(Some("Be verbose."), openai_tools.as_deref());
+        let no_tools = FrameHash::compute(Some("Be concise."), None);
+        let empty_tools = FrameHash::compute(Some("Be concise."), Some(&[]));
+
+        test_eq!(a, b);
+        test_eq!(no_tools, empty_tools);
+        assert_ne!(a, different_prompt);
+        assert_ne!(a, no_tools);
+    }
+
+    #[test]
+    fn chat_history_item_defaults_missing_native_and_omits_none() {
+        let legacy = serde_json::json!({
+            "role": "assistant",
+            "content": [{ "Text": "Hello" }]
+        });
+        let parsed: ChatHistoryItem = serde_json::from_value(legacy.clone()).unwrap();
+
+        assert!(parsed.native.is_none());
+        test_eq!(serde_json::to_value(parsed).unwrap(), legacy);
+    }
+
+    #[test]
+    fn sanitize_anthropic_tool_id_is_deterministic_and_bounded() {
+        test_eq!(
+            sanitize_anthropic_tool_id("toolu_01ABC-def"),
+            "toolu_01ABC-def"
+        );
+
+        let long_id = format!("call|{}", "x".repeat(120));
+        let sanitized = sanitize_anthropic_tool_id(&long_id);
+        let other_long_id = format!("call|{}y", "x".repeat(120));
+
+        assert!(!sanitized.is_empty() && sanitized.len() <= 64);
+        assert!(
+            sanitized
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+        );
+        test_eq!(sanitized, sanitize_anthropic_tool_id(&long_id));
+        assert_ne!(sanitized, sanitize_anthropic_tool_id(&other_long_id));
+        assert_ne!(sanitize_anthropic_tool_id(""), "");
+    }
+
+    fn project_items<C: AgenticClient>(
+        client: &C,
+        items: &[ChatHistoryItem],
+        frame: &FrameHash,
+    ) -> serde_json::Value
+    where
+        C::HistoryItem: Serialize,
+    {
+        let projected: Vec<_> = items
+            .iter()
+            .flat_map(|item| client.project_history_item(item, frame))
+            .collect();
+        serde_json::to_value(projected).unwrap()
+    }
+
+    fn project_for_provider(
+        target: ProviderId,
+        items: &[ChatHistoryItem],
+        frame: &FrameHash,
+    ) -> serde_json::Value {
+        use crate::clients::{
+            anthropic::AnthropicClient, gemini::GeminiClient, ollama::OllamaClient,
+            openai::OpenAIClient, openrouter::OpenRouterClient,
+        };
+        use crate::config::{
+            AnthropicConfig, GeminiConfig, OllamaConfig, OpenAIConfig, OpenRouterConfig,
+        };
+        use crate::http_client::MockHttpClient;
+
+        match target {
+            ProviderId::Anthropic => project_items(
+                &AnthropicClient {
+                    client: MockHttpClient::new(()),
+                    config: Some(AnthropicConfig {
+                        model: "claude-sonnet-5-5".into(),
+                        ..AnthropicConfig::default()
+                    }),
+                },
+                items,
+                frame,
+            ),
+            ProviderId::OpenAI => project_items(
+                &OpenAIClient {
+                    client: MockHttpClient::new(()),
+                    config: Some(OpenAIConfig {
+                        model: "gpt-5".into(),
+                        ..OpenAIConfig::default()
+                    }),
+                },
+                items,
+                frame,
+            ),
+            ProviderId::Gemini => project_items(
+                &GeminiClient {
+                    client: MockHttpClient::new(()),
+                    config: Some(GeminiConfig {
+                        model: "gemini-3.1-pro-preview".into(),
+                        ..GeminiConfig::default()
+                    }),
+                },
+                items,
+                frame,
+            ),
+            ProviderId::OpenRouter => project_items(
+                &OpenRouterClient {
+                    client: MockHttpClient::new(()),
+                    config: Some(OpenRouterConfig {
+                        model: "openai/gpt-5.2".into(),
+                        ..OpenRouterConfig::default()
+                    }),
+                },
+                items,
+                frame,
+            ),
+            ProviderId::Ollama => project_items(
+                &OllamaClient {
+                    client: MockHttpClient::new(()),
+                    config: Some(OllamaConfig {
+                        model: "qwen3.5:latest".into(),
+                        ..OllamaConfig::default()
+                    }),
+                },
+                items,
+                frame,
+            ),
+            _ => unreachable!(),
+        }
+    }
+
+    fn provider_history_pair(
+        provider: ProviderId,
+        api: ApiFlavor,
+        model: &str,
+        frame: &FrameHash,
+        raw_call_id: &str,
+        response: serde_json::Value,
+    ) -> [ChatHistoryItem; 2] {
+        [
+            ChatHistoryItem {
+                role: MessageRole::Assistant,
+                content: vec![
+                    ChatHistoryContent::Reasoning("Shared reasoning.".into()),
+                    ChatHistoryContent::Text("Calling tool.".into()),
+                    ChatHistoryContent::ToolCallRequest(ToolCallRequest {
+                        id: raw_call_id.into(),
+                        tool_name: "mock_tool".into(),
+                        args: serde_json::json!({"name": "Alice"}),
+                    }),
+                ],
+                native: Some(NativePayload {
+                    origin: ModelRef {
+                        provider,
+                        api,
+                        model: model.into(),
+                    },
+                    frame: frame.clone(),
+                    response,
+                }),
+            },
+            ChatHistoryItem {
+                role: MessageRole::User,
+                content: vec![ChatHistoryContent::ToolCallResponse(ToolCallResponse {
+                    id: raw_call_id.into(),
+                    tool_name: "mock_tool".into(),
+                    result: Ok(serde_json::json!("Hello, Alice!")),
+                })],
+                native: None,
+            },
+        ]
+    }
+
+    #[test]
+    fn api_flavor_serde_matches_as_str() {
+        for flavor in [
+            ApiFlavor::AnthropicMessages,
+            ApiFlavor::OpenAIResponses,
+            ApiFlavor::GeminiInteractions,
+            ApiFlavor::OpenRouterChatCompletions,
+            ApiFlavor::OllamaAnthropicMessages,
+            ApiFlavor::Mock,
+        ] {
+            let serialized = serde_json::to_value(flavor).unwrap();
+            test_eq!(
+                serialized,
+                serde_json::Value::String(flavor.as_str().into())
+            );
+            test_eq!(
+                serde_json::from_value::<ApiFlavor>(serialized).unwrap(),
+                flavor
+            );
+        }
+    }
+
+    #[test]
+    fn cross_provider_replay_matrix_strips_foreign_native_and_restores_on_switch_back() {
+        let frame = FrameHash("frame-1".into());
+        let raw_call_id = "call|bad:id.with.dots";
+        let cases = [
+            (
+                ProviderId::Anthropic,
+                "sig-anth",
+                provider_history_pair(
+                    ProviderId::Anthropic,
+                    ApiFlavor::AnthropicMessages,
+                    "claude-sonnet-5-5",
+                    &frame,
+                    raw_call_id,
+                    serde_json::json!({"content": [
+                        {"type": "thinking", "thinking": "Shared reasoning.", "signature": "sig-anth"},
+                        {"type": "redacted_thinking", "data": "red-anth"}
+                    ]}),
+                ),
+            ),
+            (
+                ProviderId::OpenAI,
+                "enc-oai",
+                provider_history_pair(
+                    ProviderId::OpenAI,
+                    ApiFlavor::OpenAIResponses,
+                    "gpt-5",
+                    &frame,
+                    raw_call_id,
+                    serde_json::json!({"output": [
+                        {"type": "reasoning", "id": "rs-1", "summary": [], "encrypted_content": "enc-oai"}
+                    ]}),
+                ),
+            ),
+            (
+                ProviderId::Gemini,
+                "sig-gem",
+                provider_history_pair(
+                    ProviderId::Gemini,
+                    ApiFlavor::GeminiInteractions,
+                    "gemini-3.1-pro-preview",
+                    &frame,
+                    raw_call_id,
+                    serde_json::json!({"steps": [{"type": "thought", "signature": "sig-gem"}]}),
+                ),
+            ),
+            (
+                ProviderId::OpenRouter,
+                "enc-or",
+                provider_history_pair(
+                    ProviderId::OpenRouter,
+                    ApiFlavor::OpenRouterChatCompletions,
+                    "openai/gpt-5.2",
+                    &frame,
+                    raw_call_id,
+                    serde_json::json!({"choices": [{"message": {
+                        "role": "assistant", "content": "Calling tool.",
+                        "reasoning_details": [{"type": "reasoning.encrypted", "data": "enc-or"}]
+                    }}]}),
+                ),
+            ),
+            (
+                ProviderId::Ollama,
+                r#""type":"thinking""#,
+                provider_history_pair(
+                    ProviderId::Ollama,
+                    ApiFlavor::OllamaAnthropicMessages,
+                    "qwen3.5:latest",
+                    &frame,
+                    raw_call_id,
+                    serde_json::json!({"content": [{"type": "thinking", "thinking": "Shared reasoning."}]}),
+                ),
+            ),
+        ];
+
+        for (source, source_marker, pair) in &cases {
+            for (target, _, _) in &cases {
+                let projected = project_for_provider(*target, pair, &frame);
+                let json_str = projected.to_string();
+
+                if target == source {
+                    assert!(
+                        json_str.contains(source_marker),
+                        "{source:?} -> {target:?}: {json_str}"
+                    );
+                    continue;
+                }
+
+                for (origin, marker, _) in &cases {
+                    assert!(
+                        !json_str.contains(marker),
+                        "{source:?} -> {target:?} leaked {origin:?} marker {marker}: {json_str}"
+                    );
+                }
+                assert!(json_str.contains("Shared reasoning."));
+                if *target == ProviderId::Anthropic {
+                    let expected_id = sanitize_anthropic_tool_id(raw_call_id);
+                    test_eq!(projected[0]["content"][2]["id"], expected_id);
+                    test_eq!(projected[1]["content"][0]["tool_use_id"], expected_id);
+                }
+            }
+        }
     }
 }

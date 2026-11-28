@@ -14,11 +14,13 @@ use crate::clients::gemini::{GeminiClient, get_gemini_api_key};
 use crate::constants::{DEFAULT_GEMINI_MODEL, DEFAULT_MAX_RETRIES};
 use crate::http_client::HttpClient;
 use crate::llm::base::{
-    AgenticClient, ChatHistoryContent, ChatHistoryItem, MessageRole, ProviderTurn, ReasoningConfig,
-    ToolCallRequest, send_generation_request,
+    AgenticClient, ApiFlavor, ChatHistoryContent, ChatHistoryItem, FrameHash, MessageRole,
+    ModelRef, ProviderTurn, RawProviderResponse, ReasoningConfig, ToolCallRequest,
+    send_generation_request,
 };
 use crate::llm::tools::{GEMINI_SCHEMA_KEY, SerializedTool};
 use crate::pricing::ModelUsage;
+use crate::providers::ProviderId;
 use crate::requests::exponential_backoff_delay;
 
 /// A content item inside a step. Only text is requested from or sent to the API.
@@ -77,6 +79,15 @@ pub(crate) enum GeminiStep {
     Unsupported,
 }
 
+/// One step in a Gemini Interactions request input: either a typed canonical step or a verbatim
+/// raw step projected from a captured response.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(untagged)]
+pub(crate) enum GeminiHistoryStep {
+    Step(GeminiStep),
+    Raw(serde_json::Value),
+}
+
 impl From<ChatHistoryItem> for Vec<GeminiStep> {
     fn from(value: ChatHistoryItem) -> Self {
         value
@@ -90,7 +101,11 @@ impl From<ChatHistoryItem> for Vec<GeminiStep> {
                         MessageRole::Assistant => GeminiStep::ModelOutput { content },
                     })
                 }
-                ChatHistoryContent::Reasoning(_) => None,
+                ChatHistoryContent::Reasoning(text) => {
+                    (!text.is_empty()).then_some(GeminiStep::ModelOutput {
+                        content: vec![GeminiContentItem::Text { text }],
+                    })
+                }
                 ChatHistoryContent::ToolCallRequest(tool_call) => Some(GeminiStep::FunctionCall {
                     id: tool_call.id,
                     name: tool_call.tool_name,
@@ -173,7 +188,7 @@ struct GeminiTool<'a> {
 #[derive(Serialize, Clone)]
 struct GeminiRequestBody<'a> {
     model: &'a str,
-    input: &'a [GeminiStep],
+    input: &'a [GeminiHistoryStep],
     #[serde(skip_serializing_if = "Option::is_none")]
     system_instruction: Option<&'a str>,
     generation_config: GeminiGenerationConfig,
@@ -214,6 +229,8 @@ impl From<GeminiUsage> for ModelUsage {
 /// Interaction response from the Gemini API.
 #[derive(Serialize, Deserialize, Clone)]
 struct GeminiResponseBody {
+    #[serde(default)]
+    model: Option<String>,
     status: String,
     #[serde(default)]
     steps: Vec<GeminiStep>,
@@ -285,23 +302,97 @@ fn is_malformed_tool_call(body: &str) -> bool {
         .is_ok_and(|value| value["error"]["code"] == "malformed_tool_call")
 }
 
-impl<T: HttpClient> AgenticClient for GeminiClient<T> {
-    type HistoryItem = GeminiStep;
-    const SCHEMA_KEY: &'static str = GEMINI_SCHEMA_KEY;
+/// Retain only text items inside a `content` or `summary` array on a raw Gemini step.
+fn retain_supported_content_items(
+    step: &mut serde_json::Map<String, serde_json::Value>,
+    key: &str,
+) {
+    if let Some(items) = step.get_mut(key).and_then(serde_json::Value::as_array_mut) {
+        items.retain(|item| item.get("type").and_then(serde_json::Value::as_str) == Some("text"));
+    }
+}
 
-    fn build_initial_history(&self, request: &ChatRequest<'_>) -> Vec<Self::HistoryItem> {
-        let mut steps: Vec<GeminiStep> = request
+/// Project a raw Gemini Interactions API response body into replayable input steps.
+///
+/// Preserves `thought`, `model_output`, and `function_call` steps verbatim (including opaque
+/// `signature` fields on both `thought` and `function_call`) while dropping unsupported step types
+/// and non-text content items.
+fn project_gemini_response(response: &serde_json::Value) -> Vec<GeminiHistoryStep> {
+    let Some(steps) = response.get("steps").and_then(serde_json::Value::as_array) else {
+        return Vec::new();
+    };
+
+    steps
+        .iter()
+        .filter_map(|step| {
+            let mut obj = step.as_object()?.clone();
+            match obj.get("type").and_then(serde_json::Value::as_str)? {
+                "model_output" => {
+                    retain_supported_content_items(&mut obj, "content");
+                    Some(GeminiHistoryStep::Raw(serde_json::Value::Object(obj)))
+                }
+                "thought" => {
+                    retain_supported_content_items(&mut obj, "summary");
+                    Some(GeminiHistoryStep::Raw(serde_json::Value::Object(obj)))
+                }
+                "function_call" => Some(GeminiHistoryStep::Raw(serde_json::Value::Object(obj))),
+                _ => None,
+            }
+        })
+        .collect()
+}
+
+impl<T: HttpClient> GeminiClient<T> {
+    /// Resolve the configured or environment-default Gemini model name.
+    fn target_model(&self) -> String {
+        match &self.config {
+            Some(config) => config.model.clone(),
+            None => env::var("GEMINI_MODEL").unwrap_or_else(|_| DEFAULT_GEMINI_MODEL.to_string()),
+        }
+    }
+}
+
+impl<T: HttpClient> AgenticClient for GeminiClient<T> {
+    type HistoryItem = GeminiHistoryStep;
+    const SCHEMA_KEY: &'static str = GEMINI_SCHEMA_KEY;
+    const API_FLAVOR: ApiFlavor = ApiFlavor::GeminiInteractions;
+
+    fn project_history_item(
+        &self,
+        item: &ChatHistoryItem,
+        _current_frame: &FrameHash,
+    ) -> Vec<Self::HistoryItem> {
+        if item.role == MessageRole::Assistant
+            && let Some(native) = &item.native
+            && native.origin.provider == ProviderId::Gemini
+            && native.origin.api == Self::API_FLAVOR
+            && native.origin.model == self.target_model()
+        {
+            return project_gemini_response(&native.response);
+        }
+
+        Vec::<GeminiStep>::from(item.clone())
+            .into_iter()
+            .map(GeminiHistoryStep::Step)
+            .collect()
+    }
+
+    fn build_initial_history(
+        &self,
+        request: &ChatRequest<'_>,
+        current_frame: &FrameHash,
+    ) -> Vec<Self::HistoryItem> {
+        let mut steps: Vec<GeminiHistoryStep> = request
             .chat_history
             .iter()
-            .cloned()
-            .flat_map(Vec::<GeminiStep>::from)
+            .flat_map(|item| self.project_history_item(item, current_frame))
             .collect();
 
-        steps.push(GeminiStep::UserInput {
+        steps.push(GeminiHistoryStep::Step(GeminiStep::UserInput {
             content: vec![GeminiContentItem::Text {
                 text: request.message.clone(),
             }],
-        });
+        }));
 
         steps
     }
@@ -314,7 +405,7 @@ impl<T: HttpClient> AgenticClient for GeminiClient<T> {
         allow_tool_calls: bool,
         reasoning: Option<&ReasoningConfig>,
         max_tokens: Option<u32>,
-    ) -> Result<super::base::ProviderTurn<Self::HistoryItem>, LLMError> {
+    ) -> Result<ProviderTurn, LLMError> {
         let key = get_gemini_api_key()?;
         let (model, max_retries) = match &self.config {
             None => (
@@ -358,7 +449,7 @@ impl<T: HttpClient> AgenticClient for GeminiClient<T> {
         let mut usage = Vec::new();
         let mut attempt = 0;
         loop {
-            let response: GeminiResponseBody =
+            let (response, raw_response): (GeminiResponseBody, _) =
                 match send_generation_request(&self.client, &request, &headers, url, max_retries)
                     .await
                 {
@@ -383,18 +474,9 @@ impl<T: HttpClient> AgenticClient for GeminiClient<T> {
                 continue;
             }
 
-            // Drop unsupported steps and content so they are not replayed.
+            // Skip unsupported steps before mapping; `texts()` already ignores unsupported items.
             let mut steps = response.steps;
             steps.retain(|step| *step != GeminiStep::Unsupported);
-            for step in &mut steps {
-                if let GeminiStep::ModelOutput { content }
-                | GeminiStep::Thought {
-                    summary: content, ..
-                } = step
-                {
-                    content.retain(|item| *item != GeminiContentItem::Unsupported);
-                }
-            }
 
             let contents = map_response_to_chat_contents(&steps);
             if status == "completed" && contents.is_empty() && attempt < max_retries {
@@ -420,8 +502,15 @@ impl<T: HttpClient> AgenticClient for GeminiClient<T> {
             }
 
             return Ok(ProviderTurn {
+                raw: Some(RawProviderResponse {
+                    origin: ModelRef {
+                        provider: ProviderId::Gemini,
+                        api: Self::API_FLAVOR,
+                        model: response.model.unwrap_or(model),
+                    },
+                    body: raw_response,
+                }),
                 contents,
-                native_items: steps,
                 usage,
             });
         }
@@ -527,6 +616,7 @@ mod tests {
             chat_history: vec![ChatHistoryItem {
                 role: MessageRole::Assistant,
                 content: vec![ChatHistoryContent::Text("Prior".into())],
+                native: None,
             }],
             max_tokens: Some(256),
             system_prompt: None,
@@ -993,6 +1083,7 @@ mod tests {
         let mut chat_history = vec![ChatHistoryItem {
             role: MessageRole::User,
             content: vec![ChatHistoryContent::Text(first_message.message.clone())],
+            native: None,
         }];
         chat_history.extend(response.history_additions);
 
@@ -1004,5 +1095,99 @@ mod tests {
 
         let response = client.send_message(&second_message).await;
         test_ok!(response);
+    }
+
+    #[tokio::test]
+    async fn native_payload_replays_across_reload_and_falls_back_on_model_switch() {
+        let turn1 = serde_json::json!({
+            "model": "gemini-3.1-pro-preview",
+            "status": "requires_action",
+            "steps": [
+                {
+                    "type": "thought", "signature": "sig-thought",
+                    "summary": [
+                        {"type": "text", "text": "Need tool."},
+                        {"type": "image", "data": "ignored"}
+                    ]
+                },
+                {"type": "google_search_call", "arguments": {}},
+                {
+                    "type": "function_call", "id": "call_1", "name": "mock_tool",
+                    "arguments": {"name": "Alice"}, "signature": "sig-call"
+                }
+            ],
+            "usage": {"total_input_tokens": 10, "total_output_tokens": 5}
+        });
+        let turn2 = serde_json::json!({
+            "model": "gemini-3.1-pro-preview",
+            "status": "completed",
+            "steps": [{"type": "model_output", "content": [{"type": "text", "text": "Done!"}]}],
+            "usage": {"total_input_tokens": 20, "total_output_tokens": 8}
+        });
+        let make_client = |client, model: &str| GeminiClient {
+            client,
+            config: Some(GeminiConfig {
+                api_key: "test".into(),
+                model: model.into(),
+                ..GeminiConfig::default()
+            }),
+        };
+        let tool: Vec<Box<dyn crate::llm::tools::Tool>> = vec![Box::new(MockTool {
+            call_count: Arc::default(),
+        })];
+        let http = RecordingSequentialMockHttpClient::new([turn1, turn2.clone()]);
+        let res = make_client(http.clone(), "gemini-3.1-pro-preview")
+            .send_message(&ChatRequest {
+                message: "First".into(),
+                tools: Some(&tool),
+                ..ChatRequest::default()
+            })
+            .await
+            .unwrap();
+        let in_loop_prefix = http.requests()[1]["input"].as_array().unwrap().clone();
+
+        let reloaded: Vec<ChatHistoryItem> =
+            serde_json::from_str(&serde_json::to_string(&res.history_additions).unwrap()).unwrap();
+        let mut history = vec![ChatHistoryItem {
+            role: MessageRole::User,
+            content: vec![ChatHistoryContent::Text("First".into())],
+            native: None,
+        }];
+        history.extend(reloaded);
+
+        // Same model replays signed thought + function_call verbatim without unsupported steps.
+        let http_same = RecordingSequentialMockHttpClient::new([turn2.clone()]);
+        make_client(http_same.clone(), "gemini-3.1-pro-preview")
+            .send_message(&ChatRequest {
+                chat_history: history.clone(),
+                message: "Follow-up".into(),
+                tools: Some(&tool),
+                ..ChatRequest::default()
+            })
+            .await
+            .unwrap();
+        let same_input = http_same.requests()[0]["input"].as_array().unwrap().clone();
+        test_eq!(&same_input[..in_loop_prefix.len()], &in_loop_prefix[..]);
+        test_eq!(same_input[1]["signature"], "sig-thought");
+        test_eq!(same_input[1]["summary"].as_array().unwrap().len(), 1);
+        test_eq!(same_input[2]["signature"], "sig-call");
+
+        // Different Gemini model falls back to canonical (reasoning as text, no signatures).
+        let http_other = RecordingSequentialMockHttpClient::new([turn2]);
+        make_client(http_other.clone(), "gemini-3.5-flash")
+            .send_message(&ChatRequest {
+                chat_history: history,
+                message: "Follow-up".into(),
+                tools: Some(&tool),
+                ..ChatRequest::default()
+            })
+            .await
+            .unwrap();
+        let other_reqs = http_other.requests();
+        let other_input = other_reqs[0]["input"].as_array().unwrap();
+        test_eq!(other_input[1]["type"], "model_output");
+        test_eq!(other_input[1]["content"][0]["text"], "Need tool.");
+        test_eq!(other_input[2]["type"], "function_call");
+        assert!(other_input[2].get("signature").is_none());
     }
 }

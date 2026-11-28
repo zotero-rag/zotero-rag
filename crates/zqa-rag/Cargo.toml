@@ -32,6 +32,7 @@ serde-jsonlines = "0.7.0"
 tempfile = "3.0"
 thiserror = "2.0"
 tokio = "1.41.0"
+xxhash-rust = { workspace = true }
 zqa-pdftools = { workspace = true }
 async-trait = "0.1.89"
 

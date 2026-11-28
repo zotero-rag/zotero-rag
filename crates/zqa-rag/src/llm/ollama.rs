@@ -15,27 +15,67 @@ use crate::constants::{
 use crate::http_client::HttpClient;
 use crate::llm::anthropic::{
     AnthropicChatHistoryItem, AnthropicRequest, AnthropicResponse, AnthropicThinkingConfig,
-    map_response_to_chat_contents,
+    map_response_to_chat_contents, project_anthropic_response,
 };
 use crate::llm::base::{
-    AgenticClient, MessageRole, ProviderTurn, ReasoningConfig, send_generation_request,
+    AgenticClient, ApiFlavor, ChatHistoryItem, FrameHash, MessageRole, ModelRef, ProviderTurn,
+    RawProviderResponse, ReasoningConfig, send_generation_request,
 };
 use crate::llm::tools::{ANTHROPIC_SCHEMA_KEY, SerializedTool};
+use crate::providers::ProviderId;
 
 /// Ollama supports the Anthropic Messages API, so we can reuse structs.
 type OllamaRequest<'a> = AnthropicRequest<'a>;
 type OllamaResponse = AnthropicResponse;
 
+impl<T: HttpClient> OllamaClient<T> {
+    /// Resolve the configured or environment-default Ollama model name.
+    fn target_model(&self) -> String {
+        match &self.config {
+            Some(config) => config.model.clone(),
+            None => env::var("OLLAMA_MODEL").unwrap_or_else(|_| DEFAULT_OLLAMA_MODEL.to_string()),
+        }
+    }
+}
+
 impl<T: HttpClient> AgenticClient for OllamaClient<T> {
     type HistoryItem = AnthropicChatHistoryItem;
     const SCHEMA_KEY: &'static str = ANTHROPIC_SCHEMA_KEY;
+    const API_FLAVOR: ApiFlavor = ApiFlavor::OllamaAnthropicMessages;
 
-    fn build_initial_history(&self, request: &ChatRequest<'_>) -> Vec<Self::HistoryItem> {
+    fn project_history_item(
+        &self,
+        item: &ChatHistoryItem,
+        _current_frame: &FrameHash,
+    ) -> Vec<Self::HistoryItem> {
+        if item.role == MessageRole::Assistant
+            && let Some(native) = &item.native
+            && native.origin.provider == ProviderId::Ollama
+            && native.origin.api == Self::API_FLAVOR
+            && native.origin.model == self.target_model()
+        {
+            return project_anthropic_response(&native.response, false)
+                .into_iter()
+                .collect();
+        }
+
+        let mapped = AnthropicChatHistoryItem::from(item);
+        if mapped.content.is_empty() {
+            Vec::new()
+        } else {
+            vec![mapped]
+        }
+    }
+
+    fn build_initial_history(
+        &self,
+        request: &ChatRequest<'_>,
+        current_frame: &FrameHash,
+    ) -> Vec<Self::HistoryItem> {
         let mut messages: Vec<AnthropicChatHistoryItem> = request
             .chat_history
-            .clone()
-            .into_iter()
-            .map(Into::into)
+            .iter()
+            .flat_map(|item| self.project_history_item(item, current_frame))
             .collect();
 
         messages.push(AnthropicChatHistoryItem {
@@ -54,7 +94,7 @@ impl<T: HttpClient> AgenticClient for OllamaClient<T> {
         allow_tool_calls: bool,
         reasoning: Option<&ReasoningConfig>,
         max_tokens: Option<u32>,
-    ) -> Result<ProviderTurn<Self::HistoryItem>, LLMError> {
+    ) -> Result<ProviderTurn, LLMError> {
         // Use config if available, otherwise fall back to env vars
         let (model, config_max_tokens, base_url, max_retries) = if let Some(ref config) =
             self.config
@@ -98,16 +138,20 @@ impl<T: HttpClient> AgenticClient for OllamaClient<T> {
         headers.insert("anthropic-version", "2023-06-01".parse()?);
 
         let url = format!("{base_url}/v1/messages");
-        let response: OllamaResponse =
+        let (response, raw_response): (OllamaResponse, _) =
             send_generation_request(&self.client, &request_body, &headers, &url, max_retries)
                 .await?;
 
         Ok(ProviderTurn {
+            raw: Some(RawProviderResponse {
+                origin: ModelRef {
+                    provider: ProviderId::Ollama,
+                    api: Self::API_FLAVOR,
+                    model: response.model,
+                },
+                body: raw_response,
+            }),
             contents: map_response_to_chat_contents(&response.content),
-            native_items: vec![AnthropicChatHistoryItem {
-                role: MessageRole::Assistant,
-                content: response.content,
-            }],
             usage: vec![response.usage.into()],
         })
     }
@@ -354,6 +398,51 @@ mod tests {
         );
     }
 
+    #[test]
+    fn native_payload_replays_for_same_model_and_falls_back_on_switch() {
+        let frame = crate::llm::base::FrameHash("f".into());
+        let item = ChatHistoryItem {
+            role: MessageRole::Assistant,
+            content: vec![ChatHistoryContent::Reasoning("Plan.".into())],
+            native: Some(crate::llm::base::NativePayload {
+                origin: ModelRef {
+                    provider: ProviderId::Ollama,
+                    api: ApiFlavor::OllamaAnthropicMessages,
+                    model: DEFAULT_OLLAMA_MODEL.into(),
+                },
+                frame: frame.clone(),
+                response: serde_json::json!({
+                    "content": [{"type": "thinking", "thinking": "Plan."}]
+                }),
+            }),
+        };
+        let reloaded: ChatHistoryItem =
+            serde_json::from_str(&serde_json::to_string(&item).unwrap()).unwrap();
+
+        let same_client = OllamaClient {
+            client: crate::http_client::MockHttpClient::new(()),
+            config: None,
+        };
+        let same = same_client.project_history_item(&reloaded, &frame);
+        test_eq!(
+            serde_json::to_value(&same[0].content[0]).unwrap(),
+            serde_json::json!({"type": "thinking", "thinking": "Plan."})
+        );
+
+        let other_client = OllamaClient {
+            client: crate::http_client::MockHttpClient::new(()),
+            config: Some(OllamaConfig {
+                model: "other-model".into(),
+                ..OllamaConfig::default()
+            }),
+        };
+        let other = other_client.project_history_item(&reloaded, &frame);
+        test_eq!(
+            serde_json::to_value(&other[0].content[0]).unwrap(),
+            serde_json::json!({"type": "text", "text": "Plan."})
+        );
+    }
+
     #[tokio::test]
     #[ignore = "CI not set up with ollama"]
     async fn test_followup_queries_work() {
@@ -372,6 +461,7 @@ mod tests {
         let mut chat_history = vec![ChatHistoryItem {
             role: MessageRole::User,
             content: vec![ChatHistoryContent::Text(first_message.message.clone())],
+            native: None,
         }];
         chat_history.extend(response.history_additions);
 

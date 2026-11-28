@@ -314,15 +314,10 @@ mod tests {
     use crate::embedding::cohere::CohereClient;
     use crate::embedding::voyage::VoyageAIClient;
     use crate::http_client::ReqwestClient;
-    use crate::llm::base::{AgenticClient, ChatHistoryItem};
+    use crate::llm::base::AgenticClient;
     use crate::reranking::common::Rerank;
 
-    fn assert_agentic_client<T>()
-    where
-        T: AgenticClient,
-        ChatHistoryItem: Into<Vec<T::HistoryItem>>,
-    {
-    }
+    fn assert_agentic_client<T: AgenticClient>() {}
     fn assert_embedding_fn<T: EmbeddingFunction>() {}
     fn assert_batch_provider<T: BatchAPIProvider>() {}
     fn assert_reranker<T: Rerank>() {}

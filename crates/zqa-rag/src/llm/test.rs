@@ -43,6 +43,7 @@ impl TestClient {
             history_additions: vec![ChatHistoryItem {
                 role: MessageRole::Assistant,
                 content: vec![ChatHistoryContent::Text(text)],
+                native: None,
             }],
             usage: vec![ModelUsage::default()],
         })

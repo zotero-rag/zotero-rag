@@ -15,11 +15,12 @@ use crate::constants::{DEFAULT_MAX_RETRIES, DEFAULT_OPENROUTER_MAX_TOKENS};
 use crate::http_client::HttpClient;
 use crate::llm::anthropic::AnthropicCacheControl;
 use crate::llm::base::{
-    AgenticClient, ChatHistoryContent, MessageRole, ProviderTurn, ReasoningConfig, ToolCallRequest,
-    send_generation_request,
+    AgenticClient, ApiFlavor, ChatHistoryContent, FrameHash, MessageRole, ModelRef, ProviderTurn,
+    RawProviderResponse, ReasoningConfig, ToolCallRequest, send_generation_request,
 };
 use crate::llm::tools::{OPENROUTER_SCHEMA_KEY, SerializedTool};
 use crate::pricing::ModelUsage;
+use crate::providers::ProviderId;
 
 const DEFAULT_MODEL: &str = "anthropic/claude-sonnet-4.5";
 
@@ -58,6 +59,10 @@ pub(crate) struct OpenRouterMessage {
     /// reasoning continuity (e.g. Anthropic via OpenRouter) can continue reasoning.
     #[serde(skip_serializing_if = "Option::is_none")]
     reasoning_details: Option<serde_json::Value>,
+    /// Reasoning text returned by models such as DeepSeek that require `reasoning_content` to be
+    /// replayed across tool-calling turns.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reasoning_content: Option<String>,
 }
 
 impl From<ChatHistoryItem> for Vec<OpenRouterMessage> {
@@ -133,7 +138,14 @@ fn convert_to_openrouter_messages(item: &ChatHistoryItem) -> Vec<OpenRouterMessa
                 }
                 content_text.push_str(text);
             }
-            ChatHistoryContent::Reasoning(_) => {}
+            ChatHistoryContent::Reasoning(text) => {
+                if !text.is_empty() {
+                    if !content_text.is_empty() {
+                        content_text.push(' ');
+                    }
+                    content_text.push_str(text);
+                }
+            }
             ChatHistoryContent::ToolCallRequest(req) => {
                 tool_calls.push(OpenRouterToolCall {
                     id: req.id.clone(),
@@ -152,6 +164,7 @@ fn convert_to_openrouter_messages(item: &ChatHistoryItem) -> Vec<OpenRouterMessa
                     tool_calls: None,
                     tool_call_id: Some(res.id.clone()),
                     reasoning_details: None,
+                    reasoning_content: None,
                 });
             }
         }
@@ -175,6 +188,7 @@ fn convert_to_openrouter_messages(item: &ChatHistoryItem) -> Vec<OpenRouterMessa
                 },
                 tool_call_id: None,
                 reasoning_details: None,
+                reasoning_content: None,
             },
         );
     }
@@ -269,6 +283,9 @@ struct OpenRouterResponseMessage {
     /// Opaque reasoning details to be returned unchanged in subsequent requests.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     reasoning_details: Option<serde_json::Value>,
+    /// Model reasoning text returned by providers such as DeepSeek for tool-loop replay.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    reasoning_content: Option<String>,
 }
 
 /// Content block in an OpenRouter API response
@@ -316,6 +333,10 @@ fn map_response_to_chat_contents(message: &OpenRouterResponseMessage) -> Vec<Cha
         && !reasoning.is_empty()
     {
         contents.push(ChatHistoryContent::Reasoning(reasoning.clone()));
+    } else if let Some(reasoning) = &message.reasoning_content
+        && !reasoning.is_empty()
+    {
+        contents.push(ChatHistoryContent::Reasoning(reasoning.clone()));
     } else if let Some(details) = message
         .reasoning_details
         .as_ref()
@@ -353,15 +374,74 @@ fn map_response_to_chat_contents(message: &OpenRouterResponseMessage) -> Vec<Cha
     contents
 }
 
+/// Compare an OpenRouter serving model against a requested model slug, ignoring OpenRouter
+/// routing suffixes (such as `:nitro` or `:floor`) on the target.
+fn openrouter_models_match(origin_model: &str, target_model: &str) -> bool {
+    let base_target = target_model.split(':').next().unwrap_or(target_model);
+    origin_model == target_model || origin_model == base_target
+}
+
+/// Project a raw OpenRouter Chat Completions response into an assistant request message.
+fn project_openrouter_response(response: &serde_json::Value) -> Option<OpenRouterMessage> {
+    let raw_message = response
+        .get("choices")?
+        .as_array()?
+        .first()?
+        .get("message")?;
+    let message: OpenRouterResponseMessage = serde_json::from_value(raw_message.clone()).ok()?;
+
+    Some(OpenRouterMessage {
+        role: message.role.into(),
+        content: message.content,
+        tool_calls: message.tool_calls,
+        tool_call_id: None,
+        reasoning_details: message.reasoning_details,
+        reasoning_content: message.reasoning_content,
+    })
+}
+
+impl<T: HttpClient> OpenRouterClient<T> {
+    /// Resolve the configured or environment-default OpenRouter model slug.
+    fn target_model(&self) -> String {
+        match &self.config {
+            Some(config) => config.model.clone(),
+            None => env::var("OPENROUTER_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.to_string()),
+        }
+    }
+}
+
 impl<T: HttpClient> AgenticClient for OpenRouterClient<T> {
     type HistoryItem = OpenRouterMessage;
     const SCHEMA_KEY: &'static str = OPENROUTER_SCHEMA_KEY;
+    const API_FLAVOR: ApiFlavor = ApiFlavor::OpenRouterChatCompletions;
 
-    fn build_initial_history(&self, request: &ChatRequest<'_>) -> Vec<Self::HistoryItem> {
+    fn project_history_item(
+        &self,
+        item: &ChatHistoryItem,
+        _current_frame: &FrameHash,
+    ) -> Vec<Self::HistoryItem> {
+        if item.role == MessageRole::Assistant
+            && let Some(native) = &item.native
+            && native.origin.provider == ProviderId::OpenRouter
+            && native.origin.api == Self::API_FLAVOR
+            && openrouter_models_match(&native.origin.model, &self.target_model())
+            && let Some(projected) = project_openrouter_response(&native.response)
+        {
+            return vec![projected];
+        }
+
+        convert_to_openrouter_messages(item)
+    }
+
+    fn build_initial_history(
+        &self,
+        request: &ChatRequest<'_>,
+        current_frame: &FrameHash,
+    ) -> Vec<Self::HistoryItem> {
         let mut messages: Vec<OpenRouterMessage> = request
             .chat_history
             .iter()
-            .flat_map(convert_to_openrouter_messages)
+            .flat_map(|item| self.project_history_item(item, current_frame))
             .collect();
 
         messages.push(OpenRouterMessage {
@@ -370,6 +450,7 @@ impl<T: HttpClient> AgenticClient for OpenRouterClient<T> {
             tool_calls: None,
             tool_call_id: None,
             reasoning_details: None,
+            reasoning_content: None,
         });
 
         messages
@@ -383,7 +464,7 @@ impl<T: HttpClient> AgenticClient for OpenRouterClient<T> {
         allow_tool_calls: bool,
         reasoning: Option<&ReasoningConfig>,
         max_tokens: Option<u32>,
-    ) -> Result<ProviderTurn<Self::HistoryItem>, LLMError> {
+    ) -> Result<ProviderTurn, LLMError> {
         // Use config if available, otherwise fall back to env vars
         let (api_key, model, config_max_tokens, max_retries) = if let Some(ref config) = self.config
         {
@@ -419,6 +500,7 @@ impl<T: HttpClient> AgenticClient for OpenRouterClient<T> {
                     tool_calls: None,
                     tool_call_id: None,
                     reasoning_details: None,
+                    reasoning_content: None,
                 };
                 Cow::Owned(
                     std::iter::once(system_message)
@@ -446,7 +528,7 @@ impl<T: HttpClient> AgenticClient for OpenRouterClient<T> {
         headers.insert("Authorization", auth.parse()?);
         headers.insert("Content-Type", "application/json".parse()?);
 
-        let response: OpenRouterResponse = send_generation_request(
+        let (response, raw_response): (OpenRouterResponse, _) = send_generation_request(
             &self.client,
             request_body,
             &headers,
@@ -461,14 +543,15 @@ impl<T: HttpClient> AgenticClient for OpenRouterClient<T> {
         let contents = map_response_to_chat_contents(&choice.message);
 
         Ok(ProviderTurn {
+            raw: Some(RawProviderResponse {
+                origin: ModelRef {
+                    provider: ProviderId::OpenRouter,
+                    api: Self::API_FLAVOR,
+                    model: response.model,
+                },
+                body: raw_response,
+            }),
             contents,
-            native_items: vec![OpenRouterMessage {
-                role: choice.message.role.into(),
-                content: choice.message.content,
-                tool_calls: choice.message.tool_calls,
-                tool_call_id: None,
-                reasoning_details: choice.message.reasoning_details,
-            }],
             usage,
         })
     }
@@ -498,6 +581,7 @@ mod tests {
             tool_calls: None,
             tool_call_id: None,
             reasoning_details: None,
+            reasoning_content: None,
         };
 
         let serialized = serde_json::to_value(message).unwrap();
@@ -555,6 +639,7 @@ mod tests {
                     refusal: Some(String::new()),
                     reasoning: None,
                     reasoning_details: None,
+                    reasoning_content: None,
                 },
                 finish_reason: String::from("stop"),
                 logprobs: Some(HashMap::new()),
@@ -610,6 +695,7 @@ mod tests {
                     result: Err("tool failed".into()),
                 }),
             ],
+            native: None,
         };
 
         let messages: Vec<OpenRouterMessage> = history.into();
@@ -685,6 +771,7 @@ mod tests {
                     refusal: None,
                     reasoning: None,
                     reasoning_details: None,
+                    reasoning_content: None,
                 },
                 finish_reason: "tool_calls".into(),
                 logprobs: None,
@@ -713,6 +800,7 @@ mod tests {
                     refusal: None,
                     reasoning: None,
                     reasoning_details: None,
+                    reasoning_content: None,
                 },
                 finish_reason: "stop".into(),
                 logprobs: None,
@@ -872,6 +960,7 @@ mod tests {
                     refusal: None,
                     reasoning: None,
                     reasoning_details: Some(reasoning_details.clone()),
+                    reasoning_content: None,
                 },
                 finish_reason: "tool_calls".into(),
                 logprobs: None,
@@ -887,6 +976,7 @@ mod tests {
                     refusal: None,
                     reasoning: None,
                     reasoning_details: None,
+                    reasoning_content: None,
                 },
                 finish_reason: "stop".into(),
                 logprobs: None,
@@ -921,6 +1011,7 @@ mod tests {
             client: http_client.clone(),
             config: Some(crate::config::OpenRouterConfig {
                 api_key: "fixture".into(),
+                model: "openai/gpt-5.2".into(),
                 ..Default::default()
             }),
         };
@@ -969,6 +1060,7 @@ mod tests {
         let mut chat_history = vec![ChatHistoryItem {
             role: MessageRole::User,
             content: vec![ChatHistoryContent::Text(first_message.message.clone())],
+            native: None,
         }];
         chat_history.extend(response.history_additions);
 
@@ -1004,10 +1096,12 @@ mod tests {
             ChatHistoryItem {
                 role: MessageRole::User,
                 content: vec![ChatHistoryContent::Text("What is 11 squared?".into())],
+                native: None,
             },
             ChatHistoryItem {
                 role: MessageRole::Assistant,
                 content: vec![ChatHistoryContent::Text("121".into())],
+                native: None,
             },
         ];
         let first_message = ChatRequest {
@@ -1032,6 +1126,7 @@ mod tests {
         chat_history.push(ChatHistoryItem {
             role: MessageRole::User,
             content: vec![ChatHistoryContent::Text(first_message.message.clone())],
+            native: None,
         });
         chat_history.extend(response.history_additions);
 
@@ -1046,5 +1141,99 @@ mod tests {
         let response = client.send_message(&second_message).await;
         test_ok!(response);
         assert!(response.unwrap().total_usage().input_cache_read > 0);
+    }
+
+    #[tokio::test]
+    async fn native_payload_replays_across_reload_and_falls_back_on_model_switch() {
+        let turn1 = serde_json::json!({
+            "id": "resp-1", "model": "deepseek/deepseek-r1", "provider": "DeepSeek",
+            "object": "chat.completion", "created": 0,
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+            "choices": [{
+                "index": 0, "finish_reason": "tool_calls", "logprobs": null,
+                "message": {
+                    "role": "assistant", "content": null, "refusal": null,
+                    "reasoning_content": "Check tool first.",
+                    "reasoning_details": [{"type": "reasoning.encrypted", "data": "enc-or"}],
+                    "tool_calls": [{
+                        "id": "call-1", "type": "function",
+                        "function": {"name": "mock_tool", "arguments": "{\"name\":\"Alice\"}"}
+                    }]
+                }
+            }]
+        });
+        let turn2 = serde_json::json!({
+            "id": "resp-2", "model": "deepseek/deepseek-r1", "provider": "DeepSeek",
+            "object": "chat.completion", "created": 0,
+            "usage": {"prompt_tokens": 20, "completion_tokens": 8, "total_tokens": 28},
+            "choices": [{
+                "index": 0, "finish_reason": "stop", "logprobs": null,
+                "message": {"role": "assistant", "content": "Done!", "refusal": null}
+            }]
+        });
+        let make_client = |client, model: &str| OpenRouterClient {
+            client,
+            config: Some(crate::config::OpenRouterConfig {
+                api_key: "fixture".into(),
+                model: model.into(),
+                ..Default::default()
+            }),
+        };
+        let tool: Vec<Box<dyn crate::llm::tools::Tool>> = vec![Box::new(MockTool {
+            call_count: Arc::default(),
+        })];
+        let http = RecordingSequentialMockHttpClient::new([turn1, turn2.clone()]);
+        let res = make_client(http.clone(), "deepseek/deepseek-r1")
+            .send_message(&ChatRequest {
+                message: "First".into(),
+                tools: Some(&tool),
+                ..ChatRequest::default()
+            })
+            .await
+            .unwrap();
+        let in_loop_assistant = http.requests()[1]["messages"][1].clone();
+
+        let reloaded: Vec<ChatHistoryItem> =
+            serde_json::from_str(&serde_json::to_string(&res.history_additions).unwrap()).unwrap();
+        let mut history = vec![ChatHistoryItem {
+            role: MessageRole::User,
+            content: vec![ChatHistoryContent::Text("First".into())],
+            native: None,
+        }];
+        history.extend(reloaded);
+
+        // Same model (even with routing suffix) replays reasoning_details and reasoning_content.
+        let http_same = RecordingSequentialMockHttpClient::new([turn2.clone()]);
+        make_client(http_same.clone(), "deepseek/deepseek-r1:nitro")
+            .send_message(&ChatRequest {
+                chat_history: history.clone(),
+                message: "Follow-up".into(),
+                tools: Some(&tool),
+                ..ChatRequest::default()
+            })
+            .await
+            .unwrap();
+        test_eq!(http_same.requests()[0]["messages"][1], in_loop_assistant);
+        test_eq!(
+            http_same.requests()[0]["messages"][1]["reasoning_content"],
+            "Check tool first."
+        );
+
+        // Different model falls back to canonical text without native reasoning fields.
+        let http_other = RecordingSequentialMockHttpClient::new([turn2]);
+        make_client(http_other.clone(), "openai/gpt-5.2")
+            .send_message(&ChatRequest {
+                chat_history: history,
+                message: "Follow-up".into(),
+                tools: Some(&tool),
+                ..ChatRequest::default()
+            })
+            .await
+            .unwrap();
+        let other_reqs = http_other.requests();
+        let assistant = &other_reqs[0]["messages"][1];
+        test_eq!(assistant["content"], "Check tool first.");
+        assert!(assistant.get("reasoning_details").is_none());
+        assert!(assistant.get("reasoning_content").is_none());
     }
 }

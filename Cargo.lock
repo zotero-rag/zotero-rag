@@ -12691,6 +12691,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.20",
  "tokio",
+ "xxhash-rust",
  "zqa-macros",
  "zqa-pdftools",
 ]
