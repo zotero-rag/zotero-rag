@@ -14,11 +14,13 @@ use crate::clients::gemini::{GeminiClient, get_gemini_api_key};
 use crate::constants::{DEFAULT_GEMINI_MODEL, DEFAULT_MAX_RETRIES};
 use crate::http_client::HttpClient;
 use crate::llm::base::{
-    AgenticClient, ChatHistoryContent, ChatHistoryItem, MessageRole, ProviderTurn, ReasoningConfig,
-    ToolCallRequest, send_generation_request,
+    AgenticClient, ApiFlavor, ChatHistoryContent, ChatHistoryItem, FrameHash, MessageRole,
+    ModelRef, ProviderTurn, RawProviderResponse, ReasoningConfig, ToolCallRequest,
+    send_generation_request,
 };
 use crate::llm::tools::{GEMINI_SCHEMA_KEY, SerializedTool};
 use crate::pricing::ModelUsage;
+use crate::providers::ProviderId;
 use crate::requests::exponential_backoff_delay;
 
 /// A content item inside a step. Only text is requested from or sent to the API.
@@ -75,6 +77,15 @@ pub(crate) enum GeminiStep {
     /// Step types we do not request, such as built-in tool calls. These are dropped.
     #[serde(other)]
     Unsupported,
+}
+
+/// One step in a Gemini Interactions request input: either a typed canonical step or a verbatim
+/// raw step projected from a captured response.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(untagged)]
+pub(crate) enum GeminiHistoryStep {
+    Step(GeminiStep),
+    Raw(serde_json::Value),
 }
 
 impl From<ChatHistoryItem> for Vec<GeminiStep> {
@@ -173,7 +184,7 @@ struct GeminiTool<'a> {
 #[derive(Serialize, Clone)]
 struct GeminiRequestBody<'a> {
     model: &'a str,
-    input: &'a [GeminiStep],
+    input: &'a [GeminiHistoryStep],
     #[serde(skip_serializing_if = "Option::is_none")]
     system_instruction: Option<&'a str>,
     generation_config: GeminiGenerationConfig,
@@ -214,6 +225,8 @@ impl From<GeminiUsage> for ModelUsage {
 /// Interaction response from the Gemini API.
 #[derive(Serialize, Deserialize, Clone)]
 struct GeminiResponseBody {
+    #[serde(default)]
+    model: Option<String>,
     status: String,
     #[serde(default)]
     steps: Vec<GeminiStep>,
@@ -285,23 +298,86 @@ fn is_malformed_tool_call(body: &str) -> bool {
         .is_ok_and(|value| value["error"]["code"] == "malformed_tool_call")
 }
 
-impl<T: HttpClient> AgenticClient for GeminiClient<T> {
-    type HistoryItem = GeminiStep;
-    const SCHEMA_KEY: &'static str = GEMINI_SCHEMA_KEY;
+/// Retain only text items inside a `content` or `summary` array on a raw Gemini step.
+fn retain_supported_content_items(
+    step: &mut serde_json::Map<String, serde_json::Value>,
+    key: &str,
+) {
+    if let Some(items) = step.get_mut(key).and_then(serde_json::Value::as_array_mut) {
+        items.retain(|item| item.get("type").and_then(serde_json::Value::as_str) == Some("text"));
+    }
+}
 
-    fn build_initial_history(&self, request: &ChatRequest<'_>) -> Vec<Self::HistoryItem> {
-        let mut steps: Vec<GeminiStep> = request
+/// Project a raw Gemini Interactions API response body into replayable input steps.
+///
+/// Preserves `thought`, `model_output`, and `function_call` steps verbatim (including opaque
+/// `signature` fields on both `thought` and `function_call`) while dropping unsupported step types
+/// and non-text content items.
+fn project_gemini_response(response: &serde_json::Value) -> Vec<GeminiHistoryStep> {
+    let Some(steps) = response.get("steps").and_then(serde_json::Value::as_array) else {
+        return Vec::new();
+    };
+
+    steps
+        .iter()
+        .filter_map(|step| {
+            let mut obj = step.as_object()?.clone();
+            match obj.get("type").and_then(serde_json::Value::as_str)? {
+                "model_output" => {
+                    retain_supported_content_items(&mut obj, "content");
+                    Some(GeminiHistoryStep::Raw(serde_json::Value::Object(obj)))
+                }
+                "thought" => {
+                    retain_supported_content_items(&mut obj, "summary");
+                    Some(GeminiHistoryStep::Raw(serde_json::Value::Object(obj)))
+                }
+                "function_call" => Some(GeminiHistoryStep::Raw(serde_json::Value::Object(obj))),
+                _ => None,
+            }
+        })
+        .collect()
+}
+
+impl<T: HttpClient> AgenticClient for GeminiClient<T> {
+    type HistoryItem = GeminiHistoryStep;
+    const SCHEMA_KEY: &'static str = GEMINI_SCHEMA_KEY;
+    const API_FLAVOR: ApiFlavor = ApiFlavor::GeminiInteractions;
+
+    fn project_history_item(
+        &self,
+        item: &ChatHistoryItem,
+        _current_frame: &FrameHash,
+    ) -> Vec<Self::HistoryItem> {
+        if item.role == MessageRole::Assistant
+            && let Some(native) = &item.native
+            && native.origin.provider == ProviderId::Gemini
+            && native.origin.api == Self::API_FLAVOR
+        {
+            return project_gemini_response(&native.response);
+        }
+
+        Vec::<GeminiStep>::from(item.clone())
+            .into_iter()
+            .map(GeminiHistoryStep::Step)
+            .collect()
+    }
+
+    fn build_initial_history(
+        &self,
+        request: &ChatRequest<'_>,
+        current_frame: &FrameHash,
+    ) -> Vec<Self::HistoryItem> {
+        let mut steps: Vec<GeminiHistoryStep> = request
             .chat_history
             .iter()
-            .cloned()
-            .flat_map(Vec::<GeminiStep>::from)
+            .flat_map(|item| self.project_history_item(item, current_frame))
             .collect();
 
-        steps.push(GeminiStep::UserInput {
+        steps.push(GeminiHistoryStep::Step(GeminiStep::UserInput {
             content: vec![GeminiContentItem::Text {
                 text: request.message.clone(),
             }],
-        });
+        }));
 
         steps
     }
@@ -314,7 +390,7 @@ impl<T: HttpClient> AgenticClient for GeminiClient<T> {
         allow_tool_calls: bool,
         reasoning: Option<&ReasoningConfig>,
         max_tokens: Option<u32>,
-    ) -> Result<super::base::ProviderTurn<Self::HistoryItem>, LLMError> {
+    ) -> Result<ProviderTurn, LLMError> {
         let key = get_gemini_api_key()?;
         let (model, max_retries) = match &self.config {
             None => (
@@ -358,7 +434,7 @@ impl<T: HttpClient> AgenticClient for GeminiClient<T> {
         let mut usage = Vec::new();
         let mut attempt = 0;
         loop {
-            let response: GeminiResponseBody =
+            let (response, raw_response): (GeminiResponseBody, _) =
                 match send_generation_request(&self.client, &request, &headers, url, max_retries)
                     .await
                 {
@@ -383,18 +459,9 @@ impl<T: HttpClient> AgenticClient for GeminiClient<T> {
                 continue;
             }
 
-            // Drop unsupported steps and content so they are not replayed.
+            // Skip unsupported steps before mapping; `texts()` already ignores unsupported items.
             let mut steps = response.steps;
             steps.retain(|step| *step != GeminiStep::Unsupported);
-            for step in &mut steps {
-                if let GeminiStep::ModelOutput { content }
-                | GeminiStep::Thought {
-                    summary: content, ..
-                } = step
-                {
-                    content.retain(|item| *item != GeminiContentItem::Unsupported);
-                }
-            }
 
             let contents = map_response_to_chat_contents(&steps);
             if status == "completed" && contents.is_empty() && attempt < max_retries {
@@ -420,8 +487,15 @@ impl<T: HttpClient> AgenticClient for GeminiClient<T> {
             }
 
             return Ok(ProviderTurn {
+                raw: Some(RawProviderResponse {
+                    origin: ModelRef {
+                        provider: ProviderId::Gemini,
+                        api: Self::API_FLAVOR,
+                        model: response.model.unwrap_or(model),
+                    },
+                    body: raw_response,
+                }),
                 contents,
-                native_items: steps,
                 usage,
             });
         }

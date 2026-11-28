@@ -25,11 +25,12 @@ use crate::constants::{
 };
 use crate::http_client::HttpClient;
 use crate::llm::base::{
-    AgenticClient, ChatHistoryContent, MessageRole, ProviderTurn, ReasoningConfig, ToolCallRequest,
-    send_generation_request,
+    AgenticClient, ApiFlavor, ChatHistoryContent, FrameHash, MessageRole, ModelRef, ProviderTurn,
+    RawProviderResponse, ReasoningConfig, ToolCallRequest, send_generation_request,
 };
 use crate::llm::tools::{OPENAI_SCHEMA_KEY, SerializedTool};
 use crate::pricing::ModelUsage;
+use crate::providers::ProviderId;
 
 /// OpenAI-specific tool wrapper that adds the `type` and `strict` fields
 /// required by OpenAI's API.
@@ -119,23 +120,8 @@ pub(crate) enum OpenAIRequestInput {
     Message(OpenAIChatHistoryItem),
     FunctionCall(OpenAIRequestToolCallInputItem),
     ToolResult(OpenAIRequestToolResultInputItem),
-    Reasoning(OpenAIRequestReasoningItem),
-}
-
-#[derive(Clone, Serialize)]
-pub(crate) struct OpenAIRequestReasoningItem {
-    /// Always "reasoning".
-    r#type: String,
-    /// The provider-assigned reasoning item ID.
-    id: String,
-    /// Reasoning summaries returned by the provider.
-    summary: Vec<OpenAIContent>,
-    /// Optional reasoning text returned by the provider.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    content: Option<Vec<OpenAIContent>>,
-    /// Encrypted reasoning content that must be replayed unchanged.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    encrypted_content: Option<String>,
+    /// Verbatim output item projected from a captured Responses API payload.
+    Raw(serde_json::Value),
 }
 
 impl From<ChatHistoryItem> for Vec<OpenAIRequestInput> {
@@ -319,6 +305,9 @@ enum OpenAIOutput {
         name: String,
         arguments: serde_json::Value,
     },
+    /// Any output item type we do not parse into canonical content (for example, `compaction`).
+    #[serde(other)]
+    Unsupported,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -389,66 +378,50 @@ fn map_response_to_chat_contents(response: &OpenAIResponse) -> Vec<ChatHistoryCo
                 tool_name: name.clone(),
                 args: parse_function_arguments(arguments),
             })),
+            OpenAIOutput::Unsupported => None,
         })
         .collect()
 }
 
-/// Convert the OpenAI-specific response into native input items for a continuation request.
-///
-/// Reasoning items are preserved alongside function calls and tool outputs so reasoning models can
-/// continue their reasoning after a tool result.
-fn map_response_to_chat_history(response: &OpenAIResponse) -> Vec<OpenAIRequestInput> {
+/// Project a raw OpenAI Responses API body into request input items.
+fn project_openai_response(response: &serde_json::Value) -> Vec<OpenAIRequestInput> {
     response
-        .output
-        .iter()
-        .filter_map(|output| match output {
-            OpenAIOutput::Reasoning {
-                id,
-                summary,
-                content,
-                encrypted_content,
-            } => Some(OpenAIRequestInput::Reasoning(OpenAIRequestReasoningItem {
-                r#type: "reasoning".into(),
-                id: id.clone(),
-                summary: summary.clone(),
-                content: content.clone(),
-                encrypted_content: encrypted_content.clone(),
-            })),
-            OpenAIOutput::Message { content, role, .. } => {
-                Some(OpenAIRequestInput::Message(OpenAIChatHistoryItem {
-                    role: *role,
-                    r#type: "message".into(),
-                    content: OpenAIRequestInputItem::Text(
-                        content.first()?.text.clone().unwrap_or_default(),
-                    ),
-                }))
-            }
-            OpenAIOutput::FunctionCall {
-                call_id,
-                name,
-                arguments,
-            } => Some(OpenAIRequestInput::FunctionCall(
-                OpenAIRequestToolCallInputItem {
-                    call_id: call_id.clone(),
-                    r#type: "function_call".into(),
-                    name: name.clone(),
-                    arguments: stringify_function_arguments(arguments),
-                },
-            )),
-        })
-        .collect()
+        .get("output")
+        .and_then(serde_json::Value::as_array)
+        .map(|items| items.iter().cloned().map(OpenAIRequestInput::Raw).collect())
+        .unwrap_or_default()
 }
 
 impl<T: HttpClient> AgenticClient for OpenAIClient<T> {
     type HistoryItem = OpenAIRequestInput;
     const SCHEMA_KEY: &'static str = OPENAI_SCHEMA_KEY;
+    const API_FLAVOR: ApiFlavor = ApiFlavor::OpenAIResponses;
 
-    fn build_initial_history(&self, request: &ChatRequest<'_>) -> Vec<Self::HistoryItem> {
+    fn project_history_item(
+        &self,
+        item: &ChatHistoryItem,
+        _current_frame: &FrameHash,
+    ) -> Vec<Self::HistoryItem> {
+        if item.role == MessageRole::Assistant
+            && let Some(native) = &item.native
+            && native.origin.provider == ProviderId::OpenAI
+            && native.origin.api == Self::API_FLAVOR
+        {
+            return project_openai_response(&native.response);
+        }
+
+        item.clone().into()
+    }
+
+    fn build_initial_history(
+        &self,
+        request: &ChatRequest<'_>,
+        current_frame: &FrameHash,
+    ) -> Vec<Self::HistoryItem> {
         let mut input: Vec<OpenAIRequestInput> = request
             .chat_history
-            .clone()
-            .into_iter()
-            .flat_map(Vec::<OpenAIRequestInput>::from)
+            .iter()
+            .flat_map(|item| self.project_history_item(item, current_frame))
             .collect();
 
         input.push(OpenAIRequestInput::Message(OpenAIChatHistoryItem {
@@ -468,7 +441,7 @@ impl<T: HttpClient> AgenticClient for OpenAIClient<T> {
         allow_tool_calls: bool,
         reasoning: Option<&ReasoningConfig>,
         max_tokens: Option<u32>,
-    ) -> Result<ProviderTurn<Self::HistoryItem>, LLMError> {
+    ) -> Result<ProviderTurn, LLMError> {
         // Use config if available, otherwise fall back to env vars
         let (api_key, model, config_max_tokens, max_retries) = if let Some(ref config) = self.config
         {
@@ -504,7 +477,7 @@ impl<T: HttpClient> AgenticClient for OpenAIClient<T> {
         headers.insert("Authorization", format!("Bearer {api_key}").parse()?);
         headers.insert("content-type", "application/json".parse()?);
 
-        let response: OpenAIResponse = send_generation_request(
+        let (response, raw_response): (OpenAIResponse, _) = send_generation_request(
             &self.client,
             &request_body,
             &headers,
@@ -513,9 +486,18 @@ impl<T: HttpClient> AgenticClient for OpenAIClient<T> {
         )
         .await?;
 
+        let contents = map_response_to_chat_contents(&response);
+
         Ok(ProviderTurn {
-            native_items: map_response_to_chat_history(&response),
-            contents: map_response_to_chat_contents(&response),
+            raw: Some(RawProviderResponse {
+                origin: ModelRef {
+                    provider: ProviderId::OpenAI,
+                    api: Self::API_FLAVOR,
+                    model: response.model,
+                },
+                body: raw_response,
+            }),
+            contents,
             usage: vec![response.usage.into()],
         })
     }

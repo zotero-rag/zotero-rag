@@ -14,11 +14,14 @@ use crate::constants::{
 };
 use crate::http_client::HttpClient;
 use crate::llm::base::{
-    AgenticClient, ChatHistoryContent, MessageRole, ProviderTurn, ReasoningConfig, ReasoningEffort,
-    ToolCallRequest, ToolCallResponse, send_generation_request,
+    AgenticClient, ApiFlavor, ChatHistoryContent, FrameHash, MessageRole, ModelRef, ProviderTurn,
+    RawProviderResponse, ReasoningConfig, ReasoningEffort, ToolCallRequest, ToolCallResponse,
+    send_generation_request,
 };
 use crate::llm::tools::{ANTHROPIC_SCHEMA_KEY, SerializedTool};
 use crate::pricing::ModelUsage;
+use crate::providers::ProviderId;
+
 const DEFAULT_CLAUDE_MODEL: &str = DEFAULT_ANTHROPIC_MODEL;
 
 /// An Anthropic-specific chat history object. This is pretty much the same as `ChatHistoryItem`,
@@ -450,6 +453,9 @@ pub(crate) enum AnthropicResponseContent {
     Thinking(AnthropicThinkingResponseContent),
     /// A redacted thinking block from models with extended thinking enabled.
     RedactedThinking(AnthropicRedactedThinkingResponseContent),
+    /// Any verbatim content block replayed from a captured response or unrecognized by the typed
+    /// variants above (for example, `server_tool_use` or `compaction`).
+    Raw(serde_json::Value),
 }
 
 impl From<String> for AnthropicResponseContent {
@@ -511,22 +517,78 @@ pub(crate) fn map_response_to_chat_contents(
                     out.push(ChatHistoryContent::Reasoning(t.thinking.clone()));
                 }
             }
-            AnthropicResponseContent::RedactedThinking(_) => {}
+            AnthropicResponseContent::RedactedThinking(_) | AnthropicResponseContent::Raw(_) => {}
         }
     }
     out
 }
 
+/// Project a raw Anthropic Messages API response body into an assistant history item.
+///
+/// Replays every block in `response["content"]` verbatim so opaque fields (thinking signatures,
+/// redacted thinking data, citations, and future server-tool blocks) survive untouched. When
+/// `strip_thinking` is `true`, `thinking` and `redacted_thinking` blocks are omitted.
+pub(crate) fn project_anthropic_response(
+    response: &serde_json::Value,
+    strip_thinking: bool,
+) -> Option<AnthropicChatHistoryItem> {
+    let blocks = response.get("content")?.as_array()?;
+    let content: Vec<AnthropicResponseContent> = blocks
+        .iter()
+        .filter(|block| {
+            !strip_thinking
+                || !matches!(
+                    block.get("type").and_then(serde_json::Value::as_str),
+                    Some("thinking" | "redacted_thinking")
+                )
+        })
+        .cloned()
+        .map(AnthropicResponseContent::Raw)
+        .collect();
+
+    (!content.is_empty()).then_some(AnthropicChatHistoryItem {
+        role: MessageRole::Assistant,
+        content,
+    })
+}
+
 impl<T: HttpClient> AgenticClient for AnthropicClient<T> {
     type HistoryItem = AnthropicChatHistoryItem;
     const SCHEMA_KEY: &'static str = ANTHROPIC_SCHEMA_KEY;
+    const API_FLAVOR: ApiFlavor = ApiFlavor::AnthropicMessages;
 
-    fn build_initial_history(&self, request: &ChatRequest<'_>) -> Vec<Self::HistoryItem> {
+    fn project_history_item(
+        &self,
+        item: &ChatHistoryItem,
+        _current_frame: &FrameHash,
+    ) -> Vec<Self::HistoryItem> {
+        if item.role == MessageRole::Assistant
+            && let Some(native) = &item.native
+            && native.origin.provider == ProviderId::Anthropic
+            && native.origin.api == Self::API_FLAVOR
+        {
+            return project_anthropic_response(&native.response, false)
+                .into_iter()
+                .collect();
+        }
+
+        let mapped = AnthropicChatHistoryItem::from(item);
+        if mapped.content.is_empty() {
+            Vec::new()
+        } else {
+            vec![mapped]
+        }
+    }
+
+    fn build_initial_history(
+        &self,
+        request: &ChatRequest<'_>,
+        current_frame: &FrameHash,
+    ) -> Vec<Self::HistoryItem> {
         let mut messages: Vec<AnthropicChatHistoryItem> = request
             .chat_history
-            .clone()
-            .into_iter()
-            .map(Into::into)
+            .iter()
+            .flat_map(|item| self.project_history_item(item, current_frame))
             .collect();
 
         messages.push(AnthropicChatHistoryItem {
@@ -545,7 +607,7 @@ impl<T: HttpClient> AgenticClient for AnthropicClient<T> {
         allow_tool_calls: bool,
         reasoning: Option<&ReasoningConfig>,
         max_tokens: Option<u32>,
-    ) -> Result<super::base::ProviderTurn<Self::HistoryItem>, LLMError> {
+    ) -> Result<ProviderTurn, LLMError> {
         // Use config if available, otherwise fall back to env vars
         let (api_key, model, config_max_tokens, max_retries) = if let Some(ref config) = self.config
         {
@@ -587,7 +649,7 @@ impl<T: HttpClient> AgenticClient for AnthropicClient<T> {
         headers.insert("anthropic-version", "2023-06-01".parse()?);
         headers.insert("content-type", "application/json".parse()?);
 
-        let response: AnthropicResponse = send_generation_request(
+        let (response, raw_response): (AnthropicResponse, _) = send_generation_request(
             &self.client,
             &request,
             &headers,
@@ -597,11 +659,15 @@ impl<T: HttpClient> AgenticClient for AnthropicClient<T> {
         .await?;
 
         Ok(ProviderTurn {
+            raw: Some(RawProviderResponse {
+                origin: ModelRef {
+                    provider: ProviderId::Anthropic,
+                    api: Self::API_FLAVOR,
+                    model: response.model,
+                },
+                body: raw_response,
+            }),
             contents: map_response_to_chat_contents(&response.content),
-            native_items: vec![AnthropicChatHistoryItem {
-                role: MessageRole::Assistant,
-                content: response.content,
-            }],
             usage: vec![response.usage.into()],
         })
     }

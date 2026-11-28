@@ -15,11 +15,12 @@ use crate::constants::{DEFAULT_MAX_RETRIES, DEFAULT_OPENROUTER_MAX_TOKENS};
 use crate::http_client::HttpClient;
 use crate::llm::anthropic::AnthropicCacheControl;
 use crate::llm::base::{
-    AgenticClient, ChatHistoryContent, MessageRole, ProviderTurn, ReasoningConfig, ToolCallRequest,
-    send_generation_request,
+    AgenticClient, ApiFlavor, ChatHistoryContent, FrameHash, MessageRole, ModelRef, ProviderTurn,
+    RawProviderResponse, ReasoningConfig, ToolCallRequest, send_generation_request,
 };
 use crate::llm::tools::{OPENROUTER_SCHEMA_KEY, SerializedTool};
 use crate::pricing::ModelUsage;
+use crate::providers::ProviderId;
 
 const DEFAULT_MODEL: &str = "anthropic/claude-sonnet-4.5";
 
@@ -353,15 +354,55 @@ fn map_response_to_chat_contents(message: &OpenRouterResponseMessage) -> Vec<Cha
     contents
 }
 
+/// Project a raw OpenRouter Chat Completions response into an assistant request message.
+fn project_openrouter_response(response: &serde_json::Value) -> Option<OpenRouterMessage> {
+    let raw_message = response
+        .get("choices")?
+        .as_array()?
+        .first()?
+        .get("message")?;
+    let message: OpenRouterResponseMessage = serde_json::from_value(raw_message.clone()).ok()?;
+
+    Some(OpenRouterMessage {
+        role: message.role.into(),
+        content: message.content,
+        tool_calls: message.tool_calls,
+        tool_call_id: None,
+        reasoning_details: message.reasoning_details,
+    })
+}
+
 impl<T: HttpClient> AgenticClient for OpenRouterClient<T> {
     type HistoryItem = OpenRouterMessage;
     const SCHEMA_KEY: &'static str = OPENROUTER_SCHEMA_KEY;
+    const API_FLAVOR: ApiFlavor = ApiFlavor::OpenRouterChatCompletions;
 
-    fn build_initial_history(&self, request: &ChatRequest<'_>) -> Vec<Self::HistoryItem> {
+    fn project_history_item(
+        &self,
+        item: &ChatHistoryItem,
+        _current_frame: &FrameHash,
+    ) -> Vec<Self::HistoryItem> {
+        if item.role == MessageRole::Assistant
+            && let Some(native) = &item.native
+            && native.origin.provider == ProviderId::OpenRouter
+            && native.origin.api == Self::API_FLAVOR
+            && let Some(projected) = project_openrouter_response(&native.response)
+        {
+            return vec![projected];
+        }
+
+        convert_to_openrouter_messages(item)
+    }
+
+    fn build_initial_history(
+        &self,
+        request: &ChatRequest<'_>,
+        current_frame: &FrameHash,
+    ) -> Vec<Self::HistoryItem> {
         let mut messages: Vec<OpenRouterMessage> = request
             .chat_history
             .iter()
-            .flat_map(convert_to_openrouter_messages)
+            .flat_map(|item| self.project_history_item(item, current_frame))
             .collect();
 
         messages.push(OpenRouterMessage {
@@ -383,7 +424,7 @@ impl<T: HttpClient> AgenticClient for OpenRouterClient<T> {
         allow_tool_calls: bool,
         reasoning: Option<&ReasoningConfig>,
         max_tokens: Option<u32>,
-    ) -> Result<ProviderTurn<Self::HistoryItem>, LLMError> {
+    ) -> Result<ProviderTurn, LLMError> {
         // Use config if available, otherwise fall back to env vars
         let (api_key, model, config_max_tokens, max_retries) = if let Some(ref config) = self.config
         {
@@ -446,7 +487,7 @@ impl<T: HttpClient> AgenticClient for OpenRouterClient<T> {
         headers.insert("Authorization", auth.parse()?);
         headers.insert("Content-Type", "application/json".parse()?);
 
-        let response: OpenRouterResponse = send_generation_request(
+        let (response, raw_response): (OpenRouterResponse, _) = send_generation_request(
             &self.client,
             request_body,
             &headers,
@@ -461,14 +502,15 @@ impl<T: HttpClient> AgenticClient for OpenRouterClient<T> {
         let contents = map_response_to_chat_contents(&choice.message);
 
         Ok(ProviderTurn {
+            raw: Some(RawProviderResponse {
+                origin: ModelRef {
+                    provider: ProviderId::OpenRouter,
+                    api: Self::API_FLAVOR,
+                    model: response.model,
+                },
+                body: raw_response,
+            }),
             contents,
-            native_items: vec![OpenRouterMessage {
-                role: choice.message.role.into(),
-                content: choice.message.content,
-                tool_calls: choice.message.tool_calls,
-                tool_call_id: None,
-                reasoning_details: choice.message.reasoning_details,
-            }],
             usage,
         })
     }

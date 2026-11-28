@@ -508,10 +508,19 @@ impl CompletionApiResponse {
     }
 }
 
+/// Raw provider response and origin captured by one [`AgenticClient::send_once`] call.
+pub(crate) struct RawProviderResponse {
+    /// Provider, API flavor, and serving model reported by the response.
+    pub(crate) origin: ModelRef,
+    /// The exact JSON response body returned by the provider.
+    pub(crate) body: serde_json::Value,
+}
+
 /// An abstraction over one model turn.
-pub(crate) struct ProviderTurn<H> {
-    /// The model's output in the provider-native format.
-    pub(crate) native_items: Vec<H>,
+pub(crate) struct ProviderTurn {
+    /// Raw response body and origin metadata, attached to the assistant [`ChatHistoryItem`] as
+    /// [`NativePayload`]. Every real provider populates this; only mock loop tests omit it.
+    pub(crate) raw: Option<RawProviderResponse>,
     /// Provider-agnostic view of the same output, for tool dispatch and final-text extraction.
     pub(crate) contents: Vec<ChatHistoryContent>,
     /// Token usage of each provider request in this turn. Usually one, but retried requests add
@@ -519,20 +528,55 @@ pub(crate) struct ProviderTurn<H> {
     pub(crate) usage: Vec<ModelUsage>,
 }
 
+impl ProviderTurn {
+    /// Split this turn into its recorded usage and an assistant [`ChatHistoryItem`] stamped with
+    /// `frame`, or `None` if neither canonical contents nor a raw response were produced.
+    fn into_history_and_usage(
+        self,
+        frame: &FrameHash,
+    ) -> (Option<ChatHistoryItem>, Vec<ModelUsage>) {
+        let native = self.raw.map(|raw| NativePayload {
+            origin: raw.origin,
+            frame: frame.clone(),
+            response: raw.body,
+        });
+        let item = (!self.contents.is_empty() || native.is_some()).then_some(ChatHistoryItem {
+            role: MessageRole::Assistant,
+            content: self.contents,
+            native,
+        });
+
+        (item, self.usage)
+    }
+}
+
 /// Internal contract for provider-specific generation adapters.
-pub(crate) trait AgenticClient
-where
-    ChatHistoryItem: Into<Vec<Self::HistoryItem>>,
-{
+pub(crate) trait AgenticClient {
     type HistoryItem;
     const SCHEMA_KEY: &'static str;
+    const API_FLAVOR: ApiFlavor;
+
+    /// Project one history item into provider-native request items for `current_frame`.
+    ///
+    /// Both [`Self::build_initial_history`] and the in-loop continuation inside
+    /// [`Self::send_message`] call this method, so in-loop replay and post-reload replay produce
+    /// identical request items.
+    fn project_history_item(
+        &self,
+        item: &ChatHistoryItem,
+        current_frame: &FrameHash,
+    ) -> Vec<Self::HistoryItem>;
 
     /// Build the initial conversation history in the provider-native format given a
-    /// [`ChatRequest`].
-    fn build_initial_history(&self, request: &ChatRequest<'_>) -> Vec<Self::HistoryItem>;
+    /// [`ChatRequest`] and the active `current_frame`.
+    fn build_initial_history(
+        &self,
+        request: &ChatRequest<'_>,
+        current_frame: &FrameHash,
+    ) -> Vec<Self::HistoryItem>;
 
-    /// Perform one provider request-response round trip and convert the response into native and
-    /// provider-agnostic history items.
+    /// Perform one provider request-response round trip and convert the response into raw and
+    /// provider-agnostic history data.
     ///
     /// `tools` is the same on every turn of a tool loop; `allow_tool_calls` is `false` on the last
     /// turn. Providers that can forbid tool calls (e.g. a `tool_choice` of "none") should keep
@@ -547,7 +591,7 @@ where
         allow_tool_calls: bool,
         reasoning: Option<&ReasoningConfig>,
         max_tokens: Option<u32>,
-    ) -> Result<ProviderTurn<Self::HistoryItem>, LLMError>;
+    ) -> Result<ProviderTurn, LLMError>;
 
     /// Send a chat request, executing requested tools until the provider returns a final response.
     ///
@@ -570,16 +614,18 @@ where
     where
         Self: Sized,
     {
-        let mut provider_history = self.build_initial_history(request);
         let tools = get_owned_tools(request.tools, Self::SCHEMA_KEY);
+        let iteration_limit = request
+            .tool_iteration_limit
+            .unwrap_or(DEFAULT_MAX_TOOL_ITERATIONS);
+        let initial_tools = tools.as_deref().filter(|_| iteration_limit > 1);
+        let frame_hash = FrameHash::compute(request.system_prompt.as_deref(), initial_tools);
+        let mut provider_history = self.build_initial_history(request, &frame_hash);
         let mut usage = Vec::new();
         let mut contents = Vec::<ContentType>::new();
         let mut history_additions = Vec::new();
 
         let mut round_trips = 0;
-        let iteration_limit = request
-            .tool_iteration_limit
-            .unwrap_or(DEFAULT_MAX_TOOL_ITERATIONS);
         while round_trips < iteration_limit {
             // On the last trip, disallow tool calls
             let is_last_turn = round_trips == iteration_limit.saturating_sub(1);
@@ -622,12 +668,19 @@ where
                 turn.contents.len(),
                 turn.usage
             );
-            usage.extend(turn.usage);
-            provider_history.extend(turn.native_items);
+            let (assistant_item, turn_usage) = turn.into_history_and_usage(&frame_hash);
+            usage.extend(turn_usage);
+            let turn_contents = assistant_item
+                .as_ref()
+                .map_or(&[][..], |item| item.content.as_slice());
+
+            if let Some(item) = &assistant_item {
+                provider_history.extend(self.project_history_item(item, &frame_hash));
+            }
 
             let tool_call_results = process_tool_calls(
                 &mut contents,
-                &turn.contents,
+                turn_contents,
                 if is_last_turn {
                     &[]
                 } else {
@@ -637,12 +690,8 @@ where
             )
             .await;
 
-            if !turn.contents.is_empty() {
-                history_additions.push(ChatHistoryItem {
-                    role: MessageRole::Assistant,
-                    content: turn.contents,
-                    native: None,
-                });
+            if let Some(item) = assistant_item {
+                history_additions.push(item);
             }
 
             let Some(tool_call_results) = tool_call_results else {
@@ -660,9 +709,7 @@ where
                 );
             }
 
-            let provider_tool_call_results: Vec<Self::HistoryItem> =
-                tool_call_results.clone().into();
-            provider_history.extend(provider_tool_call_results);
+            provider_history.extend(self.project_history_item(&tool_call_results, &frame_hash));
             history_additions.push(tool_call_results);
             round_trips += 1;
         }
@@ -689,7 +736,7 @@ pub(crate) async fn send_generation_request<R, S>(
     headers: &HeaderMap,
     api_url: &str,
     max_retries: usize,
-) -> Result<S, LLMError>
+) -> Result<(S, serde_json::Value), LLMError>
 where
     R: Serialize + Send + Sync,
     S: DeserializeOwned,
@@ -705,7 +752,7 @@ where
         );
         LLMError::DeserializationError(body.clone())
     })?;
-    let response: S = serde_json::from_value(json).map_err(|err| {
+    let response: S = serde_json::from_value(json.clone()).map_err(|err| {
         log::error!(
             "Failed to deserialize response into target type: {}. Body: {}",
             crate::logging::preview(&err),
@@ -714,7 +761,7 @@ where
         LLMError::DeserializationError(body)
     })?;
 
-    Ok(response)
+    Ok((response, json))
 }
 
 #[cfg(test)]
@@ -731,17 +778,11 @@ mod tests {
 
     struct TestHistoryItem;
 
-    impl From<ChatHistoryItem> for Vec<TestHistoryItem> {
-        fn from(_: ChatHistoryItem) -> Self {
-            Vec::new()
-        }
-    }
-
     /// The number of tools sent on a turn, and whether tool calls were allowed.
     type ToolsSeen = (Option<usize>, bool);
 
     struct TestClient {
-        turns: Mutex<VecDeque<ProviderTurn<TestHistoryItem>>>,
+        turns: Mutex<VecDeque<ProviderTurn>>,
         system_prompts_seen: Arc<Mutex<Vec<Option<String>>>>,
         tools_seen: Arc<Mutex<Vec<ToolsSeen>>>,
     }
@@ -749,8 +790,21 @@ mod tests {
     impl AgenticClient for TestClient {
         type HistoryItem = TestHistoryItem;
         const SCHEMA_KEY: &'static str = "parameters";
+        const API_FLAVOR: ApiFlavor = ApiFlavor::Mock;
 
-        fn build_initial_history(&self, _: &ChatRequest<'_>) -> Vec<Self::HistoryItem> {
+        fn project_history_item(
+            &self,
+            _: &ChatHistoryItem,
+            _: &FrameHash,
+        ) -> Vec<Self::HistoryItem> {
+            Vec::new()
+        }
+
+        fn build_initial_history(
+            &self,
+            _: &ChatRequest<'_>,
+            _: &FrameHash,
+        ) -> Vec<Self::HistoryItem> {
             Vec::new()
         }
 
@@ -762,7 +816,7 @@ mod tests {
             allow_tool_calls: bool,
             _: Option<&ReasoningConfig>,
             _: Option<u32>,
-        ) -> impl Future<Output = Result<ProviderTurn<Self::HistoryItem>, LLMError>> {
+        ) -> impl Future<Output = Result<ProviderTurn, LLMError>> {
             self.system_prompts_seen
                 .lock()
                 .unwrap()
@@ -775,9 +829,9 @@ mod tests {
         }
     }
 
-    fn tool_call_turn(calls: &[(&str, &str)], usage: ModelUsage) -> ProviderTurn<TestHistoryItem> {
+    fn tool_call_turn(calls: &[(&str, &str)], usage: ModelUsage) -> ProviderTurn {
         ProviderTurn {
-            native_items: Vec::new(),
+            raw: None,
             contents: calls
                 .iter()
                 .map(|&(id, name)| tool_call_request(id, name))
@@ -860,7 +914,7 @@ mod tests {
     async fn send_message_preserves_tool_turns_and_accumulates_usage() {
         let tools_seen = Arc::new(Mutex::new(Vec::new()));
         let first_turn = ProviderTurn {
-            native_items: Vec::new(),
+            raw: None,
             contents: vec![
                 ChatHistoryContent::Reasoning("Need information from both tools.".into()),
                 ChatHistoryContent::Text("I will check both sources.".into()),
@@ -880,7 +934,7 @@ mod tests {
                 first_turn,
                 tool_call_turn(&[("call-3", "Carol")], ModelUsage::default()),
                 ProviderTurn {
-                    native_items: Vec::new(),
+                    raw: None,
                     contents: vec![ChatHistoryContent::Text("done".into())],
                     usage: vec![ModelUsage {
                         input_tokens: 20,
@@ -949,7 +1003,7 @@ mod tests {
         let client = TestClient {
             turns: Mutex::new(VecDeque::from([
                 ProviderTurn {
-                    native_items: Vec::new(),
+                    raw: None,
                     contents: vec![
                         ChatHistoryContent::Reasoning("Check the source.".into()),
                         ChatHistoryContent::Text("Looking it up.".into()),
@@ -958,7 +1012,7 @@ mod tests {
                     usage: vec![ModelUsage::default()],
                 },
                 ProviderTurn {
-                    native_items: Vec::new(),
+                    raw: None,
                     contents: vec![
                         ChatHistoryContent::Reasoning("The source agrees.".into()),
                         ChatHistoryContent::Text("Done.".into()),
@@ -1008,7 +1062,7 @@ mod tests {
     async fn send_message_without_reasoning_only_sends_text_events() {
         let client = TestClient {
             turns: Mutex::new(VecDeque::from([ProviderTurn {
-                native_items: Vec::new(),
+                raw: None,
                 contents: vec![ChatHistoryContent::Text("done".into())],
                 usage: vec![ModelUsage::default()],
             }])),
@@ -1052,7 +1106,7 @@ mod tests {
         let tools_seen = Arc::new(Mutex::new(Vec::new()));
         let client = TestClient {
             turns: Mutex::new(VecDeque::from([ProviderTurn {
-                native_items: Vec::new(),
+                raw: None,
                 contents: vec![ChatHistoryContent::Text("done".into())],
                 usage: vec![ModelUsage::default()],
             }])),
