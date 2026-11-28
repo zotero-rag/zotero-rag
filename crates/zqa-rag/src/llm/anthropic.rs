@@ -16,7 +16,7 @@ use crate::http_client::HttpClient;
 use crate::llm::base::{
     AgenticClient, ApiFlavor, ChatHistoryContent, FrameHash, MessageRole, ModelRef, ProviderTurn,
     RawProviderResponse, ReasoningConfig, ReasoningEffort, ToolCallRequest, ToolCallResponse,
-    send_generation_request,
+    sanitize_anthropic_tool_id, send_generation_request,
 };
 use crate::llm::tools::{ANTHROPIC_SCHEMA_KEY, SerializedTool};
 use crate::pricing::ModelUsage;
@@ -54,7 +54,12 @@ impl From<ChatHistoryItem> for AnthropicChatHistoryItem {
                             text: s,
                         },
                     )),
-                    ChatHistoryContent::Reasoning(_) => None,
+                    ChatHistoryContent::Reasoning(s) => (!s.is_empty()).then_some(
+                        AnthropicResponseContent::Text(AnthropicTextResponseContent {
+                            r#type: "text".into(),
+                            text: s,
+                        }),
+                    ),
                     ChatHistoryContent::ToolCallRequest(req) => {
                         Some(AnthropicResponseContent::ToolCall(req.into()))
                     }
@@ -370,7 +375,7 @@ impl From<ToolCallResponse> for AnthropicToolUseResult {
 
         Self {
             r#type: "tool_result".into(),
-            tool_use_id: value.id,
+            tool_use_id: sanitize_anthropic_tool_id(&value.id),
             content,
             is_error,
         }
@@ -427,7 +432,7 @@ pub(crate) struct AnthropicToolUseResponseContent {
 impl From<ToolCallRequest> for AnthropicToolUseResponseContent {
     fn from(value: ToolCallRequest) -> Self {
         Self {
-            id: value.id,
+            id: sanitize_anthropic_tool_id(&value.id),
             r#type: "tool_use".into(),
             name: value.tool_name,
             input: serde_json::Value::as_object(&value.args)
@@ -560,14 +565,15 @@ impl<T: HttpClient> AgenticClient for AnthropicClient<T> {
     fn project_history_item(
         &self,
         item: &ChatHistoryItem,
-        _current_frame: &FrameHash,
+        current_frame: &FrameHash,
     ) -> Vec<Self::HistoryItem> {
         if item.role == MessageRole::Assistant
             && let Some(native) = &item.native
             && native.origin.provider == ProviderId::Anthropic
             && native.origin.api == Self::API_FLAVOR
         {
-            return project_anthropic_response(&native.response, false)
+            let strip_thinking = native.frame != *current_frame;
+            return project_anthropic_response(&native.response, strip_thinking)
                 .into_iter()
                 .collect();
         }

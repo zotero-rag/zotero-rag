@@ -139,7 +139,13 @@ impl From<ChatHistoryItem> for Vec<OpenAIRequestInput> {
                         content: OpenAIRequestInputItem::Text(text),
                     }))
                 }
-                ChatHistoryContent::Reasoning(_) => None,
+                ChatHistoryContent::Reasoning(text) => (!text.is_empty()).then_some(
+                    OpenAIRequestInput::Message(OpenAIChatHistoryItem {
+                        role,
+                        r#type: "message".into(),
+                        content: OpenAIRequestInputItem::Text(text),
+                    }),
+                ),
                 ChatHistoryContent::ToolCallRequest(request) => Some(
                     OpenAIRequestInput::FunctionCall(OpenAIRequestToolCallInputItem {
                         call_id: request.id,
@@ -384,11 +390,25 @@ fn map_response_to_chat_contents(response: &OpenAIResponse) -> Vec<ChatHistoryCo
 }
 
 /// Project a raw OpenAI Responses API body into request input items.
+///
+/// Replays every item in `response["output"]` verbatim while stripping known output-only metadata
+/// such as `created_by`.
 fn project_openai_response(response: &serde_json::Value) -> Vec<OpenAIRequestInput> {
     response
         .get("output")
         .and_then(serde_json::Value::as_array)
-        .map(|items| items.iter().cloned().map(OpenAIRequestInput::Raw).collect())
+        .map(|items| {
+            items
+                .iter()
+                .cloned()
+                .map(|mut item| {
+                    if let Some(obj) = item.as_object_mut() {
+                        obj.remove("created_by");
+                    }
+                    OpenAIRequestInput::Raw(item)
+                })
+                .collect()
+        })
         .unwrap_or_default()
 }
 

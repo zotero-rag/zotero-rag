@@ -28,6 +28,16 @@ use crate::providers::ProviderId;
 type OllamaRequest<'a> = AnthropicRequest<'a>;
 type OllamaResponse = AnthropicResponse;
 
+impl<T: HttpClient> OllamaClient<T> {
+    /// Resolve the configured or environment-default Ollama model name.
+    fn target_model(&self) -> String {
+        match &self.config {
+            Some(config) => config.model.clone(),
+            None => env::var("OLLAMA_MODEL").unwrap_or_else(|_| DEFAULT_OLLAMA_MODEL.to_string()),
+        }
+    }
+}
+
 impl<T: HttpClient> AgenticClient for OllamaClient<T> {
     type HistoryItem = AnthropicChatHistoryItem;
     const SCHEMA_KEY: &'static str = ANTHROPIC_SCHEMA_KEY;
@@ -42,6 +52,7 @@ impl<T: HttpClient> AgenticClient for OllamaClient<T> {
             && let Some(native) = &item.native
             && native.origin.provider == ProviderId::Ollama
             && native.origin.api == Self::API_FLAVOR
+            && native.origin.model == self.target_model()
         {
             return project_anthropic_response(&native.response, false)
                 .into_iter()

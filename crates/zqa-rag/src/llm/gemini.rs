@@ -101,7 +101,11 @@ impl From<ChatHistoryItem> for Vec<GeminiStep> {
                         MessageRole::Assistant => GeminiStep::ModelOutput { content },
                     })
                 }
-                ChatHistoryContent::Reasoning(_) => None,
+                ChatHistoryContent::Reasoning(text) => {
+                    (!text.is_empty()).then_some(GeminiStep::ModelOutput {
+                        content: vec![GeminiContentItem::Text { text }],
+                    })
+                }
                 ChatHistoryContent::ToolCallRequest(tool_call) => Some(GeminiStep::FunctionCall {
                     id: tool_call.id,
                     name: tool_call.tool_name,
@@ -338,6 +342,16 @@ fn project_gemini_response(response: &serde_json::Value) -> Vec<GeminiHistorySte
         .collect()
 }
 
+impl<T: HttpClient> GeminiClient<T> {
+    /// Resolve the configured or environment-default Gemini model name.
+    fn target_model(&self) -> String {
+        match &self.config {
+            Some(config) => config.model.clone(),
+            None => env::var("GEMINI_MODEL").unwrap_or_else(|_| DEFAULT_GEMINI_MODEL.to_string()),
+        }
+    }
+}
+
 impl<T: HttpClient> AgenticClient for GeminiClient<T> {
     type HistoryItem = GeminiHistoryStep;
     const SCHEMA_KEY: &'static str = GEMINI_SCHEMA_KEY;
@@ -352,6 +366,7 @@ impl<T: HttpClient> AgenticClient for GeminiClient<T> {
             && let Some(native) = &item.native
             && native.origin.provider == ProviderId::Gemini
             && native.origin.api == Self::API_FLAVOR
+            && native.origin.model == self.target_model()
         {
             return project_gemini_response(&native.response);
         }

@@ -8,7 +8,7 @@ use std::sync::{Arc, LazyLock};
 use http::HeaderMap;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
-use xxhash_rust::xxh3::Xxh3;
+use xxhash_rust::xxh3::{Xxh3, xxh3_64};
 
 use super::errors::LLMError;
 use crate::constants::DEFAULT_MAX_TOOL_ITERATIONS;
@@ -251,6 +251,55 @@ fn hash_canonical_json(hasher: &mut Xxh3, value: &serde_json::Value) {
             hasher.update(b"}");
         }
     }
+}
+
+/// Deterministically sanitize a tool call ID to satisfy Anthropic's `^[a-zA-Z0-9_-]{1,64}$`
+/// constraint.
+///
+/// IDs that already satisfy the constraint are returned unchanged. Any other ID (empty, longer
+/// than 64 bytes, or containing disallowed characters such as OpenAI's `|` or `:`) is mapped to a
+/// sanitized prefix plus a 16-hex-character `xxh3_64` suffix so tool requests and their matching
+/// tool results stay paired without collisions.
+///
+/// # Arguments
+///
+/// * `id` - The raw tool call identifier from the history item.
+///
+/// # Returns
+///
+/// A valid Anthropic tool-use identifier of length `1..=64`.
+#[must_use]
+pub(crate) fn sanitize_anthropic_tool_id(id: &str) -> String {
+    const MAX_LEN: usize = 64;
+    const SUFFIX_LEN: usize = 17; // '_' + 16 hex chars
+    const MAX_PREFIX_LEN: usize = MAX_LEN - SUFFIX_LEN;
+
+    let is_valid = !id.is_empty()
+        && id.len() <= MAX_LEN
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-');
+    if is_valid {
+        return id.to_owned();
+    }
+
+    let hash = xxh3_64(id.as_bytes());
+    let mut prefix: String = id
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .take(MAX_PREFIX_LEN)
+        .collect();
+    if prefix.is_empty() {
+        prefix.push_str("tool");
+    }
+
+    format!("{prefix}_{hash:016x}")
 }
 
 /// Provider-native response captured verbatim alongside canonical [`ChatHistoryContent`].

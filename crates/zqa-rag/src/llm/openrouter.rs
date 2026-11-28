@@ -59,6 +59,10 @@ pub(crate) struct OpenRouterMessage {
     /// reasoning continuity (e.g. Anthropic via OpenRouter) can continue reasoning.
     #[serde(skip_serializing_if = "Option::is_none")]
     reasoning_details: Option<serde_json::Value>,
+    /// Reasoning text returned by models such as DeepSeek that require `reasoning_content` to be
+    /// replayed across tool-calling turns.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reasoning_content: Option<String>,
 }
 
 impl From<ChatHistoryItem> for Vec<OpenRouterMessage> {
@@ -134,7 +138,14 @@ fn convert_to_openrouter_messages(item: &ChatHistoryItem) -> Vec<OpenRouterMessa
                 }
                 content_text.push_str(text);
             }
-            ChatHistoryContent::Reasoning(_) => {}
+            ChatHistoryContent::Reasoning(text) => {
+                if !text.is_empty() {
+                    if !content_text.is_empty() {
+                        content_text.push(' ');
+                    }
+                    content_text.push_str(text);
+                }
+            }
             ChatHistoryContent::ToolCallRequest(req) => {
                 tool_calls.push(OpenRouterToolCall {
                     id: req.id.clone(),
@@ -153,6 +164,7 @@ fn convert_to_openrouter_messages(item: &ChatHistoryItem) -> Vec<OpenRouterMessa
                     tool_calls: None,
                     tool_call_id: Some(res.id.clone()),
                     reasoning_details: None,
+                    reasoning_content: None,
                 });
             }
         }
@@ -176,6 +188,7 @@ fn convert_to_openrouter_messages(item: &ChatHistoryItem) -> Vec<OpenRouterMessa
                 },
                 tool_call_id: None,
                 reasoning_details: None,
+                reasoning_content: None,
             },
         );
     }
@@ -270,6 +283,9 @@ struct OpenRouterResponseMessage {
     /// Opaque reasoning details to be returned unchanged in subsequent requests.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     reasoning_details: Option<serde_json::Value>,
+    /// Model reasoning text returned by providers such as DeepSeek for tool-loop replay.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    reasoning_content: Option<String>,
 }
 
 /// Content block in an OpenRouter API response
@@ -317,6 +333,10 @@ fn map_response_to_chat_contents(message: &OpenRouterResponseMessage) -> Vec<Cha
         && !reasoning.is_empty()
     {
         contents.push(ChatHistoryContent::Reasoning(reasoning.clone()));
+    } else if let Some(reasoning) = &message.reasoning_content
+        && !reasoning.is_empty()
+    {
+        contents.push(ChatHistoryContent::Reasoning(reasoning.clone()));
     } else if let Some(details) = message
         .reasoning_details
         .as_ref()
@@ -354,6 +374,13 @@ fn map_response_to_chat_contents(message: &OpenRouterResponseMessage) -> Vec<Cha
     contents
 }
 
+/// Compare an OpenRouter serving model against a requested model slug, ignoring OpenRouter
+/// routing suffixes (such as `:nitro` or `:floor`) on the target.
+fn openrouter_models_match(origin_model: &str, target_model: &str) -> bool {
+    let base_target = target_model.split(':').next().unwrap_or(target_model);
+    origin_model == target_model || origin_model == base_target
+}
+
 /// Project a raw OpenRouter Chat Completions response into an assistant request message.
 fn project_openrouter_response(response: &serde_json::Value) -> Option<OpenRouterMessage> {
     let raw_message = response
@@ -369,7 +396,18 @@ fn project_openrouter_response(response: &serde_json::Value) -> Option<OpenRoute
         tool_calls: message.tool_calls,
         tool_call_id: None,
         reasoning_details: message.reasoning_details,
+        reasoning_content: message.reasoning_content,
     })
+}
+
+impl<T: HttpClient> OpenRouterClient<T> {
+    /// Resolve the configured or environment-default OpenRouter model slug.
+    fn target_model(&self) -> String {
+        match &self.config {
+            Some(config) => config.model.clone(),
+            None => env::var("OPENROUTER_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.to_string()),
+        }
+    }
 }
 
 impl<T: HttpClient> AgenticClient for OpenRouterClient<T> {
@@ -386,6 +424,7 @@ impl<T: HttpClient> AgenticClient for OpenRouterClient<T> {
             && let Some(native) = &item.native
             && native.origin.provider == ProviderId::OpenRouter
             && native.origin.api == Self::API_FLAVOR
+            && openrouter_models_match(&native.origin.model, &self.target_model())
             && let Some(projected) = project_openrouter_response(&native.response)
         {
             return vec![projected];
@@ -411,6 +450,7 @@ impl<T: HttpClient> AgenticClient for OpenRouterClient<T> {
             tool_calls: None,
             tool_call_id: None,
             reasoning_details: None,
+            reasoning_content: None,
         });
 
         messages
@@ -460,6 +500,7 @@ impl<T: HttpClient> AgenticClient for OpenRouterClient<T> {
                     tool_calls: None,
                     tool_call_id: None,
                     reasoning_details: None,
+                    reasoning_content: None,
                 };
                 Cow::Owned(
                     std::iter::once(system_message)
@@ -540,6 +581,7 @@ mod tests {
             tool_calls: None,
             tool_call_id: None,
             reasoning_details: None,
+            reasoning_content: None,
         };
 
         let serialized = serde_json::to_value(message).unwrap();
@@ -597,6 +639,7 @@ mod tests {
                     refusal: Some(String::new()),
                     reasoning: None,
                     reasoning_details: None,
+                    reasoning_content: None,
                 },
                 finish_reason: String::from("stop"),
                 logprobs: Some(HashMap::new()),
@@ -728,6 +771,7 @@ mod tests {
                     refusal: None,
                     reasoning: None,
                     reasoning_details: None,
+                    reasoning_content: None,
                 },
                 finish_reason: "tool_calls".into(),
                 logprobs: None,
@@ -756,6 +800,7 @@ mod tests {
                     refusal: None,
                     reasoning: None,
                     reasoning_details: None,
+                    reasoning_content: None,
                 },
                 finish_reason: "stop".into(),
                 logprobs: None,
@@ -915,6 +960,7 @@ mod tests {
                     refusal: None,
                     reasoning: None,
                     reasoning_details: Some(reasoning_details.clone()),
+                    reasoning_content: None,
                 },
                 finish_reason: "tool_calls".into(),
                 logprobs: None,
@@ -930,6 +976,7 @@ mod tests {
                     refusal: None,
                     reasoning: None,
                     reasoning_details: None,
+                    reasoning_content: None,
                 },
                 finish_reason: "stop".into(),
                 logprobs: None,
@@ -964,6 +1011,7 @@ mod tests {
             client: http_client.clone(),
             config: Some(crate::config::OpenRouterConfig {
                 api_key: "fixture".into(),
+                model: "openai/gpt-5.2".into(),
                 ..Default::default()
             }),
         };
