@@ -8,36 +8,20 @@ use crate::http_client::{HttpClient, ReqwestClient};
 pub struct AnthropicClient<T: HttpClient = ReqwestClient> {
     /// The HTTP client. The generic parameter allows for mocking in tests.
     pub(crate) client: T,
-    /// Optional configuration for the Anthropic client.
-    pub(crate) config: Option<crate::config::AnthropicConfig>,
-}
-
-impl<T: HttpClient + Default> Default for AnthropicClient<T> {
-    fn default() -> Self {
-        Self::new()
-    }
+    /// Configuration for the Anthropic client.
+    pub(crate) config: crate::config::AnthropicConfig,
 }
 
 impl<T> AnthropicClient<T>
 where
     T: HttpClient + Default,
 {
-    /// Creates a new AnthropicClient instance without configuration
-    /// (will fall back to environment variables)
-    #[must_use]
-    pub fn new() -> Self {
-        Self {
-            client: T::default(),
-            config: None,
-        }
-    }
-
     /// Creates a new AnthropicClient instance with provided configuration
     #[must_use]
     pub fn with_config(config: crate::config::AnthropicConfig) -> Self {
         Self {
             client: T::default(),
-            config: Some(config),
+            config,
         }
     }
 }

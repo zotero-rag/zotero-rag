@@ -2,7 +2,6 @@
 //! Anthropic client, but that will likely be changed, at which point this module will move to
 //! `llm`.
 
-use std::env;
 use std::sync::Arc;
 
 use arrow_array;
@@ -12,10 +11,6 @@ use lancedb::arrow::arrow_schema::{DataType, Field};
 use serde::{Deserialize, Serialize};
 
 use crate::clients::openai::OpenAIClient;
-use crate::constants::{
-    DEFAULT_MAX_CONCURRENT_REQUESTS, DEFAULT_MAX_RETRIES, DEFAULT_OPENAI_EMBEDDING_DIM,
-    DEFAULT_OPENAI_EMBEDDING_MODEL,
-};
 use crate::http_client::HttpClient;
 use crate::llm::errors::LLMError;
 use crate::requests::request_with_backoff;
@@ -36,7 +31,6 @@ where
     ///
     /// # Errors
     ///
-    /// * `LLMError::EnvError` - If the OPENAI_API_KEY environment variable is not set
     /// * `LLMError::TimeoutError` - If the HTTP request times out
     /// * `LLMError::CredentialError` - If the API returns 401 or 403 status
     /// * `LLMError::HttpStatusError` - If the API returns other unsuccessful HTTP status codes
@@ -51,7 +45,7 @@ where
             tokio::runtime::Handle::current().block_on(compute_openai_embeddings_async(
                 &self.client,
                 source,
-                self.config.as_ref(),
+                &self.config,
             ))
         })
     }
@@ -158,7 +152,6 @@ async fn get_openai_embeddings(
 ///
 /// # Errors
 ///
-/// * `LLMError::EnvError` - If the OPENAI_API_KEY environment variable is not set
 /// * `LLMError::TimeoutError` - If the HTTP request times out
 /// * `LLMError::CredentialError` - If the API returns 401 or 403 status
 /// * `LLMError::HttpStatusError` - If the API returns other unsuccessful HTTP status codes
@@ -168,7 +161,7 @@ async fn get_openai_embeddings(
 pub(crate) async fn compute_openai_embeddings_async(
     client: &impl HttpClient,
     source: Arc<dyn arrow_array::Array>,
-    config: Option<&crate::config::OpenAIConfig>,
+    config: &crate::config::OpenAIConfig,
 ) -> Result<Arc<dyn arrow_array::Array>, LLMError> {
     let source_array = arrow_array::cast::as_string_array(&source);
     let texts: Vec<String> = source_array
@@ -176,27 +169,7 @@ pub(crate) async fn compute_openai_embeddings_async(
         .filter_map(|s| Some(s?.to_owned()))
         .collect();
 
-    let (api_key, model, dims, max_retries, max_concurrent) = if let Some(config) = config {
-        (
-            config.api_key.clone(),
-            config.embedding_model.clone(),
-            config.embedding_dims,
-            config.max_retries,
-            config.max_concurrent_requests,
-        )
-    } else {
-        (
-            env::var("OPENAI_API_KEY")?,
-            env::var("OPENAI_EMBEDDING_MODEL")
-                .unwrap_or(DEFAULT_OPENAI_EMBEDDING_MODEL.to_string()),
-            env::var("OPENAI_EMBEDDING_DIMS")
-                .ok()
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(DEFAULT_OPENAI_EMBEDDING_DIM as usize),
-            DEFAULT_MAX_RETRIES,
-            DEFAULT_MAX_CONCURRENT_REQUESTS,
-        )
-    };
+    let dims = config.embedding_dims;
 
     // Create a stream of futures
     // Batch size of 100 to respect API limits and efficiency
@@ -205,16 +178,16 @@ pub(crate) async fn compute_openai_embeddings_async(
         get_openai_embeddings(
             client,
             chunk.to_vec(),
-            api_key.clone(),
-            model.clone(),
+            config.api_key.clone(),
+            config.embedding_model.clone(),
             dims,
-            max_retries,
+            config.max_retries,
         )
     });
 
     // Process futures with limited concurrency, preserving order
     let results = stream::iter(futures)
-        .buffered(max_concurrent.max(1))
+        .buffered(config.max_concurrent_requests.max(1))
         .collect::<Vec<_>>()
         .await;
 

@@ -168,7 +168,7 @@ reasoning_budget = 2048
 
 ### Set up environment variables
 
-Create a `.env` in the root of the project with the following structure:
+Environment variables override the matching keys in `config.toml`. `zqa` (the CLI and GUI) reads them at startup; the `zqa-rag` library never reads the environment and takes every setting from the configs `zqa` passes it. Create a `.env` in the root of the project with the following structure:
 
 ```
 ANTHROPIC_API_KEY=
@@ -183,7 +183,7 @@ OPENAI_MODEL_SMALL=
 
 VOYAGE_AI_API_KEY=
 VOYAGE_AI_MODEL=
-VOYAGE_AI_RERANK_MODEL=
+VOYAGE_AI_RERANKER=
 
 COHERE_API_KEY=
 COHERE_MODEL=
@@ -215,7 +215,7 @@ The model choices and the maximum concurrent requests above are defaults, and yo
 
 You can set `OLLAMA_BASE_URL` to any server running locally, *as long as it supports the Anthropic Messages API format*. Fortunately, this seems to be most such projects. For example, if you use an Apple Silicon Mac (i.e., one with an M-series chip), then you may prefer to use LM Studio over `ollama`, since it supports using the Apple Neural Engine and you will get *much* faster results with the same models. LM Studio's server also supports the Anthropic Messages API format out of the box, so all you would need to do is to load the models, start the server, and set `OLLAMA_BASE_URL=http://127.0.0.1:1234`.
 
-You likely don't need _all_ of these set (or even mentioned) in your `.env` file: add just the ones you need, and defaults will be used for all the others. The exception to this is if you're _contributing_--in which case you will need _all_ of them set so that tests can run locally. Because the LLM space changes often, most tests are written without mocking so that any breaking changes caused by APIs changing is caught early.
+You likely don't need _all_ of these set (or even mentioned) in your `.env` file: add just the ones you need, and defaults will be used for all the others. The exception to this is if you're _contributing_--in which case you will need all of the API keys set so that tests can run locally. Because the LLM space changes often, most tests are written without mocking so that any breaking changes caused by APIs changing is caught early.
 
 ## Running the program
 

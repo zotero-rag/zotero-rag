@@ -15,9 +15,11 @@ use zqa_rag::llm::base::ReasoningEffort;
 use zqa_rag::providers::ProviderId;
 use zqa_rag::reranking::common::RerankProviderConfig;
 
-/// TOML config. Below is an example config with most of the defaults. The TOML config is
-/// overridden by environment variables. Note that reasoning defaults to off for all
-/// providers; the example below shows you how you can set reasoning parameters.
+/// TOML config. Below is an example config with most of the defaults. Environment variables
+/// override the matching TOML keys when [`Config::read_env`] is called. This crate is the only one
+/// that reads the environment: `zqa-rag` takes every setting, including API keys, from the
+/// provider configs built here. Note that reasoning defaults to off for all providers; the example
+/// below shows you how you can set reasoning parameters.
 ///
 /// Note on `embedding_dims`: this must match the embedding model's output width (or a
 /// reduced, Matryoshka-style width for models that support dimension reduction, such as

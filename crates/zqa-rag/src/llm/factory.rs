@@ -40,15 +40,15 @@ pub enum LLMClient {
 impl LLMClient {
     /// Return the configured model
     #[must_use]
-    pub fn get_model_name(&self) -> Option<String> {
+    pub fn get_model_name(&self) -> &str {
         match self {
-            LLMClient::Anthropic(client) => client.config.as_ref().map(|c| c.model.clone()),
-            LLMClient::Ollama(client) => client.config.as_ref().map(|c| c.model.clone()),
-            LLMClient::OpenAI(client) => client.config.as_ref().map(|c| c.model.clone()),
-            LLMClient::OpenRouter(client) => client.config.as_ref().map(|c| c.model.clone()),
-            LLMClient::Gemini(client) => client.config.as_ref().map(|c| c.model.clone()),
+            LLMClient::Anthropic(client) => &client.config.model,
+            LLMClient::Ollama(client) => &client.config.model,
+            LLMClient::OpenAI(client) => &client.config.model,
+            LLMClient::OpenRouter(client) => &client.config.model,
+            LLMClient::Gemini(client) => &client.config.model,
             #[cfg(any(test, feature = "mock"))]
-            LLMClient::Mock(_) => Some("mock_client".into()),
+            LLMClient::Mock(_) => "mock_client",
         }
     }
 
@@ -74,31 +74,41 @@ impl LLMClient {
     #[must_use]
     pub fn get_reasoning_config(&self) -> Option<ReasoningConfig> {
         match self {
-            LLMClient::Anthropic(client) => client.config.as_ref().and_then(|c| {
-                if c.reasoning_budget.is_none() && c.reasoning_effort.is_none() {
+            LLMClient::Anthropic(client) => {
+                let config = &client.config;
+                if config.reasoning_budget.is_none() && config.reasoning_effort.is_none() {
                     return None;
                 }
+
                 Some(ReasoningConfig {
-                    max_tokens: c.reasoning_budget,
-                    effort: c.reasoning_effort.clone(),
+                    max_tokens: config.reasoning_budget,
+                    effort: config.reasoning_effort.clone(),
                     summary: None,
                 })
-            }),
-            LLMClient::Ollama(client) => client.config.as_ref().and_then(|c| {
-                c.reasoning_budget.map(|budget| ReasoningConfig {
-                    max_tokens: Some(budget),
-                    effort: None,
-                    summary: None,
-                })
-            }),
-            LLMClient::OpenAI(client) => client.config.as_ref().and_then(|c| {
-                c.reasoning_effort.as_ref().map(|effort| ReasoningConfig {
-                    max_tokens: None,
-                    effort: Some(effort.clone()),
-                    summary: None,
-                })
-            }),
-            LLMClient::OpenRouter(client) => client.config.as_ref().map(|config| {
+            }
+            LLMClient::Ollama(client) => {
+                client
+                    .config
+                    .reasoning_budget
+                    .map(|budget| ReasoningConfig {
+                        max_tokens: Some(budget),
+                        effort: None,
+                        summary: None,
+                    })
+            }
+            LLMClient::OpenAI(client) => {
+                client
+                    .config
+                    .reasoning_effort
+                    .as_ref()
+                    .map(|effort| ReasoningConfig {
+                        max_tokens: None,
+                        effort: Some(effort.clone()),
+                        summary: None,
+                    })
+            }
+            LLMClient::OpenRouter(client) => {
+                let config = &client.config;
                 if config.reasoning_effort.is_none() && config.reasoning_budget.is_none() {
                     return None;
                 }
@@ -108,14 +118,18 @@ impl LLMClient {
                     effort: config.reasoning_effort.clone(),
                     summary: None,
                 })
-            })?,
-            LLMClient::Gemini(client) => client.config.as_ref().and_then(|c| {
-                c.reasoning_effort.as_ref().map(|effort| ReasoningConfig {
-                    max_tokens: None,
-                    effort: Some(effort.clone()),
-                    summary: None,
-                })
-            }),
+            }
+            LLMClient::Gemini(client) => {
+                client
+                    .config
+                    .reasoning_effort
+                    .as_ref()
+                    .map(|effort| ReasoningConfig {
+                        max_tokens: None,
+                        effort: Some(effort.clone()),
+                        summary: None,
+                    })
+            }
             #[cfg(any(test, feature = "mock"))]
             LLMClient::Mock(_) => None,
         }
@@ -139,7 +153,7 @@ impl LLMClient {
         request: &ChatRequest<'_>,
     ) -> Result<CompletionApiResponse, LLMError> {
         log::debug!(
-            "Sending generation request: model={:?}, message_bytes={}, history_items={}",
+            "Sending generation request: model={}, message_bytes={}, history_items={}",
             self.get_model_name(),
             request.message.len(),
             request.chat_history.len()
@@ -187,7 +201,6 @@ impl BatchAPIProvider for BatchEmbeddingClient {
     ///
     /// # Errors
     ///
-    /// * `LLMError::EnvError` - If the API key is not set, and no config is provided
     /// * `LLMError::InvalidHeaderError` - If the API key cannot be parsed as a header value
     /// * `LLMError::TimeoutError` - If the HTTP request times out
     /// * `LLMError::CredentialError` - If the API returns 401 or 403
@@ -216,7 +229,6 @@ impl BatchAPIProvider for BatchEmbeddingClient {
     ///
     /// # Errors
     ///
-    /// * `LLMError::EnvError` - If no API key was supplied.
     /// * `LLMError::InvalidHeaderError` - If the API key cannot be parsed as a header value
     /// * `LLMError::TimeoutError` - If the HTTP request times out
     /// * `LLMError::CredentialError` - If the API returns 401 or 403
@@ -242,7 +254,6 @@ impl BatchAPIProvider for BatchEmbeddingClient {
     /// # Errors
     ///
     /// * `LLMError::BatchNotCompleted` - If the batch has not yet reached [`BatchJobState::Completed`] or [`BatchJobState::Failed`]
-    /// * `LLMError::EnvError` - If an API key is not set up
     /// * `LLMError::InvalidHeaderError` - If the API key cannot be parsed as a header value
     /// * `LLMError::TimeoutError` - If the HTTP request times out
     /// * `LLMError::CredentialError` - If the API returns 401 or 403
@@ -264,7 +275,6 @@ impl BatchAPIProvider for BatchEmbeddingClient {
     ///
     /// # Errors
     ///
-    /// * `LLMError::EnvError` - If an API key is not set up
     /// * `LLMError::InvalidHeaderError` - If the API key cannot be parsed as a header value
     /// * `LLMError::TimeoutError` - If the HTTP request times out
     /// * `LLMError::CredentialError` - If the API returns 401 or 403

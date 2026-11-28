@@ -3,7 +3,6 @@
 
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::env;
 
 use http::HeaderMap;
 use serde::{Deserialize, Serialize};
@@ -11,7 +10,6 @@ use serde::{Deserialize, Serialize};
 use super::base::{ChatHistoryItem, ChatRequest};
 use super::errors::LLMError;
 use crate::clients::openrouter::OpenRouterClient;
-use crate::constants::{DEFAULT_MAX_RETRIES, DEFAULT_OPENROUTER_MAX_TOKENS};
 use crate::http_client::HttpClient;
 use crate::llm::anthropic::AnthropicCacheControl;
 use crate::llm::base::{
@@ -20,8 +18,6 @@ use crate::llm::base::{
 };
 use crate::llm::tools::{OPENROUTER_SCHEMA_KEY, SerializedTool};
 use crate::pricing::ModelUsage;
-
-const DEFAULT_MODEL: &str = "anthropic/claude-sonnet-4.5";
 
 /// Roles accepted by OpenRouter's chat completions API.
 #[derive(Copy, Clone, Debug, Serialize)]
@@ -384,23 +380,7 @@ impl<T: HttpClient> AgenticClient for OpenRouterClient<T> {
         reasoning: Option<&ReasoningConfig>,
         max_tokens: Option<u32>,
     ) -> Result<ProviderTurn<Self::HistoryItem>, LLMError> {
-        // Use config if available, otherwise fall back to env vars
-        let (api_key, model, config_max_tokens, max_retries) = if let Some(ref config) = self.config
-        {
-            (
-                config.api_key.clone(),
-                config.model.clone(),
-                config.max_tokens,
-                config.max_retries,
-            )
-        } else {
-            (
-                env::var("OPENROUTER_API_KEY")?,
-                env::var("OPENROUTER_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.to_string()),
-                DEFAULT_OPENROUTER_MAX_TOKENS,
-                DEFAULT_MAX_RETRIES,
-            )
-        };
+        let config = &self.config;
 
         let wrapped_tools = tools.map(|tools| {
             tools
@@ -429,20 +409,20 @@ impl<T: HttpClient> AgenticClient for OpenRouterClient<T> {
             None => Cow::Borrowed(history),
         };
         let request_body = OpenRouterRequest {
-            model: &model,
+            model: &config.model,
             messages: messages.as_ref(),
             reasoning: reasoning.map(Into::into),
             tools: wrapped_tools,
             tool_choice: (tools.is_some() && !allow_tool_calls).then_some("none"),
-            max_tokens: max_tokens.unwrap_or(config_max_tokens),
+            max_tokens: max_tokens.unwrap_or(config.max_tokens),
             // NOTE: Maintainers should keep this condition in sync with `AnthropicClient::send_once`.
-            cache_control: (model.starts_with("anthropic/")
+            cache_control: (config.model.starts_with("anthropic/")
                 && (tools.is_some() || history.len() > 1))
                 .then_some(AnthropicCacheControl::Ephemeral),
         };
 
         let mut headers = HeaderMap::new();
-        let auth = format!("Bearer {api_key}");
+        let auth = format!("Bearer {}", config.api_key);
         headers.insert("Authorization", auth.parse()?);
         headers.insert("Content-Type", "application/json".parse()?);
 
@@ -451,7 +431,7 @@ impl<T: HttpClient> AgenticClient for OpenRouterClient<T> {
             request_body,
             &headers,
             "https://openrouter.ai/api/v1/chat/completions",
-            max_retries,
+            config.max_retries,
         )
         .await?;
         let usage = vec![response.usage.into()];
@@ -510,7 +490,8 @@ mod tests {
     async fn test_request_works() {
         dotenv().ok();
 
-        let client = OpenRouterClient::<ReqwestClient>::default();
+        let client =
+            OpenRouterClient::<ReqwestClient>::with_config(crate::config::test_env::openrouter());
         let request = ChatRequest {
             chat_history: Vec::new(),
             max_tokens: Some(1024),
@@ -565,7 +546,7 @@ mod tests {
         let mock_http_client = MockHttpClient::new(mock_response);
         let mock_client = OpenRouterClient {
             client: mock_http_client,
-            config: None,
+            config: crate::config::OpenRouterConfig::default(),
         };
 
         let request = ChatRequest {
@@ -628,7 +609,8 @@ mod tests {
     async fn test_request_with_tool_works() {
         dotenv().ok();
 
-        let client = OpenRouterClient::<ReqwestClient>::default();
+        let client =
+            OpenRouterClient::<ReqwestClient>::with_config(crate::config::test_env::openrouter());
         let call_count = Arc::new(Mutex::new(0));
         let tool = MockTool {
             call_count: Arc::clone(&call_count),
@@ -744,7 +726,7 @@ mod tests {
 
         let mock_client = OpenRouterClient {
             client: SequentialMockHttpClient::new([tool_call_response, text_response]),
-            config: None,
+            config: crate::config::OpenRouterConfig::default(),
         };
         let res = mock_client.send_message(&request).await;
         test_ok!(res);
@@ -919,10 +901,10 @@ mod tests {
             RecordingSequentialMockHttpClient::new([tool_call_response, text_response]);
         let mock_client = OpenRouterClient {
             client: http_client.clone(),
-            config: Some(crate::config::OpenRouterConfig {
+            config: crate::config::OpenRouterConfig {
                 api_key: "fixture".into(),
                 ..Default::default()
-            }),
+            },
         };
         let res = mock_client.send_message(&request).await.unwrap();
 
@@ -956,7 +938,8 @@ mod tests {
     async fn test_followup_queries_work() {
         dotenv().ok();
 
-        let client = OpenRouterClient::<ReqwestClient>::default();
+        let client =
+            OpenRouterClient::<ReqwestClient>::with_config(crate::config::test_env::openrouter());
         let first_message = ChatRequest {
             message: "What is self-attention?".into(),
             ..ChatRequest::default()
@@ -993,11 +976,11 @@ mod tests {
             .join("\n");
         let client = OpenRouterClient {
             client: ReqwestClient::default(),
-            config: Some(crate::config::OpenRouterConfig {
+            config: crate::config::OpenRouterConfig {
                 api_key: std::env::var("OPENROUTER_API_KEY").unwrap(),
                 model: "anthropic/claude-haiku-4.5".into(),
                 ..Default::default()
-            }),
+            },
         };
         // Requests without tools or history are not cached, so start mid-conversation.
         let opening_history = vec![

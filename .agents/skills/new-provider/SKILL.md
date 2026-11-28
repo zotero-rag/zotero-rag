@@ -61,13 +61,12 @@ All fields should have `/// doc` comments and the struct should derive `Debug, C
 Model on `zqa-rag/src/llm/openrouter.rs`. Requirements:
 
 - Module-level `//!` doc comment
-- `<Name>Client<T: HttpClient>` struct with `pub client: T` and `pub config: Option<<Name>Config>`
-- `impl<T: HttpClient + Default> Default` delegating to `new()`
-- `new()` and `with_config(config: <Name>Config)` constructors (both `#[must_use]`)
+- `<Name>Client<T: HttpClient>` struct with `pub(crate) client: T` and `pub(crate) config: <Name>Config`
+- A `#[must_use]` `with_config(config: <Name>Config)` constructor and no `Default` impl: `zqa-rag` never reads environment variables, so every setting, including the API key, comes from the config. `zqa` maps env vars onto the config in `read_env` (see Step 7)
 - Private request/response structs with `#[derive(Serialize)]` / `#[derive(Deserialize)]`
 - `impl AgenticClient for <Name>Client<T>`: define the provider-native history item, schema key, initial-history conversion, and one `send_once` request-response round trip
 - Use `send_generation_request` from `llm/base.rs` for the HTTP call
-- Tests: at minimum one mock test (using `MockHttpClient`) and one live integration test (using `ReqwestClient`, loads `.env` via `dotenv`)
+- Tests: at minimum one mock test (using `MockHttpClient`) and one live integration test (using `ReqwestClient`, loads `.env` via `dotenv`, and builds its config with a new helper in `crate::config::test_env`)
 
 **Register in three places:**
 
@@ -76,7 +75,6 @@ Model on `zqa-rag/src/llm/openrouter.rs`. Requirements:
   - Import the new client
   - Add `/// <Name> client` + `<Name>(<Name>Client)` variant to `LLMClient`
   - Add a dispatch arm to the inherent `LLMClient::send_message` match
-  - Add `"<key>" => Ok(LLMClient::<Name>(<Name>Client::new()))` to `get_client_by_provider`
   - Add `LLMClientConfig::<Name>(cfg) => Ok(LLMClient::<Name>(<Name>Client::with_config(cfg)))` to `get_client_with_config`
 - `zqa-rag/src/config.rs` — add `/// <Name> client configuration` + `<Name>(crate::config::<Name>Config)` to `LLMClientConfig`
 
@@ -104,9 +102,7 @@ Model on `zqa-rag/src/llm/openrouter.rs`. Requirements:
 
 **Register in `zqa-rag/src/embedding/common.rs`:**
 
-- Import the new client
-- Add `"<key>" => Ok(Arc::new(<Name>Client::<ReqwestClient>::default()))` to `get_embedding_provider`
-- Add arm to `get_embedding_provider_with_config`
+- Implement `EmbeddingFactory` for `<Name>Provider` in `zqa-rag/src/providers/<key>.rs` (model on `providers/ollama.rs`): `create_embedding` matches `EmbeddingProviderConfig::<Name>(cfg)` and returns `Arc::new(<Name>Client::<ReqwestClient>::with_config(cfg.clone()))`. Register it in `providers/registry.rs`
 - Add `/// Configuration for <Name> embedding provider` + `<Name>(crate::config::<Name>Config)` to `EmbeddingProviderConfig`
 - Add arm to `provider_name()`
 
@@ -121,13 +117,12 @@ Model on `zqa-rag/src/llm/openrouter.rs`. Requirements:
 **Add `Rerank` impl to the provider's file** — model on the `Rerank<U>` impl in `zqa-rag/src/embedding/cohere.rs`:
 
 - `impl<T: HttpClient, U: AsRef<str> + Send + Clone> Rerank<U> for <Name>Client<T>`
-- Reads credentials from `self.config` first, then env vars
+- Reads credentials from `self.config`
 - Returns `Pin<Box<dyn Future<...>>>`
 
 **Register in `zqa-rag/src/embedding/common.rs`:**
 
-- Add `"<key>" => Ok(Arc::new(<Name>Client::<ReqwestClient>::default()))` to `get_reranking_provider`
-- Add arm to `get_reranking_provider_with_config`
+- Implement `RerankFactory` for `<Name>Provider` in `zqa-rag/src/providers/<key>.rs` (model on `providers/cohere.rs`): `create_reranker` matches `RerankProviderConfig::<Name>(cfg)` and returns the client built with `with_config(cfg.clone())`. Register it in `providers/registry.rs`
 - Add `/// Configuration for <Name> reranking provider` + `<Name>(crate::config::<Name>Config)` to `RerankProviderConfig`
 
 **`zqa-rag/src/capabilities.rs` — `RerankerProviders`:**

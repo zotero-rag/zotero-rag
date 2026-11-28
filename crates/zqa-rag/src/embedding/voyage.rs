@@ -2,7 +2,6 @@
 //! includes support for both embedding only.
 
 use std::borrow::Cow;
-use std::env;
 use std::sync::Arc;
 
 use arrow_schema::{DataType, Field};
@@ -13,10 +12,7 @@ use serde::{Deserialize, Serialize};
 use serde_jsonlines::{json_lines, write_json_lines};
 
 use crate::capabilities::{BatchAPIProvider, BatchJobState, EmbeddingProvider};
-use crate::constants::{
-    DEFAULT_MAX_CONCURRENT_REQUESTS, DEFAULT_MAX_RETRIES, DEFAULT_VOYAGE_EMBEDDING_DIM,
-    DEFAULT_VOYAGE_EMBEDDING_MODEL,
-};
+use crate::constants::{DEFAULT_VOYAGE_EMBEDDING_DIM, DEFAULT_VOYAGE_EMBEDDING_MODEL};
 use crate::embedding::common::{
     BatchEmbeddingError, BatchEmbeddingRequest, BatchEmbeddingResult, BatchEmbeddingResults,
     BatchSubmission, EmbeddingApiResponse, compute_embeddings_async,
@@ -29,36 +25,20 @@ use crate::llm::errors::LLMError;
 pub struct VoyageAIClient<T: HttpClient = ReqwestClient> {
     /// The HTTP client. The generic parameter allows for mocking in tests.
     pub(crate) client: T,
-    /// Optional configuration for the VoyageAI client.
-    pub(crate) config: Option<crate::config::VoyageAIConfig>,
-}
-
-impl<T: HttpClient + Default + Clone> Default for VoyageAIClient<T> {
-    fn default() -> Self {
-        Self::new()
-    }
+    /// Configuration for the VoyageAI client.
+    pub(crate) config: crate::config::VoyageAIConfig,
 }
 
 impl<T> VoyageAIClient<T>
 where
     T: HttpClient + Default + Clone,
 {
-    /// Creates a new VoyageAIClient instance without configuration
-    /// (will fall back to environment variables)
-    #[must_use]
-    pub(crate) fn new() -> Self {
-        Self {
-            client: T::default(),
-            config: None,
-        }
-    }
-
     /// Creates a new VoyageAIClient instance with provided configuration
     #[must_use]
     pub(crate) fn with_config(config: crate::config::VoyageAIConfig) -> Self {
         Self {
             client: T::default(),
-            config: Some(config),
+            config,
         }
     }
 
@@ -66,7 +46,6 @@ where
     ///
     /// # Errors
     ///
-    /// * `LLMError::EnvError` - If the VOYAGE_AI_API_KEY environment variable is not set
     /// * `LLMError::TimeoutError` - If the HTTP request times out
     /// * `LLMError::CredentialError` - If the API returns 401 or 403 status
     /// * `LLMError::HttpStatusError` - If the API returns other unsuccessful HTTP status codes
@@ -91,31 +70,8 @@ where
         const BATCH_SIZE: usize = 3;
         const WAIT_AFTER_REQUEST_S: u64 = 2;
 
-        let api_key = self.config.as_ref().map_or_else(
-            || env::var("VOYAGE_AI_API_KEY"),
-            |config| Ok(config.api_key.clone()),
-        )?;
-
-        let model = self
-            .config
-            .as_ref()
-            .map_or(DEFAULT_VOYAGE_EMBEDDING_MODEL.to_string(), |c| {
-                c.embedding_model.clone()
-            });
-        let output_dimension = self
-            .config
-            .as_ref()
-            .map_or(DEFAULT_VOYAGE_EMBEDDING_DIM, |c| c.embedding_dims as u32);
-        let max_concurrent = self
-            .config
-            .as_ref()
-            .map_or(DEFAULT_MAX_CONCURRENT_REQUESTS, |c| {
-                c.max_concurrent_requests
-            });
-        let max_retries = self
-            .config
-            .as_ref()
-            .map_or(DEFAULT_MAX_RETRIES, |c| c.max_retries);
+        let config = &self.config;
+        let output_dimension = config.embedding_dims as u32;
 
         tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(compute_embeddings_async::<
@@ -125,11 +81,11 @@ where
             >(
                 source,
                 "https://api.voyageai.com/v1/embeddings",
-                &api_key,
+                &config.api_key,
                 self.client.clone(),
                 |texts| VoyageAIRequest {
                     input: texts,
-                    model: model.clone(),
+                    model: config.embedding_model.clone(),
                     input_type: Some(input_type.into()),
                     truncation: true,
                     output_dimension, // Matryoshka embeddings
@@ -138,9 +94,9 @@ where
                 EmbeddingProvider::VoyageAI.as_str().to_string(),
                 BATCH_SIZE,
                 WAIT_AFTER_REQUEST_S,
-                output_dimension as usize,
-                max_concurrent,
-                max_retries,
+                config.embedding_dims,
+                config.max_concurrent_requests,
+                config.max_retries,
             ))
         })
     }
@@ -244,15 +200,9 @@ impl<T: HttpClient + Default + Clone + std::fmt::Debug> EmbeddingFunction for Vo
     }
 
     fn dest_type(&self) -> Result<Cow<'_, DataType>, lancedb::Error> {
-        let dim = self
-            .config
-            .as_ref()
-            .map_or(DEFAULT_VOYAGE_EMBEDDING_DIM as i32, |c| {
-                c.embedding_dims as i32
-            });
         Ok(Cow::Owned(DataType::FixedSizeList(
             Arc::new(Field::new("item", DataType::Float32, true)),
-            dim,
+            self.config.embedding_dims as i32,
         )))
     }
 
@@ -509,7 +459,6 @@ where
     ///
     /// # Errors
     ///
-    /// * `LLMError::EnvError` - If `VOYAGE_AI_API_KEY` is not set and no config is provided
     /// * `LLMError::InvalidHeaderError` - If the API key cannot be parsed as a header value
     /// * `LLMError::TimeoutError` - If the HTTP request times out
     /// * `LLMError::CredentialError` - If the API returns 401 or 403
@@ -522,11 +471,7 @@ where
     ) -> Result<VoyageAIBatchStatusResponse, LLMError> {
         let files_api_url = &format!("https://api.voyageai.com/v1/batches/{batch_id}");
 
-        let api_key = if let Some(ref config) = self.config {
-            config.api_key.clone()
-        } else {
-            env::var("VOYAGE_AI_API_KEY")?
-        };
+        let api_key = &self.config.api_key;
 
         let mut headers = HeaderMap::new();
         headers.insert("Authorization", format!("Bearer {api_key}").parse()?);
@@ -550,7 +495,6 @@ where
     ///
     /// # Errors
     ///
-    /// * `LLMError::EnvError` - If `VOYAGE_AI_API_KEY` is not set and no config is provided
     /// * `LLMError::InvalidHeaderError` - If the API key cannot be parsed as a header value
     /// * `LLMError::TimeoutError` - If the HTTP request times out
     /// * `LLMError::CredentialError` - If the API returns 401 or 403
@@ -563,11 +507,7 @@ where
     {
         let files_api_url = &format!("https://api.voyageai.com/v1/files/{file_id}");
 
-        let api_key = if let Some(ref config) = self.config {
-            config.api_key.clone()
-        } else {
-            env::var("VOYAGE_AI_API_KEY")?
-        };
+        let api_key = &self.config.api_key;
 
         let mut headers = HeaderMap::new();
         headers.insert("Authorization", format!("Bearer {api_key}").parse()?);
@@ -606,7 +546,6 @@ where
     ///
     /// # Errors
     ///
-    /// * `LLMError::EnvError` - If `VOYAGE_AI_API_KEY` is not set and no config is provided
     /// * `LLMError::InvalidHeaderError` - If the API key cannot be parsed as a header value
     /// * `LLMError::TimeoutError` - If the HTTP request times out
     /// * `LLMError::CredentialError` - If the API returns 401 or 403
@@ -635,11 +574,7 @@ where
         let tmp_file = tempfile::NamedTempFile::new()?;
         write_json_lines(&tmp_file, &inputs)?;
 
-        let api_key = if let Some(ref config) = self.config {
-            config.api_key.clone()
-        } else {
-            env::var("VOYAGE_AI_API_KEY")?
-        };
+        let api_key = &self.config.api_key;
 
         let mut headers = HeaderMap::new();
         headers.insert("Authorization", format!("Bearer {api_key}").parse()?);
@@ -707,7 +642,6 @@ where
     ///
     /// # Errors
     ///
-    /// * `LLMError::EnvError` - If an API key is not set up
     /// * `LLMError::InvalidHeaderError` - If the API key cannot be parsed as a header value
     /// * `LLMError::TimeoutError` - If the HTTP request times out
     /// * `LLMError::CredentialError` - If the API returns 401 or 403
@@ -716,11 +650,7 @@ where
     async fn cancel_batch(&self, batch_id: &str) -> Result<(), LLMError> {
         const BATCH_API_URL: &str = "https://api.voyageai.com/v1/batches";
 
-        let api_key = if let Some(ref config) = self.config {
-            config.api_key.clone()
-        } else {
-            env::var("VOYAGE_AI_API_KEY")?
-        };
+        let api_key = &self.config.api_key;
 
         let mut headers = HeaderMap::new();
         headers.insert("Authorization", format!("Bearer {api_key}").parse()?);
@@ -826,7 +756,8 @@ mod tests {
             "A sixth string",
         ]);
 
-        let client = VoyageAIClient::<ReqwestClient>::default();
+        let client =
+            VoyageAIClient::<ReqwestClient>::with_config(crate::config::test_env::voyage());
         let embeddings = client.compute_embeddings_internal(Arc::new(array), "document");
 
         test_ok!(embeddings);
@@ -892,7 +823,7 @@ mod tests {
         };
         let client = VoyageAIClient {
             client: MockHttpClient::new(()),
-            config: Some(config),
+            config,
         };
 
         let result = client.cancel_batch("batch-xyz").await;
@@ -917,14 +848,14 @@ mod tests {
 
         let client = VoyageAIClient {
             client: MockHttpClient::new(mock_response),
-            config: Some(crate::config::VoyageAIConfig {
+            config: crate::config::VoyageAIConfig {
                 api_key: "test-key".to_string(),
                 embedding_model: DEFAULT_VOYAGE_EMBEDDING_MODEL.to_string(),
                 embedding_dims: DEFAULT_VOYAGE_EMBEDDING_DIM as usize,
                 reranker: "rerank-2".to_string(),
                 max_concurrent_requests: crate::constants::DEFAULT_MAX_CONCURRENT_REQUESTS,
                 max_retries: crate::constants::DEFAULT_MAX_RETRIES,
-            }),
+            },
         };
 
         let result = BatchAPIProvider::get_batch_status(&client, "batch-xyz").await;
@@ -948,14 +879,14 @@ mod tests {
 
         let client = VoyageAIClient {
             client: MockHttpClient::new(mock_response),
-            config: Some(crate::config::VoyageAIConfig {
+            config: crate::config::VoyageAIConfig {
                 api_key: "test-key".to_string(),
                 embedding_model: DEFAULT_VOYAGE_EMBEDDING_MODEL.to_string(),
                 embedding_dims: DEFAULT_VOYAGE_EMBEDDING_DIM as usize,
                 reranker: "rerank-2".to_string(),
                 max_concurrent_requests: crate::constants::DEFAULT_MAX_CONCURRENT_REQUESTS,
                 max_retries: crate::constants::DEFAULT_MAX_RETRIES,
-            }),
+            },
         };
 
         let result = BatchAPIProvider::get_batch_status(&client, "batch-xyz").await;
@@ -981,14 +912,14 @@ mod tests {
 
         let client = VoyageAIClient {
             client: MockHttpClient::new(mock_response),
-            config: Some(crate::config::VoyageAIConfig {
+            config: crate::config::VoyageAIConfig {
                 api_key: "test-key".to_string(),
                 embedding_model: DEFAULT_VOYAGE_EMBEDDING_MODEL.to_string(),
                 embedding_dims: DEFAULT_VOYAGE_EMBEDDING_DIM as usize,
                 reranker: "rerank-2".to_string(),
                 max_concurrent_requests: crate::constants::DEFAULT_MAX_CONCURRENT_REQUESTS,
                 max_retries: crate::constants::DEFAULT_MAX_RETRIES,
-            }),
+            },
         };
 
         let result = BatchAPIProvider::get_batch_results(&client, "batch-xyz").await;
@@ -1007,7 +938,8 @@ mod tests {
     async fn test_live_submit_batch_and_check_status() {
         dotenv().ok();
 
-        let client = VoyageAIClient::<ReqwestClient>::default();
+        let client =
+            VoyageAIClient::<ReqwestClient>::with_config(crate::config::test_env::voyage());
 
         let request = BatchEmbeddingRequest {
             inputs: vec![
@@ -1056,14 +988,14 @@ mod tests {
 
         let client = VoyageAIClient {
             client: MockHttpClient::new(mock_response),
-            config: Some(crate::config::VoyageAIConfig {
+            config: crate::config::VoyageAIConfig {
                 api_key: "test-key".to_string(),
                 embedding_model: DEFAULT_VOYAGE_EMBEDDING_MODEL.to_string(),
                 embedding_dims: DEFAULT_VOYAGE_EMBEDDING_DIM as usize,
                 reranker: "rerank-2".to_string(),
                 max_concurrent_requests: crate::constants::DEFAULT_MAX_CONCURRENT_REQUESTS,
                 max_retries: crate::constants::DEFAULT_MAX_RETRIES,
-            }),
+            },
         };
 
         let result = BatchAPIProvider::get_batch_results(&client, "batch-validating").await;

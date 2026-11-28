@@ -8,10 +8,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::capabilities::EmbeddingProvider;
 use crate::clients::ollama::OllamaClient;
-use crate::constants::{
-    DEFAULT_MAX_CONCURRENT_REQUESTS, DEFAULT_MAX_RETRIES, DEFAULT_OLLAMA_BASE_URL,
-    DEFAULT_OLLAMA_EMBEDDING_DIM, DEFAULT_OLLAMA_EMBEDDING_MODEL,
-};
 use crate::embedding::common::{EmbeddingApiResponse, compute_embeddings_async};
 use crate::http_client::HttpClient;
 use crate::llm::errors::LLMError;
@@ -64,10 +60,6 @@ impl EmbeddingApiResponse for OllamaEmbeddingResponse {
 }
 
 impl<T: HttpClient + Debug + Default + Clone> OllamaClient<T> {
-    fn get_embedding_dims(&self) -> Option<usize> {
-        self.config.as_ref().map(|c| c.embedding_dims)
-    }
-
     /// Internal method to compute embeddings
     ///
     /// # Errors
@@ -84,29 +76,8 @@ impl<T: HttpClient + Debug + Default + Clone> OllamaClient<T> {
         const BATCH_SIZE: usize = 32;
         const WAIT_AFTER_REQUEST_S: u64 = 0;
 
-        let model = self
-            .config
-            .as_ref()
-            .map_or(DEFAULT_OLLAMA_EMBEDDING_MODEL.into(), |c| {
-                c.embedding_model.clone()
-            });
-        let base_url = self
-            .config
-            .as_ref()
-            .map_or(DEFAULT_OLLAMA_BASE_URL.into(), |c| c.base_url.clone());
-        let base_url = base_url.trim_end_matches('/');
-        let max_concurrent = self
-            .config
-            .as_ref()
-            .map_or(DEFAULT_MAX_CONCURRENT_REQUESTS, |c| {
-                c.max_concurrent_requests
-            });
-        let max_retries = self
-            .config
-            .as_ref()
-            .map_or(DEFAULT_MAX_RETRIES, |c| c.max_retries);
-
-        let url = format!("{base_url}/api/embed");
+        let config = &self.config;
+        let url = format!("{}/api/embed", config.base_url.trim_end_matches('/'));
 
         tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(compute_embeddings_async::<
@@ -119,16 +90,15 @@ impl<T: HttpClient + Debug + Default + Clone> OllamaClient<T> {
                 "",
                 self.client.clone(),
                 |input| OllamaEmbeddingRequest {
-                    model: model.clone(),
+                    model: config.embedding_model.clone(),
                     input,
                 },
                 EmbeddingProvider::Ollama.as_str().to_string(),
                 BATCH_SIZE,
                 WAIT_AFTER_REQUEST_S,
-                self.get_embedding_dims()
-                    .unwrap_or(DEFAULT_OLLAMA_EMBEDDING_DIM),
-                max_concurrent,
-                max_retries,
+                config.embedding_dims,
+                config.max_concurrent_requests,
+                config.max_retries,
             ))
         })
     }
@@ -147,13 +117,9 @@ where
     }
 
     fn dest_type(&self) -> lancedb::Result<Cow<'_, DataType>> {
-        let embedding_dims = self
-            .get_embedding_dims()
-            .unwrap_or(DEFAULT_OLLAMA_EMBEDDING_DIM) as i32;
-
         Ok(Cow::Owned(DataType::FixedSizeList(
             Arc::new(Field::new("item", DataType::Float32, true)),
-            embedding_dims,
+            self.config.embedding_dims as i32,
         )))
     }
 
@@ -253,19 +219,6 @@ mod tests {
     }
 
     #[test]
-    fn test_dest_type_uses_default_dims_without_config() {
-        use arrow_schema::DataType;
-        let client = OllamaClient::<ReqwestClient>::default();
-        let dt = client.dest_type().unwrap();
-        match dt.as_ref() {
-            DataType::FixedSizeList(_, size) => {
-                test_eq!(*size, DEFAULT_OLLAMA_EMBEDDING_DIM as i32);
-            }
-            other => panic!("Expected FixedSizeList, got {other:?}"),
-        }
-    }
-
-    #[test]
     fn test_dest_type_uses_config_dims() {
         use arrow_schema::DataType;
         let config = OllamaConfig {
@@ -291,10 +244,10 @@ mod tests {
 
         let client = OllamaClient {
             client: MockHttpClient::new(mock_response),
-            config: Some(OllamaConfig {
+            config: OllamaConfig {
                 embedding_dims: dim,
                 ..OllamaConfig::default()
-            }),
+            },
         };
 
         let array = arrow_array::StringArray::from(vec!["hello", "world"]);
@@ -315,10 +268,10 @@ mod tests {
 
         let client = OllamaClient {
             client: MockHttpClient::new(mock_response),
-            config: Some(OllamaConfig {
+            config: OllamaConfig {
                 embedding_dims: dim,
                 ..OllamaConfig::default()
-            }),
+            },
         };
 
         let array = arrow_array::StringArray::from(vec!["hello"]);
@@ -347,12 +300,12 @@ mod tests {
 
         let client = OllamaClient {
             client: MockHttpClient::new(mock_response),
-            config: Some(OllamaConfig {
+            config: OllamaConfig {
                 base_url: "http://custom-ollama:11434".into(),
                 embedding_model: "custom-model".into(),
                 embedding_dims: dim,
                 ..OllamaConfig::default()
-            }),
+            },
         };
 
         let array = arrow_array::StringArray::from(vec!["a", "b", "c"]);
@@ -383,7 +336,7 @@ mod tests {
             "A sixth string",
         ]);
 
-        let client = OllamaClient::<ReqwestClient>::default();
+        let client = OllamaClient::<ReqwestClient>::with_config(crate::config::test_env::ollama());
         let embeddings = client.compute_embeddings_internal(Arc::new(array));
 
         test_ok!(embeddings);

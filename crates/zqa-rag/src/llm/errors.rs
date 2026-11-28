@@ -16,9 +16,6 @@ pub enum LLMError {
     /// invalid JSON.
     #[error("Failed to deserialize response: {0}")]
     DeserializationError(String),
-    /// Errors indicating a necessary environment variable is missing.
-    #[error("Environment variable could not be fetched: {0}")]
-    EnvError(#[from] std::env::VarError),
     /// A broad "other" error. This is also used for cases when we don't know what went wrong.
     #[error("Unknown error occurred: {0}")]
     GenericLLMError(String),

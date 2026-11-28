@@ -7,35 +7,14 @@ use crate::http_client::{HttpClient, ReqwestClient};
 pub struct OpenAIClient<T: HttpClient = ReqwestClient> {
     /// The HTTP client. The generic parameter allows for mocking in tests.
     pub(crate) client: T,
-    /// Optional configuration for the OpenAI client.
-    pub(crate) config: Option<crate::config::OpenAIConfig>,
-}
-
-impl<T: HttpClient + Default> Default for OpenAIClient<T> {
-    fn default() -> Self {
-        Self::new()
-    }
+    /// Configuration for the OpenAI client.
+    pub(crate) config: crate::config::OpenAIConfig,
 }
 
 impl<T> OpenAIClient<T>
 where
     T: HttpClient + Default,
 {
-    /// Creates a new `OpenAIClient` instance without configuration.
-    ///
-    /// Uses environment variables for configuration.
-    ///
-    /// # Returns
-    ///
-    /// A client initialized with a default HTTP client and no config.
-    #[must_use]
-    pub fn new() -> Self {
-        Self {
-            client: T::default(),
-            config: None,
-        }
-    }
-
     /// Creates a new `OpenAIClient` instance with provided configuration.
     ///
     /// # Arguments
@@ -49,7 +28,7 @@ where
     pub fn with_config(config: crate::config::OpenAIConfig) -> Self {
         Self {
             client: T::default(),
-            config: Some(config),
+            config,
         }
     }
 }

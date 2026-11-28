@@ -1,17 +1,12 @@
 //! Functions, structs, and trait implementations for interacting with `ollama`. This
 //! module includes support for text generation only.
 
-use std::env;
-
 use http::HeaderMap;
 
 use super::base::ChatRequest;
 use super::errors::LLMError;
 use crate::clients::ollama::OllamaClient;
-use crate::constants::{
-    DEFAULT_ANTHROPIC_REASONING_BUDGET, DEFAULT_MAX_RETRIES, DEFAULT_OLLAMA_BASE_URL,
-    DEFAULT_OLLAMA_MAX_TOKENS, DEFAULT_OLLAMA_MODEL,
-};
+use crate::constants::DEFAULT_ANTHROPIC_REASONING_BUDGET;
 use crate::http_client::HttpClient;
 use crate::llm::anthropic::{
     AnthropicChatHistoryItem, AnthropicRequest, AnthropicResponse, AnthropicThinkingConfig,
@@ -55,28 +50,10 @@ impl<T: HttpClient> AgenticClient for OllamaClient<T> {
         reasoning: Option<&ReasoningConfig>,
         max_tokens: Option<u32>,
     ) -> Result<ProviderTurn<Self::HistoryItem>, LLMError> {
-        // Use config if available, otherwise fall back to env vars
-        let (model, config_max_tokens, base_url, max_retries) = if let Some(ref config) =
-            self.config
-        {
-            (
-                config.model.clone(),
-                config.max_tokens,
-                config.base_url.clone(),
-                config.max_retries,
-            )
-        } else {
-            (
-                env::var("OLLAMA_MODEL").unwrap_or_else(|_| DEFAULT_OLLAMA_MODEL.to_string()),
-                DEFAULT_OLLAMA_MAX_TOKENS,
-                env::var("OLLAMA_BASE_URL").unwrap_or_else(|_| DEFAULT_OLLAMA_BASE_URL.to_string()),
-                DEFAULT_MAX_RETRIES,
-            )
-        };
-
+        let config = &self.config;
         let request_body = OllamaRequest {
-            model: &model,
-            max_tokens: max_tokens.unwrap_or(config_max_tokens),
+            model: &config.model,
+            max_tokens: max_tokens.unwrap_or(config.max_tokens),
             messages: history,
             system: system_prompt,
             thinking: reasoning.map(|reasoning| AnthropicThinkingConfig::Enabled {
@@ -97,10 +74,15 @@ impl<T: HttpClient> AgenticClient for OllamaClient<T> {
         headers.insert("x-api-key", "ollama".parse()?);
         headers.insert("anthropic-version", "2023-06-01".parse()?);
 
-        let url = format!("{base_url}/v1/messages");
-        let response: OllamaResponse =
-            send_generation_request(&self.client, &request_body, &headers, &url, max_retries)
-                .await?;
+        let url = format!("{}/v1/messages", config.base_url);
+        let response: OllamaResponse = send_generation_request(
+            &self.client,
+            &request_body,
+            &headers,
+            &url,
+            config.max_retries,
+        )
+        .await?;
 
         Ok(ProviderTurn {
             contents: map_response_to_chat_contents(&response.content),
@@ -115,6 +97,7 @@ impl<T: HttpClient> AgenticClient for OllamaClient<T> {
 
 #[cfg(test)]
 mod tests {
+    use std::env;
     use std::sync::{Arc, Mutex};
 
     use dotenv::dotenv;
@@ -123,6 +106,7 @@ mod tests {
     use super::*;
     use crate::clients::ollama::OllamaClient;
     use crate::config::OllamaConfig;
+    use crate::constants::DEFAULT_OLLAMA_MODEL;
     use crate::events::AgentEvent;
     use crate::http_client::{RecordingSequentialMockHttpClient, ReqwestClient};
     use crate::llm::anthropic::{
@@ -144,7 +128,7 @@ mod tests {
             return;
         }
 
-        let client = OllamaClient::<ReqwestClient>::default();
+        let client = OllamaClient::<ReqwestClient>::with_config(crate::config::test_env::ollama());
         let request = ChatRequest {
             chat_history: Vec::new(),
             max_tokens: Some(1024),
@@ -170,7 +154,7 @@ mod tests {
             return;
         }
 
-        let client = OllamaClient::<ReqwestClient>::default();
+        let client = OllamaClient::<ReqwestClient>::with_config(crate::config::test_env::ollama());
         let call_count = Arc::new(Mutex::new(0));
         let tool = MockTool {
             call_count: Arc::clone(&call_count),
@@ -220,10 +204,10 @@ mod tests {
         let http_client = RecordingSequentialMockHttpClient::new([response]);
         let client = OllamaClient {
             client: http_client.clone(),
-            config: Some(OllamaConfig {
+            config: OllamaConfig {
                 model: DEFAULT_OLLAMA_MODEL.into(),
                 ..OllamaConfig::default()
-            }),
+            },
         };
         let request = ChatRequest {
             message: "Test".into(),
@@ -329,7 +313,7 @@ mod tests {
             RecordingSequentialMockHttpClient::new([tool_call_response, text_response]);
         let mock_client = OllamaClient {
             client: http_client.clone(),
-            config: None,
+            config: crate::config::OllamaConfig::default(),
         };
         let res = mock_client.send_message(&request).await;
         test_ok!(res);
@@ -351,7 +335,7 @@ mod tests {
     async fn test_followup_queries_work() {
         dotenv().ok();
 
-        let client = OllamaClient::<ReqwestClient>::default();
+        let client = OllamaClient::<ReqwestClient>::with_config(crate::config::test_env::ollama());
         let first_message = ChatRequest {
             message: "What is self-attention?".into(),
             ..ChatRequest::default()

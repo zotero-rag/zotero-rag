@@ -3,15 +3,12 @@
 //! generation uses the stateless mode of the Interactions API: see
 //! <https://ai.google.dev/gemini-api/docs/interactions>.
 
-use std::env;
-
 use reqwest::header::HeaderMap;
 use serde::{Deserialize, Serialize};
 
 use super::base::ChatRequest;
 use super::errors::LLMError;
-use crate::clients::gemini::{GeminiClient, get_gemini_api_key};
-use crate::constants::{DEFAULT_GEMINI_MODEL, DEFAULT_MAX_RETRIES};
+use crate::clients::gemini::GeminiClient;
 use crate::http_client::HttpClient;
 use crate::llm::base::{
     AgenticClient, ChatHistoryContent, ChatHistoryItem, MessageRole, ProviderTurn, ReasoningConfig,
@@ -315,29 +312,19 @@ impl<T: HttpClient> AgenticClient for GeminiClient<T> {
         reasoning: Option<&ReasoningConfig>,
         max_tokens: Option<u32>,
     ) -> Result<super::base::ProviderTurn<Self::HistoryItem>, LLMError> {
-        let key = get_gemini_api_key()?;
-        let (model, max_retries) = match &self.config {
-            None => (
-                env::var("GEMINI_MODEL").unwrap_or_else(|_| DEFAULT_GEMINI_MODEL.to_string()),
-                DEFAULT_MAX_RETRIES,
-            ),
-            Some(config) => (config.model.clone(), config.max_retries),
-        };
+        let config = &self.config;
+        let max_retries = config.max_retries;
 
         let mut headers = HeaderMap::new();
         headers.insert("content-type", "application/json".parse()?);
-        headers.insert("x-goog-api-key", key.parse()?);
+        headers.insert("x-goog-api-key", config.api_key.parse()?);
 
         let request = GeminiRequestBody {
-            model: &model,
+            model: &config.model,
             input: history,
             system_instruction: system_prompt,
             generation_config: GeminiGenerationConfig {
-                max_output_tokens: max_tokens.or_else(|| {
-                    env::var("GEMINI_MAX_TOKENS")
-                        .ok()
-                        .and_then(|s| s.parse().ok())
-                }),
+                max_output_tokens: max_tokens,
                 thinking_level: reasoning.and_then(gemini_thinking_level),
                 thinking_summaries: reasoning.map(|_| "auto"),
                 tool_choice: (tools.is_some() && !allow_tool_calls).then_some("none"),
@@ -519,7 +506,7 @@ mod tests {
         let mock_http = MockHttpClient::new(mock_response);
         let client = GeminiClient {
             client: mock_http,
-            config: None,
+            config: crate::config::GeminiConfig::default(),
         };
 
         let request = ChatRequest {
@@ -580,7 +567,7 @@ mod tests {
 
             let client = GeminiClient {
                 client: http_client.clone(),
-                config: Some(config),
+                config,
             };
             let dest_type = client.dest_type().unwrap();
 
@@ -658,7 +645,7 @@ mod tests {
             "A sixth string",
         ]);
 
-        let client = GeminiClient::<ReqwestClient>::default();
+        let client = GeminiClient::<ReqwestClient>::with_config(crate::config::test_env::gemini());
         let embeddings = client.compute_embeddings_async(Arc::new(array)).await;
 
         test_ok!(embeddings);
@@ -674,7 +661,7 @@ mod tests {
     async fn test_request_works() {
         dotenv().ok();
 
-        let client = GeminiClient::<ReqwestClient>::default();
+        let client = GeminiClient::<ReqwestClient>::with_config(crate::config::test_env::gemini());
         let request = ChatRequest {
             chat_history: Vec::new(),
             max_tokens: Some(1024),
@@ -694,7 +681,7 @@ mod tests {
     async fn test_request_works_with_tools() {
         dotenv().ok();
 
-        let client = GeminiClient::<ReqwestClient>::default();
+        let client = GeminiClient::<ReqwestClient>::with_config(crate::config::test_env::gemini());
         let tool = MockTool {
             call_count: Arc::new(Mutex::new(0)),
         };
@@ -741,10 +728,10 @@ mod tests {
             ));
             let client = GeminiClient {
                 client: http_client.clone(),
-                config: Some(GeminiConfig {
+                config: GeminiConfig {
                     max_retries,
                     ..GeminiConfig::default()
-                }),
+                },
             };
 
             let result = client.send_message(&ChatRequest::default()).await;
@@ -766,10 +753,10 @@ mod tests {
         );
         let client = GeminiClient {
             client: http_client.clone(),
-            config: Some(GeminiConfig {
+            config: GeminiConfig {
                 max_retries,
                 ..GeminiConfig::default()
-            }),
+            },
         };
 
         let result = client.send_message(&ChatRequest::default()).await;
@@ -785,10 +772,10 @@ mod tests {
         );
         let client = GeminiClient {
             client: http_client.clone(),
-            config: Some(GeminiConfig {
+            config: GeminiConfig {
                 max_retries,
                 ..GeminiConfig::default()
-            }),
+            },
         };
 
         let result = client.send_message(&ChatRequest::default()).await;
@@ -811,10 +798,10 @@ mod tests {
             ));
             let client = GeminiClient {
                 client: http_client.clone(),
-                config: Some(GeminiConfig {
+                config: GeminiConfig {
                     max_retries,
                     ..GeminiConfig::default()
-                }),
+                },
             };
 
             let result = client.send_message(&ChatRequest::default()).await;
@@ -849,7 +836,7 @@ mod tests {
             let http_client = RecordingSequentialMockHttpClient::new([response]);
             let client = GeminiClient {
                 client: http_client.clone(),
-                config: None,
+                config: crate::config::GeminiConfig::default(),
             };
 
             let result = client.send_message(&ChatRequest::default()).await;
@@ -919,7 +906,7 @@ mod tests {
         ]);
         let mock_client = GeminiClient {
             client: http_client.clone(),
-            config: None,
+            config: crate::config::GeminiConfig::default(),
         };
         let res = mock_client.send_message(&request).await;
         test_ok!(res);
@@ -980,7 +967,7 @@ mod tests {
     async fn test_followup_queries_work() {
         dotenv().ok();
 
-        let client = GeminiClient::<ReqwestClient>::default();
+        let client = GeminiClient::<ReqwestClient>::with_config(crate::config::test_env::gemini());
         let first_message = ChatRequest {
             message: "What is self-attention?".into(),
             ..ChatRequest::default()

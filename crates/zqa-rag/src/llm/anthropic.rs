@@ -1,17 +1,12 @@
 //! A module for interacting with Anthropic's API.
 
-use std::env;
-
 use http::HeaderMap;
 use serde::{Deserialize, Serialize};
 
 use super::base::{ChatHistoryItem, ChatRequest};
 use super::errors::LLMError;
 use crate::clients::anthropic::AnthropicClient;
-use crate::constants::{
-    DEFAULT_ANTHROPIC_MAX_TOKENS, DEFAULT_ANTHROPIC_MODEL, DEFAULT_ANTHROPIC_REASONING_BUDGET,
-    DEFAULT_MAX_RETRIES,
-};
+use crate::constants::DEFAULT_ANTHROPIC_REASONING_BUDGET;
 use crate::http_client::HttpClient;
 use crate::llm::base::{
     AgenticClient, ChatHistoryContent, MessageRole, ProviderTurn, ReasoningConfig, ReasoningEffort,
@@ -19,7 +14,6 @@ use crate::llm::base::{
 };
 use crate::llm::tools::{ANTHROPIC_SCHEMA_KEY, SerializedTool};
 use crate::pricing::ModelUsage;
-const DEFAULT_CLAUDE_MODEL: &str = DEFAULT_ANTHROPIC_MODEL;
 
 /// An Anthropic-specific chat history object. This is pretty much the same as `ChatHistoryItem`,
 /// except that `content` is now Anthropic-specific.
@@ -544,28 +538,11 @@ impl<T: HttpClient> AgenticClient for AnthropicClient<T> {
         reasoning: Option<&ReasoningConfig>,
         max_tokens: Option<u32>,
     ) -> Result<super::base::ProviderTurn<Self::HistoryItem>, LLMError> {
-        // Use config if available, otherwise fall back to env vars
-        let (api_key, model, config_max_tokens, max_retries) = if let Some(ref config) = self.config
-        {
-            (
-                config.api_key.clone(),
-                config.model.clone(),
-                config.max_tokens,
-                config.max_retries,
-            )
-        } else {
-            (
-                env::var("ANTHROPIC_API_KEY")?,
-                env::var("ANTHROPIC_MODEL").unwrap_or_else(|_| DEFAULT_CLAUDE_MODEL.to_string()),
-                DEFAULT_ANTHROPIC_MAX_TOKENS,
-                DEFAULT_MAX_RETRIES,
-            )
-        };
-
-        let (thinking, output_config) = make_thinking_config(&model, reasoning);
+        let config = &self.config;
+        let (thinking, output_config) = make_thinking_config(&config.model, reasoning);
         let request = AnthropicRequest {
-            model: &model,
-            max_tokens: max_tokens.unwrap_or(config_max_tokens),
+            model: &config.model,
+            max_tokens: max_tokens.unwrap_or(config.max_tokens),
             messages: history,
             system: system_prompt,
             thinking,
@@ -581,7 +558,7 @@ impl<T: HttpClient> AgenticClient for AnthropicClient<T> {
         };
 
         let mut headers = HeaderMap::new();
-        headers.insert("x-api-key", api_key.parse()?);
+        headers.insert("x-api-key", config.api_key.parse()?);
         headers.insert("anthropic-version", "2023-06-01".parse()?);
         headers.insert("content-type", "application/json".parse()?);
 
@@ -590,7 +567,7 @@ impl<T: HttpClient> AgenticClient for AnthropicClient<T> {
             &request,
             &headers,
             "https://api.anthropic.com/v1/messages",
-            max_retries,
+            config.max_retries,
         )
         .await?;
 
@@ -619,12 +596,10 @@ mod tests {
         supports_adaptive_thinking,
     };
     use crate::config::AnthropicConfig;
-    use crate::constants::DEFAULT_MAX_RETRIES;
+    use crate::constants::{DEFAULT_ANTHROPIC_MODEL, DEFAULT_MAX_RETRIES};
     use crate::events::AgentEvent;
     use crate::http_client::{RecordingSequentialMockHttpClient, ReqwestClient};
-    use crate::llm::anthropic::{
-        AnthropicOutputTokensDetails, AnthropicTextResponseContent, DEFAULT_CLAUDE_MODEL,
-    };
+    use crate::llm::anthropic::{AnthropicOutputTokensDetails, AnthropicTextResponseContent};
     use crate::llm::base::{
         AgenticClient, ChatHistoryContent, ChatHistoryItem, ChatRequest, ContentType, MessageRole,
         ReasoningConfig, ToolCallResponse,
@@ -640,7 +615,7 @@ mod tests {
     ) -> AnthropicResponse {
         AnthropicResponse {
             id: id.into(),
-            model: DEFAULT_CLAUDE_MODEL.into(),
+            model: DEFAULT_ANTHROPIC_MODEL.into(),
             role: MessageRole::Assistant,
             stop_reason: stop_reason.into(),
             stop_sequence: None,
@@ -830,7 +805,8 @@ mod tests {
     async fn test_request_works() {
         dotenv().ok();
 
-        let client = AnthropicClient::<ReqwestClient>::default();
+        let client =
+            AnthropicClient::<ReqwestClient>::with_config(crate::config::test_env::anthropic());
         let request = ChatRequest {
             chat_history: Vec::new(),
             max_tokens: Some(1024),
@@ -855,7 +831,7 @@ mod tests {
         // Create a proper AnthropicResponse that matches the structure we expect to deserialize
         let mock_response = AnthropicResponse {
             id: "mock-id".to_string(),
-            model: DEFAULT_CLAUDE_MODEL.to_string(),
+            model: DEFAULT_ANTHROPIC_MODEL.to_string(),
             role: MessageRole::Assistant,
             stop_reason: "end_turn".to_string(),
             stop_sequence: None,
@@ -878,7 +854,7 @@ mod tests {
         let mock_http_client = RecordingSequentialMockHttpClient::new([mock_response]);
         let mock_client = AnthropicClient {
             client: mock_http_client.clone(),
-            config: None,
+            config: crate::config::AnthropicConfig::default(),
         };
 
         let request = ChatRequest {
@@ -919,7 +895,8 @@ mod tests {
     async fn test_request_with_tool_works() {
         dotenv().ok();
 
-        let client = AnthropicClient::<ReqwestClient>::default();
+        let client =
+            AnthropicClient::<ReqwestClient>::with_config(crate::config::test_env::anthropic());
         let call_count = Arc::new(Mutex::new(0));
         let tool = MockTool {
             call_count: Arc::clone(&call_count),
@@ -946,7 +923,7 @@ mod tests {
 
         let tool_call_response = AnthropicResponse {
             id: "msg-1".into(),
-            model: DEFAULT_CLAUDE_MODEL.into(),
+            model: DEFAULT_ANTHROPIC_MODEL.into(),
             role: MessageRole::Assistant,
             stop_reason: "tool_use".into(),
             stop_sequence: None,
@@ -972,7 +949,7 @@ mod tests {
         };
         let text_response = AnthropicResponse {
             id: "msg-2".into(),
-            model: DEFAULT_CLAUDE_MODEL.into(),
+            model: DEFAULT_ANTHROPIC_MODEL.into(),
             role: MessageRole::Assistant,
             stop_reason: "end_turn".into(),
             stop_sequence: None,
@@ -1021,7 +998,7 @@ mod tests {
             RecordingSequentialMockHttpClient::new([tool_call_response, text_response]);
         let mock_client = AnthropicClient {
             client: http_client.clone(),
-            config: None,
+            config: crate::config::AnthropicConfig::default(),
         };
         let res = mock_client.send_message(&request).await;
         test_ok!(res);
@@ -1105,14 +1082,14 @@ mod tests {
             RecordingSequentialMockHttpClient::new([tool_call_response, text_response]);
         let client = AnthropicClient {
             client: http_client.clone(),
-            config: Some(AnthropicConfig {
+            config: AnthropicConfig {
                 api_key: "test".into(),
-                model: DEFAULT_CLAUDE_MODEL.into(),
+                model: DEFAULT_ANTHROPIC_MODEL.into(),
                 max_tokens: 2048,
                 reasoning_budget: None,
                 reasoning_effort: None,
                 max_retries: DEFAULT_MAX_RETRIES,
-            }),
+            },
         };
         let request = ChatRequest {
             chat_history: Vec::new(),
@@ -1200,7 +1177,8 @@ mod tests {
     async fn test_followup_queries_work() {
         dotenv().ok();
 
-        let client = AnthropicClient::<ReqwestClient>::default();
+        let client =
+            AnthropicClient::<ReqwestClient>::with_config(crate::config::test_env::anthropic());
         let first_message = ChatRequest {
             message: "What is self-attention?".into(),
             ..ChatRequest::default()
@@ -1235,7 +1213,8 @@ mod tests {
             .map(|i| format!("Fact {i}: the number {i} squared is {}.", i * i))
             .collect::<Vec<_>>()
             .join("\n");
-        let client = AnthropicClient::<ReqwestClient>::default();
+        let client =
+            AnthropicClient::<ReqwestClient>::with_config(crate::config::test_env::anthropic());
         // Requests without tools or history are not cached, so start mid-conversation.
         let opening_history = vec![
             ChatHistoryItem {

@@ -148,7 +148,7 @@ where
                             UsageMetadata::from_rag_usage(
                                 &response.usage,
                                 self.llm_client.get_provider(),
-                                &self.llm_client.get_model_name().unwrap_or_default(),
+                                self.llm_client.get_model_name(),
                             )
                             .await,
                         );

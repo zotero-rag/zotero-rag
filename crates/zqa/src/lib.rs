@@ -94,10 +94,10 @@ pub fn load_config() -> Result<Config, CLIError> {
 ///
 /// The vector store resolves its location from the `LANCEDB_URI` environment variable, falling
 /// back to a path relative to the current working directory (see
-/// [`zqa_rag::vector::backends::lance::get_db_uri`]). Every front-end (the CLI and the GUI)
-/// must call this at startup so they all open the same database; otherwise a front-end launched
-/// from a different working directory would open an empty relative path and report a missing
-/// table.
+/// [`LanceZoteroStore::from_schema`](crate::store::lance::LanceZoteroStore::from_schema)). Every
+/// front-end (the CLI and the GUI) must call this at startup so they all open the same database;
+/// otherwise a front-end launched from a different working directory would open an empty relative
+/// path and report a missing table.
 ///
 /// This sets a process-global environment variable, so it must be called while the process is
 /// still single-threaded, i.e. before spawning any threads or async tasks.
