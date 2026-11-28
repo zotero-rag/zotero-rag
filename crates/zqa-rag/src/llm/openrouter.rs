@@ -1142,4 +1142,98 @@ mod tests {
         test_ok!(response);
         assert!(response.unwrap().total_usage().input_cache_read > 0);
     }
+
+    #[tokio::test]
+    async fn native_payload_replays_across_reload_and_falls_back_on_model_switch() {
+        let turn1 = serde_json::json!({
+            "id": "resp-1", "model": "deepseek/deepseek-r1", "provider": "DeepSeek",
+            "object": "chat.completion", "created": 0,
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+            "choices": [{
+                "index": 0, "finish_reason": "tool_calls", "logprobs": null,
+                "message": {
+                    "role": "assistant", "content": null, "refusal": null,
+                    "reasoning_content": "Check tool first.",
+                    "reasoning_details": [{"type": "reasoning.encrypted", "data": "enc-or"}],
+                    "tool_calls": [{
+                        "id": "call-1", "type": "function",
+                        "function": {"name": "mock_tool", "arguments": "{\"name\":\"Alice\"}"}
+                    }]
+                }
+            }]
+        });
+        let turn2 = serde_json::json!({
+            "id": "resp-2", "model": "deepseek/deepseek-r1", "provider": "DeepSeek",
+            "object": "chat.completion", "created": 0,
+            "usage": {"prompt_tokens": 20, "completion_tokens": 8, "total_tokens": 28},
+            "choices": [{
+                "index": 0, "finish_reason": "stop", "logprobs": null,
+                "message": {"role": "assistant", "content": "Done!", "refusal": null}
+            }]
+        });
+        let make_client = |client, model: &str| OpenRouterClient {
+            client,
+            config: Some(crate::config::OpenRouterConfig {
+                api_key: "fixture".into(),
+                model: model.into(),
+                ..Default::default()
+            }),
+        };
+        let tool: Vec<Box<dyn crate::llm::tools::Tool>> = vec![Box::new(MockTool {
+            call_count: Arc::default(),
+        })];
+        let http = RecordingSequentialMockHttpClient::new([turn1, turn2.clone()]);
+        let res = make_client(http.clone(), "deepseek/deepseek-r1")
+            .send_message(&ChatRequest {
+                message: "First".into(),
+                tools: Some(&tool),
+                ..ChatRequest::default()
+            })
+            .await
+            .unwrap();
+        let in_loop_assistant = http.requests()[1]["messages"][1].clone();
+
+        let reloaded: Vec<ChatHistoryItem> =
+            serde_json::from_str(&serde_json::to_string(&res.history_additions).unwrap()).unwrap();
+        let mut history = vec![ChatHistoryItem {
+            role: MessageRole::User,
+            content: vec![ChatHistoryContent::Text("First".into())],
+            native: None,
+        }];
+        history.extend(reloaded);
+
+        // Same model (even with routing suffix) replays reasoning_details and reasoning_content.
+        let http_same = RecordingSequentialMockHttpClient::new([turn2.clone()]);
+        make_client(http_same.clone(), "deepseek/deepseek-r1:nitro")
+            .send_message(&ChatRequest {
+                chat_history: history.clone(),
+                message: "Follow-up".into(),
+                tools: Some(&tool),
+                ..ChatRequest::default()
+            })
+            .await
+            .unwrap();
+        test_eq!(http_same.requests()[0]["messages"][1], in_loop_assistant);
+        test_eq!(
+            http_same.requests()[0]["messages"][1]["reasoning_content"],
+            "Check tool first."
+        );
+
+        // Different model falls back to canonical text without native reasoning fields.
+        let http_other = RecordingSequentialMockHttpClient::new([turn2]);
+        make_client(http_other.clone(), "openai/gpt-5.2")
+            .send_message(&ChatRequest {
+                chat_history: history,
+                message: "Follow-up".into(),
+                tools: Some(&tool),
+                ..ChatRequest::default()
+            })
+            .await
+            .unwrap();
+        let other_reqs = http_other.requests();
+        let assistant = &other_reqs[0]["messages"][1];
+        test_eq!(assistant["content"], "Check tool first.");
+        assert!(assistant.get("reasoning_details").is_none());
+        assert!(assistant.get("reasoning_content").is_none());
+    }
 }

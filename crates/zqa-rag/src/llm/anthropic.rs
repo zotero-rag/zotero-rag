@@ -1366,4 +1366,97 @@ mod tests {
         test_ok!(response);
         assert!(response.unwrap().total_usage().input_cache_read > 0);
     }
+
+    #[tokio::test]
+    async fn native_payload_replays_across_reload_and_strips_on_frame_change() {
+        let turn1 = serde_json::json!({
+            "id": "msg-1", "type": "message", "role": "assistant", "model": DEFAULT_CLAUDE_MODEL,
+            "stop_reason": "tool_use", "stop_sequence": null,
+            "usage": {"input_tokens": 10, "output_tokens": 5},
+            "content": [
+                {"type": "thinking", "thinking": "Plan.", "signature": "sig-1"},
+                {"type": "thinking", "thinking": "", "signature": "sig-empty"},
+                {"type": "redacted_thinking", "data": "redacted-1"},
+                {"type": "server_tool_use", "id": "srv_1", "name": "web_search", "input": {"q": "rag"}},
+                {"type": "tool_use", "id": "tool-1", "name": "mock_tool", "input": {"name": "Alice"}}
+            ]
+        });
+        let turn2 = serde_json::json!({
+            "id": "msg-2", "type": "message", "role": "assistant", "model": DEFAULT_CLAUDE_MODEL,
+            "stop_reason": "end_turn", "stop_sequence": null,
+            "usage": {"input_tokens": 20, "output_tokens": 8},
+            "content": [{"type": "text", "text": "Done!"}]
+        });
+        let http = RecordingSequentialMockHttpClient::new([turn1, turn2.clone()]);
+        let make_client = |client, model: &str| AnthropicClient {
+            client,
+            config: Some(AnthropicConfig {
+                api_key: "test".into(),
+                model: model.into(),
+                max_tokens: 1024,
+                ..AnthropicConfig::default()
+            }),
+        };
+        let tool: Vec<Box<dyn crate::llm::tools::Tool>> = vec![Box::new(MockTool {
+            call_count: Arc::default(),
+        })];
+        let res = make_client(http.clone(), DEFAULT_CLAUDE_MODEL)
+            .send_message(&ChatRequest {
+                message: "First".into(),
+                system_prompt: Some("Prompt A".into()),
+                tools: Some(&tool),
+                ..ChatRequest::default()
+            })
+            .await
+            .unwrap();
+        let in_loop_assistant = http.requests()[1]["messages"][1]["content"].clone();
+
+        // Simulate disk save/reload through JSON.
+        let reloaded: Vec<ChatHistoryItem> =
+            serde_json::from_str(&serde_json::to_string(&res.history_additions).unwrap()).unwrap();
+        let mut history = vec![ChatHistoryItem {
+            role: MessageRole::User,
+            content: vec![ChatHistoryContent::Text("First".into())],
+            native: None,
+        }];
+        history.extend(reloaded);
+
+        // Same frame on a different Claude model still replays native blocks verbatim.
+        let http_reload = RecordingSequentialMockHttpClient::new([turn2.clone()]);
+        make_client(http_reload.clone(), "claude-opus-5-5")
+            .send_message(&ChatRequest {
+                chat_history: history.clone(),
+                message: "Follow-up".into(),
+                system_prompt: Some("Prompt A".into()),
+                tools: Some(&tool),
+                ..ChatRequest::default()
+            })
+            .await
+            .unwrap();
+        test_eq!(
+            http_reload.requests()[0]["messages"][1]["content"],
+            in_loop_assistant
+        );
+
+        // Changed frame strips thinking and redacted_thinking while preserving other blocks.
+        let http_changed = RecordingSequentialMockHttpClient::new([turn2]);
+        make_client(http_changed.clone(), DEFAULT_CLAUDE_MODEL)
+            .send_message(&ChatRequest {
+                chat_history: history,
+                message: "Follow-up".into(),
+                system_prompt: Some("Prompt B".into()),
+                tools: Some(&tool),
+                ..ChatRequest::default()
+            })
+            .await
+            .unwrap();
+        let changed_reqs = http_changed.requests();
+        let block_types: Vec<_> = changed_reqs[0]["messages"][1]["content"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|b| b["type"].as_str())
+            .collect();
+        test_eq!(block_types, vec!["server_tool_use", "tool_use"]);
+    }
 }

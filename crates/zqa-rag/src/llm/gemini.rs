@@ -1096,4 +1096,98 @@ mod tests {
         let response = client.send_message(&second_message).await;
         test_ok!(response);
     }
+
+    #[tokio::test]
+    async fn native_payload_replays_across_reload_and_falls_back_on_model_switch() {
+        let turn1 = serde_json::json!({
+            "model": "gemini-3.1-pro-preview",
+            "status": "requires_action",
+            "steps": [
+                {
+                    "type": "thought", "signature": "sig-thought",
+                    "summary": [
+                        {"type": "text", "text": "Need tool."},
+                        {"type": "image", "data": "ignored"}
+                    ]
+                },
+                {"type": "google_search_call", "arguments": {}},
+                {
+                    "type": "function_call", "id": "call_1", "name": "mock_tool",
+                    "arguments": {"name": "Alice"}, "signature": "sig-call"
+                }
+            ],
+            "usage": {"total_input_tokens": 10, "total_output_tokens": 5}
+        });
+        let turn2 = serde_json::json!({
+            "model": "gemini-3.1-pro-preview",
+            "status": "completed",
+            "steps": [{"type": "model_output", "content": [{"type": "text", "text": "Done!"}]}],
+            "usage": {"total_input_tokens": 20, "total_output_tokens": 8}
+        });
+        let make_client = |client, model: &str| GeminiClient {
+            client,
+            config: Some(GeminiConfig {
+                api_key: "test".into(),
+                model: model.into(),
+                ..GeminiConfig::default()
+            }),
+        };
+        let tool: Vec<Box<dyn crate::llm::tools::Tool>> = vec![Box::new(MockTool {
+            call_count: Arc::default(),
+        })];
+        let http = RecordingSequentialMockHttpClient::new([turn1, turn2.clone()]);
+        let res = make_client(http.clone(), "gemini-3.1-pro-preview")
+            .send_message(&ChatRequest {
+                message: "First".into(),
+                tools: Some(&tool),
+                ..ChatRequest::default()
+            })
+            .await
+            .unwrap();
+        let in_loop_prefix = http.requests()[1]["input"].as_array().unwrap().clone();
+
+        let reloaded: Vec<ChatHistoryItem> =
+            serde_json::from_str(&serde_json::to_string(&res.history_additions).unwrap()).unwrap();
+        let mut history = vec![ChatHistoryItem {
+            role: MessageRole::User,
+            content: vec![ChatHistoryContent::Text("First".into())],
+            native: None,
+        }];
+        history.extend(reloaded);
+
+        // Same model replays signed thought + function_call verbatim without unsupported steps.
+        let http_same = RecordingSequentialMockHttpClient::new([turn2.clone()]);
+        make_client(http_same.clone(), "gemini-3.1-pro-preview")
+            .send_message(&ChatRequest {
+                chat_history: history.clone(),
+                message: "Follow-up".into(),
+                tools: Some(&tool),
+                ..ChatRequest::default()
+            })
+            .await
+            .unwrap();
+        let same_input = http_same.requests()[0]["input"].as_array().unwrap().clone();
+        test_eq!(&same_input[..in_loop_prefix.len()], &in_loop_prefix[..]);
+        test_eq!(same_input[1]["signature"], "sig-thought");
+        test_eq!(same_input[1]["summary"].as_array().unwrap().len(), 1);
+        test_eq!(same_input[2]["signature"], "sig-call");
+
+        // Different Gemini model falls back to canonical (reasoning as text, no signatures).
+        let http_other = RecordingSequentialMockHttpClient::new([turn2]);
+        make_client(http_other.clone(), "gemini-3.5-flash")
+            .send_message(&ChatRequest {
+                chat_history: history,
+                message: "Follow-up".into(),
+                tools: Some(&tool),
+                ..ChatRequest::default()
+            })
+            .await
+            .unwrap();
+        let other_reqs = http_other.requests();
+        let other_input = other_reqs[0]["input"].as_array().unwrap();
+        test_eq!(other_input[1]["type"], "model_output");
+        test_eq!(other_input[1]["content"][0]["text"], "Need tool.");
+        test_eq!(other_input[2]["type"], "function_call");
+        assert!(other_input[2].get("signature").is_none());
+    }
 }

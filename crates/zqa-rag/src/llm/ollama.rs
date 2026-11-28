@@ -398,6 +398,51 @@ mod tests {
         );
     }
 
+    #[test]
+    fn native_payload_replays_for_same_model_and_falls_back_on_switch() {
+        let frame = crate::llm::base::FrameHash("f".into());
+        let item = ChatHistoryItem {
+            role: MessageRole::Assistant,
+            content: vec![ChatHistoryContent::Reasoning("Plan.".into())],
+            native: Some(crate::llm::base::NativePayload {
+                origin: ModelRef {
+                    provider: ProviderId::Ollama,
+                    api: ApiFlavor::OllamaAnthropicMessages,
+                    model: DEFAULT_OLLAMA_MODEL.into(),
+                },
+                frame: frame.clone(),
+                response: serde_json::json!({
+                    "content": [{"type": "thinking", "thinking": "Plan."}]
+                }),
+            }),
+        };
+        let reloaded: ChatHistoryItem =
+            serde_json::from_str(&serde_json::to_string(&item).unwrap()).unwrap();
+
+        let same_client = OllamaClient {
+            client: crate::http_client::MockHttpClient::new(()),
+            config: None,
+        };
+        let same = same_client.project_history_item(&reloaded, &frame);
+        test_eq!(
+            serde_json::to_value(&same[0].content[0]).unwrap(),
+            serde_json::json!({"type": "thinking", "thinking": "Plan."})
+        );
+
+        let other_client = OllamaClient {
+            client: crate::http_client::MockHttpClient::new(()),
+            config: Some(OllamaConfig {
+                model: "other-model".into(),
+                ..OllamaConfig::default()
+            }),
+        };
+        let other = other_client.project_history_item(&reloaded, &frame);
+        test_eq!(
+            serde_json::to_value(&other[0].content[0]).unwrap(),
+            serde_json::json!({"type": "text", "text": "Plan."})
+        );
+    }
+
     #[tokio::test]
     #[ignore = "CI not set up with ollama"]
     async fn test_followup_queries_work() {

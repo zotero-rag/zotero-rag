@@ -1012,4 +1012,88 @@ mod tests {
         let response = client.send_message(&second_message).await;
         test_ok!(response);
     }
+
+    #[tokio::test]
+    async fn native_payload_replays_across_reload_and_strips_output_only_fields() {
+        let turn1 = serde_json::json!({
+            "id": "resp-1", "created_at": 0, "model": "gpt-5",
+            "usage": {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
+            "output": [
+                {
+                    "type": "reasoning", "id": "rs-1", "created_by": "internal",
+                    "summary": [{"type": "summary_text", "text": "Plan."}],
+                    "encrypted_content": "enc-1"
+                },
+                {"type": "compaction", "encrypted_content": "cmp-1"},
+                {
+                    "type": "message", "id": "msg-1", "status": "completed", "role": "assistant",
+                    "phase": "commentary", "annotations": [{"type": "url_citation"}],
+                    "content": [{"type": "output_text", "text": "Calling tool."}]
+                },
+                {
+                    "type": "function_call", "call_id": "call-1", "name": "mock_tool",
+                    "arguments": "{\"name\":\"Alice\"}"
+                }
+            ]
+        });
+        let turn2 = serde_json::json!({
+            "id": "resp-2", "created_at": 0, "model": "gpt-5",
+            "usage": {"input_tokens": 20, "output_tokens": 8, "total_tokens": 28},
+            "output": [{
+                "type": "message", "id": "msg-2", "status": "completed", "role": "assistant",
+                "content": [{"type": "output_text", "text": "Done!"}]
+            }]
+        });
+        let make_client = |client, model: &str| OpenAIClient {
+            client,
+            config: Some(OpenAIConfig {
+                api_key: "test".into(),
+                model: model.into(),
+                ..OpenAIConfig::default()
+            }),
+        };
+        let tool: Vec<Box<dyn crate::llm::tools::Tool>> = vec![Box::new(MockTool {
+            call_count: Arc::default(),
+        })];
+        let http = RecordingSequentialMockHttpClient::new([turn1, turn2.clone()]);
+        let res = make_client(http.clone(), "gpt-5")
+            .send_message(&ChatRequest {
+                message: "First".into(),
+                tools: Some(&tool),
+                ..ChatRequest::default()
+            })
+            .await
+            .unwrap();
+        let in_loop_prefix = http.requests()[1]["input"].as_array().unwrap().clone();
+
+        let reloaded: Vec<ChatHistoryItem> =
+            serde_json::from_str(&serde_json::to_string(&res.history_additions).unwrap()).unwrap();
+        let mut history = vec![ChatHistoryItem {
+            role: MessageRole::User,
+            content: vec![ChatHistoryContent::Text("First".into())],
+            native: None,
+        }];
+        history.extend(reloaded);
+
+        let http_reload = RecordingSequentialMockHttpClient::new([turn2]);
+        make_client(http_reload.clone(), "gpt-6.1-sol")
+            .send_message(&ChatRequest {
+                chat_history: history,
+                message: "Follow-up".into(),
+                tools: Some(&tool),
+                ..ChatRequest::default()
+            })
+            .await
+            .unwrap();
+        let replayed = http_reload.requests()[0]["input"]
+            .as_array()
+            .unwrap()
+            .clone();
+
+        test_eq!(&replayed[..in_loop_prefix.len()], &in_loop_prefix[..]);
+        assert!(replayed[1].get("created_by").is_none());
+        test_eq!(replayed[1]["encrypted_content"], "enc-1");
+        test_eq!(replayed[2]["type"], "compaction");
+        test_eq!(replayed[3]["phase"], "commentary");
+    }
 }

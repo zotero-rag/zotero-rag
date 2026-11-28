@@ -1243,4 +1243,283 @@ mod tests {
         assert!(parsed.native.is_none());
         test_eq!(serde_json::to_value(parsed).unwrap(), legacy);
     }
+
+    #[test]
+    fn sanitize_anthropic_tool_id_is_deterministic_and_bounded() {
+        test_eq!(
+            sanitize_anthropic_tool_id("toolu_01ABC-def"),
+            "toolu_01ABC-def"
+        );
+
+        let long_id = format!("call|{}", "x".repeat(120));
+        let sanitized = sanitize_anthropic_tool_id(&long_id);
+        let other_long_id = format!("call|{}y", "x".repeat(120));
+
+        assert!(!sanitized.is_empty() && sanitized.len() <= 64);
+        assert!(
+            sanitized
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+        );
+        test_eq!(sanitized, sanitize_anthropic_tool_id(&long_id));
+        assert_ne!(sanitized, sanitize_anthropic_tool_id(&other_long_id));
+        assert_ne!(sanitize_anthropic_tool_id(""), "");
+    }
+
+    fn project_items<C: AgenticClient>(
+        client: &C,
+        items: &[ChatHistoryItem],
+        frame: &FrameHash,
+    ) -> serde_json::Value
+    where
+        C::HistoryItem: Serialize,
+    {
+        let projected: Vec<_> = items
+            .iter()
+            .flat_map(|item| client.project_history_item(item, frame))
+            .collect();
+        serde_json::to_value(projected).unwrap()
+    }
+
+    fn project_for_provider(
+        target: ProviderId,
+        items: &[ChatHistoryItem],
+        frame: &FrameHash,
+    ) -> serde_json::Value {
+        use crate::clients::{
+            anthropic::AnthropicClient, gemini::GeminiClient, ollama::OllamaClient,
+            openai::OpenAIClient, openrouter::OpenRouterClient,
+        };
+        use crate::config::{
+            AnthropicConfig, GeminiConfig, OllamaConfig, OpenAIConfig, OpenRouterConfig,
+        };
+        use crate::http_client::MockHttpClient;
+
+        match target {
+            ProviderId::Anthropic => project_items(
+                &AnthropicClient {
+                    client: MockHttpClient::new(()),
+                    config: Some(AnthropicConfig {
+                        model: "claude-sonnet-5-5".into(),
+                        ..AnthropicConfig::default()
+                    }),
+                },
+                items,
+                frame,
+            ),
+            ProviderId::OpenAI => project_items(
+                &OpenAIClient {
+                    client: MockHttpClient::new(()),
+                    config: Some(OpenAIConfig {
+                        model: "gpt-5".into(),
+                        ..OpenAIConfig::default()
+                    }),
+                },
+                items,
+                frame,
+            ),
+            ProviderId::Gemini => project_items(
+                &GeminiClient {
+                    client: MockHttpClient::new(()),
+                    config: Some(GeminiConfig {
+                        model: "gemini-3.1-pro-preview".into(),
+                        ..GeminiConfig::default()
+                    }),
+                },
+                items,
+                frame,
+            ),
+            ProviderId::OpenRouter => project_items(
+                &OpenRouterClient {
+                    client: MockHttpClient::new(()),
+                    config: Some(OpenRouterConfig {
+                        model: "openai/gpt-5.2".into(),
+                        ..OpenRouterConfig::default()
+                    }),
+                },
+                items,
+                frame,
+            ),
+            ProviderId::Ollama => project_items(
+                &OllamaClient {
+                    client: MockHttpClient::new(()),
+                    config: Some(OllamaConfig {
+                        model: "qwen3.5:latest".into(),
+                        ..OllamaConfig::default()
+                    }),
+                },
+                items,
+                frame,
+            ),
+            _ => unreachable!(),
+        }
+    }
+
+    fn provider_history_pair(
+        provider: ProviderId,
+        api: ApiFlavor,
+        model: &str,
+        frame: &FrameHash,
+        raw_call_id: &str,
+        response: serde_json::Value,
+    ) -> [ChatHistoryItem; 2] {
+        [
+            ChatHistoryItem {
+                role: MessageRole::Assistant,
+                content: vec![
+                    ChatHistoryContent::Reasoning("Shared reasoning.".into()),
+                    ChatHistoryContent::Text("Calling tool.".into()),
+                    ChatHistoryContent::ToolCallRequest(ToolCallRequest {
+                        id: raw_call_id.into(),
+                        tool_name: "mock_tool".into(),
+                        args: serde_json::json!({"name": "Alice"}),
+                    }),
+                ],
+                native: Some(NativePayload {
+                    origin: ModelRef {
+                        provider,
+                        api,
+                        model: model.into(),
+                    },
+                    frame: frame.clone(),
+                    response,
+                }),
+            },
+            ChatHistoryItem {
+                role: MessageRole::User,
+                content: vec![ChatHistoryContent::ToolCallResponse(ToolCallResponse {
+                    id: raw_call_id.into(),
+                    tool_name: "mock_tool".into(),
+                    result: Ok(serde_json::json!("Hello, Alice!")),
+                })],
+                native: None,
+            },
+        ]
+    }
+
+    #[test]
+    fn api_flavor_serde_matches_as_str() {
+        for flavor in [
+            ApiFlavor::AnthropicMessages,
+            ApiFlavor::OpenAIResponses,
+            ApiFlavor::GeminiInteractions,
+            ApiFlavor::OpenRouterChatCompletions,
+            ApiFlavor::OllamaAnthropicMessages,
+            ApiFlavor::Mock,
+        ] {
+            let serialized = serde_json::to_value(flavor).unwrap();
+            test_eq!(
+                serialized,
+                serde_json::Value::String(flavor.as_str().into())
+            );
+            test_eq!(
+                serde_json::from_value::<ApiFlavor>(serialized).unwrap(),
+                flavor
+            );
+        }
+    }
+
+    #[test]
+    fn cross_provider_replay_matrix_strips_foreign_native_and_restores_on_switch_back() {
+        let frame = FrameHash("frame-1".into());
+        let raw_call_id = "call|bad:id.with.dots";
+        let cases = [
+            (
+                ProviderId::Anthropic,
+                "sig-anth",
+                provider_history_pair(
+                    ProviderId::Anthropic,
+                    ApiFlavor::AnthropicMessages,
+                    "claude-sonnet-5-5",
+                    &frame,
+                    raw_call_id,
+                    serde_json::json!({"content": [
+                        {"type": "thinking", "thinking": "Shared reasoning.", "signature": "sig-anth"},
+                        {"type": "redacted_thinking", "data": "red-anth"}
+                    ]}),
+                ),
+            ),
+            (
+                ProviderId::OpenAI,
+                "enc-oai",
+                provider_history_pair(
+                    ProviderId::OpenAI,
+                    ApiFlavor::OpenAIResponses,
+                    "gpt-5",
+                    &frame,
+                    raw_call_id,
+                    serde_json::json!({"output": [
+                        {"type": "reasoning", "id": "rs-1", "summary": [], "encrypted_content": "enc-oai"}
+                    ]}),
+                ),
+            ),
+            (
+                ProviderId::Gemini,
+                "sig-gem",
+                provider_history_pair(
+                    ProviderId::Gemini,
+                    ApiFlavor::GeminiInteractions,
+                    "gemini-3.1-pro-preview",
+                    &frame,
+                    raw_call_id,
+                    serde_json::json!({"steps": [{"type": "thought", "signature": "sig-gem"}]}),
+                ),
+            ),
+            (
+                ProviderId::OpenRouter,
+                "enc-or",
+                provider_history_pair(
+                    ProviderId::OpenRouter,
+                    ApiFlavor::OpenRouterChatCompletions,
+                    "openai/gpt-5.2",
+                    &frame,
+                    raw_call_id,
+                    serde_json::json!({"choices": [{"message": {
+                        "role": "assistant", "content": "Calling tool.",
+                        "reasoning_details": [{"type": "reasoning.encrypted", "data": "enc-or"}]
+                    }}]}),
+                ),
+            ),
+            (
+                ProviderId::Ollama,
+                r#""type":"thinking""#,
+                provider_history_pair(
+                    ProviderId::Ollama,
+                    ApiFlavor::OllamaAnthropicMessages,
+                    "qwen3.5:latest",
+                    &frame,
+                    raw_call_id,
+                    serde_json::json!({"content": [{"type": "thinking", "thinking": "Shared reasoning."}]}),
+                ),
+            ),
+        ];
+
+        for (source, source_marker, pair) in &cases {
+            for (target, _, _) in &cases {
+                let projected = project_for_provider(*target, pair, &frame);
+                let json_str = projected.to_string();
+
+                if target == source {
+                    assert!(
+                        json_str.contains(source_marker),
+                        "{source:?} -> {target:?}: {json_str}"
+                    );
+                    continue;
+                }
+
+                for (origin, marker, _) in &cases {
+                    assert!(
+                        !json_str.contains(marker),
+                        "{source:?} -> {target:?} leaked {origin:?} marker {marker}: {json_str}"
+                    );
+                }
+                assert!(json_str.contains("Shared reasoning."));
+                if *target == ProviderId::Anthropic {
+                    let expected_id = sanitize_anthropic_tool_id(raw_call_id);
+                    test_eq!(projected[0]["content"][2]["id"], expected_id);
+                    test_eq!(projected[1]["content"][0]["tool_use_id"], expected_id);
+                }
+            }
+        }
+    }
 }
