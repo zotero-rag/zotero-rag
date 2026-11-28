@@ -349,7 +349,7 @@ async fn call_subagent(
     let usage = UsageMetadata::from_rag_usage(
         &response.usage,
         client.get_provider(),
-        &client.get_model_name().unwrap_or_default(),
+        client.get_model_name(),
     )
     .await;
     let _ = cost_tx.send(usage);

@@ -1,11 +1,9 @@
-use std::env;
 use std::pin::Pin;
 use std::time::Instant;
 
 use http::HeaderMap;
 use serde::{Deserialize, Serialize};
 
-use crate::constants::DEFAULT_COHERE_RERANK_MODEL;
 use crate::embedding::cohere::CohereClient;
 use crate::http_client::HttpClient;
 use crate::llm::errors::LLMError;
@@ -38,25 +36,19 @@ impl<T: HttpClient> Rerank for CohereClient<T> {
         Box::pin(async move {
             const RERANK_API_URL: &str = "https://api.cohere.com/v2/rerank";
 
-            // Use config if available, otherwise fall back to env vars
-            let (api_key, reranker_model) = if let Some(ref config) = self.config {
-                (config.api_key.clone(), config.reranker.clone())
-            } else {
-                (
-                    env::var("COHERE_API_KEY")?,
-                    env::var("COHERE_RERANKER").unwrap_or(DEFAULT_COHERE_RERANK_MODEL.into()),
-                )
-            };
-
+            let config = &self.config;
             let request = CohereRerankRequest {
-                model: reranker_model,
+                model: config.reranker.clone(),
                 query: query.into(),
                 top_n: None,
                 documents: items,
             };
 
             let mut headers = HeaderMap::new();
-            headers.insert("Authorization", format!("Bearer {api_key}").parse()?);
+            headers.insert(
+                "Authorization",
+                format!("Bearer {}", config.api_key).parse()?,
+            );
             headers.insert("Content-Type", "application/json".parse()?);
             headers.insert("Accept", "application/json".parse()?);
 
@@ -109,14 +101,14 @@ mod tests {
                     status,
                     String::from("request rejected"),
                 )]),
-                config: Some(CohereConfig {
+                config: CohereConfig {
                     api_key: "test-key".into(),
                     embedding_model: String::new(),
                     embedding_dims: 0,
                     reranker: "test-reranker".into(),
                     max_concurrent_requests: crate::constants::DEFAULT_MAX_CONCURRENT_REQUESTS,
                     max_retries: crate::constants::DEFAULT_MAX_RETRIES,
-                }),
+                },
             };
 
             let result = client.rerank(&["a document"], "a query").await;
@@ -135,7 +127,7 @@ mod tests {
         let array = ["Hello, World!", "A second string", "A third string"];
         let query = "A string";
 
-        let client = CohereClient::<ReqwestClient>::default();
+        let client = CohereClient::<ReqwestClient>::with_config(crate::config::test_env::cohere());
         let reranked = client.rerank(&array, query).await;
 
         test_ok!(reranked);

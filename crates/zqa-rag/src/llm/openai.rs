@@ -6,7 +6,6 @@
 //! implementation used across providers in this project.
 
 use std::borrow::Cow;
-use std::env;
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -19,10 +18,7 @@ use serde_json::{Map, Value};
 use super::base::{ChatHistoryItem, ChatRequest};
 use super::errors::LLMError;
 use crate::clients::openai::OpenAIClient;
-use crate::constants::{
-    DEFAULT_MAX_RETRIES, DEFAULT_OPENAI_EMBEDDING_DIM, DEFAULT_OPENAI_MAX_TOKENS,
-    DEFAULT_OPENAI_MODEL, DEFAULT_OPENAI_REASONING_EFFORT,
-};
+use crate::constants::DEFAULT_OPENAI_REASONING_EFFORT;
 use crate::http_client::HttpClient;
 use crate::llm::base::{
     AgenticClient, ChatHistoryContent, MessageRole, ProviderTurn, ReasoningConfig, ToolCallRequest,
@@ -461,37 +457,23 @@ impl<T: HttpClient> AgenticClient for OpenAIClient<T> {
         reasoning: Option<&ReasoningConfig>,
         max_tokens: Option<u32>,
     ) -> Result<ProviderTurn<Self::HistoryItem>, LLMError> {
-        // Use config if available, otherwise fall back to env vars
-        let (api_key, model, config_max_tokens, max_retries) = if let Some(ref config) = self.config
-        {
-            (
-                config.api_key.clone(),
-                config.model.clone(),
-                config.max_tokens,
-                config.max_retries,
-            )
-        } else {
-            (
-                env::var("OPENAI_API_KEY")?,
-                env::var("OPENAI_MODEL").unwrap_or_else(|_| DEFAULT_OPENAI_MODEL.to_string()),
-                DEFAULT_OPENAI_MAX_TOKENS,
-                DEFAULT_MAX_RETRIES,
-            )
-        };
-
+        let config = &self.config;
         let wrapped_tools = tools.map(wrap_tools_for_openai);
         let request_body = OpenAIRequest {
-            model: &model,
+            model: &config.model,
             input: history,
             instructions: system_prompt,
             reasoning: reasoning.map(Into::into),
-            max_output_tokens: max_tokens.unwrap_or(config_max_tokens),
+            max_output_tokens: max_tokens.unwrap_or(config.max_tokens),
             tools: wrapped_tools.as_deref(),
             tool_choice: (tools.is_some() && !allow_tool_calls).then_some("none"),
         };
 
         let mut headers = HeaderMap::new();
-        headers.insert("Authorization", format!("Bearer {api_key}").parse()?);
+        headers.insert(
+            "Authorization",
+            format!("Bearer {}", config.api_key).parse()?,
+        );
         headers.insert("content-type", "application/json".parse()?);
 
         let response: OpenAIResponse = send_generation_request(
@@ -499,7 +481,7 @@ impl<T: HttpClient> AgenticClient for OpenAIClient<T> {
             &request_body,
             &headers,
             "https://api.openai.com/v1/responses",
-            max_retries,
+            config.max_retries,
         )
         .await?;
 
@@ -522,22 +504,13 @@ impl<T: HttpClient + Default + Debug> EmbeddingFunction for OpenAIClient<T> {
     }
 
     fn dest_type(&self) -> Result<Cow<'_, DataType>, lancedb::Error> {
-        let dim = self.config.as_ref().map_or_else(
-            || {
-                env::var("OPENAI_EMBEDDING_DIMS")
-                    .ok()
-                    .and_then(|s| s.parse().ok())
-                    .unwrap_or(DEFAULT_OPENAI_EMBEDDING_DIM as usize)
-            },
-            |c| c.embedding_dims,
-        );
         Ok(Cow::Owned(DataType::FixedSizeList(
             Arc::new(lancedb::arrow::arrow_schema::Field::new(
                 "item",
                 DataType::Float32,
                 true,
             )),
-            dim as i32,
+            self.config.embedding_dims as i32,
         )))
     }
 
@@ -599,7 +572,7 @@ mod tests {
     async fn test_request_works() {
         dotenv().ok();
 
-        let client = OpenAIClient::<ReqwestClient>::default();
+        let client = OpenAIClient::<ReqwestClient>::with_config(crate::config::test_env::openai());
         let request = ChatRequest {
             chat_history: Vec::new(),
             max_tokens: Some(1024),
@@ -652,7 +625,7 @@ mod tests {
         let mock_http_client = MockHttpClient::new(mock_response);
         let mock_client = OpenAIClient {
             client: mock_http_client,
-            config: None,
+            config: crate::config::OpenAIConfig::default(),
         };
 
         let request = ChatRequest {
@@ -692,7 +665,7 @@ mod tests {
             "A sixth string",
         ]);
 
-        let client = OpenAIClient::<ReqwestClient>::default();
+        let client = OpenAIClient::<ReqwestClient>::with_config(crate::config::test_env::openai());
         let embeddings = client.compute_source_embeddings(Arc::new(array));
 
         test_ok!(embeddings);
@@ -708,7 +681,7 @@ mod tests {
     async fn test_request_with_tool_works() {
         dotenv().ok();
 
-        let client = OpenAIClient::<ReqwestClient>::default();
+        let client = OpenAIClient::<ReqwestClient>::with_config(crate::config::test_env::openai());
         let call_count = Arc::new(Mutex::new(0));
         let tool = MockTool {
             call_count: Arc::clone(&call_count),
@@ -910,12 +883,12 @@ mod tests {
             RecordingSequentialMockHttpClient::new([tool_call_response, text_response]);
         let mock_client = OpenAIClient {
             client: http_client.clone(),
-            config: Some(OpenAIConfig {
+            config: OpenAIConfig {
                 api_key: "test".into(),
                 model: "gpt-5".into(),
                 max_tokens: 1024,
                 ..OpenAIConfig::default()
-            }),
+            },
         };
 
         let res = mock_client.send_message(&request).await;
@@ -966,7 +939,7 @@ mod tests {
     async fn test_followup_queries_work() {
         dotenv().ok();
 
-        let client = OpenAIClient::<ReqwestClient>::default();
+        let client = OpenAIClient::<ReqwestClient>::with_config(crate::config::test_env::openai());
         let first_message = ChatRequest {
             message: "What is self-attention?".into(),
             ..ChatRequest::default()

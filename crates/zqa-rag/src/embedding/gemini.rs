@@ -1,5 +1,4 @@
 use std::borrow::Cow;
-use std::env;
 use std::sync::Arc;
 
 use arrow_schema::{DataType, Field};
@@ -8,11 +7,7 @@ use http::HeaderMap;
 use lancedb::embeddings::EmbeddingFunction;
 use serde::{Deserialize, Serialize};
 
-use crate::clients::gemini::{GeminiClient, get_gemini_api_key};
-use crate::constants::{
-    DEFAULT_GEMINI_EMBEDDING_DIM, DEFAULT_GEMINI_EMBEDDING_MODEL, DEFAULT_MAX_CONCURRENT_REQUESTS,
-    DEFAULT_MAX_RETRIES,
-};
+use crate::clients::gemini::GeminiClient;
 use crate::http_client::HttpClient;
 use crate::llm::errors::LLMError;
 use crate::requests::request_with_backoff;
@@ -25,7 +20,6 @@ where
     ///
     /// # Errors
     ///
-    /// * `LLMError::EnvError` - If neither GEMINI_API_KEY nor GOOGLE_API_KEY environment variables are set
     /// * `LLMError::TimeoutError` - If the HTTP request times out
     /// * `LLMError::CredentialError` - If the API returns 401 or 403 status
     /// * `LLMError::HttpStatusError` - If the API returns other unsuccessful HTTP status codes
@@ -59,50 +53,34 @@ where
             .iter()
             .filter_map(|s| Some(s?.to_owned()))
             .collect();
-        let config = self.config.as_ref();
-        let (embedding_dim, max_retries, max_concurrent) = config.map_or(
-            (
-                DEFAULT_GEMINI_EMBEDDING_DIM as usize,
-                DEFAULT_MAX_RETRIES,
-                DEFAULT_MAX_CONCURRENT_REQUESTS,
-            ),
-            |config| {
-                (
-                    config.embedding_dims,
-                    config.max_retries,
-                    config.max_concurrent_requests,
-                )
-            },
-        );
+        let config = &self.config;
+        let embedding_dim = config.embedding_dims;
 
         let embeddings: Vec<Vec<f32>> = if texts.is_empty() {
             Vec::new()
         } else {
-            let api_key =
-                config.map_or_else(get_gemini_api_key, |config| Ok(config.api_key.clone()))?;
-            let model = config.map_or_else(
-                || {
-                    env::var("GEMINI_EMBEDDING_MODEL")
-                        .unwrap_or_else(|_| DEFAULT_GEMINI_EMBEDDING_MODEL.to_string())
-                },
-                |config| config.embedding_model.clone(),
-            );
-            let model = format!("models/{model}");
+            let model = format!("models/{}", config.embedding_model);
             let url =
                 format!("https://generativelanguage.googleapis.com/v1beta/{model}:embedContent");
             let mut headers = HeaderMap::new();
             headers.insert("content-type", "application/json".parse()?);
-            headers.insert("x-goog-api-key", api_key.parse()?);
+            headers.insert("x-goog-api-key", config.api_key.parse()?);
 
             let futures = texts.into_iter().map(|text| {
                 let request_body =
                     GeminiEmbeddingRequest::from_text(text, model.clone(), embedding_dim);
-                call_gemini_embedding_api(&self.client, &url, &headers, request_body, max_retries)
+                call_gemini_embedding_api(
+                    &self.client,
+                    &url,
+                    &headers,
+                    request_body,
+                    config.max_retries,
+                )
             });
 
             // Preserve input order so vectors remain associated with their source rows.
             let results = stream::iter(futures)
-                .buffered(max_concurrent.max(1))
+                .buffered(config.max_concurrent_requests.max(1))
                 .collect::<Vec<_>>()
                 .await;
 
@@ -263,15 +241,9 @@ impl<T: HttpClient + std::fmt::Debug> EmbeddingFunction for GeminiClient<T> {
     }
 
     fn dest_type(&self) -> Result<Cow<'_, DataType>, lancedb::Error> {
-        let embedding_dim = self
-            .config
-            .as_ref()
-            .map_or(DEFAULT_GEMINI_EMBEDDING_DIM as usize, |config| {
-                config.embedding_dims
-            });
         Ok(Cow::Owned(DataType::FixedSizeList(
             Arc::new(Field::new("item", DataType::Float32, true)),
-            embedding_dim as i32,
+            self.config.embedding_dims as i32,
         )))
     }
 

@@ -1,8 +1,8 @@
 //! Configuration structures for RAG providers
 //!
-//! This module provides configuration structs that can be passed to clients
-//! instead of reading from environment variables or TOML files directly.
-//! This makes the rag crate more general and reusable.
+//! Every provider client is built from one of these configs. The crate does not read environment
+//! variables or config files; resolving API keys and settings is the caller's job (`zqa` reads
+//! them from its TOML config and the environment).
 
 use crate::constants::{
     DEFAULT_ANTHROPIC_MAX_TOKENS, DEFAULT_ANTHROPIC_MODEL, DEFAULT_GEMINI_EMBEDDING_DIM,
@@ -268,6 +268,104 @@ impl LLMClientConfig {
             Self::Gemini(cfg) => &cfg.model,
             #[cfg(any(test, feature = "mock"))]
             Self::Mock(_) => "",
+        }
+    }
+}
+
+/// Provider configs for tests that call live APIs, with API keys read from the environment.
+///
+/// The crate never reads the environment itself; callers pass configs explicitly. Live tests still
+/// need real keys (and, for Ollama, the server URL), so these helpers read them (typically loaded
+/// from `.env` by `dotenv`) and fill every other field with the same defaults that `zqa` uses. A
+/// missing key is left empty, so the test fails on the provider's authentication error.
+#[cfg(test)]
+pub(crate) mod test_env {
+    use super::{
+        AnthropicConfig, CohereConfig, GeminiConfig, OllamaConfig, OpenAIConfig, OpenRouterConfig,
+        VoyageAIConfig,
+    };
+    use crate::constants::{
+        DEFAULT_COHERE_EMBEDDING_DIM, DEFAULT_COHERE_EMBEDDING_MODEL, DEFAULT_COHERE_RERANK_MODEL,
+        DEFAULT_MAX_CONCURRENT_REQUESTS, DEFAULT_MAX_RETRIES, DEFAULT_VOYAGE_EMBEDDING_DIM,
+        DEFAULT_VOYAGE_EMBEDDING_MODEL, DEFAULT_VOYAGE_RERANK_MODEL,
+    };
+
+    fn api_key(var: &str) -> String {
+        std::env::var(var).unwrap_or_default()
+    }
+
+    /// An Anthropic config using `ANTHROPIC_API_KEY`.
+    pub(crate) fn anthropic() -> AnthropicConfig {
+        AnthropicConfig {
+            api_key: api_key("ANTHROPIC_API_KEY"),
+            ..AnthropicConfig::default()
+        }
+    }
+
+    /// An OpenAI config using `OPENAI_API_KEY`.
+    pub(crate) fn openai() -> OpenAIConfig {
+        OpenAIConfig {
+            api_key: api_key("OPENAI_API_KEY"),
+            ..OpenAIConfig::default()
+        }
+    }
+
+    /// A Gemini config using `GEMINI_API_KEY`, or `GOOGLE_API_KEY` if that is not set.
+    pub(crate) fn gemini() -> GeminiConfig {
+        let api_key = std::env::var("GEMINI_API_KEY")
+            .or_else(|_| std::env::var("GOOGLE_API_KEY"))
+            .unwrap_or_default();
+
+        GeminiConfig {
+            api_key,
+            ..GeminiConfig::default()
+        }
+    }
+
+    /// An Ollama config using `OLLAMA_BASE_URL` and `OLLAMA_MODEL` where they are set, and the
+    /// defaults otherwise. Contributors often run a server elsewhere or have only one model pulled.
+    pub(crate) fn ollama() -> OllamaConfig {
+        let mut config = OllamaConfig::default();
+        if let Ok(base_url) = std::env::var("OLLAMA_BASE_URL") {
+            config.base_url = base_url;
+        }
+
+        if let Ok(model) = std::env::var("OLLAMA_MODEL") {
+            config.model = model;
+        }
+
+        config
+    }
+
+    /// An OpenRouter config using `OPENROUTER_API_KEY`.
+    pub(crate) fn openrouter() -> OpenRouterConfig {
+        OpenRouterConfig {
+            api_key: api_key("OPENROUTER_API_KEY"),
+            ..OpenRouterConfig::default()
+        }
+    }
+
+    /// A Voyage AI config using `VOYAGE_AI_API_KEY`.
+    pub(crate) fn voyage() -> VoyageAIConfig {
+        VoyageAIConfig {
+            api_key: api_key("VOYAGE_AI_API_KEY"),
+            embedding_model: DEFAULT_VOYAGE_EMBEDDING_MODEL.into(),
+            embedding_dims: DEFAULT_VOYAGE_EMBEDDING_DIM as usize,
+            reranker: DEFAULT_VOYAGE_RERANK_MODEL.into(),
+            max_concurrent_requests: DEFAULT_MAX_CONCURRENT_REQUESTS,
+            max_retries: DEFAULT_MAX_RETRIES,
+        }
+    }
+
+    /// A Cohere config using `COHERE_API_KEY`.
+    pub(crate) fn cohere() -> CohereConfig {
+        CohereConfig {
+            api_key: api_key("COHERE_API_KEY"),
+            embedding_model: DEFAULT_COHERE_EMBEDDING_MODEL.into(),
+            embedding_dims: DEFAULT_COHERE_EMBEDDING_DIM as usize,
+            reranker: DEFAULT_COHERE_RERANK_MODEL.into(),
+            max_concurrent_requests: DEFAULT_MAX_CONCURRENT_REQUESTS,
+            max_retries: DEFAULT_MAX_RETRIES,
         }
     }
 }

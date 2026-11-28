@@ -1,11 +1,9 @@
-use std::env;
 use std::pin::Pin;
 use std::time::Instant;
 
 use http::HeaderMap;
 use serde::{Deserialize, Serialize};
 
-use crate::constants::DEFAULT_VOYAGE_RERANK_MODEL;
 use crate::embedding::voyage::VoyageAIClient;
 use crate::http_client::HttpClient;
 use crate::llm::errors::LLMError;
@@ -49,25 +47,18 @@ impl<T: HttpClient> Rerank for VoyageAIClient<T> {
         Box::pin(async move {
             const RERANK_API_URL: &str = "https://api.voyageai.com/v1/rerank";
 
-            // Use config if available, otherwise fall back to env vars
-            let (api_key, reranker_model) = if let Some(ref config) = self.config {
-                (config.api_key.clone(), config.reranker.clone())
-            } else {
-                (
-                    env::var("VOYAGE_AI_API_KEY")?,
-                    env::var("VOYAGE_AI_RERANK_MODEL")
-                        .unwrap_or(DEFAULT_VOYAGE_RERANK_MODEL.into()),
-                )
-            };
-
+            let config = &self.config;
             let request = VoyageAIRerankRequest {
-                model: reranker_model,
+                model: config.reranker.clone(),
                 query: query.into(),
                 documents: items,
             };
 
             let mut headers = HeaderMap::new();
-            headers.insert("Authorization", format!("Bearer {api_key}").parse()?);
+            headers.insert(
+                "Authorization",
+                format!("Bearer {}", config.api_key).parse()?,
+            );
             headers.insert("Content-Type", "application/json".parse()?);
             headers.insert("Accept", "application/json".parse()?);
 
@@ -127,14 +118,14 @@ mod tests {
                     status,
                     String::from("request rejected"),
                 )]),
-                config: Some(VoyageAIConfig {
+                config: VoyageAIConfig {
                     api_key: "test-key".into(),
                     embedding_model: String::new(),
                     embedding_dims: 0,
                     reranker: "test-reranker".into(),
                     max_concurrent_requests: crate::constants::DEFAULT_MAX_CONCURRENT_REQUESTS,
                     max_retries: crate::constants::DEFAULT_MAX_RETRIES,
-                }),
+                },
             };
 
             let result = client.rerank(&["a document"], "a query").await;
@@ -153,7 +144,8 @@ mod tests {
         let array = ["Hello, World!", "A second string", "A third string"];
         let query = "A string";
 
-        let client = VoyageAIClient::<ReqwestClient>::default();
+        let client =
+            VoyageAIClient::<ReqwestClient>::with_config(crate::config::test_env::voyage());
         let reranked = client.rerank(&array, query).await;
 
         test_ok!(reranked);

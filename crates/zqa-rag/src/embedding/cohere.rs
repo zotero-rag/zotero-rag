@@ -2,7 +2,6 @@
 //! includes support for embedding only.
 
 use std::borrow::Cow;
-use std::env;
 use std::sync::Arc;
 
 use arrow_schema::{DataType, Field};
@@ -11,10 +10,6 @@ use serde::{Deserialize, Serialize};
 
 use super::common::EmbeddingApiResponse;
 use crate::capabilities::EmbeddingProvider;
-use crate::constants::{
-    DEFAULT_COHERE_EMBEDDING_DIM, DEFAULT_COHERE_EMBEDDING_MODEL, DEFAULT_MAX_CONCURRENT_REQUESTS,
-    DEFAULT_MAX_RETRIES,
-};
 use crate::embedding::common::compute_embeddings_async;
 use crate::http_client::{HttpClient, ReqwestClient};
 use crate::llm::errors::LLMError;
@@ -24,36 +19,20 @@ use crate::llm::errors::LLMError;
 pub(crate) struct CohereClient<T: HttpClient = ReqwestClient> {
     /// The HTTP client. The generic parameter allows for mocking in tests.
     pub(crate) client: T,
-    /// Optional configuration for the Cohere client.
-    pub(crate) config: Option<crate::config::CohereConfig>,
-}
-
-impl<T: HttpClient + Default + Clone> Default for CohereClient<T> {
-    fn default() -> Self {
-        Self::new()
-    }
+    /// Configuration for the Cohere client.
+    pub(crate) config: crate::config::CohereConfig,
 }
 
 impl<T> CohereClient<T>
 where
     T: HttpClient + Default + Clone,
 {
-    /// Creates a new CohereClient instance without configuration
-    /// (will fall back to environment variables)
-    #[must_use]
-    pub(crate) fn new() -> Self {
-        Self {
-            client: T::default(),
-            config: None,
-        }
-    }
-
     /// Creates a new CohereClient instance with provided configuration
     #[must_use]
     pub(crate) fn with_config(config: crate::config::CohereConfig) -> Self {
         Self {
             client: T::default(),
-            config: Some(config),
+            config,
         }
     }
 }
@@ -70,20 +49,9 @@ impl<T: HttpClient + Clone> CohereClient<T> {
         const BATCH_SIZE: usize = 30;
         const WAIT_AFTER_REQUEST_S: u64 = 0;
 
-        let api_key = self.config.as_ref().map_or_else(
-            || env::var("COHERE_API_KEY"),
-            |config| Ok(config.api_key.clone()),
-        )?;
-        let model = self
-            .config
-            .as_ref()
-            .map_or(DEFAULT_COHERE_EMBEDDING_MODEL, |c| {
-                c.embedding_model.as_str()
-            });
-        let embedding_dims = self
-            .config
-            .as_ref()
-            .map_or(DEFAULT_COHERE_EMBEDDING_DIM, |c| c.embedding_dims as u32);
+        let config = &self.config;
+        let model = config.embedding_model.as_str();
+        let embedding_dims = config.embedding_dims as u32;
 
         // Embed v3 models have fixed widths and do not support output_dimension.
         let fixed_dims = match model {
@@ -102,16 +70,6 @@ impl<T: HttpClient + Clone> CohereClient<T> {
             }
             None => Some(embedding_dims),
         };
-        let max_concurrent = self
-            .config
-            .as_ref()
-            .map_or(DEFAULT_MAX_CONCURRENT_REQUESTS, |c| {
-                c.max_concurrent_requests
-            });
-        let max_retries = self
-            .config
-            .as_ref()
-            .map_or(DEFAULT_MAX_RETRIES, |c| c.max_retries);
 
         tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(compute_embeddings_async::<
@@ -121,7 +79,7 @@ impl<T: HttpClient + Clone> CohereClient<T> {
             >(
                 source,
                 "https://api.cohere.com/v2/embed",
-                &api_key,
+                &config.api_key,
                 self.client.clone(),
                 |texts| CohereEmbedRequest {
                     texts,
@@ -134,9 +92,9 @@ impl<T: HttpClient + Clone> CohereClient<T> {
                 EmbeddingProvider::Cohere.as_str().to_string(),
                 BATCH_SIZE,
                 WAIT_AFTER_REQUEST_S,
-                embedding_dims as usize,
-                max_concurrent,
-                max_retries,
+                config.embedding_dims,
+                config.max_concurrent_requests,
+                config.max_retries,
             ))
         })
     }
@@ -213,16 +171,9 @@ impl<T: HttpClient + Clone + std::fmt::Debug> EmbeddingFunction for CohereClient
     }
 
     fn dest_type(&self) -> Result<Cow<'_, DataType>, lancedb::Error> {
-        let dim = self
-            .config
-            .as_ref()
-            .map_or(DEFAULT_COHERE_EMBEDDING_DIM as i32, |c| {
-                c.embedding_dims as i32
-            });
-
         Ok(Cow::Owned(DataType::FixedSizeList(
             Arc::new(Field::new("item", DataType::Float32, true)),
-            dim,
+            self.config.embedding_dims as i32,
         )))
     }
 
@@ -263,8 +214,9 @@ mod tests {
     use serde_json::json;
     use zqa_macros::{test_eq, test_ok};
 
-    use super::{CohereClient, DEFAULT_COHERE_EMBEDDING_DIM};
+    use super::CohereClient;
     use crate::config::CohereConfig;
+    use crate::constants::DEFAULT_COHERE_EMBEDDING_DIM;
     use crate::http_client::{
         ConcurrencyTrackingMockHttpClient, RecordingSequentialMockHttpClient, ReqwestClient,
     };
@@ -298,7 +250,7 @@ mod tests {
         ]);
         let client = CohereClient {
             client: http_client.clone(),
-            config: Some(embed_v4_config(1, 0)),
+            config: embed_v4_config(1, 0),
         };
         // Row 31 is empty, so it keeps its zero vector even though its batch fails.
         let mut texts = vec!["configured input"; 91];
@@ -330,7 +282,7 @@ mod tests {
         ]);
         let client = CohereClient {
             client: http_client.clone(),
-            config: Some(embed_v4_config(1, 0)),
+            config: embed_v4_config(1, 0),
         };
         let input = Arc::new(arrow_array::StringArray::from(vec!["configured input"; 90]));
         let result = client.compute_embeddings_internal(input, "search_document");
@@ -357,7 +309,7 @@ mod tests {
             let http_client = RecordingSequentialMockHttpClient::new([response.clone(), response]);
             let client = CohereClient {
                 client: http_client.clone(),
-                config: Some(config.clone()),
+                config: config.clone(),
             };
 
             for input_type in ["search_document", "search_query"] {
@@ -394,7 +346,7 @@ mod tests {
             ConcurrencyTrackingMockHttpClient::new(std::iter::repeat_n(batch_response, 4));
         let client = CohereClient {
             client: http_client.clone(),
-            config: Some(embed_v4_config(2, crate::constants::DEFAULT_MAX_RETRIES)),
+            config: embed_v4_config(2, crate::constants::DEFAULT_MAX_RETRIES),
         };
         let input = Arc::new(arrow_array::StringArray::from(vec![
             "configured input";
@@ -407,14 +359,14 @@ mod tests {
         let http_client = RecordingSequentialMockHttpClient::new::<serde_json::Value>([]);
         let client = CohereClient {
             client: http_client.clone(),
-            config: Some(CohereConfig {
+            config: CohereConfig {
                 api_key: "test-key".into(),
                 embedding_model: "embed-english-v3.0".into(),
                 embedding_dims: 256,
                 reranker: String::new(),
                 max_concurrent_requests: crate::constants::DEFAULT_MAX_CONCURRENT_REQUESTS,
                 max_retries: crate::constants::DEFAULT_MAX_RETRIES,
-            }),
+            },
         };
         let input = Arc::new(arrow_array::StringArray::from(vec!["configured input"]));
         let error = client.compute_source_embeddings(input).unwrap_err();
@@ -439,7 +391,7 @@ mod tests {
             "A sixth string",
         ]);
 
-        let client = CohereClient::<ReqwestClient>::default();
+        let client = CohereClient::<ReqwestClient>::with_config(crate::config::test_env::cohere());
         let embeddings = client.compute_embeddings_internal(Arc::new(array), "search_document");
 
         test_ok!(embeddings);

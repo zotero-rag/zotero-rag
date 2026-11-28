@@ -40,13 +40,20 @@ impl LanceZoteroStore {
     }
 
     /// Create a Lance-backed Zotero store from an embedding config and Arrow schema.
+    ///
+    /// The store opens the database at the `LANCEDB_URI` environment variable if it is set, and
+    /// otherwise at the [`zqa_rag::vector::backends::lance::LANCEDB_URI`] default.
     #[must_use]
     pub fn from_schema(embedding_config: EmbeddingProviderConfig, schema: Arc<Schema>) -> Self {
-        let backend = LanceBackend::new(
+        let mut backend = LanceBackend::new(
             embedding_config.clone(),
             schema,
             DbFields::PdfText.as_ref().to_string(),
         );
+
+        if let Ok(uri) = std::env::var("LANCEDB_URI") {
+            backend = backend.with_uri(uri);
+        }
 
         Self::new(backend, embedding_config)
     }

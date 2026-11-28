@@ -96,12 +96,6 @@ pub enum LanceError {
     Other(#[from] LanceDbError),
 }
 
-/// Returns the database URI, allowing override via `LANCEDB_URI` environment variable.
-#[must_use]
-pub fn get_db_uri() -> String {
-    std::env::var("LANCEDB_URI").unwrap_or_else(|_| LANCEDB_URI.to_string())
-}
-
 /// Backend for LanceDB vector store.
 #[derive(Debug, Clone)]
 pub struct LanceBackend {
@@ -111,8 +105,8 @@ pub struct LanceBackend {
     schema: Arc<Schema>,
     /// Column name containing the source text used to generate embeddings.
     source_col: String,
-    /// Override for the database URI. When `None`, the URI falls back to the `LANCEDB_URI`
-    /// environment variable (or the [`LANCEDB_URI`] default) via [`get_db_uri`].
+    /// Override for the database URI. When `None`, the backend uses the [`LANCEDB_URI`] default,
+    /// which is relative to the current working directory.
     uri: Option<String>,
 }
 
@@ -230,9 +224,10 @@ impl LanceBackend {
         }
     }
 
-    /// Overrides the database URI for this backend instance. When unset, the URI falls back to the
-    /// `LANCEDB_URI` environment variable (or the [`LANCEDB_URI`] default). This is primarily useful
-    /// for pointing a backend at an isolated location, such as a temporary directory in tests.
+    /// Overrides the database URI for this backend instance. When unset, the backend uses the
+    /// [`LANCEDB_URI`] default, which is relative to the current working directory. Applications
+    /// should set this to a stable location; tests can point each backend at its own temporary
+    /// directory.
     #[must_use]
     pub fn with_uri(mut self, uri: impl Into<String>) -> Self {
         self.uri = Some(uri.into());
@@ -355,17 +350,16 @@ pub(crate) async fn read_stored_data_table_version(db: &Connection) -> Result<u6
 impl VectorBackend for LanceBackend {
     type Record = RecordBatch;
     type Error = LanceError;
-    // We read the URI from the environment variable, so no config is needed.
+    // The URI is set on the backend itself (see `LanceBackend::with_uri`), so no config is needed.
     type ConnectionConfig = ();
     type ProviderConfig = EmbeddingProviderConfig;
     type Connection = lancedb::Connection;
     type Metadata = LanceMetadata;
 
-    /// Returns the database URI for this backend, preferring an instance override (see
-    /// [`LanceBackend::with_uri`]) and otherwise falling back to the `LANCEDB_URI` environment
-    /// variable.
+    /// Returns the database URI for this backend: the override set by [`LanceBackend::with_uri`],
+    /// or the [`LANCEDB_URI`] default.
     fn get_db_path(&self) -> String {
-        self.uri.clone().unwrap_or_else(get_db_uri)
+        self.uri.clone().unwrap_or_else(|| LANCEDB_URI.to_string())
     }
 
     async fn get_metadata(&self) -> Result<Self::Metadata, Self::Error> {
@@ -1812,7 +1806,7 @@ mod tests {
         let sample_texts: Vec<&str> = chunks.iter().take(3).map(|c| c.content.as_str()).collect();
         assert!(!sample_texts.is_empty(), "Need at least one chunk to embed");
 
-        let client = OpenAIClient::<ReqwestClient>::default();
+        let client = OpenAIClient::<ReqwestClient>::with_config(crate::config::test_env::openai());
         let source: Arc<dyn arrow_array::Array> = Arc::new(StringArray::from(sample_texts.clone()));
         let embeddings = client.compute_source_embeddings(source);
 
