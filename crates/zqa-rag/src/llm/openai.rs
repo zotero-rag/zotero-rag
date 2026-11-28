@@ -226,6 +226,14 @@ pub(crate) struct OpenAIRequest<'a> {
     /// Set to "none" to forbid tool calls while still sending the tools
     #[serde(skip_serializing_if = "Option::is_none")]
     tool_choice: Option<&'static str>,
+
+    /// Whether OpenAI stores the response object server-side. Disabled so replay relies on
+    /// client-held encrypted reasoning instead of expiring server-side state.
+    store: bool,
+
+    /// Extra response fields to return, such as `reasoning.encrypted_content`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    include: Option<&'static [&'static str]>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Copy)]
@@ -488,6 +496,8 @@ impl<T: HttpClient> AgenticClient for OpenAIClient<T> {
             max_output_tokens: max_tokens.unwrap_or(config_max_tokens),
             tools: wrapped_tools.as_deref(),
             tool_choice: (tools.is_some() && !allow_tool_calls).then_some("none"),
+            store: false,
+            include: Some(&["reasoning.encrypted_content"]),
         };
 
         let mut headers = HeaderMap::new();
@@ -785,6 +795,11 @@ mod tests {
         assert_eq!(request["reasoning"]["summary"].as_str(), Some("detailed"));
         assert_eq!(request["tools"][0]["type"].as_str(), Some("function"));
         assert_eq!(request["max_output_tokens"].as_u64(), Some(1024));
+        assert_eq!(request["store"].as_bool(), Some(false));
+        assert_eq!(
+            request["include"],
+            serde_json::json!(["reasoning.encrypted_content"])
+        );
     }
 
     #[test]
@@ -798,6 +813,8 @@ mod tests {
             max_output_tokens: DEFAULT_OPENAI_MAX_TOKENS,
             tools: None,
             tool_choice: None,
+            store: false,
+            include: None,
         };
 
         let serialized = serde_json::to_value(request).unwrap();

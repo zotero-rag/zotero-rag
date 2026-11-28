@@ -381,8 +381,10 @@ pub(crate) struct AnthropicThinkingResponseContent {
     pub(crate) r#type: String,
     /// The thinking content from the model.
     pub(crate) thinking: String,
-    /// Opaque signature that must be returned unchanged with a tool-use continuation.
-    pub(crate) signature: String,
+    /// Opaque signature that Anthropic requires unchanged on continuation. Omitted by
+    /// Anthropic-compatible endpoints such as Ollama that do not sign thinking blocks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) signature: Option<String>,
 }
 
 /// A redacted thinking block returned by models with extended thinking enabled.
@@ -1045,6 +1047,10 @@ mod tests {
                 "signature": "thinking-signature"
             },
             {
+                "type": "thinking",
+                "thinking": "Unsigned Ollama thinking block."
+            },
+            {
                 "type": "redacted_thinking",
                 "data": "redacted-thinking-data"
             }
@@ -1066,7 +1072,7 @@ mod tests {
                 AnthropicResponseContent::Thinking(AnthropicThinkingResponseContent {
                     r#type: "thinking".into(),
                     thinking: "I need the tool result.".into(),
-                    signature: "thinking-signature".into(),
+                    signature: Some("thinking-signature".into()),
                 }),
                 AnthropicResponseContent::RedactedThinking(
                     AnthropicRedactedThinkingResponseContent {

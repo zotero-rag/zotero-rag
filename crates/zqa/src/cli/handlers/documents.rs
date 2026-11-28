@@ -42,7 +42,11 @@ pub(crate) fn get_document_session_key(path: &Path) -> Result<String, CLIError> 
     Ok(canonical_path.to_string_lossy().into_owned())
 }
 
-/// Get tools to work with user-imported documents.
+/// Build the tools for working with user-imported documents.
+///
+/// Always registers the tools even when no documents have been imported yet, so the request tool
+/// list stays unchanged if a later turn uses `@import`. Until a document is imported,
+/// `list_documents` returns an empty list.
 ///
 /// # Arguments
 ///
@@ -56,17 +60,14 @@ pub(crate) fn get_document_session_key(path: &Path) -> Result<String, CLIError> 
 ///
 /// # Errors
 ///
-/// * `LLMError::InvalidProviderError` if the provider is not supported
+/// * `CLIError::ConfigError` if no embedding configuration is available.
+/// * `CLIError::LLMError` if the configured generation provider cannot be constructed.
 pub(super) fn get_user_document_tools(
     ctx: &mut Context,
     status_tx: UnboundedSender<EngineEvent>,
     cost_tx: UnboundedSender<UsageMetadata>,
 ) -> Result<Vec<Box<dyn Tool>>, CLIError> {
     let imports = ctx.state.imports.clone();
-    if imports.read()?.is_empty() {
-        return Ok(Vec::new());
-    }
-
     let embedding_config = ctx.config.get_embedding_config().ok_or_else(|| {
         CLIError::ConfigError(
             "No embedding config found; mentioned documents won't be imported.".into(),
@@ -223,9 +224,24 @@ pub(crate) async fn handle_docs_cmd(
 
 #[cfg(test)]
 mod tests {
+    use tokio::sync::mpsc;
     use zqa_macros::{test_eq, test_ok};
 
-    use super::{get_document_mentions, get_document_session_key};
+    use super::{get_document_mentions, get_document_session_key, get_user_document_tools};
+    use crate::common::test_support::create_test_context;
+
+    #[test]
+    fn test_get_user_document_tools_registered_without_imports() {
+        let mut ctx = create_test_context(vec![]);
+        let (status_tx, _status_rx) = mpsc::unbounded_channel();
+        let (cost_tx, _cost_rx) = mpsc::unbounded_channel();
+
+        let tools = get_user_document_tools(&mut ctx, status_tx, cost_tx);
+        test_ok!(tools);
+
+        let names: Vec<String> = tools.unwrap().iter().map(|tool| tool.name()).collect();
+        test_eq!(names, vec!["list_documents", "user_document_tool"]);
+    }
 
     #[test]
     fn test_get_document_mentions_unquoted() {

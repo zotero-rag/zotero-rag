@@ -74,7 +74,7 @@ This doc proposes a replacement:
   * **Migration** of existing JSON conversations without inventing data they never had.
 
 * **Non-Goals:**
-  * **Server-side conversation state.** This covers OpenAI [`previous_response_id` and Conversations](https://developers.openai.com/api/docs/guides/conversation-state) and the Gemini [Interactions API](https://ai.google.dev/gemini-api/docs/interactions-overview). These tie a conversation to one provider and to its retention window (30 days for stored OpenAI responses, 1 to 55 days for Interactions). They can never be the source of truth.
+  * **Server-side conversation state.** This covers OpenAI [`previous_response_id` and Conversations](https://developers.openai.com/api/docs/guides/conversation-state) and server-side state (`store: true` / `previous_interaction_id`) in the Gemini [Interactions API](https://ai.google.dev/gemini-api/docs/interactions-overview). These tie a conversation to one provider and to its retention window (30 days for stored OpenAI responses, 1 to 55 days for Interactions), so they can never be the source of truth; the Gemini adapter uses the Interactions API strictly in stateless mode (`store: false`).
   * **Server mode and multi-user storage** ([#311](https://github.com/zotero-rag/zotero-rag/issues/311)). One local host owns the database. Worker ownership, fencing, and owner columns are deferred. Adding a column later is a cheap `ALTER TABLE`.
   * **A context-window strategy.** This doc provides compaction *nodes* and the rule that context policies must follow. It does not decide when or how to compact.
   * **Semantic search over past conversations.** A LanceDB index over node text can be added later without schema changes.
@@ -85,7 +85,7 @@ This doc proposes a replacement:
 | # | Decision | Choice | Why |
 | --- | --- | --- | --- |
 | 1 | Model used when a thread is resumed | **The thread's last model.** The configured model is used for new threads, and `/model` switches explicitly. | Keeps native reasoning and cache affinity. Switching models only when the user asks keeps handoffs rare and visible. |
-| 2 | What old threads do after an upgrade changes the system prompt or tools | **Keep the thread's stored frame** | Only Anthropic documents a way to change instructions and tools without editing the prefix ([mid-conversation system messages](https://platform.claude.com/docs/en/build-with-claude/mid-conversation-system-messages)); it is not available on Sonnet 5, and tool changes are in beta. OpenAI's path is partial: [developer messages](https://developers.openai.com/api/docs/guides/text), plus [`allowed_tools`](https://developers.openai.com/api/docs/guides/function-calling), which can only *restrict* declared tools. Gemini `generateContent` treats [system instructions](https://ai.google.dev/gemini-api/docs/generate-content/text-generation) and tools as request-level config with no mid-conversation equivalent. OpenRouter and Ollama document nothing similar. Revisit if all providers gain a documented path. |
+| 2 | What old threads do after an upgrade changes the system prompt or tools | **Keep the thread's stored frame** | Only Anthropic documents a way to change instructions and tools without editing the prefix ([mid-conversation system messages](https://platform.claude.com/docs/en/build-with-claude/mid-conversation-system-messages)); it is not available on Sonnet 5, and tool changes are in beta. OpenAI's path is partial: [developer messages](https://developers.openai.com/api/docs/guides/text), plus [`allowed_tools`](https://developers.openai.com/api/docs/guides/function-calling), which can only *restrict* declared tools. Gemini's stateless Interactions API treats `system_instruction` and `tools` as request-level config with no mid-conversation equivalent. OpenRouter and Ollama document nothing similar. Revisit if all providers gain a documented path. |
 | 3 | Reasoning from a model that cannot read it natively | **Convert it to plain text on a best-effort basis** (non-empty summaries only; redacted or encrypted reasoning is dropped) | This matches [pi's `transformMessages`](https://github.com/earendil-works/pi/blob/main/packages/ai/src/api/transform-messages.ts) and [opencode's `message-v2.ts`](https://github.com/anomalyco/opencode/blob/dev/packages/opencode/src/session/message-v2.ts). Today's adapters drop reasoning instead, so this is a change. |
 | 4 | Deployment model | **One local host.** No worker ownership or fencing. | Server mode is not planned. |
 | 5 | When nodes are committed | **As each node is produced, from Phase 1**, with "interrupted" state detected on load | Web search ([#250](https://github.com/zotero-rag/zotero-rag/issues/250)) is a few months out and paper import ([#252](https://github.com/zotero-rag/zotero-rag/issues/252)) further out. Committing per node is cheap now and gives record-before-execute semantics before side-effectful tools arrive. |
@@ -181,10 +181,10 @@ pub struct NativePayload {
 
 #### Frames
 
-The system prompt and tool definitions are passed as an explicit `Frame { system_prompt, tools: Vec<ToolSpec> }`, where `ToolSpec` is `{ name, description, parameters }`.
+In Phase 0, `zqa-rag` computes `FrameHash` internally from `request.system_prompt` and each tool's provider-agnostic `{ name, description, parameters }`. In Phase 1, the SQLite store persists those values as an explicit `Frame { system_prompt, tools: Vec<ToolSpec> }`, where `ToolSpec` is `{ name, description, parameters }`.
 
-- **Hashing.** `FrameHash` is an `xxh3` hash of the provider-agnostic frame; `xxhash-rust` is already a dependency. The adapter still serializes the frame into its own format, including its schema key.
-- **Stored tool specs, current implementations.** Stored specs are paired with current `Tool` implementations by name, using a small wrapper in `zqa` that overrides `description` and `parameters`. The `Tool` trait does not change.
+- **Hashing.** `FrameHash` is an `xxh3` hash of the provider-agnostic frame; `xxhash-rust` is already a dependency. Because Phase 0 hashes the same canonical `(system_prompt, [{ name, description, parameters }])` tuple, its hashes match Phase 1's `Frame` hashes directly. The adapter still serializes the frame into its own format, including its schema key.
+- **Stored tool specs, current implementations (Phase 1).** Stored specs are paired with current `Tool` implementations by name, using a small wrapper in `zqa` that overrides `description` and `parameters`. The `Tool` trait does not change.
 - **Stored frames never grant permission.** Execution always checks the current tool policy, including the `tools: None` rule for document-processing subagents from [#302](https://github.com/zotero-rag/zotero-rag/issues/302). A frozen tool that has since been removed or disallowed returns an error result.
 
 #### Disabling tools without changing the frame
@@ -195,7 +195,7 @@ On the final iteration, the loop keeps `tools` and sets a "no tool calls" choice
 | --- | --- |
 | Anthropic | `tool_choice: {"type": "none"}`. The docs say: "To turn tool use off for a request, send `tool_choice: {"type": "none"}`. Don't remove `tools`." `tool_choice` is outside the prefix check. |
 | OpenAI | `tool_choice: "none"` |
-| Gemini | [`function_calling_config.mode: NONE`](https://ai.google.dev/gemini-api/docs/generate-content/function-calling) |
+| Gemini | `generation_config.tool_choice: "none"` (Interactions API) |
 | OpenRouter | [`tool_choice: "none"`](https://openrouter.ai/docs/api/reference/parameters) |
 | Ollama | Tools are still removed. [`tool_choice` is unsupported](https://docs.ollama.com/api/anthropic-compatibility), and Ollama has no prefix binding. |
 
@@ -205,8 +205,8 @@ On the final iteration, the loop keeps `tools` and sets a "no tool calls" choice
 - `ToolCallResponse.result` is a `Result<Value, String>`, so a failed or unknown tool call keeps its failure. Adapters map `Err` to the provider's error form where it has one: Anthropic sets [`is_error`](https://platform.claude.com/docs/en/agents-and-tools/tool-use/handle-tool-calls), Gemini puts the message under `error`, and OpenAI sends it as the output string.
 - The OpenAI adapter sends `store: false` and `include: ["reasoning.encrypted_content"]`. The `include` is legacy under `store: false`, but it is harmless.
 - The Anthropic adapter enables [automatic prompt caching](https://platform.claude.com/docs/en/build-with-claude/prompt-caching) with a top-level `cache_control: {"type": "ephemeral"}`. This is a small start on #289 that pays off once requests are append-only.
-- On a prefix-mismatch 400, the Anthropic adapter retries once with `thinking.block_binding.prefix_mismatch_behavior: "drop_block"`, and records that choice on the thread. With a deterministic builder this should not happen, so it is only a safety net.
-- The OpenRouter adapter sends the session ID as `session_id`, so [sticky routing](https://openrouter.ai/docs/guides/best-practices/prompt-caching) keeps a thread on one upstream provider, where its cache lives.
+- On a prefix-mismatch 400 (Phase 1, once threads exist to persist the flag), the Anthropic adapter retries once with `thinking.block_binding.prefix_mismatch_behavior: "drop_block"`, and records that choice on the thread. With a deterministic builder this should not happen, so it is only a safety net.
+- In Phase 1, once sessions exist, the OpenRouter adapter sends the session ID as `session_id`, so [sticky routing](https://openrouter.ai/docs/guides/best-practices/prompt-caching) keeps a thread on one upstream provider, where its cache lives.
 
 ### Part 2: The conversation graph in `zqa`
 
@@ -216,7 +216,7 @@ A node is one row of `nodes`. Its body is a versioned, tagged serde enum. The pa
 
 ```rust
 enum NodeBody {
-    /// A user message exactly as sent (e.g. the rendered summarize prompt), what to display,
+    /// A user message as sent, an optional display override when those differ,
     /// and the settings the turn ran with.
     User { message: ChatHistoryItem, display: Option<String>, turn: TurnContext },
     /// One provider round trip; `message.native` holds the raw response and origin.
@@ -242,7 +242,7 @@ struct TurnContext {
   - This is what lets users bookmark individual messages.
   - Steering injections ([#315](https://github.com/zotero-rag/zotero-rag/issues/315)) and late async tool results ([#353](https://github.com/zotero-rag/zotero-rag/issues/353)) fit without special cases.
   - An Anthropic `pause_turn` continuation, which is ["sent back as-is"](https://platform.claude.com/docs/en/build-with-claude/handling-stop-reasons), is simply another `Response` node.
-- **Store what was sent.** `User.message` is the rendered prompt, and `display` is the raw query shown to the user. Changing `get_summarize_prompt` later affects only new turns.
+- **Store what was sent.** Plain user queries are sent raw without a wrapper, so `User.message` matches what the user typed; `display` is optional for any future prompt transformation that differs from what is shown.
 - **Turn context lives on the user node.**
   - The settings in effect at any node are read off the user nodes on its path, so checking out an old node restores the settings that produced it.
   - This is the same idea as Codex's per-turn [`TurnContext`](https://github.com/openai/codex/blob/main/codex-rs/history/src/lib.rs) and pi's [`model_change`/`thinking_level_change` entries](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/session-format.md), but it needs no extra node kinds.
@@ -361,13 +361,13 @@ Each adapter implements these rules in `replay`. They are pure functions and are
 | --- | --- | --- | --- | --- |
 | **Anthropic** | Native, verbatim. This includes empty `thinking`, `redacted_thinking`, citations, and server-tool blocks with their `encrypted_content`. ["Required: within a tool-use turn, pass thinking blocks back"](https://platform.claude.com/docs/en/build-with-claude/thinking); recommended across turns. | Native, verbatim. ["Keep passing thinking blocks back unchanged when you switch models ... the API ignores or drops the blocks the target model can't read."](https://platform.claude.com/docs/en/build-with-claude/thinking) Reasoning is ["lost for good only if your client removes the blocks itself"](https://platform.claude.com/docs/en/build-with-claude/preserved-thinking). | Strip thinking produced under older frames. | Canonical. Per the docs, other models' turns are sent ["as `text` and `tool_use` content"](https://platform.claude.com/docs/en/build-with-claude/preserved-thinking). |
 | **OpenAI (Responses)** | Native, verbatim. Reasoning keeps `id` and `encrypted_content`; messages keep `id`, `phase`, and `annotations`; calls keep `caller`. Replay reasoning ["since the last `user` message"](https://developers.openai.com/api/docs/guides/reasoning) at minimum. GPT-5.6 also uses earlier turns ([`reasoning.context`](https://developers.openai.com/api/docs/guides/upgrading-to-gpt-5p6-sol)). | Native, verbatim. ["When you switch model families, the API omits incompatible reasoning from the model's context"](https://developers.openai.com/api/docs/guides/reasoning). | No change: reasoning is not bound to instructions or tools. | Canonical. |
-| **Gemini (`generateContent`)** | Native, verbatim: exact part order and grouping. Signature-only parts are sent as `{"text": "", "thoughtSignature": ...}`, since omitting `text` [causes intermittent 400s](https://github.com/google/adk-go/issues/1633). Gemini 3.5+ ["uses reasoning context from all previous turns when thought signatures are present"](https://ai.google.dev/gemini-api/docs/whats-new-gemini-3.5). | Canonical. Only the [current turn is validated](https://ai.google.dev/gemini-api/docs/generate-content/thought-signatures), and partial foreign context can hurt quality. | No change. | Canonical. For a function call in the *current* turn that has no signature (an injected or steered trace), use the [documented `skip_thought_signature_validator`](https://ai.google.dev/gemini-api/docs/generate-content/thought-signatures) as a last resort. |
+| **Gemini (Interactions API)** | Native, verbatim: replay model-generated `steps` (`thought`, `model_output`, `function_call`) in order, preserving `signature` on both `thought` and `function_call` steps and dropping unsupported step types. | Canonical. Partial foreign thought context across models can hurt quality. | No change. | Canonical (`function_call` omits `signature`). |
 | **OpenRouter** | Native, verbatim: `reasoning_details` unmodified and in order (["you cannot rearrange or modify the sequence"](https://openrouter.ai/docs/guides/best-practices/reasoning-tokens)). DeepSeek with tools [requires `reasoning_content` in all later requests](https://api-docs.deepseek.com/guides/thinking_mode). | Canonical. Behaviour across `format`s is undocumented. | No change. OpenRouter does not enforce Anthropic prefix binding. | Canonical. |
 | **Ollama (Anthropic-compatible)** | Native, verbatim. Thinking blocks carry no signature, and the [chat template decides](https://docs.ollama.com/capabilities/tool-calling) whether earlier thinking is used. | Canonical. | No change. | Canonical. |
 
 Notes:
 
-- **Matching requires the API flavor as well as the provider**, as in pi's `isSameModel`. Google now [recommends the Interactions API](https://ai.google.dev/gemini-api/docs/interactions-overview) over `generateContent`. If the Gemini adapter ever moves to Interactions, old payloads fall back to canonical instead of being misread.
+- **Matching requires the API flavor as well as the provider**, as in pi's `isSameModel`. Gemini uses `gemini.interactions` (stateless mode); if an adapter switches API flavors later, old payloads fall back to canonical instead of being misread.
 - **Switching back.** Switching back to a model that can read earlier native payloads restores them. Anthropic documents this: "When the same history goes back to Claude Fable 5.1, its blocks are readable again."
 - **Container and pause limits.** [Anthropic containers expire 30 days after creation](https://platform.claude.com/docs/en/agents-and-tools/tool-use/code-execution-tool), and a [pending programmatic tool call times out after about 4 minutes](https://platform.claude.com/docs/en/agents-and-tools/tool-use/programmatic-tool-calling). A thread resumed later sends no expired `container` and treats paused programmatic calls as interrupted.
 
@@ -457,16 +457,17 @@ migrations (version INTEGER PK, applied_at)                      -- plus PRAGMA 
 
 1. **Phase 0 (`zqa-rag`; fixes #336; ships independently):**
    - raw native capture, the output-only-field projection, `NativePayload`, and per-provider `replay` (including reasoning-to-text in the canonical fallback);
-   - an explicit `Frame` and `FrameHash`;
+   - internal `FrameHash` computation over `(system_prompt, tools)` matching Phase 1's canonical `Frame` shape;
    - `tool_choice: none` instead of removing tools;
-   - OpenAI `store: false`;
-   - the Ollama thinking-block fix;
-   - storing the rendered user prompt;
+   - OpenAI `store: false` and `include: ["reasoning.encrypted_content"]`;
+   - the Ollama optional-signature thinking-block fix;
+   - sending raw user queries (removing the `get_summarize_prompt` wrapper);
    - always registering the document tools.
 
    The existing JSON files gain native payloads through serde defaults. Because every payload carries its frame hash, an upgrade that changes the prompt degrades safely: thinking is stripped instead of causing a 400.
 2. **Phase 1 ([#340](https://github.com/zotero-rag/zotero-rag/issues/340)):**
    - the SQLite store with sessions, threads, nodes, frames, attempts, and the usage ledger;
+   - explicit `Frame` and `ToolSpec` persistence with stored-spec tool wrappers, Anthropic's `drop_block` retry flag on threads, and OpenRouter's `session_id`;
    - per-node commits through `on_history_item`;
    - interrupted-branch detection;
    - legacy import;
