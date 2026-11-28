@@ -127,7 +127,7 @@ mod tests {
     use crate::http_client::{RecordingSequentialMockHttpClient, ReqwestClient};
     use crate::llm::anthropic::{
         AnthropicOutputTokensDetails, AnthropicResponseContent, AnthropicTextResponseContent,
-        AnthropicToolUseResponseContent, AnthropicUsageStats,
+        AnthropicThinkingResponseContent, AnthropicToolUseResponseContent, AnthropicUsageStats,
     };
     use crate::llm::base::{
         AgenticClient, ChatHistoryContent, ChatHistoryItem, ChatRequest, MessageRole,
@@ -266,8 +266,13 @@ mod tests {
                 output_tokens_details: Some(AnthropicOutputTokensDetails { thinking_tokens: 0 }),
             },
             r#type: "message".into(),
-            content: vec![AnthropicResponseContent::ToolCall(
-                AnthropicToolUseResponseContent {
+            content: vec![
+                AnthropicResponseContent::Thinking(AnthropicThinkingResponseContent {
+                    r#type: "thinking".into(),
+                    thinking: "I should call the tool.".into(),
+                    signature: None,
+                }),
+                AnthropicResponseContent::ToolCall(AnthropicToolUseResponseContent {
                     id: "tool-1".into(),
                     r#type: "tool_use".into(),
                     name: "mock_tool".into(),
@@ -275,8 +280,8 @@ mod tests {
                         .as_object()
                         .unwrap()
                         .clone(),
-                },
-            )],
+                }),
+            ],
         };
         let text_response = AnthropicResponse {
             id: "msg-2".into(),
@@ -311,18 +316,16 @@ mod tests {
         let text_segments_cb = Arc::clone(&text_segments);
 
         let request = ChatRequest {
-            chat_history: Vec::new(),
             max_tokens: Some(1024),
             message: "Test".into(),
             system_prompt: Some("Follow the system instructions.".into()),
-            reasoning: None,
             tools: Some(&[Box::new(tool)]),
             on_event: Some(Arc::new(move |event| match event {
                 AgentEvent::ToolCall { .. } => *tool_call_count_cb.lock().unwrap() += 1,
                 AgentEvent::Text(s) => text_segments_cb.lock().unwrap().push(s.clone()),
                 _ => {}
             })),
-            tool_iteration_limit: None,
+            ..ChatRequest::default()
         };
 
         let http_client =
@@ -338,12 +341,17 @@ mod tests {
         test_eq!(res.total_usage().input_tokens, 30);
         test_eq!(res.total_usage().output_tokens, 13);
         test_eq!(*tool_call_count.lock().unwrap(), 1_usize);
-        let texts = text_segments.lock().unwrap();
-        test_eq!(texts.len(), 1);
-        test_eq!(texts[0].as_str(), "Done!");
-        for request in http_client.requests() {
+        assert_eq!(*text_segments.lock().unwrap(), ["Done!"]);
+
+        let requests = http_client.requests();
+        for request in &requests {
             test_eq!(request["system"], "Follow the system instructions.");
         }
+
+        test_eq!(
+            requests[1]["messages"][1]["content"][0],
+            serde_json::json!({ "type": "thinking", "thinking": "I should call the tool." })
+        );
     }
 
     #[tokio::test]
