@@ -100,11 +100,10 @@ Model on `zqa-rag/src/llm/openrouter.rs`. Requirements:
   - `dest_type()` returns `Ok(Cow::Owned(DataType::FixedSizeList(..., DEFAULT_<NAME>_EMBEDDING_DIM as i32)))`
   - `compute_source_embeddings` and `compute_query_embeddings` both delegate to `compute_embeddings_internal`, mapping `LLMError` to `lancedb::Error::Other`
 
-**Register in `zqa-rag/src/embedding/common.rs`:**
+**Register the provider:**
 
 - Implement `EmbeddingFactory` for `<Name>Provider` in `zqa-rag/src/providers/<key>.rs` (model on `providers/ollama.rs`): `create_embedding` matches `EmbeddingProviderConfig::<Name>(cfg)` and returns `Arc::new(<Name>Client::<ReqwestClient>::with_config(cfg.clone()))`. Register it in `providers/registry.rs`
-- Add `/// Configuration for <Name> embedding provider` + `<Name>(crate::config::<Name>Config)` to `EmbeddingProviderConfig`
-- Add arm to `provider_name()`
+- In `zqa-rag/src/embedding/common.rs`, add `/// Configuration for <Name> embedding provider` + `<Name>(crate::config::<Name>Config)` to `EmbeddingProviderConfig`, and add an arm to its `provider_name()`
 
 **`zqa-rag/src/capabilities.rs` — `EmbeddingProvider`:**
 
@@ -120,10 +119,10 @@ Model on `zqa-rag/src/llm/openrouter.rs`. Requirements:
 - Reads credentials from `self.config`
 - Returns `Pin<Box<dyn Future<...>>>`
 
-**Register in `zqa-rag/src/embedding/common.rs`:**
+**Register the provider:**
 
 - Implement `RerankFactory` for `<Name>Provider` in `zqa-rag/src/providers/<key>.rs` (model on `providers/cohere.rs`): `create_reranker` matches `RerankProviderConfig::<Name>(cfg)` and returns the client built with `with_config(cfg.clone())`. Register it in `providers/registry.rs`
-- Add `/// Configuration for <Name> reranking provider` + `<Name>(crate::config::<Name>Config)` to `RerankProviderConfig`
+- In `zqa-rag/src/reranking/common.rs`, add `/// Configuration for <Name> reranking provider` + `<Name>(crate::config::<Name>Config)` to `RerankProviderConfig`
 
 **`zqa-rag/src/capabilities.rs` — `RerankerProviders`:**
 
