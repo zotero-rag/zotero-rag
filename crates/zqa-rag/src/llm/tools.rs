@@ -342,6 +342,7 @@ pub(crate) async fn process_tool_calls(
     (!tool_call_responses.is_empty()).then_some(ChatHistoryItem {
         role: MessageRole::User,
         content: tool_call_responses,
+        native: None,
     })
 }
 
@@ -576,6 +577,7 @@ mod tests {
                     tool_name: "imaginary_tool".into(),
                     result: expected_result.clone(),
                 })],
+                native: None,
             })
         );
         assert_eq!(

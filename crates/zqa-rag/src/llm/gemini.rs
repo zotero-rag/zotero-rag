@@ -527,6 +527,7 @@ mod tests {
             chat_history: vec![ChatHistoryItem {
                 role: MessageRole::Assistant,
                 content: vec![ChatHistoryContent::Text("Prior".into())],
+                native: None,
             }],
             max_tokens: Some(256),
             system_prompt: None,
@@ -993,6 +994,7 @@ mod tests {
         let mut chat_history = vec![ChatHistoryItem {
             role: MessageRole::User,
             content: vec![ChatHistoryContent::Text(first_message.message.clone())],
+            native: None,
         }];
         chat_history.extend(response.history_additions);
 

@@ -2450,6 +2450,7 @@ mod tests {
         let item = ChatHistoryItem {
             role: MessageRole::Assistant,
             content: vec![ChatHistoryContent::Text("Assistant response".into())],
+            native: None,
         };
 
         let rows = ChatRows::from_history(std::slice::from_ref(&item)).0;
@@ -2467,6 +2468,7 @@ mod tests {
                     tool_name: "search".into(),
                     args: serde_json::json!({"query": "attention"}),
                 })],
+                native: None,
             },
             ChatHistoryItem {
                 role: MessageRole::User,
@@ -2475,6 +2477,7 @@ mod tests {
                     tool_name: "search".into(),
                     result: Ok(serde_json::json!({"matches": 3})),
                 })],
+                native: None,
             },
         ];
 

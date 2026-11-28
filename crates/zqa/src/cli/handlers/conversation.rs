@@ -208,6 +208,7 @@ mod tests {
         let history = vec![ChatHistoryItem {
             role: MessageRole::User,
             content: vec![ChatHistoryContent::Text("What is attention?".into())],
+            native: None,
         }];
         let saved = SavedChatHistory {
             history: history.clone(),
@@ -241,12 +242,14 @@ mod tests {
                 ChatHistoryItem {
                     role: MessageRole::User,
                     content: vec![ChatHistoryContent::Text("What is attention?".into())],
+                    native: None,
                 },
                 ChatHistoryItem {
                     role: MessageRole::Assistant,
                     content: vec![ChatHistoryContent::Text(
                         "Attention is a mechanism...".into(),
                     )],
+                    native: None,
                 },
             ];
             let history_b = vec![ChatHistoryItem {
@@ -254,6 +257,7 @@ mod tests {
                 content: vec![ChatHistoryContent::Text(
                     "Tell me about transformers.".into(),
                 )],
+                native: None,
             }];
 
             save_conversation(&SavedChatHistory {
@@ -334,6 +338,7 @@ mod tests {
                 history: vec![ChatHistoryItem {
                     role: MessageRole::User,
                     content: vec![ChatHistoryContent::Text("Hello".into())],
+                    native: None,
                 }],
                 usage: UsageMetadata::default(),
                 date: Local::now(),

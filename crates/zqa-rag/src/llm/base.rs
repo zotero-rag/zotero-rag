@@ -8,6 +8,7 @@ use std::sync::{Arc, LazyLock};
 use http::HeaderMap;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+use xxhash_rust::xxh3::Xxh3;
 
 use super::errors::LLMError;
 use crate::constants::DEFAULT_MAX_TOOL_ITERATIONS;
@@ -15,6 +16,7 @@ use crate::events::AgentEvent;
 use crate::http_client::HttpClient;
 use crate::llm::tools::{CallbackFn, SerializedTool, Tool, get_owned_tools, process_tool_calls};
 use crate::pricing::ModelUsage;
+use crate::providers::ProviderId;
 use crate::requests::request_with_backoff;
 
 /// Roles for messages
@@ -90,6 +92,182 @@ pub enum ChatHistoryContent {
     ToolCallResponse(ToolCallResponse),
 }
 
+/// Wire API flavor that produced a [`NativePayload`].
+///
+/// Distinguishes endpoints within one provider and separates providers that share a
+/// wire-compatible format (such as Anthropic and Ollama), so stored payloads are only replayed
+/// natively by an adapter speaking the same API.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
+pub enum ApiFlavor {
+    /// Anthropic Messages API (`POST /v1/messages`).
+    #[serde(rename = "anthropic.messages")]
+    AnthropicMessages,
+    /// OpenAI Responses API (`POST /v1/responses`).
+    #[serde(rename = "openai.responses")]
+    OpenAIResponses,
+    /// Gemini Interactions API (`POST /v1beta/interactions`).
+    #[serde(rename = "gemini.interactions")]
+    GeminiInteractions,
+    /// OpenRouter Chat Completions API (`POST /api/v1/chat/completions`).
+    #[serde(rename = "openrouter.chat_completions")]
+    OpenRouterChatCompletions,
+    /// Ollama Anthropic-compatible Messages API (`POST /v1/messages`).
+    #[serde(rename = "ollama.anthropic_messages")]
+    OllamaAnthropicMessages,
+    /// Mock API flavor, used for testing (enabled by the `mock` feature).
+    #[cfg(any(test, feature = "mock"))]
+    #[serde(rename = "mock")]
+    Mock,
+}
+
+impl ApiFlavor {
+    /// Return the canonical wire identifier for this API flavor.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::AnthropicMessages => "anthropic.messages",
+            Self::OpenAIResponses => "openai.responses",
+            Self::GeminiInteractions => "gemini.interactions",
+            Self::OpenRouterChatCompletions => "openrouter.chat_completions",
+            Self::OllamaAnthropicMessages => "ollama.anthropic_messages",
+            #[cfg(any(test, feature = "mock"))]
+            Self::Mock => "mock",
+        }
+    }
+}
+
+impl Display for ApiFlavor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Identifies the provider, wire API flavor, and serving model that produced a response.
+///
+/// `api` distinguishes endpoints within one provider (such as [`ApiFlavor::AnthropicMessages`] vs.
+/// [`ApiFlavor::OllamaAnthropicMessages`], or [`ApiFlavor::GeminiInteractions`]), so stored
+/// payloads are not misread if an adapter later switches APIs. `model` records the serving model
+/// reported in the response when available.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct ModelRef {
+    /// The provider that served the response.
+    pub provider: ProviderId,
+    /// The wire API flavor that served the response.
+    pub api: ApiFlavor,
+    /// The serving model identifier reported by the provider.
+    pub model: String,
+}
+
+/// A deterministic `xxh3` digest of the provider-agnostic request frame (`system_prompt` and tool
+/// specifications).
+///
+/// The digest hashes `(system_prompt, [{ name, description, parameters }])` without
+/// provider-specific schema keys, so adapters can tell when the request prefix changed (for
+/// example, to strip Anthropic thinking blocks bound to an older frame).
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct FrameHash(pub String);
+
+impl FrameHash {
+    /// Compute the canonical `xxh3` hash for `system_prompt` and `tools`.
+    ///
+    /// Both `None` and `Some(&[])` for `tools` hash identically since neither sends tool
+    /// declarations. JSON object keys inside tool parameter schemas are sorted before hashing so
+    /// the digest is independent of map iteration order.
+    ///
+    /// # Arguments
+    ///
+    /// * `system_prompt` - The system prompt active for the request, if any.
+    /// * `tools` - The tools exposed to the model, if any.
+    ///
+    /// # Returns
+    ///
+    /// A 32-character lowercase hexadecimal `xxh3_128` digest.
+    #[must_use]
+    pub(crate) fn compute(
+        system_prompt: Option<&str>,
+        tools: Option<&[SerializedTool<'_>]>,
+    ) -> Self {
+        let tool_specs: Vec<serde_json::Value> = tools
+            .unwrap_or_default()
+            .iter()
+            .map(|serialized| {
+                serde_json::json!({
+                    "name": serialized.tool.name(),
+                    "description": serialized.tool.description(),
+                    "parameters": serde_json::Value::from(serialized.tool.parameters()),
+                })
+            })
+            .collect();
+        let canonical = serde_json::json!({
+            "system_prompt": system_prompt,
+            "tools": tool_specs,
+        });
+
+        let mut hasher = Xxh3::new();
+        hash_canonical_json(&mut hasher, &canonical);
+
+        Self(format!("{:032x}", hasher.digest128()))
+    }
+}
+
+/// Feed a `serde_json::Value` into `hasher` with object keys sorted lexicographically.
+fn hash_canonical_json(hasher: &mut Xxh3, value: &serde_json::Value) {
+    match value {
+        serde_json::Value::Null => hasher.update(b"null"),
+        serde_json::Value::Bool(b) => hasher.update(if *b { b"true" } else { b"false" }),
+        serde_json::Value::Number(n) => hasher.update(n.to_string().as_bytes()),
+        serde_json::Value::String(s) => {
+            hasher.update(serde_json::to_string(s).unwrap_or_default().as_bytes());
+        }
+        serde_json::Value::Array(items) => {
+            hasher.update(b"[");
+
+            for (idx, item) in items.iter().enumerate() {
+                if idx > 0 {
+                    hasher.update(b",");
+                }
+                hash_canonical_json(hasher, item);
+            }
+
+            hasher.update(b"]");
+        }
+        serde_json::Value::Object(map) => {
+            let mut entries: Vec<(&str, &serde_json::Value)> =
+                map.iter().map(|(k, v)| (k.as_str(), v)).collect();
+            entries.sort_unstable_by_key(|(k, _)| *k);
+
+            hasher.update(b"{");
+
+            for (idx, (k, v)) in entries.into_iter().enumerate() {
+                if idx > 0 {
+                    hasher.update(b",");
+                }
+                hasher.update(serde_json::to_string(k).unwrap_or_default().as_bytes());
+                hasher.update(b":");
+                hash_canonical_json(hasher, v);
+            }
+
+            hasher.update(b"}");
+        }
+    }
+}
+
+/// Provider-native response captured verbatim alongside canonical [`ChatHistoryContent`].
+///
+/// Storing the raw response JSON lets each adapter replay provider-opaque state (such as Anthropic
+/// thinking signatures and redacted thinking, OpenAI encrypted reasoning, Gemini thought and
+/// function-call signatures, and OpenRouter `reasoning_details`) across turns and disk reloads.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct NativePayload {
+    /// Provider, API flavor, and serving model that produced `response`.
+    pub origin: ModelRef,
+    /// Digest of the request frame (`system_prompt` and tools) active when `response` was produced.
+    pub frame: FrameHash,
+    /// The response body exactly as returned by the provider.
+    pub response: serde_json::Value,
+}
+
 /// An element of the chat history. This records all previous chat interactions, including tool
 /// requests from the model and the results of those tool calls. This is a user-facing struct: this
 /// is internally converted to provider-specific implementations.
@@ -101,10 +279,14 @@ pub struct ChatHistoryItem {
     /// The contents of this item. This is a `Vec` because some APIs expect tool call requests to
     /// be bundled together with the text preceding it.
     pub content: Vec<ChatHistoryContent>,
+    /// Provider-native response payload for assistant turns, when available. Absent on user and
+    /// tool-result items and on conversations saved before native capture existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native: Option<NativePayload>,
 }
 
 /// Provider-agnostic reasoning configuration
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReasoningConfig {
     /// Token budget for thinking.
     pub max_tokens: Option<u32>,
@@ -459,6 +641,7 @@ where
                 history_additions.push(ChatHistoryItem {
                     role: MessageRole::Assistant,
                     content: turn.contents,
+                    native: None,
                 });
             }
 
@@ -629,6 +812,7 @@ mod tests {
                         args: serde_json::json!({"name": "Bob"}),
                     }),
                 ],
+                native: None,
             },
             ChatHistoryItem {
                 role: MessageRole::User,
@@ -644,6 +828,7 @@ mod tests {
                         result: Ok(serde_json::json!("Hello, Bob!")),
                     }),
                 ],
+                native: None,
             },
             ChatHistoryItem {
                 role: MessageRole::Assistant,
@@ -652,6 +837,7 @@ mod tests {
                     tool_name: "mock_tool".into(),
                     args: serde_json::json!({"name": "Carol"}),
                 })],
+                native: None,
             },
             ChatHistoryItem {
                 role: MessageRole::User,
@@ -660,10 +846,12 @@ mod tests {
                     tool_name: "mock_tool".into(),
                     result: Ok(serde_json::json!("Hello, Carol!")),
                 })],
+                native: None,
             },
             ChatHistoryItem {
                 role: MessageRole::Assistant,
                 content: vec![ChatHistoryContent::Text("done".into())],
+                native: None,
             },
         ]
     }
@@ -919,5 +1107,37 @@ mod tests {
     #[test]
     fn test_effort_token_maps_have_same_length() {
         test_eq!(EFFORT_TO_TOKENS.len(), TOKENS_TO_EFFORT.len());
+    }
+
+    #[test]
+    fn frame_hash_is_provider_agnostic_and_tracks_changes() {
+        let tools: Vec<Box<dyn Tool>> = vec![Box::new(MockTool {
+            call_count: Arc::default(),
+        })];
+        let anthropic_tools = get_owned_tools(Some(&tools), "input_schema");
+        let openai_tools = get_owned_tools(Some(&tools), "parameters");
+
+        let a = FrameHash::compute(Some("Be concise."), anthropic_tools.as_deref());
+        let b = FrameHash::compute(Some("Be concise."), openai_tools.as_deref());
+        let different_prompt = FrameHash::compute(Some("Be verbose."), openai_tools.as_deref());
+        let no_tools = FrameHash::compute(Some("Be concise."), None);
+        let empty_tools = FrameHash::compute(Some("Be concise."), Some(&[]));
+
+        test_eq!(a, b);
+        test_eq!(no_tools, empty_tools);
+        assert_ne!(a, different_prompt);
+        assert_ne!(a, no_tools);
+    }
+
+    #[test]
+    fn chat_history_item_defaults_missing_native_and_omits_none() {
+        let legacy = serde_json::json!({
+            "role": "assistant",
+            "content": [{ "Text": "Hello" }]
+        });
+        let parsed: ChatHistoryItem = serde_json::from_value(legacy.clone()).unwrap();
+
+        assert!(parsed.native.is_none());
+        test_eq!(serde_json::to_value(parsed).unwrap(), legacy);
     }
 }

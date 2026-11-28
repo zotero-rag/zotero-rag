@@ -217,6 +217,7 @@ mod tests {
             ctx.state.chat_history = Arc::new(Mutex::new(vec![ChatHistoryItem {
                 role: MessageRole::User,
                 content: vec![ChatHistoryContent::Text("What is attention?".into())],
+                native: None,
             }]));
             ctx.state.dirty.store(true, atomic::Ordering::Relaxed);
 

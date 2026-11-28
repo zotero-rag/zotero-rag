@@ -508,6 +508,7 @@ mod tests {
                 .push(ChatHistoryItem {
                     role: MessageRole::User,
                     content: vec![ChatHistoryContent::Text("Summarize this paper".into())],
+                    native: None,
                 });
             ctx.state.dirty.store(true, atomic::Ordering::Relaxed);
 
@@ -555,6 +556,7 @@ mod tests {
                 let history = vec![ChatHistoryItem {
                     role: MessageRole::User,
                     content: vec![ChatHistoryContent::Text("Summarize this paper".into())],
+                    native: None,
                 }];
                 let usage = UsageMetadata {
                     input_tokens: 1000,

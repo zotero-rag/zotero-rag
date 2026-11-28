@@ -834,6 +834,7 @@ mod tests {
                 tool_name: "mock_tool".into(),
                 args: serde_json::json!({"name": "Alice"}),
             })],
+            native: None,
         }
         .into();
 
@@ -996,6 +997,7 @@ mod tests {
         let mut chat_history = vec![ChatHistoryItem {
             role: MessageRole::User,
             content: vec![ChatHistoryContent::Text(first_message.message.clone())],
+            native: None,
         }];
         chat_history.extend(response.history_additions);
 

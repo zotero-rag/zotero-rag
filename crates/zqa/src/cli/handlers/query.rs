@@ -411,6 +411,7 @@ pub(crate) async fn handle_query_cmd(query: String, ctx: &mut Context) -> Result
             history.push(ChatHistoryItem {
                 role: MessageRole::User,
                 content: vec![ChatHistoryContent::Text(query)],
+                native: None,
             });
 
             history.extend(response.history_additions);

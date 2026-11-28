@@ -743,6 +743,7 @@ mod tests {
                 history: vec![ChatHistoryItem {
                     role: MessageRole::User,
                     content: vec![ChatHistoryContent::Text("Hello!".into())],
+                    native: None,
                 }],
                 usage: UsageMetadata::default(),
             };
@@ -765,6 +766,7 @@ mod tests {
                 history: vec![ChatHistoryItem {
                     role: MessageRole::User,
                     content: vec![ChatHistoryContent::Text("Hello!".into())],
+                    native: None,
                 }],
                 usage: UsageMetadata {
                     input_tokens: 500,
@@ -811,6 +813,7 @@ mod tests {
                 ChatHistoryItem {
                     role: MessageRole::User,
                     content: vec![ChatHistoryContent::Text("Initial question".into())],
+                    native: None,
                 },
                 ChatHistoryItem {
                     role: MessageRole::Assistant,
@@ -818,6 +821,7 @@ mod tests {
                         ChatHistoryContent::Text("  Latest response  ".into()),
                         ChatHistoryContent::Reasoning("Internal reasoning".into()),
                     ],
+                    native: None,
                 },
             ],
             usage: UsageMetadata::default(),

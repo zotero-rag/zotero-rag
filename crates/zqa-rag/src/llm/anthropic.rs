@@ -1219,6 +1219,7 @@ mod tests {
         let mut chat_history = vec![ChatHistoryItem {
             role: MessageRole::User,
             content: vec![ChatHistoryContent::Text(first_message.message.clone())],
+            native: None,
         }];
         chat_history.extend(response.history_additions);
 
@@ -1247,10 +1248,12 @@ mod tests {
             ChatHistoryItem {
                 role: MessageRole::User,
                 content: vec![ChatHistoryContent::Text("What is 11 squared?".into())],
+                native: None,
             },
             ChatHistoryItem {
                 role: MessageRole::Assistant,
                 content: vec![ChatHistoryContent::Text("121".into())],
+                native: None,
             },
         ];
         let first_message = ChatRequest {
@@ -1275,6 +1278,7 @@ mod tests {
         chat_history.push(ChatHistoryItem {
             role: MessageRole::User,
             content: vec![ChatHistoryContent::Text(first_message.message.clone())],
+            native: None,
         });
         chat_history.extend(response.history_additions);
 
