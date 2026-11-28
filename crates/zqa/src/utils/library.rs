@@ -730,7 +730,8 @@ pub(crate) async fn parse_library_items(
     event_tx: Option<&mpsc::Sender<EngineEvent>>,
     metadata: Vec<ZoteroItemMetadata>,
 ) -> Result<Vec<ZoteroItem>, LibraryParsingError> {
-    // `parse_library` is `pub`, so calls can overlap. Numbering keeps each call's progress IDs unique.
+    // `parse_library` is `pub`, so calls calls (from `parse_library` and `/process`) can overlap can
+    // overlap. Numbering keeps each call's progress IDs unique.
     static NEXT_PARSE_ID: AtomicUsize = AtomicUsize::new(0);
 
     let start_time = Instant::now();
